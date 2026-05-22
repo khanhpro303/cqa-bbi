@@ -63,6 +63,7 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, me
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("x-api-key", apiKey)
 	}
 
 	resp, err := l.client.Do(req)
