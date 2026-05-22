@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-REPO="https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main"
+REPO="https://raw.githubusercontent.com/bbicrm/cqa-bbi/main"
 CQA_DIR="/opt/cqa"
 
 echo -e "${GREEN}========================================${NC}"

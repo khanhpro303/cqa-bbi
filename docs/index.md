@@ -17,7 +17,7 @@ hero:
       link: /guide/introduction
     - theme: alt
       text: GitHub
-      link: https://github.com/tanviet12/chat-quality-agent
+      link: https://github.com/bbicrm/cqa-bbi
 
 features:
   - icon: 🔄

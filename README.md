@@ -5,9 +5,9 @@
 
 Hệ thống phân tích chất lượng chăm sóc khách hàng bằng AI. Tự động đồng bộ tin nhắn từ Zalo OA, Facebook Messenger, dùng AI (Claude/Gemini/OpenAI) đánh giá chất lượng CSKH và gửi cảnh báo qua Telegram/Email.
 
-📖 **Hướng dẫn sử dụng chi tiết: [https://tanviet12.github.io/chat-quality-agent/](https://tanviet12.github.io/chat-quality-agent/)**
+📖 **Hướng dẫn sử dụng chi tiết: [https://bbicrm.github.io/cqa-bbi/](https://bbicrm.github.io/cqa-bbi/)**
 
-![Dashboard](https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/docs/public/screenshots/dashboard.png)
+![Dashboard](https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docs/public/screenshots/dashboard.png)
 
 ## Tính năng
 
@@ -27,7 +27,7 @@ Hệ thống phân tích chất lượng chăm sóc khách hàng bằng AI. Tự
 ### Cách 1: Cài tự động (khuyến nghị)
 
 ```bash
-curl -s https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/install.sh | sudo bash
+curl -s https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/install.sh | sudo bash
 ```
 
 Script tự cài Docker, tạo secrets ngẫu nhiên, pull images và khởi chạy.
@@ -35,7 +35,7 @@ Script tự cài Docker, tạo secrets ngẫu nhiên, pull images và khởi ch�
 ### Cách 2: Build từ source
 
 ```bash
-git clone https://github.com/tanviet12/chat-quality-agent.git
+git clone https://github.com/bbicrm/cqa-bbi.git
 cd chat-quality-agent
 cp .env.example .env
 # Sửa .env
@@ -159,13 +159,13 @@ Xem đầy đủ trong [.env.example](.env.example).
 
 | | |
 |---|---|
-| ![Setup](https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/docs/public/screenshots/setup.png) | ![Dashboard](https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/docs/public/screenshots/dashboard.png) |
+| ![Setup](https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docs/public/screenshots/setup.png) | ![Dashboard](https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docs/public/screenshots/dashboard.png) |
 | Trang Setup lần đầu | Dashboard |
-| ![Kết nối kênh](https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/docs/public/screenshots/ket-noi-kenh-chat.png) | ![Tạo công việc](https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/docs/public/screenshots/tao-cong-viec.png) |
+| ![Kết nối kênh](https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docs/public/screenshots/ket-noi-kenh-chat.png) | ![Tạo công việc](https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docs/public/screenshots/tao-cong-viec.png) |
 | Kết nối kênh chat | Tạo công việc |
-| ![Kết quả QC](https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/docs/public/screenshots/ket-qua-cong-viec-danh-gia.png) | ![Kết quả phân loại](https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/docs/public/screenshots/ket-qua-cong-viec-phan-loai.png) |
+| ![Kết quả QC](https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docs/public/screenshots/ket-qua-cong-viec-danh-gia.png) | ![Kết quả phân loại](https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docs/public/screenshots/ket-qua-cong-viec-phan-loai.png) |
 | Kết quả đánh giá QC | Kết quả phân loại |
-| ![Chi tiết tin nhắn](https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/docs/public/screenshots/chi-tiet-tin-nhan-va-danh-gia.png) | ![Chi tiết kênh](https://raw.githubusercontent.com/tanviet12/chat-quality-agent/main/docs/public/screenshots/chi-tiet-kenh-chat.png) |
+| ![Chi tiết tin nhắn](https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docs/public/screenshots/chi-tiet-tin-nhan-va-danh-gia.png) | ![Chi tiết kênh](https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docs/public/screenshots/chi-tiet-kenh-chat.png) |
 | Chi tiết tin nhắn + đánh giá | Chi tiết kênh chat |
 
 ## Changelog
@@ -174,7 +174,7 @@ Xem lịch sử thay đổi tại: **[CHANGELOG.md](CHANGELOG.md)**
 
 ## Tài liệu
 
-Xem tài liệu chi tiết tại: **[https://tanviet12.github.io/chat-quality-agent/](https://tanviet12.github.io/chat-quality-agent/)**
+Xem tài liệu chi tiết tại: **[https://bbicrm.github.io/cqa-bbi/](https://bbicrm.github.io/cqa-bbi/)**
 
 ## License
 

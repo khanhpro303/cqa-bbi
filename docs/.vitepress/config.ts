@@ -4,7 +4,7 @@ export default defineConfig({
   title: 'Chat Quality Agent',
   description: 'Hệ thống phân tích chất lượng CSKH bằng AI',
   lang: 'vi-VN',
-  base: '/chat-quality-agent/',
+  base: '/cqa-bbi/',
 
   head: [
     ['meta', { name: 'theme-color', content: '#1976D2' }],
@@ -69,7 +69,7 @@ export default defineConfig({
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/tanviet12/chat-quality-agent' },
+      { icon: 'github', link: 'https://github.com/bbicrm/cqa-bbi' },
     ],
 
     search: {
