@@ -272,6 +272,10 @@ export default {
   msg_unknown_customer: 'Khách hàng',
   msg_empty_desc: 'Tin nhắn sẽ hiện ở đây sau khi kết nối và đồng bộ kênh chat.',
   go_to_channels: 'Đi tới kênh chat',
+  filter_evaluated: 'Đã đánh giá',
+  filter_not_evaluated: 'Chưa đánh giá',
+  filter_pass: 'Đạt',
+  filter_fail: 'Không đạt',
 
   // Cron Picker
   cron_daily: 'Mỗi ngày',

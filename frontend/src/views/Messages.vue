@@ -643,12 +643,12 @@ const exportFormat = ref('txt')
 const exportChannelType = ref('')
 const exportFrom = ref(new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10))
 const exportTo = ref(new Date().toISOString().slice(0, 10))
-const evaluationFilterOptions = [
-  { title: 'Đã đánh giá', value: 'evaluated' },
-  { title: 'Chưa đánh giá', value: 'not_evaluated' },
-  { title: 'Đạt', value: 'PASS' },
-  { title: 'Không đạt', value: 'FAIL' },
-]
+const evaluationFilterOptions = computed(() => [
+  { title: t('filter_evaluated'), value: 'evaluated' },
+  { title: t('filter_not_evaluated'), value: 'not_evaluated' },
+  { title: t('filter_pass'), value: 'PASS' },
+  { title: t('filter_fail'), value: 'FAIL' },
+])
 const snackbar = ref(false)
 const lightboxSrc = ref('')
 const snackText = ref('')

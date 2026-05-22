@@ -272,6 +272,10 @@ export default {
   msg_unknown_customer: 'Customer',
   msg_empty_desc: 'Messages will appear here after connecting and syncing a chat channel.',
   go_to_channels: 'Go to channels',
+  filter_evaluated: 'Evaluated',
+  filter_not_evaluated: 'Not evaluated',
+  filter_pass: 'Passed',
+  filter_fail: 'Failed',
 
   // Cron Picker
   cron_daily: 'Every day',
