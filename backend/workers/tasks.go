@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/vietbui/chat-quality-agent/channels"
@@ -43,6 +45,14 @@ func NewZaloWebhookTask(payload ZaloWebhookPayload) (*asynq.Task, error) {
 		return nil, err
 	}
 	return asynq.NewTask(TypeZaloWebhook, payloadBytes), nil
+}
+
+// ChannelMetadata holds the session settings mapped from models.Channel.Metadata
+type ChannelMetadata struct {
+	SessionKeyword        string `json:"session_keyword"`
+	SessionEndKeyword     string `json:"session_end_keyword"`
+	SessionWelcomeMessage string `json:"session_welcome_message"`
+	SessionTimeout        int    `json:"session_timeout_minutes"`
 }
 
 // HandleZaloWebhookTask processes the webhook task
@@ -86,18 +96,27 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return asynq.SkipRetry // Skip retry if channel not found
 		}
 
-		// 2. Call Langflow API
-		replyText, err := langflowClient.RunFlow(ctx, payload.Sender.ID, payload.Message.Text)
-		if err != nil {
-			return fmt.Errorf("langflow error: %w", err)
+		// Parse metadata for session configuration
+		var meta ChannelMetadata
+		if matchedChannel.Metadata != "" {
+			_ = json.Unmarshal([]byte(matchedChannel.Metadata), &meta)
 		}
 
-		if replyText == "" {
-			log.Printf("[worker] langflow returned empty response")
-			return nil
+		// Fallback to global config
+		if meta.SessionKeyword == "" {
+			meta.SessionKeyword = cfg.ChatbotSessionKeyword
+		}
+		if meta.SessionEndKeyword == "" {
+			meta.SessionEndKeyword = cfg.ChatbotSessionEndKeyword
+		}
+		if meta.SessionWelcomeMessage == "" {
+			meta.SessionWelcomeMessage = cfg.ChatbotSessionWelcomeMessage
+		}
+		if meta.SessionTimeout == 0 {
+			meta.SessionTimeout = cfg.ChatbotSessionTimeout
 		}
 
-		// 3. Send message back to Zalo
+		// Setup Zalo adapter for replies
 		adapter := channels.NewZaloOAAdapter(zaloCreds)
 		adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
 			var ch models.Channel
@@ -115,6 +134,67 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		})
 
+		sessionKey := fmt.Sprintf("zalo_session:%s:%s", matchedChannel.ID, payload.Sender.ID)
+		
+		// Check session
+		var hasSession bool
+		if db.RedisClient != nil {
+			err := db.RedisClient.Get(ctx, sessionKey).Err()
+			hasSession = (err == nil)
+		}
+
+		userText := strings.TrimSpace(payload.Message.Text)
+
+		if !hasSession {
+			// No active session. Check for trigger word.
+			if strings.EqualFold(userText, meta.SessionKeyword) {
+				// Open session
+				if db.RedisClient != nil {
+					db.RedisClient.Set(ctx, sessionKey, "1", time.Duration(meta.SessionTimeout)*time.Minute)
+				}
+				// Send welcome message
+				err := adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionWelcomeMessage)
+				if err != nil {
+					log.Printf("[worker] failed to send welcome message: %v", err)
+				}
+				log.Printf("[worker] opened new session for user %s", payload.Sender.ID)
+				return nil
+			}
+			// Ignore message
+			log.Printf("[worker] ignoring message from %s (no session)", payload.Sender.ID)
+			return nil
+		}
+
+		// Has session. Check for end word.
+		if strings.EqualFold(userText, meta.SessionEndKeyword) {
+			if db.RedisClient != nil {
+				db.RedisClient.Del(ctx, sessionKey)
+			}
+			err := adapter.SendMessage(ctx, payload.Sender.ID, "Phiên hỗ trợ đã kết thúc. Hẹn gặp lại bạn!")
+			if err != nil {
+				log.Printf("[worker] failed to send end session message: %v", err)
+			}
+			log.Printf("[worker] closed session for user %s", payload.Sender.ID)
+			return nil
+		}
+
+		// Keep session alive
+		if db.RedisClient != nil {
+			db.RedisClient.Expire(ctx, sessionKey, time.Duration(meta.SessionTimeout)*time.Minute)
+		}
+
+		// 2. Call Langflow API
+		replyText, err := langflowClient.RunFlow(ctx, payload.Sender.ID, payload.Message.Text)
+		if err != nil {
+			return fmt.Errorf("langflow error: %w", err)
+		}
+
+		if replyText == "" {
+			log.Printf("[worker] langflow returned empty response")
+			return nil
+		}
+
+		// 3. Send message back to Zalo
 		err = adapter.SendMessage(ctx, payload.Sender.ID, replyText)
 		if err != nil {
 			return fmt.Errorf("failed to send reply to Zalo: %w", err)

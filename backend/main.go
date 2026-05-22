@@ -33,6 +33,14 @@ func main() {
 	}
 	defer db.Close()
 
+	// Connect Redis
+	if cfg.RedisURL != "" {
+		if err := db.ConnectRedis(cfg.RedisURL); err != nil {
+			log.Fatalf("Failed to connect Redis: %v", err)
+		}
+		defer db.CloseRedis()
+	}
+
 	// Run migrations
 	if err := db.AutoMigrate(); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
