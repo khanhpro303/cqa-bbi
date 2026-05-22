@@ -120,13 +120,29 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			meta.SessionTimeout = cfg.ChatbotSessionTimeout
 		}
 		if meta.LangflowAPIURL == "" {
-			meta.LangflowAPIURL = cfg.LangflowAPIURL
+			var setting models.AppSetting
+			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_url").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+				meta.LangflowAPIURL = setting.ValuePlain
+			} else {
+				meta.LangflowAPIURL = cfg.LangflowAPIURL
+			}
 		}
 		if meta.LangflowAPIKey == "" {
-			meta.LangflowAPIKey = cfg.LangflowAPIKey
+			var setting models.AppSetting
+			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_token").First(&setting).Error; err == nil && len(setting.ValueEncrypted) > 0 {
+				decrypted, _ := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
+				meta.LangflowAPIKey = string(decrypted)
+			} else {
+				meta.LangflowAPIKey = cfg.LangflowAPIKey
+			}
 		}
 		if meta.LangflowFlowID == "" {
-			meta.LangflowFlowID = cfg.LangflowFlowID
+			var setting models.AppSetting
+			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_flow_id").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+				meta.LangflowFlowID = setting.ValuePlain
+			} else {
+				meta.LangflowFlowID = cfg.LangflowFlowID
+			}
 		}
 
 		// Setup Zalo adapter for replies

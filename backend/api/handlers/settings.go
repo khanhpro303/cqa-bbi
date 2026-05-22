@@ -36,6 +36,17 @@ func GetSettings(c *gin.Context) {
 		}
 	}
 
+	cfg, _ := config.Load()
+	if _, ok := result["ai_engine_langflow_url"]; !ok && cfg.LangflowAPIURL != "" {
+		result["ai_engine_langflow_url"] = cfg.LangflowAPIURL
+	}
+	if _, ok := result["ai_engine_langflow_flow_id"]; !ok && cfg.LangflowFlowID != "" {
+		result["ai_engine_langflow_flow_id"] = cfg.LangflowFlowID
+	}
+	if _, ok := result["ai_engine_langflow_token"]; !ok && cfg.LangflowAPIKey != "" {
+		result["ai_engine_langflow_token"] = "••••••••"
+	}
+
 	// Backward-compatible alias for current provider key (used by older frontend versions).
 	currentProvider := getSettingValue(settings, "ai_provider", "claude")
 	for _, key := range ai.ProviderAPIKeySettingKeys(currentProvider) {
@@ -226,12 +237,14 @@ func TestLangflowConnection(c *gin.Context) {
 		}
 	}
 
-	// Resolve params (fallback to DB if not provided)
+	// Resolve params (fallback to DB, then .env if not provided)
 	baseURL := req.LangflowBaseURL
 	if baseURL == "" {
 		var setting models.AppSetting
 		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_url").First(&setting).Error; err == nil {
 			baseURL = setting.ValuePlain
+		} else {
+			baseURL = cfg.LangflowAPIURL
 		}
 	}
 	flowID := req.LangflowFlowID
@@ -239,6 +252,8 @@ func TestLangflowConnection(c *gin.Context) {
 		var setting models.AppSetting
 		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_flow_id").First(&setting).Error; err == nil {
 			flowID = setting.ValuePlain
+		} else {
+			flowID = cfg.LangflowFlowID
 		}
 	}
 	token := ""
@@ -253,6 +268,8 @@ func TestLangflowConnection(c *gin.Context) {
 			} else {
 				token = setting.ValuePlain
 			}
+		} else {
+			token = cfg.LangflowAPIKey
 		}
 	}
 
