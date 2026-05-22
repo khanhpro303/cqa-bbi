@@ -194,26 +194,50 @@
     </v-dialog>
 
     <!-- Edit Channel Dialog -->
-    <v-dialog v-model="editDialog" max-width="500">
+    <v-dialog v-model="editDialog" max-width="600">
       <v-card class="pa-6">
         <v-card-title>Sửa kênh chat</v-card-title>
-        <v-text-field v-model="editForm.name" label="Tên kênh" class="mb-3" />
-        <v-switch v-model="editForm.is_active" label="Hoạt động" color="primary" density="compact" class="mb-3" />
-        <template v-if="editChannelType !== 'personal_zalo_import'">
-          <v-select
-            v-model="editForm.sync_interval"
-            :items="syncIntervalOptions"
-            label="Chu kỳ đồng bộ"
-            density="compact"
-            class="mb-3"
-            hint="Khoảng thời gian giữa mỗi lần tự động đồng bộ tin nhắn"
-            persistent-hint
-          />
-          <v-alert v-if="editForm.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
-            Đồng bộ quá thường xuyên có thể bị giới hạn bởi API của nền tảng (Facebook/Zalo).
-          </v-alert>
-          <v-switch v-model="editForm.sync_files" label="Lưu trữ file/ảnh từ cuộc chat" color="primary" density="compact" hint="Tải và lưu file, ảnh từ cuộc chat lên server." persistent-hint />
-        </template>
+        
+        <v-tabs v-model="editTab" color="primary" class="mb-4">
+          <v-tab value="general">Cài đặt chung</v-tab>
+          <v-tab value="chatbot" v-if="editChannelType === 'zalo_oa'">Chatbot & Session</v-tab>
+        </v-tabs>
+
+        <v-window v-model="editTab">
+          <v-window-item value="general">
+            <v-text-field v-model="editForm.name" label="Tên kênh" class="mb-3" />
+            <v-switch v-model="editForm.is_active" label="Hoạt động" color="primary" density="compact" class="mb-3" />
+            <template v-if="editChannelType !== 'personal_zalo_import'">
+              <v-select
+                v-model="editForm.sync_interval"
+                :items="syncIntervalOptions"
+                label="Chu kỳ đồng bộ"
+                density="compact"
+                class="mb-3"
+                hint="Khoảng thời gian giữa mỗi lần tự động đồng bộ tin nhắn"
+                persistent-hint
+              />
+              <v-alert v-if="editForm.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
+                Đồng bộ quá thường xuyên có thể bị giới hạn bởi API của nền tảng (Facebook/Zalo).
+              </v-alert>
+              <v-switch v-model="editForm.sync_files" label="Lưu trữ file/ảnh từ cuộc chat" color="primary" density="compact" hint="Tải và lưu file, ảnh từ cuộc chat lên server." persistent-hint />
+            </template>
+          </v-window-item>
+          
+          <v-window-item value="chatbot">
+            <div class="text-subtitle-2 mb-2">Cấu hình phiên làm việc (Session)</div>
+            <v-text-field v-model="editForm.session_keyword" label="Từ khóa mở session" hint="Ví dụ: 'chào bull'" persistent-hint density="compact" class="mb-3" />
+            <v-text-field v-model="editForm.session_end_keyword" label="Từ khóa đóng session" hint="Ví dụ: 'tạm biệt'" persistent-hint density="compact" class="mb-3" />
+            <v-text-field v-model="editForm.session_welcome_message" label="Câu chào" hint="Gửi khi mở session thành công" persistent-hint density="compact" class="mb-3" />
+            <v-text-field v-model.number="editForm.session_timeout_minutes" label="Thời gian đóng session tự động (phút)" type="number" density="compact" class="mb-3" />
+            <v-divider class="my-4" />
+            <div class="text-subtitle-2 mb-2">Tích hợp Langflow (Bỏ trống để dùng cấu hình mặc định)</div>
+            <v-text-field v-model="editForm.langflow_api_url" label="Langflow API URL" density="compact" class="mb-3" />
+            <v-text-field v-model="editForm.langflow_api_key" label="Langflow API Key" type="password" density="compact" class="mb-3" />
+            <v-text-field v-model="editForm.langflow_flow_id" label="Langflow Flow ID" density="compact" class="mb-3" />
+          </v-window-item>
+        </v-window>
+        
         <v-card-actions class="mt-4 px-0">
           <v-spacer />
           <v-btn variant="text" @click="editDialog = false">{{ $t('cancel') }}</v-btn>
@@ -450,9 +474,14 @@ function channelLabel(channelType: string) {
 // Edit channel
 const editDialog = ref(false)
 const savingEdit = ref(false)
+const editTab = ref('general')
 const editChannelId = ref('')
 const editChannelType = ref('')
-const editForm = reactive({ name: '', is_active: true, sync_files: false, sync_interval: 15 })
+const editForm = reactive({ 
+  name: '', is_active: true, sync_files: false, sync_interval: 15,
+  session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_timeout_minutes: 0,
+  langflow_api_url: '', langflow_api_key: '', langflow_flow_id: ''
+})
 const syncIntervalOptions = [
   { title: 'Mỗi 1 phút', value: 1 },
   { title: 'Mỗi 5 phút', value: 5 },
@@ -469,13 +498,28 @@ function openEdit(ch: any) {
   editChannelType.value = ch.channel_type
   editForm.name = ch.name
   editForm.is_active = ch.is_active
+  editTab.value = 'general'
   try {
     const meta = JSON.parse(ch.metadata || '{}')
     editForm.sync_files = meta.sync_files || false
     editForm.sync_interval = meta.sync_interval || 15
+    editForm.session_keyword = meta.session_keyword || ''
+    editForm.session_end_keyword = meta.session_end_keyword || ''
+    editForm.session_welcome_message = meta.session_welcome_message || ''
+    editForm.session_timeout_minutes = meta.session_timeout_minutes || 0
+    editForm.langflow_api_url = meta.langflow_api_url || ''
+    editForm.langflow_api_key = meta.langflow_api_key || ''
+    editForm.langflow_flow_id = meta.langflow_flow_id || ''
   } catch {
     editForm.sync_files = false
     editForm.sync_interval = 15
+    editForm.session_keyword = ''
+    editForm.session_end_keyword = ''
+    editForm.session_welcome_message = ''
+    editForm.session_timeout_minutes = 0
+    editForm.langflow_api_url = ''
+    editForm.langflow_api_key = ''
+    editForm.langflow_flow_id = ''
   }
   editDialog.value = true
 }
@@ -488,7 +532,20 @@ async function saveEdit() {
       is_active: editForm.is_active,
     }
     if (editChannelType.value !== 'personal_zalo_import') {
-      payload.metadata = JSON.stringify({ sync_files: editForm.sync_files, sync_interval: editForm.sync_interval })
+      const metaToSave: any = { 
+        sync_files: editForm.sync_files, 
+        sync_interval: editForm.sync_interval 
+      }
+      if (editChannelType.value === 'zalo_oa') {
+        metaToSave.session_keyword = editForm.session_keyword
+        metaToSave.session_end_keyword = editForm.session_end_keyword
+        metaToSave.session_welcome_message = editForm.session_welcome_message
+        metaToSave.session_timeout_minutes = editForm.session_timeout_minutes
+        metaToSave.langflow_api_url = editForm.langflow_api_url
+        metaToSave.langflow_api_key = editForm.langflow_api_key
+        metaToSave.langflow_flow_id = editForm.langflow_flow_id
+      }
+      payload.metadata = JSON.stringify(metaToSave)
     }
     await channelStore.updateChannel(tenantId.value, editChannelId.value, payload)
     editDialog.value = false

@@ -53,6 +53,10 @@ type ChannelMetadata struct {
 	SessionEndKeyword     string `json:"session_end_keyword"`
 	SessionWelcomeMessage string `json:"session_welcome_message"`
 	SessionTimeout        int    `json:"session_timeout_minutes"`
+
+	LangflowAPIURL string `json:"langflow_api_url"`
+	LangflowAPIKey string `json:"langflow_api_key"`
+	LangflowFlowID string `json:"langflow_flow_id"`
 }
 
 // HandleZaloWebhookTask processes the webhook task
@@ -114,6 +118,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		if meta.SessionTimeout == 0 {
 			meta.SessionTimeout = cfg.ChatbotSessionTimeout
+		}
+		if meta.LangflowAPIURL == "" {
+			meta.LangflowAPIURL = cfg.LangflowAPIURL
+		}
+		if meta.LangflowAPIKey == "" {
+			meta.LangflowAPIKey = cfg.LangflowAPIKey
+		}
+		if meta.LangflowFlowID == "" {
+			meta.LangflowFlowID = cfg.LangflowFlowID
 		}
 
 		// Setup Zalo adapter for replies
@@ -184,7 +197,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// 2. Call Langflow API
-		replyText, err := langflowClient.RunFlow(ctx, payload.Sender.ID, payload.Message.Text)
+		replyText, err := langflowClient.RunFlowWithOverrides(ctx, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, meta.LangflowFlowID)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}

@@ -27,13 +27,18 @@ func NewLangflowClient(cfg *config.Config) *LangflowClient {
 	}
 }
 
-// RunFlow sends a message to a Langflow flow and returns the generated text response.
+// RunFlow sends a message to a Langflow flow using global config.
 func (l *LangflowClient) RunFlow(ctx context.Context, sessionID, message string) (string, error) {
-	if l.cfg.LangflowAPIURL == "" || l.cfg.LangflowFlowID == "" {
+	return l.RunFlowWithOverrides(ctx, sessionID, message, l.cfg.LangflowAPIURL, l.cfg.LangflowAPIKey, l.cfg.LangflowFlowID)
+}
+
+// RunFlowWithOverrides allows passing specific API URL, Key, and Flow ID.
+func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, message, apiURL, apiKey, flowID string) (string, error) {
+	if apiURL == "" || flowID == "" {
 		return "", fmt.Errorf("langflow integration is not configured")
 	}
 
-	url := fmt.Sprintf("%s/api/v1/run/%s", l.cfg.LangflowAPIURL, l.cfg.LangflowFlowID)
+	url := fmt.Sprintf("%s/api/v1/run/%s", apiURL, flowID)
 
 	payload := map[string]interface{}{
 		"input_value": message,
@@ -56,8 +61,8 @@ func (l *LangflowClient) RunFlow(ctx context.Context, sessionID, message string)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if l.cfg.LangflowAPIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+l.cfg.LangflowAPIKey)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	resp, err := l.client.Do(req)
