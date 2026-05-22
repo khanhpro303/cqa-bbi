@@ -302,9 +302,9 @@ const MANAGE_TENANT_ID = '__manage__'
 const tenantSelectItems = computed(() => {
   const items = [...tenants.value]
   if (authStore.user?.is_admin) {
-    items.push({ id: CREATE_TENANT_ID, name: '+ Thêm công ty', slug: '' })
+    items.push({ id: CREATE_TENANT_ID, name: `+ ${t('create_tenant')}`, slug: '' })
   }
-  items.push({ id: MANAGE_TENANT_ID, name: 'Quản lý công ty', slug: '' })
+  items.push({ id: MANAGE_TENANT_ID, name: t('manage_tenants'), slug: '' })
   return items
 })
 

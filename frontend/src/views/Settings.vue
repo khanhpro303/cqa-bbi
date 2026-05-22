@@ -65,13 +65,13 @@
 
           <v-switch
             v-model="useCustomBaseUrl"
-            label="Tùy chỉnh API URL"
+            :label="$t('custom_api_url')"
             color="primary"
             density="compact"
             hide-details
             class="mt-1 mb-2"
           />
-          <div v-if="!useCustomBaseUrl" class="text-caption text-grey mb-2">Bật khi cần dùng proxy (OpenRouter, LiteLLM) hoặc self-hosted</div>
+          <div v-if="!useCustomBaseUrl" class="text-caption text-grey mb-2">{{ $t('custom_api_url_hint') }}</div>
 
           <v-text-field
             v-if="useCustomBaseUrl"

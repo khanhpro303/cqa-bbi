@@ -53,7 +53,7 @@
       </v-card-actions>
       <div v-else-if="!logs.length" class="text-center pa-8">
         <v-icon size="48" color="grey-lighten-1" class="mb-3">mdi-bell-outline</v-icon>
-        <div class="text-grey">Chưa có thông báo nào. Thông báo sẽ được ghi nhận khi công việc chạy và gửi kết quả qua Telegram/Email.</div>
+        <div class="text-grey">{{ $t('no_notifications_desc') }}</div>
       </div>
     </v-card>
   </div>

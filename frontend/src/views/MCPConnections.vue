@@ -44,8 +44,8 @@
     </v-card>
     <div v-else class="text-center pa-8">
       <v-icon size="48" color="grey-lighten-1" class="mb-3">mdi-connection</v-icon>
-      <div class="text-grey-darken-1 mb-2">Kết nối MCP cho phép Claude Web/Desktop truy vấn dữ liệu qua giao thức MCP.</div>
-      <v-btn color="primary" prepend-icon="mdi-plus" @click="createDialog = true">Tạo kết nối</v-btn>
+      <div class="text-grey-darken-1 mb-2">{{ $t('mcp_empty_desc') }}</div>
+      <v-btn color="primary" prepend-icon="mdi-plus" @click="createDialog = true">{{ $t('create_connection') }}</v-btn>
     </div>
 
     <!-- Create Dialog -->

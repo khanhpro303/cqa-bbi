@@ -21,6 +21,8 @@ export default {
   normal: 'Bình thường',
   required: 'Bắt buộc',
   slug_hint: 'Dùng cho URL, chỉ chứa a-z, 0-9 và dấu -',
+  date_from: 'Từ ngày',
+  date_to: 'Đến ngày',
 
   // Auth
   login: 'Đăng nhập',
@@ -46,6 +48,7 @@ export default {
   // Tenants
   tenants: 'Công ty',
   create_tenant: 'Thêm công ty',
+  manage_tenants: 'Quản lý công ty',
   tenant_name: 'Tên công ty',
   tenant_slug: 'Mã công ty',
   channels_count: '{count} kênh',
@@ -54,6 +57,9 @@ export default {
   // Channels
   channels: 'Kênh chat',
   connect_channel: 'Kết nối kênh mới',
+  connect_channel_short: 'Kết nối kênh',
+  no_chat_channels: 'Chưa có kênh chat nào',
+  connect_channel_guide: 'Kết nối Facebook, Zalo OA hoặc Zalo cá nhân để hệ thống tự lấy hội thoại về một nơi. Với Zalo cá nhân, bạn chỉ cần tạo kênh rồi làm theo hướng dẫn quét QR trong màn hình chi tiết.',
   channel_type: 'Loại kênh',
   channel_zalo: 'Zalo OA',
   channel_facebook: 'Facebook Fanpage',
@@ -65,6 +71,8 @@ export default {
   // Jobs
   jobs: 'Công việc',
   create_job: 'Tạo công việc mới',
+  create_task: 'Tạo công việc',
+  job_empty_desc: 'Tạo công việc phân tích để AI đánh giá chất lượng CSKH hoặc phân loại cuộc chat tự động.',
   job_type: 'Loại',
   job_qc: 'Phân tích chất lượng CSKH',
   job_classification: 'Phân loại & cảnh báo',
@@ -96,9 +104,11 @@ export default {
   // Dashboard
   dashboard: 'Trang chủ',
   total_conversations: 'Tổng hội thoại',
+  total_messages: 'Tổng tin nhắn',
   issues_today: 'Vấn đề hôm nay',
   active_jobs: 'Công việc đang chạy',
   active_channels: 'Kênh hoạt động',
+  recent_activity: 'Hoạt động gần đây',
   recent_alerts: 'Cảnh báo gần đây',
   service_status: 'Trạng thái dịch vụ',
   ai_cost: 'Chi phí AI',
@@ -114,6 +124,7 @@ export default {
   evidence: 'Bằng chứng',
   violation: 'Vi phạm',
   suggestion: 'Gợi ý',
+  evaluate: 'Đánh giá',
 
   // Settings
   settings: 'Cài đặt',
@@ -234,10 +245,12 @@ export default {
   recipient: 'Người nhận',
   sent_at: 'Thời gian gửi',
   content: 'Nội dung',
+  no_notifications_desc: 'Chưa có thông báo nào. Thông báo sẽ được ghi nhận khi công việc chạy và gửi kết quả qua Telegram/Email.',
 
   // MCP
   mcp_connections: 'Kết nối MCP',
   create_connection: 'Tạo kết nối mới',
+  mcp_empty_desc: 'Kết nối MCP cho phép Claude Web/Desktop truy vấn dữ liệu qua giao thức MCP.',
   client_id: 'Client ID',
   client_secret: 'Client Secret',
   revoke: 'Thu hồi',
@@ -250,6 +263,8 @@ export default {
   new_password: 'Mật khẩu mới',
   confirm_password: 'Xác nhận mật khẩu mới',
   company_name: 'Tên công ty',
+  custom_api_url: 'Tuỳ chỉnh API URL',
+  custom_api_url_hint: 'Bật khi cần dùng proxy (OpenRouter, LiteLLM) hoặc self-hosted',
 
   // Messages
   msg_channel: 'Kênh',

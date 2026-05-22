@@ -86,7 +86,7 @@
         <v-card class="pa-4">
           <div class="d-flex justify-space-between align-center">
             <div>
-              <div class="text-body-2 text-grey">Tổng tin nhắn</div>
+              <div class="text-body-2 text-grey">{{ $t('total_messages') }}</div>
               <div class="text-h5 font-weight-bold mt-1">{{ totalMessages.toLocaleString() }}</div>
             </div>
             <v-icon color="primary" size="32" class="opacity-50">mdi-email-multiple</v-icon>
@@ -112,7 +112,7 @@
         <v-card class="pa-4">
           <div class="text-subtitle-1 font-weight-bold mb-3">
             <v-icon start size="small" color="primary">mdi-bell-ring</v-icon>
-            Hoạt động gần đây
+            {{ $t('recent_activity') }}
           </div>
           <div v-if="recentActivity.length">
             <div
@@ -235,6 +235,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { Line } from 'vue-chartjs'
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend } from 'chart.js'
 import api from '../api'
@@ -243,6 +244,7 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
 
 const stats = ref([
@@ -350,7 +352,7 @@ const messagesChartData = computed(() => ({
   labels: messagesByDay.value.map(d => formatChartDate(d.date)),
   datasets: [
     {
-      label: 'Tổng tin nhắn',
+      label: t('total_messages'),
       data: messagesByDay.value.map(d => d.count),
       borderColor: '#5C6BC0',
       backgroundColor: 'rgba(92,107,192,0.1)',

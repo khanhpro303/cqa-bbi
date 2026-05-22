@@ -70,11 +70,11 @@
 
     <div v-if="!channelStore.channels.length" class="text-center mt-12 pa-8">
       <v-icon size="64" color="grey-lighten-1" class="mb-4">mdi-chat-plus</v-icon>
-      <div class="text-h6 text-grey-darken-1 mb-2">Chưa có kênh chat nào</div>
+      <div class="text-h6 text-grey-darken-1 mb-2">{{ $t('no_chat_channels') }}</div>
       <div class="text-body-2 text-grey mb-4" style="max-width: 500px; margin: 0 auto;">
-        Kết nối Facebook, Zalo OA hoặc Zalo cá nhân để hệ thống tự lấy hội thoại về một nơi. Với Zalo cá nhân, bạn chỉ cần tạo kênh rồi làm theo hướng dẫn quét QR trong màn hình chi tiết.
+        {{ $t('connect_channel_guide') }}
       </div>
-      <v-btn color="primary" prepend-icon="mdi-plus" @click="showDialog = true">Kết nối kênh</v-btn>
+      <v-btn color="primary" prepend-icon="mdi-plus" @click="showDialog = true">{{ $t('connect_channel_short') }}</v-btn>
     </div>
 
     <!-- Connect Channel Dialog -->

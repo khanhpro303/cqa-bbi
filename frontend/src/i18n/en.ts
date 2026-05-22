@@ -21,6 +21,8 @@ export default {
   normal: 'Normal',
   required: 'Required',
   slug_hint: 'Used in URL, only a-z, 0-9 and hyphens',
+  date_from: 'From Date',
+  date_to: 'To Date',
 
   // Auth
   login: 'Login',
@@ -46,6 +48,7 @@ export default {
   // Tenants
   tenants: 'Companies',
   create_tenant: 'Add Company',
+  manage_tenants: 'Manage Companies',
   tenant_name: 'Company Name',
   tenant_slug: 'Company Code',
   channels_count: '{count} channels',
@@ -54,6 +57,9 @@ export default {
   // Channels
   channels: 'Channels',
   connect_channel: 'Connect New Channel',
+  connect_channel_short: 'Connect Channel',
+  no_chat_channels: 'No chat channels yet',
+  connect_channel_guide: 'Connect Facebook, Zalo OA, or personal Zalo to automatically collect conversations in one place. For personal Zalo, simply create a channel and follow the QR scan instructions on the details screen.',
   channel_type: 'Channel Type',
   channel_zalo: 'Zalo OA',
   channel_facebook: 'Facebook Fanpage',
@@ -65,6 +71,8 @@ export default {
   // Jobs
   jobs: 'Jobs',
   create_job: 'Create New Job',
+  create_task: 'Create Task',
+  job_empty_desc: 'Create an analysis task for AI to evaluate customer service quality or automatically classify chats.',
   job_type: 'Type',
   job_qc: 'CSKH Quality Analysis',
   job_classification: 'Classification & Alerts',
@@ -96,9 +104,11 @@ export default {
   // Dashboard
   dashboard: 'Dashboard',
   total_conversations: 'Total Conversations',
+  total_messages: 'Total Messages',
   issues_today: 'Issues Today',
   active_jobs: 'Active Jobs',
   active_channels: 'Active Channels',
+  recent_activity: 'Recent Activity',
   recent_alerts: 'Recent Alerts',
   service_status: 'Service Status',
   ai_cost: 'AI Cost',
@@ -114,6 +124,7 @@ export default {
   evidence: 'Evidence',
   violation: 'Violation',
   suggestion: 'Suggestion',
+  evaluate: 'Evaluate',
 
   // Settings
   settings: 'Settings',
@@ -234,10 +245,12 @@ export default {
   recipient: 'Recipient',
   sent_at: 'Sent At',
   content: 'Content',
+  no_notifications_desc: 'No notifications yet. Notifications will be recorded when tasks run and send results via Telegram/Email.',
 
   // MCP
   mcp_connections: 'MCP Connections',
   create_connection: 'Create Connection',
+  mcp_empty_desc: 'MCP connections allow Claude Web/Desktop to query data via the MCP protocol.',
   client_id: 'Client ID',
   client_secret: 'Client Secret',
   revoke: 'Revoke',
@@ -250,6 +263,8 @@ export default {
   new_password: 'New Password',
   confirm_password: 'Confirm New Password',
   company_name: 'Company Name',
+  custom_api_url: 'Custom API URL',
+  custom_api_url_hint: 'Enable when using a proxy (OpenRouter, LiteLLM) or self-hosted',
 
   // Messages
   msg_channel: 'Channel',

@@ -13,8 +13,8 @@
           style="max-width: 200px"
           @update:model-value="loadLogs"
         />
-        <v-text-field v-model="dateFrom" type="date" label="Từ ngày" density="compact" style="max-width: 160px" @change="loadLogs" />
-        <v-text-field v-model="dateTo" type="date" label="Đến ngày" density="compact" style="max-width: 160px" @change="loadLogs" />
+        <v-text-field v-model="dateFrom" type="date" :label="$t('date_from')" density="compact" style="max-width: 160px" @change="loadLogs" />
+        <v-text-field v-model="dateTo" type="date" :label="$t('date_to')" density="compact" style="max-width: 160px" @change="loadLogs" />
       </v-card-text>
 
       <div style="overflow-x: auto;">

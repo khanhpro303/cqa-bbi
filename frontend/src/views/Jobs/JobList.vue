@@ -48,8 +48,8 @@
       </v-table>
       <div v-else class="text-center pa-8">
         <v-icon size="48" color="grey-lighten-1" class="mb-3">mdi-briefcase-plus</v-icon>
-        <div class="text-grey-darken-1 mb-2">Tạo công việc phân tích để AI đánh giá chất lượng CSKH hoặc phân loại cuộc chat tự động.</div>
-        <v-btn color="primary" prepend-icon="mdi-plus" :to="`/${tenantId}/jobs/create`" size="small">Tạo công việc</v-btn>
+        <div class="text-grey-darken-1 mb-2">{{ $t('job_empty_desc') }}</div>
+        <v-btn color="primary" prepend-icon="mdi-plus" :to="`/${tenantId}/jobs/create`" size="small">{{ $t('create_task') }}</v-btn>
       </div>
     </v-card>
   </div>

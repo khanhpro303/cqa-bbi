@@ -49,7 +49,7 @@
                 <v-select
                   v-model="filterEvaluation"
                   :items="evaluationFilterOptions"
-                  label="Đánh giá"
+                  :label="$t('evaluate')"
                   clearable
                   density="compact"
                   variant="outlined"
@@ -191,7 +191,7 @@
             </v-tab>
             <v-tab value="qc">
               <v-icon start size="small">mdi-clipboard-check</v-icon>
-              Đánh giá
+              {{ $t('evaluate') }}
               <v-chip v-if="qcGroups.length" size="x-small" color="primary" variant="flat" class="ml-1">{{ qcGroups.length }}</v-chip>
             </v-tab>
             <v-tab value="classification">
@@ -421,6 +421,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useDisplay } from 'vuetify'
 import { useConversationStore, type Message } from '../stores/conversations'
 import { useChannelStore } from '../stores/channels'
@@ -441,6 +442,7 @@ const { mdAndUp } = useDisplay()
 const conversationStore = useConversationStore()
 const channelStore = useChannelStore()
 const authStore = useAuthStore()
+const { t } = useI18n()
 
 const tenantId = computed(() => route.params.tenantId as string)
 
@@ -557,7 +559,7 @@ function downloadConversation() {
     text += '─'.repeat(50) + '\n'
     for (const g of qcGroups.value) {
       const verdict = getQcVerdict(g)
-      text += `Đánh giá (${g.job_name}): ${verdict === 'PASS' ? 'Đạt' : verdict === 'SKIP' ? 'Bỏ qua' : 'Không đạt'}\n`
+      text += `${t('evaluate')} (${g.job_name}): ${verdict === 'PASS' ? 'Đạt' : verdict === 'SKIP' ? 'Bỏ qua' : 'Không đạt'}\n`
       const review = getQcReview(g)
       if (review) text += `Nhận xét: ${review}\n`
     }
