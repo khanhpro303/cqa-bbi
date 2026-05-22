@@ -162,6 +162,138 @@ func SaveAnalysisSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})
 }
 
+// SaveAIEnginesSettings saves Langflow configuration and other AI engines
+func SaveAIEnginesSettings(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	var req struct {
+		LangflowBaseURL string `json:"langflow_base_url"`
+		LangflowFlowID  string `json:"langflow_flow_id"`
+		LangflowToken   string `json:"langflow_token"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
+		return
+	}
+
+	cfg, _ := config.Load()
+
+	// Base URL
+	if req.LangflowBaseURL != "" {
+		upsertSetting(tenantID, "ai_engine_langflow_url", req.LangflowBaseURL, nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_url").Delete(&models.AppSetting{})
+	}
+
+	// Flow ID
+	if req.LangflowFlowID != "" {
+		upsertSetting(tenantID, "ai_engine_langflow_flow_id", req.LangflowFlowID, nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_flow_id").Delete(&models.AppSetting{})
+	}
+
+	// Token
+	if req.LangflowToken != "" {
+		if !isMaskedSecret(req.LangflowToken) {
+			encrypted, err := pkg.Encrypt([]byte(req.LangflowToken), cfg.EncryptionKey)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "encryption_failed"})
+				return
+			}
+			upsertSetting(tenantID, "ai_engine_langflow_token", "", encrypted)
+		}
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_token").Delete(&models.AppSetting{})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "saved"})
+}
+
+// TestLangflowConnection pings Langflow to check if configuration works
+func TestLangflowConnection(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	cfg, _ := config.Load()
+
+	var req struct {
+		LangflowBaseURL string `json:"langflow_base_url"`
+		LangflowFlowID  string `json:"langflow_flow_id"`
+		LangflowToken   string `json:"langflow_token"`
+	}
+	body, _ := io.ReadAll(c.Request.Body)
+	if len(strings.TrimSpace(string(body))) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+	}
+
+	// Resolve params (fallback to DB if not provided)
+	baseURL := req.LangflowBaseURL
+	if baseURL == "" {
+		var setting models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_url").First(&setting).Error; err == nil {
+			baseURL = setting.ValuePlain
+		}
+	}
+	flowID := req.LangflowFlowID
+	if flowID == "" {
+		var setting models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_flow_id").First(&setting).Error; err == nil {
+			flowID = setting.ValuePlain
+		}
+	}
+	token := ""
+	if req.LangflowToken != "" && !isMaskedSecret(req.LangflowToken) {
+		token = req.LangflowToken
+	} else {
+		var setting models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_token").First(&setting).Error; err == nil {
+			if len(setting.ValueEncrypted) > 0 {
+				decrypted, _ := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
+				token = string(decrypted)
+			} else {
+				token = setting.ValuePlain
+			}
+		}
+	}
+
+	if baseURL == "" || flowID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing_config", "message": "Vui lòng cung cấp URL và Flow ID"})
+		return
+	}
+
+	// Clean up URL
+	baseURL = strings.TrimRight(baseURL, "/")
+	endpoint := fmt.Sprintf("%s/api/v1/run/%s", baseURL, flowID)
+
+	payload := strings.NewReader(`{"input_value": "ping", "output_type": "chat", "input_type": "chat"}`)
+	
+	httpReq, err := http.NewRequest("POST", endpoint, payload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "request_creation_failed"})
+		return
+	}
+	httpReq.Header.Add("Content-Type", "application/json")
+	if token != "" {
+		httpReq.Header.Add("Authorization", "Bearer "+token)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	res, err := client.Do(httpReq)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "connection_failed", "details": err.Error()})
+		return
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		resBody, _ := io.ReadAll(res.Body)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "api_error", "status_code": res.StatusCode, "details": string(resBody)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "Kết nối thành công"})
+}
+
 // TestAIKey tests the AI API key by making a simple request
 func TestAIKey(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)

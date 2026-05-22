@@ -409,6 +409,7 @@ const navItems = computed(() => {
     { icon: 'mdi-currency-usd', label: 'cost_logs', route: `${base}/cost-logs`, exact: false, perm: 'settings' },
     { icon: 'mdi-bell-ring', label: 'nav_notification_logs', route: `${base}/notifications`, exact: false, perm: 'jobs' },
     { icon: 'mdi-api', label: 'nav_mcp', route: `${base}/mcp`, exact: false, perm: 'settings' },
+    { icon: 'mdi-brain', label: 'nav_ai_engines', route: `${base}/ai-engines`, exact: false, perm: 'settings' },
     { icon: 'mdi-account-group', label: 'nav_users', route: `${base}/users`, exact: false, perm: 'settings' },
     { icon: 'mdi-cog', label: 'nav_settings', route: `${base}/settings`, exact: false, perm: 'settings' },
   ]

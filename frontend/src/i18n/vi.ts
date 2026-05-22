@@ -42,6 +42,7 @@ export default {
   nav_jobs: 'Tác vụ AI',
   nav_notification_logs: 'Lịch sử thông báo',
   nav_mcp: 'Kết nối MCP',
+  nav_ai_engines: 'AI Engines',
   nav_messages: 'Tin nhắn',
   nav_settings: 'Cài đặt',
 
@@ -358,4 +359,12 @@ export default {
   mcp_secret_copied: 'Đã copy secret',
 
   validation_output: 'Vui lòng điền đầy đủ thông tin đầu ra và test gửi thành công',
+
+  // AI Engines
+  ai_engines: 'AI Engines',
+  ai_engines_desc: 'Cấu hình các AI Workflow Engines bên ngoài như Langflow, Flowise...',
+  langflow_config: 'Cấu hình Langflow',
+  flow_id: 'Flow ID',
+  application_token: 'Application Token',
+  base_url: 'Base URL',
 }

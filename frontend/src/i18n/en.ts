@@ -42,6 +42,7 @@ export default {
   nav_jobs: 'AI Tasks',
   nav_notification_logs: 'Notification Logs',
   nav_mcp: 'MCP Connections',
+  nav_ai_engines: 'AI Engines',
   nav_messages: 'Messages',
   nav_settings: 'Settings',
 
@@ -358,4 +359,12 @@ export default {
   mcp_secret_copied: 'Secret copied',
 
   validation_output: 'Please fill in output details and successfully test sending',
+
+  // AI Engines
+  ai_engines: 'AI Engines',
+  ai_engines_desc: 'Configure external AI Workflow Engines like Langflow, Flowise...',
+  langflow_config: 'Langflow Configuration',
+  flow_id: 'Flow ID',
+  application_token: 'Application Token',
+  base_url: 'Base URL',
 }

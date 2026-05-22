@@ -106,6 +106,12 @@ const router = createRouter({
           meta: { perm: 'settings' },
         },
         {
+          path: 'ai-engines',
+          name: 'ai-engines',
+          component: () => import('../views/AIEngines.vue'),
+          meta: { perm: 'settings' },
+        },
+        {
           path: 'users',
           name: 'users',
           component: () => import('../views/Users.vue'),
