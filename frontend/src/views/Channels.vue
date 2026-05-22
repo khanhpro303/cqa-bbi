@@ -55,7 +55,7 @@
               {{ $t('sync_now') }}
             </v-btn>
             <v-btn v-if="ch.channel_type !== 'personal_zalo_import' && ch.last_sync_status === 'error'" size="small" variant="tonal" color="warning" prepend-icon="mdi-link-variant" :loading="reauthing === ch.id" @click="reauthChannel(ch.id)">
-              Kết nối lại
+              {{ $t('reauth') }}
             </v-btn>
             <v-btn v-if="ch.channel_type !== 'personal_zalo_import'" size="small" variant="text" color="primary" @click="testConn(ch.id)">
               {{ $t('test_connection') }}
@@ -87,7 +87,7 @@
           :items="[
             { title: $t('channel_zalo'), value: 'zalo_oa' },
             { title: $t('channel_facebook'), value: 'facebook' },
-            { title: 'Zalo cá nhân', value: 'personal_zalo_import' },
+            { title: $t('channel_personal_zalo'), value: 'personal_zalo_import' },
           ]"
           class="mb-3"
         />
@@ -96,40 +96,39 @@
         <!-- Zalo OA -->
         <template v-if="newChannel.channel_type === 'zalo_oa'">
           <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://tanviet12.github.io/chat-quality-agent/usage/channels.html#zalo-oa" target="_blank" class="mb-3">
-            Hướng dẫn lấy App ID và Secret Key
+            {{ $t('zalo_app_id_guide') }}
           </v-btn>
-          <v-text-field v-model="newChannel.creds.app_id" :label="$t('zalo_app_id')" density="compact" class="mb-2" hint="Lấy từ Cài đặt ứng dụng trên Zalo Developers" persistent-hint />
+          <v-text-field v-model="newChannel.creds.app_id" :label="$t('zalo_app_id')" density="compact" class="mb-2" :hint="$t('zalo_app_id_hint')" persistent-hint />
           <v-text-field v-model="newChannel.creds.app_secret" :label="$t('zalo_app_secret')" type="password" density="compact" class="mb-2" />
           <div class="text-caption text-grey-darken-1 mb-2">
             <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
-            Nếu ứng dụng Zalo có nhiều OA, bước tiếp theo sẽ mở trang Zalo để chọn OA — hãy chọn <b>đúng OA</b> tương ứng với kênh này.
+            {{ $t('zalo_oa_selection_note') }}
           </div>
         </template>
 
         <!-- Facebook -->
         <template v-else-if="newChannel.channel_type === 'facebook'">
           <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://tanviet12.github.io/chat-quality-agent/usage/facebook.html" target="_blank" class="mb-3">
-            Hướng dẫn kết nối Facebook Fanpage
+            {{ $t('fb_guide') }}
           </v-btn>
           <v-text-field v-model="newChannel.creds.page_id" :label="$t('fb_page_id')" density="compact" class="mb-2" hint="Page ID từ Cài đặt trang Facebook" persistent-hint />
           <v-text-field v-model="newChannel.creds.access_token" :label="$t('fb_access_token')" density="compact" class="mb-2" hint="Page Access Token (nên dùng long-lived token)" persistent-hint />
         </template>
         <template v-else>
           <v-alert type="info" variant="tonal" class="mb-3">
-            Kênh này dùng để lấy tin nhắn từ Zalo cá nhân. Sau khi tạo, vào màn hình chi tiết để bấm kết nối, quét QR và đồng bộ tin nhắn.
-            Thông tin kỹ thuật (endpoint/secret) vẫn có sẵn cho đội dev ở màn hình chi tiết.
+            {{ $t('personal_zalo_note') }}
           </v-alert>
           <v-select
             v-model="newChannel.sync_scope"
             :items="[
-              { title: 'Tất cả (Cá nhân & Nhóm)', value: 'all' },
-              { title: 'Chỉ tin nhắn 1:1', value: 'direct' },
-              { title: 'Chỉ tin nhắn nhóm', value: 'group' },
+              { title: $t('sync_scope_all'), value: 'all' },
+              { title: $t('sync_scope_direct'), value: 'direct' },
+              { title: $t('sync_scope_group'), value: 'group' },
             ]"
-            label="Phạm vi đồng bộ"
+            :label="$t('sync_scope')"
             density="compact"
             class="mb-3"
-            hint="Chọn loại tin nhắn sẽ được lấy về từ Zalo cá nhân"
+            :hint="$t('sync_scope_hint')"
             persistent-hint
           />
         </template>
@@ -140,19 +139,19 @@
           <v-select
             v-model="newChannel.sync_interval"
             :items="syncIntervalOptions"
-            label="Chu kỳ đồng bộ"
+            :label="$t('sync_interval')"
             density="compact"
             class="mb-3"
-            hint="Khoảng thời gian giữa mỗi lần tự động đồng bộ tin nhắn"
+            :hint="$t('sync_interval_hint')"
             persistent-hint
           />
           <v-alert v-if="newChannel.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
-            Đồng bộ quá thường xuyên có thể bị giới hạn bởi API của nền tảng.
+            {{ $t('sync_interval_warning') }}
           </v-alert>
           <v-switch
             v-model="newChannel.sync_files"
-            label="Lưu trữ file/ảnh từ cuộc chat"
-            hint="Tải và lưu file, ảnh từ cuộc chat lên server. Tăng dung lượng lưu trữ."
+            :label="$t('sync_files')"
+            :hint="$t('sync_files_hint')"
             persistent-hint
             density="compact"
             color="primary"
@@ -178,7 +177,7 @@
             :disabled="!newChannel.name"
             @click="createPersonalZalo"
           >
-            Tạo kênh Zalo cá nhân
+            {{ $t('create_personal_zalo') }}
           </v-btn>
           <v-btn
             v-else
@@ -196,42 +195,42 @@
     <!-- Edit Channel Dialog -->
     <v-dialog v-model="editDialog" max-width="600">
       <v-card class="pa-6">
-        <v-card-title>Sửa kênh chat</v-card-title>
+        <v-card-title>{{ $t('edit_channel') }}</v-card-title>
         
         <v-tabs v-model="editTab" color="primary" class="mb-4">
-          <v-tab value="general">Cài đặt chung</v-tab>
-          <v-tab value="chatbot" v-if="editChannelType === 'zalo_oa'">Chatbot & Session</v-tab>
+          <v-tab value="general">{{ $t('general_settings') }}</v-tab>
+          <v-tab value="chatbot" v-if="editChannelType === 'zalo_oa'">{{ $t('chatbot_session') }}</v-tab>
         </v-tabs>
 
         <v-window v-model="editTab">
           <v-window-item value="general">
-            <v-text-field v-model="editForm.name" label="Tên kênh" class="mb-3" />
-            <v-switch v-model="editForm.is_active" label="Hoạt động" color="primary" density="compact" class="mb-3" />
+            <v-text-field v-model="editForm.name" :label="$t('channel_name')" class="mb-3" />
+            <v-switch v-model="editForm.is_active" :label="$t('active')" color="primary" density="compact" class="mb-3" />
             <template v-if="editChannelType !== 'personal_zalo_import'">
               <v-select
                 v-model="editForm.sync_interval"
                 :items="syncIntervalOptions"
-                label="Chu kỳ đồng bộ"
+                :label="$t('sync_interval')"
                 density="compact"
                 class="mb-3"
-                hint="Khoảng thời gian giữa mỗi lần tự động đồng bộ tin nhắn"
+                :hint="$t('sync_interval_hint')"
                 persistent-hint
               />
               <v-alert v-if="editForm.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
-                Đồng bộ quá thường xuyên có thể bị giới hạn bởi API của nền tảng (Facebook/Zalo).
+                {{ $t('sync_interval_warning_fb_zalo') }}
               </v-alert>
-              <v-switch v-model="editForm.sync_files" label="Lưu trữ file/ảnh từ cuộc chat" color="primary" density="compact" hint="Tải và lưu file, ảnh từ cuộc chat lên server." persistent-hint />
+              <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" color="primary" density="compact" :hint="$t('sync_files_hint_short')" persistent-hint />
             </template>
           </v-window-item>
           
           <v-window-item value="chatbot">
-            <div class="text-subtitle-2 mb-2">Cấu hình phiên làm việc (Session)</div>
-            <v-text-field v-model="editForm.session_keyword" label="Từ khóa mở session" hint="Ví dụ: 'chào bull'" persistent-hint density="compact" class="mb-3" />
-            <v-text-field v-model="editForm.session_end_keyword" label="Từ khóa đóng session" hint="Ví dụ: 'tạm biệt'" persistent-hint density="compact" class="mb-3" />
-            <v-text-field v-model="editForm.session_welcome_message" label="Câu chào" hint="Gửi khi mở session thành công" persistent-hint density="compact" class="mb-3" />
-            <v-text-field v-model.number="editForm.session_timeout_minutes" label="Thời gian đóng session tự động (phút)" type="number" density="compact" class="mb-3" />
+            <div class="text-subtitle-2 mb-2">{{ $t('session_config') }}</div>
+            <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
+            <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
+            <v-text-field v-model="editForm.session_welcome_message" :label="$t('session_welcome')" :hint="$t('session_welcome_hint')" persistent-hint density="compact" class="mb-3" />
+            <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
             <v-divider class="my-4" />
-            <div class="text-subtitle-2 mb-2">Tích hợp Langflow (Bỏ trống để dùng cấu hình mặc định)</div>
+            <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
             <v-text-field v-model="editForm.langflow_api_url" label="Langflow API URL" density="compact" class="mb-3" />
             <v-text-field v-model="editForm.langflow_api_key" label="Langflow API Key" type="password" density="compact" class="mb-3" />
             <v-text-field v-model="editForm.langflow_flow_id" label="Langflow Flow ID" density="compact" class="mb-3" />
@@ -380,7 +379,7 @@ async function createPersonalZalo() {
     showDialog.value = false
     newChannel.name = ''
     newChannel.creds = {}
-    showSnack('Đã tạo kênh Zalo cá nhân', 'success')
+    showSnack(t('personal_zalo_created'), 'success')
     await channelStore.fetchChannels(tenantId.value)
     const channelId = created?.id || created?.data?.id
     if (channelId) {
@@ -418,7 +417,7 @@ async function reauthChannel(channelId: string) {
       window.location.href = data.redirect_url
     }
   } catch (e: any) {
-    showSnack(e?.response?.data?.error || 'Lỗi kết nối lại', 'error')
+    showSnack(e?.response?.data?.error || t('reauth_error'), 'error')
   } finally {
     reauthing.value = ''
   }
@@ -482,16 +481,16 @@ const editForm = reactive({
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_timeout_minutes: 0,
   langflow_api_url: '', langflow_api_key: '', langflow_flow_id: ''
 })
-const syncIntervalOptions = [
-  { title: 'Mỗi 1 phút', value: 1 },
-  { title: 'Mỗi 5 phút', value: 5 },
-  { title: 'Mỗi 10 phút', value: 10 },
-  { title: 'Mỗi 15 phút (mặc định)', value: 15 },
-  { title: 'Mỗi 30 phút', value: 30 },
-  { title: 'Mỗi 1 giờ', value: 60 },
-  { title: 'Mỗi 6 giờ', value: 360 },
-  { title: 'Mỗi ngày', value: 1440 },
-]
+const syncIntervalOptions = computed(() => [
+  { title: t('sync_1m'), value: 1 },
+  { title: t('sync_5m'), value: 5 },
+  { title: t('sync_10m'), value: 10 },
+  { title: t('sync_15m'), value: 15 },
+  { title: t('sync_30m'), value: 30 },
+  { title: t('sync_1h'), value: 60 },
+  { title: t('sync_6h'), value: 360 },
+  { title: t('sync_1d'), value: 1440 },
+])
 
 function openEdit(ch: any) {
   editChannelId.value = ch.id

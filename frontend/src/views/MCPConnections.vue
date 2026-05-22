@@ -13,9 +13,9 @@
           <tr>
             <th>{{ $t('name') }}</th>
             <th>{{ $t('client_id') }}</th>
-            <th>Redirect URIs</th>
+            <th>{{ $t('mcp_redirect_uris') }}</th>
             <th>{{ $t('scopes') }}</th>
-            <th>Tạo lúc</th>
+            <th>{{ $t('mcp_created_at') }}</th>
             <th>{{ $t('actions') }}</th>
           </tr>
         </thead>
@@ -27,7 +27,7 @@
               <template v-if="parseJSON(client.redirect_uris).length">
                 <v-chip v-for="uri in parseJSON(client.redirect_uris)" :key="uri" size="x-small" variant="tonal" class="mr-1 mb-1">{{ uri }}</v-chip>
               </template>
-              <span v-else class="text-grey text-caption">Chưa cấu hình</span>
+              <span v-else class="text-grey text-caption">{{ $t('mcp_not_configured') }}</span>
             </td>
             <td>
               <v-chip v-for="scope in parseJSON(client.scopes)" :key="scope" size="x-small" variant="tonal" color="primary" class="mr-1">{{ scope }}</v-chip>
@@ -53,27 +53,27 @@
       <v-card class="pa-6">
         <v-card-title>{{ $t('create_connection') }}</v-card-title>
 
-        <v-text-field v-model="newName" :label="$t('name')" class="mt-4" hint="Tên hiển thị cho kết nối này" persistent-hint />
+        <v-text-field v-model="newName" :label="$t('name')" class="mt-4" :hint="$t('mcp_name_hint')" persistent-hint />
 
         <v-combobox
           v-model="newRedirectURIs"
-          label="Redirect URIs"
+          :label="$t('mcp_redirect_uris')"
           multiple
           chips
           closable-chips
           class="mt-4"
-          hint="Nhập URL callback rồi nhấn Enter (vd: https://claude.ai/api/mcp/auth_callback)"
+          :hint="$t('mcp_redirect_uris_hint')"
           persistent-hint
         />
 
         <v-select
           v-model="newScopes"
           :items="scopeOptions"
-          label="Phân quyền (Scopes)"
+          :label="$t('scopes')"
           multiple
           chips
           class="mt-4"
-          hint="Chọn quyền truy cập cho kết nối"
+          :hint="$t('mcp_scopes_hint')"
           persistent-hint
         />
 
@@ -83,17 +83,17 @@
           <div class="text-caption text-grey mb-1">{{ $t('client_secret') }}</div>
           <div class="font-mono text-body-2 text-error mb-2">{{ generatedSecret }}</div>
           <v-alert type="warning" variant="tonal" density="compact">
-            Secret chỉ hiện 1 lần. Hãy copy ngay!
+            {{ $t('mcp_secret_warning') }}
           </v-alert>
           <v-btn variant="outlined" size="small" class="mt-2" @click="copySecret">
             <v-icon start size="small">mdi-content-copy</v-icon>
-            Copy Secret
+            {{ $t('mcp_copy_secret') }}
           </v-btn>
         </div>
 
         <v-card-actions class="px-0 mt-4">
           <v-spacer />
-          <v-btn variant="text" @click="closeDialog">{{ generatedSecret ? 'Đóng' : $t('cancel') }}</v-btn>
+          <v-btn variant="text" @click="closeDialog">{{ generatedSecret ? $t('mcp_close') : $t('cancel') }}</v-btn>
           <v-btn v-if="!generatedSecret" color="primary" :loading="creating" :disabled="!newName" @click="generateClient">{{ $t('create') }}</v-btn>
         </v-card-actions>
       </v-card>
@@ -106,7 +106,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import api from '../api'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const clients = ref<any[]>([])
 const createDialog = ref(false)
 const newName = ref('')
@@ -151,7 +153,7 @@ async function generateClient() {
     newRedirectURIs.value = []
     newScopes.value = ['read', 'write']
   } catch (err: any) {
-    snackText.value = err.response?.data?.error || 'Lỗi tạo kết nối'
+    snackText.value = err.response?.data?.error || t('mcp_create_error')
     snackbar.value = true
   } finally {
     creating.value = false
@@ -159,7 +161,7 @@ async function generateClient() {
 }
 
 async function revokeClient(id: string) {
-  if (!confirm('Thu hồi kết nối này?')) return
+  if (!confirm(t('mcp_revoke_confirm'))) return
   try {
     await api.delete(`/mcp/clients/${id}`)
     await loadClients()
@@ -174,7 +176,7 @@ function closeDialog() {
 
 function copySecret() {
   navigator.clipboard.writeText(generatedSecret.value)
-  snackText.value = 'Đã copy secret'
+  snackText.value = t('mcp_secret_copied')
   snackbar.value = true
 }
 </script>

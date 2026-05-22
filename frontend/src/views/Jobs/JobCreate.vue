@@ -106,7 +106,7 @@ const validationMessage = computed(() => {
     case 1: return t('validation_min_chars', { min: 2 })
     case 2: return t('validation_select_channel')
     case 3: return t('validation_enter_rules')
-    case 4: return 'Vui lòng điền đầy đủ thông tin đầu ra và test gửi thành công'
+    case 4: return t('validation_output')
     default: return ''
   }
 })
