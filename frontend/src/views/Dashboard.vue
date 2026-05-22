@@ -109,12 +109,12 @@
     <v-row>
       <!-- Recent Activity (QC + Classification mixed) -->
       <v-col cols="12" md="7">
-        <v-card class="pa-4">
-          <div class="text-subtitle-1 font-weight-bold mb-3">
+        <v-card class="pa-4 h-100 d-flex flex-column">
+          <div class="text-subtitle-1 font-weight-bold mb-3 flex-shrink-0">
             <v-icon start size="small" color="primary">mdi-bell-ring</v-icon>
             {{ $t('recent_activity') }}
           </div>
-          <div v-if="recentActivity.length">
+          <div v-if="recentActivity.length" class="flex-grow-1">
             <div
               v-for="item in recentActivity"
               :key="item.id"
@@ -140,7 +140,7 @@
               <span class="text-caption text-grey text-no-wrap ml-2">{{ timeAgo(item.created_at) }}</span>
             </div>
           </div>
-          <div v-else class="text-center pa-6">
+          <div v-else class="text-center pa-6 flex-grow-1 d-flex flex-column justify-center align-center">
             <v-icon size="40" color="success" class="mb-2">mdi-check-circle</v-icon>
             <div class="text-grey">Chưa có hoạt động nào trong khoảng thời gian này.</div>
           </div>
@@ -209,23 +209,33 @@
     <!-- Charts Row -->
     <v-row class="mt-4">
       <v-col cols="12" md="6">
-        <v-card class="pa-4">
-          <div class="text-subtitle-1 font-weight-bold mb-3">
+        <v-card class="pa-4 h-100 d-flex flex-column">
+          <div class="text-subtitle-1 font-weight-bold mb-3 flex-shrink-0">
             <v-icon start size="small" color="primary">mdi-message-text-clock</v-icon>
             {{ $t('messages_by_day') }}
           </div>
-          <Line v-if="messagesChartData.labels.length" :data="messagesChartData" :options="chartOptions" style="max-height: 250px" />
-          <div v-else class="text-center text-grey pa-4">{{ $t('no_data') }}</div>
+          <div v-if="messagesChartData.labels.length" class="flex-grow-1" style="min-height: 250px">
+            <Line :data="messagesChartData" :options="chartOptions" style="max-height: 250px; height: 100%" />
+          </div>
+          <div v-else class="text-center text-grey pa-4 flex-grow-1 d-flex flex-column justify-center align-center" style="min-height: 250px">
+            <v-icon size="40" color="grey-lighten-2" class="mb-2">mdi-chart-box-outline</v-icon>
+            <div>{{ $t('no_data') }}</div>
+          </div>
         </v-card>
       </v-col>
       <v-col cols="12" md="6">
-        <v-card class="pa-4">
-          <div class="text-subtitle-1 font-weight-bold mb-3">
+        <v-card class="pa-4 h-100 d-flex flex-column">
+          <div class="text-subtitle-1 font-weight-bold mb-3 flex-shrink-0">
             <v-icon start size="small" color="warning">mdi-chart-line</v-icon>
             {{ $t('cost_by_day_chart') }}
           </div>
-          <Line v-if="costChartData.labels.length" :data="costChartData" :options="chartOptionsNoLegend" style="max-height: 250px" />
-          <div v-else class="text-center text-grey pa-4">{{ $t('no_data') }}</div>
+          <div v-if="costChartData.labels.length" class="flex-grow-1" style="min-height: 250px">
+            <Line :data="costChartData" :options="chartOptionsNoLegend" style="max-height: 250px; height: 100%" />
+          </div>
+          <div v-else class="text-center text-grey pa-4 flex-grow-1 d-flex flex-column justify-center align-center" style="min-height: 250px">
+            <v-icon size="40" color="grey-lighten-2" class="mb-2">mdi-chart-box-outline</v-icon>
+            <div>{{ $t('no_data') }}</div>
+          </div>
         </v-card>
       </v-col>
     </v-row>
