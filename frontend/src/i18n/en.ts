@@ -270,6 +270,8 @@ export default {
   msg_channel: 'Channel',
   msg_messages_count: 'messages',
   msg_unknown_customer: 'Customer',
+  msg_empty_desc: 'Messages will appear here after connecting and syncing a chat channel.',
+  go_to_channels: 'Go to channels',
 
   // Cron Picker
   cron_daily: 'Every day',

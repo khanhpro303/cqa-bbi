@@ -142,8 +142,8 @@
 
           <v-card-text v-else-if="!loading" class="text-center py-8">
             <v-icon size="48" color="grey-lighten-1">mdi-message-text-outline</v-icon>
-            <div class="text-grey-darken-1 mt-2">Tin nhắn sẽ hiện ở đây sau khi kết nối và đồng bộ kênh chat.</div>
-            <v-btn variant="text" color="primary" size="small" class="mt-2" :to="`/${tenantId}/channels`">Đi tới kênh chat</v-btn>
+            <div class="text-grey-darken-1 mt-2">{{ $t('msg_empty_desc') }}</div>
+            <v-btn variant="text" color="primary" size="small" class="mt-2" :to="`/${tenantId}/channels`">{{ $t('go_to_channels') }}</v-btn>
           </v-card-text>
 
           <v-card-text v-if="loading" class="text-center py-4">

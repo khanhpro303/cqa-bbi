@@ -270,6 +270,8 @@ export default {
   msg_channel: 'Kênh',
   msg_messages_count: 'tin nhắn',
   msg_unknown_customer: 'Khách hàng',
+  msg_empty_desc: 'Tin nhắn sẽ hiện ở đây sau khi kết nối và đồng bộ kênh chat.',
+  go_to_channels: 'Đi tới kênh chat',
 
   // Cron Picker
   cron_daily: 'Mỗi ngày',
