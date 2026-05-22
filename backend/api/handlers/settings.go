@@ -15,6 +15,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -278,33 +279,12 @@ func TestLangflowConnection(c *gin.Context) {
 		return
 	}
 
-	// Clean up URL
-	baseURL = strings.TrimRight(baseURL, "/")
-	endpoint := fmt.Sprintf("%s/api/v1/run/%s", baseURL, flowID)
-
-	payload := strings.NewReader(`{"input_value": "ping", "output_type": "chat", "input_type": "chat"}`)
+	// Try calling run flow with a ping using the actual LangflowClient logic
+	lfClient := engine.NewLangflowClient(cfg)
 	
-	httpReq, err := http.NewRequest("POST", endpoint, payload)
+	_, err := lfClient.RunFlowWithOverrides(c.Request.Context(), "ping_test_session", "ping", baseURL, token, flowID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "request_creation_failed"})
-		return
-	}
-	httpReq.Header.Add("Content-Type", "application/json")
-	if token != "" {
-		httpReq.Header.Add("Authorization", "Bearer "+token)
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	res, err := client.Do(httpReq)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "connection_failed", "details": err.Error()})
-		return
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusOK {
-		resBody, _ := io.ReadAll(res.Body)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "api_error", "status_code": res.StatusCode, "details": string(resBody)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
