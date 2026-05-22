@@ -261,3 +261,9 @@ func (f *FacebookAdapter) HealthCheck(ctx context.Context) error {
 	_, err := f.doRequest(ctx, url)
 	return err
 }
+
+func (f *FacebookAdapter) SendMessage(ctx context.Context, conversationID string, content string) error {
+	// TODO: implement facebook send message API
+	return fmt.Errorf("facebook send message not implemented yet")
+}
+

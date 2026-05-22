@@ -37,6 +37,11 @@ type Config struct {
 
 	// Sidecars
 	PersonalZaloGatewayBaseURL string
+
+	// Langflow Integration
+	LangflowAPIURL string
+	LangflowAPIKey string
+	LangflowFlowID string
 }
 
 func Load() (*Config, error) {
@@ -57,6 +62,9 @@ func Load() (*Config, error) {
 		AIMaxTokens:                getEnvInt("AI_MAX_TOKENS", 16384),
 		Env:                        getEnv("APP_ENV", "development"),
 		PersonalZaloGatewayBaseURL: strings.TrimRight(getEnv("PERSONAL_ZALO_GATEWAY_BASE_URL", ""), "/"),
+		LangflowAPIURL:             strings.TrimRight(getEnv("LANGFLOW_API_URL", ""), "/"),
+		LangflowAPIKey:             getEnv("LANGFLOW_API_KEY", ""),
+		LangflowFlowID:             getEnv("LANGFLOW_FLOW_ID", ""),
 	}
 
 	if cfg.JWTSecret == "" {

@@ -97,6 +97,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		// Version check (public, no auth required)
 		api.GET("/version/check", handlers.CheckVersion)
 
+		// Webhooks
+		api.POST("/webhooks/zalo", handlers.ZaloWebhookHandler(cfg))
+
 		// Initial setup (only works when no users exist)
 		api.GET("/setup/status", handlers.SetupStatus)
 		api.POST("/setup", handlers.Setup)

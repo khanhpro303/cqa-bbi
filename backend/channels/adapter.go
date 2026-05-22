@@ -42,6 +42,9 @@ type ChannelAdapter interface {
 	// FetchMessages returns messages for a conversation since `since`.
 	FetchMessages(ctx context.Context, conversationID string, since time.Time) ([]SyncedMessage, error)
 
+	// SendMessage sends a message to the external channel.
+	SendMessage(ctx context.Context, conversationID string, content string) error
+
 	// HealthCheck verifies the channel connection is working.
 	HealthCheck(ctx context.Context) error
 }

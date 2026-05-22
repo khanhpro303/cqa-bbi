@@ -352,3 +352,28 @@ func (z *ZaloOAAdapter) HealthCheck(ctx context.Context) error {
 	_, err := z.doRequest(ctx, "GET", zaloAPIBaseV2+"/getoa", nil)
 	return err
 }
+
+func (z *ZaloOAAdapter) SendMessage(ctx context.Context, conversationID string, content string) error {
+	payload := map[string]interface{}{
+		"recipient": map[string]interface{}{
+			"user_id": conversationID,
+		},
+		"message": map[string]interface{}{
+			"text": content,
+		},
+	}
+
+	result, err := z.doRequest(ctx, "POST", zaloAPIBaseV3+"/message/cs", payload)
+	if err != nil {
+		return fmt.Errorf("zalo send message failed: %w", err)
+	}
+
+	// Zalo API returns error code in "error" field
+	if errCode, ok := result["error"].(float64); ok && errCode != 0 {
+		msg, _ := result["message"].(string)
+		return fmt.Errorf("zalo send message api error %v: %s", errCode, msg)
+	}
+
+	return nil
+}
+
