@@ -87,7 +87,7 @@
               />
               <v-select
                 v-model="exportChannelType"
-                :items="[{ title: 'Tất cả kênh', value: '' }, { title: 'Zalo OA', value: 'zalo_oa' }, { title: 'Facebook', value: 'facebook' }]"
+                :items="[{ title: 'Tất cả kênh', value: '' }, { title: 'Zalo OA', value: 'zalo_oa' }, { title: 'Facebook', value: 'facebook' }, { title: 'Zalo cá nhân', value: 'personal_zalo_import' }]"
                 label="Kênh"
                 density="compact"
                 variant="outlined"
@@ -660,6 +660,7 @@ const perPage = 9
 const channelTypes = [
   { title: 'Facebook Fanpage', value: 'facebook' },
   { title: 'Zalo OA', value: 'zalo_oa' },
+  { title: 'Zalo cá nhân', value: 'personal_zalo_import' },
 ]
 
 const channelOptions = computed(() => {
