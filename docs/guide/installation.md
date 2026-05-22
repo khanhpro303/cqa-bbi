@@ -22,7 +22,7 @@ Có 2 cách cài đặt CQA. Khuyến nghị dùng cách 1 (tự động) cho đ
 Chỉ cần 1 lệnh. Script sẽ tự cài Docker (nếu chưa có), tạo secrets ngẫu nhiên, pull images và khởi chạy.
 
 ```bash
-curl -s https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/install.sh | sudo bash
+curl -s https://raw.githubusercontent.com/khanhpro303/cqa-bbi/main/install.sh | sudo bash
 ```
 
 Sau khi chạy xong, bạn sẽ thấy:
@@ -44,7 +44,7 @@ Mở trình duyệt, truy cập `http://<IP-VPS>` — bạn sẽ thấy trang **
 Dùng cách này nếu bạn muốn tùy chỉnh code.
 
 ```bash
-git clone https://github.com/bbicrm/cqa-bbi.git
+git clone https://github.com/khanhpro303/cqa-bbi.git
 cd chat-quality-agent
 cp .env.example .env
 ```

@@ -27,7 +27,7 @@ Chạy lệnh sau trên VPS để cập nhật file docker-compose.yml (đã bao
 
 ```bash
 cd /opt/cqa
-curl -sfL https://raw.githubusercontent.com/bbicrm/cqa-bbi/main/docker-compose.hub.yml -o docker-compose.yml
+curl -sfL https://raw.githubusercontent.com/khanhpro303/cqa-bbi/main/docker-compose.hub.yml -o docker-compose.yml
 docker compose up -d
 ```
 

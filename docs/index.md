@@ -17,7 +17,7 @@ hero:
       link: /guide/introduction
     - theme: alt
       text: GitHub
-      link: https://github.com/bbicrm/cqa-bbi
+      link: https://github.com/khanhpro303/cqa-bbi
 
 features:
   - icon: 🔄

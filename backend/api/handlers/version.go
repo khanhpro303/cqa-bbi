@@ -16,7 +16,7 @@ import (
 var AppVersion = "dev"
 
 const (
-	githubReleasesURL = "https://api.github.com/repos/bbicrm/cqa-bbi/releases/latest"
+	githubReleasesURL = "https://api.github.com/repos/khanhpro303/cqa-bbi/releases/latest"
 	cacheDuration     = 1 * time.Hour
 )
 

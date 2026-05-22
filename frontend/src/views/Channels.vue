@@ -95,7 +95,7 @@
 
         <!-- Zalo OA -->
         <template v-if="newChannel.channel_type === 'zalo_oa'">
-          <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://bbicrm.github.io/cqa-bbi/usage/channels.html#zalo-oa" target="_blank" class="mb-3">
+          <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://khanhpro303.github.io/cqa-bbi/usage/channels.html#zalo-oa" target="_blank" class="mb-3">
             {{ $t('zalo_app_id_guide') }}
           </v-btn>
           <v-text-field v-model="newChannel.creds.app_id" :label="$t('zalo_app_id')" density="compact" class="mb-2" :hint="$t('zalo_app_id_hint')" persistent-hint />
@@ -108,7 +108,7 @@
 
         <!-- Facebook -->
         <template v-else-if="newChannel.channel_type === 'facebook'">
-          <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://bbicrm.github.io/cqa-bbi/usage/facebook.html" target="_blank" class="mb-3">
+          <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://khanhpro303.github.io/cqa-bbi/usage/facebook.html" target="_blank" class="mb-3">
             {{ $t('fb_guide') }}
           </v-btn>
           <v-text-field v-model="newChannel.creds.page_id" :label="$t('fb_page_id')" density="compact" class="mb-2" hint="Page ID từ Cài đặt trang Facebook" persistent-hint />

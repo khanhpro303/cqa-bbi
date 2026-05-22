@@ -69,7 +69,7 @@ export default defineConfig({
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/bbicrm/cqa-bbi' },
+      { icon: 'github', link: 'https://github.com/khanhpro303/cqa-bbi' },
     ],
 
     search: {

@@ -98,9 +98,9 @@
 
         <!-- Docs + Version -->
         <div v-if="!isRail" class="mt-2 d-flex align-center">
-          <v-btn size="small" variant="text" href="https://bbicrm.github.io/cqa-bbi/guide/introduction.html" target="_blank" prepend-icon="mdi-file-document" class="text-none">Docs</v-btn>
+          <v-btn size="small" variant="text" href="https://khanhpro303.github.io/cqa-bbi/guide/introduction.html" target="_blank" prepend-icon="mdi-file-document" class="text-none">Docs</v-btn>
           <v-spacer />
-          <v-chip size="small" variant="tonal" :color="updateInfo?.has_update ? 'warning' : 'success'" href="https://bbicrm.github.io/cqa-bbi/changelog.html" target="_blank" style="cursor: pointer;">
+          <v-chip size="small" variant="tonal" :color="updateInfo?.has_update ? 'warning' : 'success'" href="https://khanhpro303.github.io/cqa-bbi/changelog.html" target="_blank" style="cursor: pointer;">
             <v-icon start size="10" icon="mdi-circle" />
             {{ updateInfo?.current || 'dev' }}
           </v-chip>
@@ -149,11 +149,11 @@
         @click:close="dismissUpdate"
       >
         <div class="d-flex align-center flex-wrap">
-          <span class="text-body-2">Có phiên bản mới: <a href="https://bbicrm.github.io/cqa-bbi/changelog.html" target="_blank" class="text-primary font-weight-bold">{{ updateInfo.latest }}</a></span>
+          <span class="text-body-2">Có phiên bản mới: <a href="https://khanhpro303.github.io/cqa-bbi/changelog.html" target="_blank" class="text-primary font-weight-bold">{{ updateInfo.latest }}</a></span>
           <span class="text-caption text-grey mx-2">|</span>
           <span class="text-caption text-grey">Hiện tại: {{ updateInfo.current }}</span>
           <span class="text-caption text-grey mx-2">|</span>
-          <span class="text-caption"><a href="https://bbicrm.github.io/cqa-bbi/guide/installation.html#tu-%C4%91ong-cap-nhat-tuy-chon" target="_blank" class="text-primary">Cài Watchtower</a> để tự động cập nhật.</span>
+          <span class="text-caption"><a href="https://khanhpro303.github.io/cqa-bbi/guide/installation.html#tu-%C4%91ong-cap-nhat-tuy-chon" target="_blank" class="text-primary">Cài Watchtower</a> để tự động cập nhật.</span>
         </div>
         <div class="d-flex align-center mt-2 ga-1">
           <span class="text-caption text-grey">Cập nhật thủ công:</span>
