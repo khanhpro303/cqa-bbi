@@ -42,6 +42,9 @@ type Config struct {
 	LangflowAPIURL string
 	LangflowAPIKey string
 	LangflowFlowID string
+
+	// Redis Task Queue
+	RedisURL string
 }
 
 func Load() (*Config, error) {
@@ -65,6 +68,7 @@ func Load() (*Config, error) {
 		LangflowAPIURL:             strings.TrimRight(getEnv("LANGFLOW_API_URL", ""), "/"),
 		LangflowAPIKey:             getEnv("LANGFLOW_API_KEY", ""),
 		LangflowFlowID:             getEnv("LANGFLOW_FLOW_ID", ""),
+		RedisURL:                   getEnv("REDIS_URL", "redis://localhost:6379/0"),
 	}
 
 	if cfg.JWTSecret == "" {

@@ -9,6 +9,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"github.com/vietbui/chat-quality-agent/workers"
 )
 
 var version = "dev"
@@ -45,6 +46,17 @@ func main() {
 	engine.SetDefaultScheduler(scheduler)
 	scheduler.Start()
 	defer scheduler.Stop()
+
+	// Start worker pool (Asynq server)
+	workerPool := workers.NewWorkerPool(cfg)
+	if workerPool != nil {
+		go func() {
+			if err := workerPool.Start(); err != nil {
+				log.Printf("Worker pool error: %v", err)
+			}
+		}()
+		defer workerPool.Stop()
+	}
 
 	// Setup router
 	router := api.SetupRouter(cfg)
