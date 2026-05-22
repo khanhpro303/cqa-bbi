@@ -17,4 +17,4 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            /home/karien/cqa-bbi/deploy.sh
+            /home/karien/cqa-personal-zalo/deploy.sh
