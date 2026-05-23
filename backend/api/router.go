@@ -32,6 +32,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		r.Static("/assets", "./static/assets")
 		r.Static("/guides", "./static/guides")
 		r.StaticFile("/favicon.png", "./static/favicon.png")
+		r.StaticFile("/bbi-logo.ico", "./static/bbi-logo.ico")
 		r.StaticFile("/", "./static/index.html")
 		r.NoRoute(func(c *gin.Context) {
 			// SPA fallback: serve index.html for non-API routes
