@@ -247,7 +247,7 @@
                   <!-- Path Left-to-Center -->
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
                     <div class="arrow-line animated-flow"></div>
-                    <v-icon class="arrow-tip" color="indigo">mdi-chevron-right</v-icon>
+                    <v-icon class="arrow-tip" color="indigo" size="20">mdi-chevron-right</v-icon>
                     <span class="text-caption graph-arrow-label px-2 position-absolute" style="font-size: 0.6rem !important; top: -14px;">X-Agent-Token (Public)</span>
                   </div>
 
@@ -265,7 +265,7 @@
                   <!-- Path Center-to-Right -->
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
                     <div class="arrow-line" :class="{ 'animated-flow-success': erp.publicScopes.length > 0 }"></div>
-                    <v-icon class="arrow-tip" :color="erp.publicScopes.length > 0 ? 'success' : 'grey'">mdi-chevron-right</v-icon>
+                    <v-icon class="arrow-tip" :color="erp.publicScopes.length > 0 ? 'success' : 'grey'" size="20">mdi-chevron-right</v-icon>
                     <span class="text-caption graph-arrow-label px-2 position-absolute" :class="erp.publicScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
                       {{ erp.publicScopes.length > 0 ? 'Cho phép' : 'Chặn' }}
                     </span>
@@ -400,7 +400,7 @@
                   <!-- Path Left-to-Center -->
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
                     <div class="arrow-line animated-flow"></div>
-                    <v-icon class="arrow-tip" color="indigo">mdi-chevron-right</v-icon>
+                    <v-icon class="arrow-tip" color="indigo" size="20">mdi-chevron-right</v-icon>
                     <span class="text-caption graph-arrow-label px-2 position-absolute" style="font-size: 0.6rem !important; top: -14px;">X-Agent-Token (Private)</span>
                   </div>
 
@@ -419,7 +419,7 @@
                   <!-- Path Center-to-Right -->
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
                     <div class="arrow-line" :class="{ 'animated-flow-success': erp.privateScopes.length > 0 }"></div>
-                    <v-icon class="arrow-tip" :color="erp.privateScopes.length > 0 ? 'success' : 'grey'">mdi-chevron-right</v-icon>
+                    <v-icon class="arrow-tip" :color="erp.privateScopes.length > 0 ? 'success' : 'grey'" size="20">mdi-chevron-right</v-icon>
                     <span class="text-caption graph-arrow-label px-2 position-absolute" :class="erp.privateScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
                       {{ erp.privateScopes.length > 0 ? 'Cho phép' : 'Chặn' }}
                     </span>
@@ -681,10 +681,10 @@ onMounted(loadSettings)
 }
 .graph-arrow {
   position: relative;
-  height: 2px;
+  height: 3px;
 }
 .arrow-line {
-  height: 2px;
+  height: 3px;
   background: #cbd5e1;
   width: 100%;
   position: absolute;
@@ -693,7 +693,7 @@ onMounted(loadSettings)
   transform: translateY(-50%);
 }
 .v-theme--dark .arrow-line {
-  background: #475569;
+  background: #334155;
 }
 .animated-flow {
   background: linear-gradient(90deg, #3f51b5, #cbd5e1);
@@ -701,7 +701,7 @@ onMounted(loadSettings)
   animation: dataflow 1.5s linear infinite;
 }
 .v-theme--dark .animated-flow {
-  background: linear-gradient(90deg, #818cf8, #475569);
+  background: linear-gradient(90deg, #334155 0%, #818cf8 40%, #ffffff 50%, #818cf8 60%, #334155 100%);
 }
 .animated-flow-success {
   background: linear-gradient(90deg, #4caf50, #cbd5e1);
@@ -709,14 +709,18 @@ onMounted(loadSettings)
   animation: dataflow 1.5s linear infinite;
 }
 .v-theme--dark .animated-flow-success {
-  background: linear-gradient(90deg, #4caf50, #475569);
+  background: linear-gradient(90deg, #334155 0%, #4caf50 40%, #a7f3d0 50%, #4caf50 60%, #334155 100%);
 }
 .arrow-tip {
   position: absolute;
-  right: -5px;
+  right: -6px;
   top: 50%;
   transform: translateY(-50%);
+  margin-top: -1px;
   z-index: 1;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
 }
 .graph-arrow-label {
   background-color: #ffffff;
