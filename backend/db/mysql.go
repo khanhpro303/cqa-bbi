@@ -57,6 +57,7 @@ func AutoMigrate() error {
 		&models.OAuthToken{},
 		&models.ActivityLog{},
 		&models.ZaloWhitelist{},
+		&models.ERPEndpoint{},
 	)
 	if err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)

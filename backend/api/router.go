@@ -229,9 +229,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.PUT("/settings/general", middleware.RequirePermission("settings", "w"), handlers.SaveGeneralSettings)
 			tenant.PUT("/settings/password", handlers.ChangePassword)
 
-			// ERP Settings & Test Connect
+			// ERP Settings, Test Connect & Endpoint Permission Management
 			tenant.PUT("/settings/erp", middleware.RequirePermission("settings", "w"), handlers.SaveERPSettings)
 			tenant.POST("/settings/erp/test", middleware.RequirePermission("settings", "w"), handlers.TestERPConnection)
+			tenant.GET("/settings/erp/endpoints", middleware.RequirePermission("settings", "r"), handlers.ListERPEndpoints)
+			tenant.PUT("/settings/erp/endpoints", middleware.RequirePermission("settings", "w"), handlers.SaveERPEndpoints)
+			tenant.POST("/settings/erp/endpoints/toggle", middleware.RequirePermission("settings", "w"), handlers.ToggleERPEndpoint)
 
 			// Notification logs
 			tenant.GET("/notification-logs", handlers.ListNotificationLogs)

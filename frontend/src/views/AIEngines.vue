@@ -72,7 +72,7 @@
           <v-text-field
             v-model="erp.url"
             :label="$t('erp_url_label')"
-            placeholder="https://api.cloudify.vn/api/v1"
+            placeholder="https://bbiapi.cloudify.vn"
             class="mb-3"
             clearable
             density="compact"
@@ -80,7 +80,7 @@
           <v-text-field
             v-model="erp.username"
             :label="$t('erp_username_label')"
-            placeholder="cqa_agent_readonly"
+            placeholder="bien.la@cloudify.vn"
             class="mb-3"
             clearable
             density="compact"
@@ -88,17 +88,18 @@
         </v-col>
         <v-col cols="12" md="6">
           <v-text-field
-            v-model="erp.password"
-            :label="$t('erp_password_label')"
-            type="password"
-            placeholder="••••••••"
+            v-model="erp.dbName"
+            :label="$t('erp_db_label')"
+            :hint="$t('erp_db_hint')"
+            persistent-hint
+            placeholder="demobienla"
             class="mb-3"
             clearable
             density="compact"
           />
           <v-text-field
-            v-model="erp.token"
-            :label="$t('erp_token_label')"
+            v-model="erp.password"
+            :label="$t('erp_password_label')"
             type="password"
             placeholder="••••••••"
             class="mb-3"
@@ -148,59 +149,63 @@
             <div v-if="erp.publicActive">
               <v-row class="px-3">
                 <v-col cols="12" md="6">
-                  <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_scopes_label') }}</div>
-                  <v-card variant="outlined" class="pa-4 rounded-lg scopes-card">
-                    <v-checkbox
-                      v-model="erp.publicScopes"
-                      value="read_products"
-                      :label="$t('erp_scopes_products')"
-                      density="compact"
-                      hide-details
-                      color="primary"
-                      class="mb-1"
-                    />
-                    <v-checkbox
-                      v-model="erp.publicScopes"
-                      value="read_inventory"
-                      :label="$t('erp_scopes_inventory')"
-                      density="compact"
-                      hide-details
-                      color="primary"
-                      class="mb-1"
-                    />
-                    
-                    <v-expand-transition>
-                      <div v-if="erp.publicScopes.includes('read_inventory')" class="pl-8 pt-2 pb-2">
-                        <v-text-field
-                          v-model="erp.publicProductGroups"
-                          :label="$t('erp_inventory_product_groups')"
-                          :hint="$t('erp_inventory_groups_hint')"
-                          persistent-hint
-                          density="compact"
-                          variant="outlined"
-                          class="mb-2"
-                          placeholder="e.g. Mỹ Phẩm"
-                        />
-                      </div>
-                    </v-expand-transition>
-
-                    <v-checkbox
-                      v-model="erp.publicScopes"
-                      value="read_orders"
-                      :label="$t('erp_scopes_orders') + ' (Không khuyến nghị cho Public)'"
-                      density="compact"
-                      hide-details
-                      color="primary"
-                      class="mb-1"
-                    />
-                    <v-checkbox
-                      v-model="erp.publicScopes"
-                      value="read_customers"
-                      :label="$t('erp_scopes_customers') + ' (Không khuyến nghị cho Public)'"
-                      density="compact"
-                      hide-details
-                      color="primary"
-                    />
+                  <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_endpoints_title') }}</div>
+                  <v-card variant="outlined" class="rounded-lg scopes-card">
+                    <v-table density="compact">
+                      <thead>
+                        <tr>
+                          <th style="width:36%">{{ $t('erp_endpoint_resource') }}</th>
+                          <th style="width:14%" class="text-center">{{ $t('erp_endpoint_enabled') }}</th>
+                          <th style="width:26%">{{ $t('erp_endpoint_scope') }}</th>
+                          <th style="width:24%">{{ $t('erp_endpoint_groups') }}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="ep in endpointsFor('public')" :key="ep.resource">
+                          <td class="text-caption">{{ resourceLabel(ep.resource) }}</td>
+                          <td class="text-center">
+                            <v-switch
+                              v-model="ep.is_enabled"
+                              color="primary"
+                              density="compact"
+                              hide-details
+                              @change="quickToggle('public', ep)"
+                            />
+                          </td>
+                          <td>
+                            <v-select
+                              v-model="ep.scope_type"
+                              :items="scopeOptions"
+                              density="compact"
+                              variant="plain"
+                              hide-details
+                              :disabled="!ep.is_enabled"
+                              style="font-size:0.75rem"
+                            />
+                          </td>
+                          <td>
+                            <v-text-field
+                              v-if="ep.resource === 'products' || ep.resource === 'inventory'"
+                              v-model="ep.product_groups"
+                              density="compact"
+                              variant="plain"
+                              hide-details
+                              :disabled="!ep.is_enabled"
+                              placeholder="e.g. Nguyên Đầu"
+                              style="font-size:0.75rem"
+                            />
+                            <span v-else class="text-caption text-grey">—</span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </v-table>
+                    <div class="pa-3 d-flex align-center ga-2">
+                      <v-btn size="small" color="primary" variant="tonal" :loading="savingEndpoints" @click="saveEndpoints('public')">
+                        <v-icon start size="small">mdi-content-save</v-icon>
+                        {{ $t('erp_save_endpoints') }}
+                      </v-btn>
+                      <v-progress-circular v-if="loadingEndpoints" indeterminate size="16" width="2" color="primary" />
+                    </div>
                   </v-card>
                 </v-col>
                 
@@ -301,59 +306,63 @@
             <div v-if="erp.privateActive">
               <v-row class="px-3">
                 <v-col cols="12" md="6">
-                  <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_scopes_label') }}</div>
-                  <v-card variant="outlined" class="pa-4 rounded-lg scopes-card">
-                    <v-checkbox
-                      v-model="erp.privateScopes"
-                      value="read_products"
-                      :label="$t('erp_scopes_products')"
-                      density="compact"
-                      hide-details
-                      color="primary"
-                      class="mb-1"
-                    />
-                    <v-checkbox
-                      v-model="erp.privateScopes"
-                      value="read_inventory"
-                      :label="$t('erp_scopes_inventory')"
-                      density="compact"
-                      hide-details
-                      color="primary"
-                      class="mb-1"
-                    />
-                    
-                    <v-expand-transition>
-                      <div v-if="erp.privateScopes.includes('read_inventory')" class="pl-8 pt-2 pb-2">
-                        <v-text-field
-                          v-model="erp.privateProductGroups"
-                          :label="$t('erp_inventory_product_groups')"
-                          :hint="$t('erp_inventory_groups_hint')"
-                          persistent-hint
-                          density="compact"
-                          variant="outlined"
-                          class="mb-2"
-                          placeholder="e.g. Nguyên Đầu, Nửa Đầu"
-                        />
-                      </div>
-                    </v-expand-transition>
-
-                    <v-checkbox
-                      v-model="erp.privateScopes"
-                      value="read_orders"
-                      :label="$t('erp_scopes_orders')"
-                      density="compact"
-                      hide-details
-                      color="primary"
-                      class="mb-1"
-                    />
-                    <v-checkbox
-                      v-model="erp.privateScopes"
-                      value="read_customers"
-                      :label="$t('erp_scopes_customers')"
-                      density="compact"
-                      hide-details
-                      color="primary"
-                    />
+                  <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_endpoints_title') }}</div>
+                  <v-card variant="outlined" class="rounded-lg scopes-card">
+                    <v-table density="compact">
+                      <thead>
+                        <tr>
+                          <th style="width:36%">{{ $t('erp_endpoint_resource') }}</th>
+                          <th style="width:14%" class="text-center">{{ $t('erp_endpoint_enabled') }}</th>
+                          <th style="width:26%">{{ $t('erp_endpoint_scope') }}</th>
+                          <th style="width:24%">{{ $t('erp_endpoint_groups') }}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="ep in endpointsFor('private')" :key="ep.resource">
+                          <td class="text-caption">{{ resourceLabel(ep.resource) }}</td>
+                          <td class="text-center">
+                            <v-switch
+                              v-model="ep.is_enabled"
+                              color="primary"
+                              density="compact"
+                              hide-details
+                              @change="quickToggle('private', ep)"
+                            />
+                          </td>
+                          <td>
+                            <v-select
+                              v-model="ep.scope_type"
+                              :items="scopeOptions"
+                              density="compact"
+                              variant="plain"
+                              hide-details
+                              :disabled="!ep.is_enabled"
+                              style="font-size:0.75rem"
+                            />
+                          </td>
+                          <td>
+                            <v-text-field
+                              v-if="ep.resource === 'products' || ep.resource === 'inventory'"
+                              v-model="ep.product_groups"
+                              density="compact"
+                              variant="plain"
+                              hide-details
+                              :disabled="!ep.is_enabled"
+                              placeholder="e.g. Nguyên Đầu"
+                              style="font-size:0.75rem"
+                            />
+                            <span v-else class="text-caption text-grey">—</span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </v-table>
+                    <div class="pa-3 d-flex align-center ga-2">
+                      <v-btn size="small" color="primary" variant="tonal" :loading="savingEndpoints" @click="saveEndpoints('private')">
+                        <v-icon start size="small">mdi-content-save</v-icon>
+                        {{ $t('erp_save_endpoints') }}
+                      </v-btn>
+                      <v-progress-circular v-if="loadingEndpoints" indeterminate size="16" width="2" color="primary" />
+                    </div>
                   </v-card>
                 </v-col>
                 
@@ -485,8 +494,18 @@ const langflow = reactive({
   token: '',
 })
 
+interface ERPEndpoint {
+  tenant_id?: string
+  agent_type: 'public' | 'private'
+  resource: string
+  is_enabled: boolean
+  scope_type: string
+  product_groups: string
+}
+
 const erp = reactive({
   url: '',
+  dbName: '',
   token: '',
   username: '',
   password: '',
@@ -501,6 +520,93 @@ const erp = reactive({
   privateProductGroups: '',
   privateAgentToken: '',
 })
+
+// ERP Endpoints state
+const erpEndpoints = ref<ERPEndpoint[]>([])
+const loadingEndpoints = ref(false)
+const savingEndpoints = ref(false)
+
+const scopeOptions = [
+  { title: 'Tất cả', value: 'all' },
+  { title: 'Của họ (OWN)', value: 'own' },
+  { title: 'Phân công (ASSIGNED)', value: 'assigned' },
+]
+
+const resourceLabels: Record<string, string> = {
+  products: '🛍 Sản phẩm',
+  inventory: '📦 Tồn kho',
+  orders: '📋 Đơn hàng',
+  customers: '👥 Khách hàng',
+  debt: '💰 Công nợ',
+}
+
+function resourceLabel(r: string): string {
+  return resourceLabels[r] || r
+}
+
+function endpointsFor(agentType: string): ERPEndpoint[] {
+  return erpEndpoints.value.filter(ep => ep.agent_type === agentType)
+}
+
+// Pre-fill new endpoint table from legacy CSV scopes for backward compat
+function backfillFromLegacyScopes() {
+  const legacyMap: Record<string, string> = {
+    read_products: 'products',
+    read_inventory: 'inventory',
+    read_orders: 'orders',
+    read_customers: 'customers',
+  }
+  const allDisabled = erpEndpoints.value.every(ep => !ep.is_enabled)
+  if (!allDisabled) return
+  ;(['public', 'private'] as const).forEach(agentType => {
+    const legacyScopes = agentType === 'public' ? erp.publicScopes : erp.privateScopes
+    legacyScopes.forEach(scope => {
+      const resource = legacyMap[scope]
+      if (!resource) return
+      const ep = erpEndpoints.value.find(e => e.agent_type === agentType && e.resource === resource)
+      if (ep) ep.is_enabled = true
+    })
+  })
+}
+
+async function loadERPEndpoints() {
+  loadingEndpoints.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/settings/erp/endpoints`)
+    erpEndpoints.value = data.endpoints || []
+    backfillFromLegacyScopes()
+  } catch {
+    // Endpoints table not yet populated — defaults are shown
+  } finally {
+    loadingEndpoints.value = false
+  }
+}
+
+async function saveEndpoints(agentType: string) {
+  savingEndpoints.value = true
+  try {
+    const endpoints = endpointsFor(agentType)
+    await api.put(`/tenants/${tenantId.value}/settings/erp/endpoints`, { endpoints })
+    showSnack(t('erp_endpoints_saved'), 'success')
+  } catch (err: any) {
+    showSnack(err.response?.data?.error || t('error'), 'error')
+  } finally {
+    savingEndpoints.value = false
+  }
+}
+
+async function quickToggle(agentType: string, ep: ERPEndpoint) {
+  try {
+    await api.post(`/tenants/${tenantId.value}/settings/erp/endpoints/toggle`, {
+      agent_type: agentType,
+      resource: ep.resource,
+      is_enabled: ep.is_enabled,
+    })
+  } catch {
+    // revert toggle on error
+    ep.is_enabled = !ep.is_enabled
+  }
+}
 
 const gatewayUrl = computed(() => {
   return `${window.location.origin}/api/v1/tenants/${tenantId.value}/erp/query`
@@ -525,11 +631,9 @@ async function loadSettings() {
     }
 
     erp.url = settings.erp_api_url || ''
+    erp.dbName = settings.erp_api_db || ''
     erp.username = settings.erp_api_username || ''
-    
-    if (settings.erp_api_token) {
-      erp.token = settings.erp_api_token
-    }
+
     if (settings.erp_api_password) {
       erp.password = settings.erp_api_password
     }
@@ -552,6 +656,8 @@ async function loadSettings() {
   } catch {
     // Ignore
   }
+  // Load endpoint permissions (separate call)
+  await loadERPEndpoints()
 }
 
 async function save() {
@@ -597,7 +703,7 @@ async function saveERP() {
   try {
     await api.put(`/tenants/${tenantId.value}/settings/erp`, {
       url: erp.url,
-      token: erp.token,
+      db: erp.dbName,
       username: erp.username,
       password: erp.password,
       // Public bot settings
@@ -622,12 +728,16 @@ async function testERPConnection() {
     showSnack('Vui lòng nhập URL của Cloudify API', 'warning')
     return
   }
-  
+  if (!erp.username) {
+    showSnack('Vui lòng nhập tài khoản Cloudify', 'warning')
+    return
+  }
+
   testingERP.value = true
   try {
     const { data } = await api.post(`/tenants/${tenantId.value}/settings/erp/test`, {
       url: erp.url,
-      token: erp.token,
+      db: erp.dbName,
       username: erp.username,
       password: erp.password,
     })
