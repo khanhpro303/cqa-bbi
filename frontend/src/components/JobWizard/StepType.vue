@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="text-body-2 text-grey-darken-1 mb-4">
-      Đặt tên và chọn loại công việc phân tích.
+      {{ $t('jobs_step_type_intro') }}
     </div>
     <v-text-field
       v-model="form.name"
@@ -11,29 +11,29 @@
     />
     <v-textarea v-model="form.description" :label="$t('job_description')" rows="2" class="mb-4" />
 
-    <div class="text-subtitle-2 mb-2">Loại công việc</div>
+    <div class="text-subtitle-2 mb-2">{{ $t('jobs_job_type_label') }}</div>
     <v-radio-group v-model="form.job_type" class="mt-0">
       <v-radio value="qc_analysis">
         <template #label>
           <div>
-            <div class="font-weight-medium">Phân tích chất lượng CSKH</div>
-            <div class="text-caption text-grey">Đánh giá chất lượng trả lời của nhân viên, phát hiện vi phạm quy tắc.</div>
+            <div class="font-weight-medium">{{ $t('jobs_type_qc_title') }}</div>
+            <div class="text-caption text-grey">{{ $t('jobs_type_qc_caption') }}</div>
           </div>
         </template>
       </v-radio>
       <v-radio value="classification">
         <template #label>
           <div>
-            <div class="font-weight-medium">Phân loại chat</div>
-            <div class="text-caption text-grey">Phân loại cuộc chat theo chủ đề (feedback, hỏi giá, khiếu nại...). Phù hợp gom phản hồi khách hàng.</div>
+            <div class="font-weight-medium">{{ $t('jobs_type_classification_title') }}</div>
+            <div class="text-caption text-grey">{{ $t('jobs_type_classification_caption') }}</div>
           </div>
         </template>
       </v-radio>
       <v-radio value="chatbot_toggle">
         <template #label>
           <div>
-            <div class="font-weight-medium">Bật/Tắt Chatbot tự động</div>
-            <div class="text-caption text-grey">Tự động bật hoặc tắt chatbot OA theo khung giờ cấu hình (cron job).</div>
+            <div class="font-weight-medium">{{ $t('jobs_type_chatbot_toggle_title') }}</div>
+            <div class="text-caption text-grey">{{ $t('jobs_type_chatbot_toggle_caption') }}</div>
           </div>
         </template>
       </v-radio>

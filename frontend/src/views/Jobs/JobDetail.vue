@@ -118,7 +118,7 @@
         <v-col cols="6" sm="3">
           <div class="text-caption text-grey">{{ $t('job_type') }}</div>
           <v-chip size="small" :color="job.job_type === 'qc_analysis' ? 'primary' : job.job_type === 'classification' ? 'secondary' : 'warning'" variant="tonal">
-            {{ job.job_type === 'qc_analysis' ? $t('job_qc') : job.job_type === 'classification' ? $t('job_classification') : 'Bật/Tắt Chatbot' }}
+            {{ job.job_type === 'qc_analysis' ? $t('job_qc') : job.job_type === 'classification' ? $t('job_classification') : $t('job_chatbot_toggle') }}
           </v-chip>
         </v-col>
         <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle'">

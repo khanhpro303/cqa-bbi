@@ -120,7 +120,7 @@ const validationMessage = computed(() => {
   if (form.value.job_type === 'chatbot_toggle') {
     switch (step.value) {
       case 1: return t('validation_min_chars', { min: 2 })
-      case 2: return 'Vui lòng chọn trạng thái chatbot mong muốn'
+      case 2: return t('jobs_validation_chatbot_status')
       default: return ''
     }
   }
@@ -157,7 +157,7 @@ const stepItems = computed(() => {
   if (form.value.job_type === 'chatbot_toggle') {
     return [
       { title: t('job_wizard_step_type'), value: 1 },
-      { title: 'Cấu hình trạng thái', value: 2 },
+      { title: t('jobs_wizard_step_status_config'), value: 2 },
       { title: t('job_wizard_step_schedule'), value: 3 },
       { title: t('job_wizard_step_confirm'), value: 4 },
     ]
