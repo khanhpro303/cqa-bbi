@@ -646,6 +646,9 @@ func redirectWithError(c *gin.Context, tenantID, message string) {
 func SyncChannelNow(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	channelID := c.Param("channelId")
+	userID := middleware.GetUserID(c)
+	userEmail := middleware.GetUserEmail(c)
+	clientIP := c.ClientIP()
 
 	var channel models.Channel
 	if err := db.DB.Where("id = ? AND tenant_id = ?", channelID, tenantID).First(&channel).Error; err != nil {
@@ -683,7 +686,12 @@ func SyncChannelNow(c *gin.Context) {
 		cfg, _ := config.Load()
 		syncEng := engine.NewSyncEngine(cfg)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		ctx := context.WithValue(context.Background(), "manual_sync", true)
+		ctx = context.WithValue(ctx, "user_id", userID)
+		ctx = context.WithValue(ctx, "user_email", userEmail)
+		ctx = context.WithValue(ctx, "client_ip", clientIP)
+
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
 		if err := syncEng.SyncChannel(ctx, channel); err != nil {
 			log.Printf("[error] sync channel %s failed: %v", channelID, err)

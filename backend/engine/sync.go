@@ -148,10 +148,28 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 
 	log.Printf("[sync] channel %s: synced %d conversations, %d messages (%d new)", channel.Name, len(conversations), totalMessages, totalInserted)
 
-	// Log activity only when there are new messages
-	if totalInserted > 0 {
-		db.LogActivity(channel.TenantID, "", "system", "sync.completed", "channel", channel.ID,
-			fmt.Sprintf("Sync '%s': %d conversations, %d messages (%d new)", channel.Name, len(conversations), totalMessages, totalInserted), "", "")
+	// Log activity only when there are new messages, OR if triggered manually
+	isManual, _ := ctx.Value("manual_sync").(bool)
+	userID, _ := ctx.Value("user_id").(string)
+	userEmail, _ := ctx.Value("user_email").(string)
+	clientIP, _ := ctx.Value("client_ip").(string)
+
+	if totalInserted > 0 || isManual {
+		actorID := "system"
+		if userID != "" {
+			actorID = userID
+		}
+
+		detail := fmt.Sprintf("Sync '%s': %d conversations, %d messages (%d new)", channel.Name, len(conversations), totalMessages, totalInserted)
+		if isManual {
+			if userEmail != "" {
+				detail += fmt.Sprintf(" (Thủ công bởi %s)", userEmail)
+			} else {
+				detail += " (Thủ công)"
+			}
+		}
+
+		db.LogActivity(channel.TenantID, actorID, userEmail, "sync.completed", "channel", channel.ID, detail, "", clientIP)
 	}
 
 	// Trigger after-sync jobs for this channel
