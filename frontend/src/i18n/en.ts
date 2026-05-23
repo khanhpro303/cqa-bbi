@@ -331,6 +331,8 @@ export default {
   session_end_keyword_hint: "Separate multiple keywords with a semicolon (;). Example: 'goodbye; bye; end'",
   session_welcome: 'Welcome message',
   session_welcome_hint: 'Sent when session opens successfully',
+  session_goodbye: 'Goodbye message',
+  session_goodbye_hint: 'Sent when session closes successfully',
   session_timeout: 'Auto-close session timeout (minutes)',
   langflow_integration: 'Langflow Integration (Leave blank to use default config)',
   sync_1m: 'Every 1 minute',

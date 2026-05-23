@@ -55,6 +55,7 @@ type ChannelMetadata struct {
 	SessionKeyword        string `json:"session_keyword"`
 	SessionEndKeyword     string `json:"session_end_keyword"`
 	SessionWelcomeMessage string `json:"session_welcome_message"`
+	SessionGoodbyeMessage string `json:"session_goodbye_message"`
 	SessionTimeout        int    `json:"session_timeout_minutes"`
 
 	LangflowAPIURL string `json:"langflow_api_url"`
@@ -135,6 +136,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		if meta.SessionWelcomeMessage == "" {
 			meta.SessionWelcomeMessage = cfg.ChatbotSessionWelcomeMessage
+		}
+		if meta.SessionGoodbyeMessage == "" {
+			meta.SessionGoodbyeMessage = cfg.ChatbotSessionGoodbyeMessage
 		}
 		if meta.SessionTimeout == 0 {
 			meta.SessionTimeout = cfg.ChatbotSessionTimeout
@@ -252,7 +256,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if db.RedisClient != nil {
 				db.RedisClient.Del(ctx, sessionKey)
 			}
-			err := adapter.SendMessage(ctx, payload.Sender.ID, "Phiên hỗ trợ đã kết thúc. Hẹn gặp lại bạn!")
+			err := adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionGoodbyeMessage)
 			if err != nil {
 				log.Printf("[worker] failed to send end session message: %v", err)
 			}

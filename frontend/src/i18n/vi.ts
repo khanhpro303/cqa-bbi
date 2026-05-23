@@ -331,6 +331,8 @@ export default {
   session_end_keyword_hint: "Ngăn cách bằng dấu chấm phẩy (;). Ví dụ: 'tạm biệt; kết thúc; bye'",
   session_welcome: 'Câu chào',
   session_welcome_hint: 'Gửi khi mở session thành công',
+  session_goodbye: 'Câu tạm biệt',
+  session_goodbye_hint: 'Gửi khi đóng session thành công',
   session_timeout: 'Thời gian đóng session tự động (phút)',
   langflow_integration: 'Tích hợp Langflow (Bỏ trống để dùng cấu hình mặc định)',
   sync_1m: 'Mỗi 1 phút',

@@ -228,6 +228,7 @@
             <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
             <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
             <v-text-field v-model="editForm.session_welcome_message" :label="$t('session_welcome')" :hint="$t('session_welcome_hint')" persistent-hint density="compact" class="mb-3" />
+            <v-text-field v-model="editForm.session_goodbye_message" :label="$t('session_goodbye')" :hint="$t('session_goodbye_hint')" persistent-hint density="compact" class="mb-3" />
             <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
             <v-divider class="my-4" />
             <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
@@ -478,7 +479,7 @@ const editChannelId = ref('')
 const editChannelType = ref('')
 const editForm = reactive({ 
   name: '', is_active: true, sync_files: false, sync_interval: 15,
-  session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_timeout_minutes: 0,
+  session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
   langflow_api_url: '', langflow_api_key: '', langflow_flow_id: ''
 })
 const syncIntervalOptions = computed(() => [
@@ -505,6 +506,7 @@ function openEdit(ch: any) {
     editForm.session_keyword = meta.session_keyword || ''
     editForm.session_end_keyword = meta.session_end_keyword || ''
     editForm.session_welcome_message = meta.session_welcome_message || ''
+    editForm.session_goodbye_message = meta.session_goodbye_message || ''
     editForm.session_timeout_minutes = meta.session_timeout_minutes || 0
     editForm.langflow_api_url = meta.langflow_api_url || ''
     editForm.langflow_api_key = meta.langflow_api_key || ''
@@ -515,6 +517,7 @@ function openEdit(ch: any) {
     editForm.session_keyword = ''
     editForm.session_end_keyword = ''
     editForm.session_welcome_message = ''
+    editForm.session_goodbye_message = ''
     editForm.session_timeout_minutes = 0
     editForm.langflow_api_url = ''
     editForm.langflow_api_key = ''
@@ -539,6 +542,7 @@ async function saveEdit() {
         metaToSave.session_keyword = editForm.session_keyword
         metaToSave.session_end_keyword = editForm.session_end_keyword
         metaToSave.session_welcome_message = editForm.session_welcome_message
+        metaToSave.session_goodbye_message = editForm.session_goodbye_message
         metaToSave.session_timeout_minutes = editForm.session_timeout_minutes
         metaToSave.langflow_api_url = editForm.langflow_api_url
         metaToSave.langflow_api_key = editForm.langflow_api_key
