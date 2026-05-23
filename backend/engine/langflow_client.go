@@ -157,3 +157,128 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 
 	return text, nil
 }
+
+// RunFlowWithCustomer allows passing specific API URL, Key, Flow ID, and Customer Code.
+func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode string) (string, error) {
+	if apiURL == "" || flowID == "" {
+		return "", fmt.Errorf("langflow integration is not configured")
+	}
+
+	url := fmt.Sprintf("%s/api/v1/run/%s", apiURL, flowID)
+
+	tweaks := map[string]interface{}{
+		"session_id": sessionID,
+	}
+
+	if zaloUserID != "" {
+		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{
+			"advanced_search_filter": map[string]interface{}{
+				"zalo_user_id": zaloUserID,
+			},
+		}
+	}
+
+	if customerCode != "" {
+		tweaks["customer_code"] = customerCode
+		tweaks["CustomComponent"] = map[string]interface{}{
+			"customer_code": customerCode,
+		}
+	}
+
+	payload := map[string]interface{}{
+		"input_value": message,
+		"input_type":  "chat",
+		"output_type": "chat",
+		"session_id":  sessionID,
+		"tweaks":      tweaks,
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal langflow payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("create langflow request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("x-api-key", apiKey)
+	}
+
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("langflow request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read langflow response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("langflow api error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("unmarshal langflow response: %w", err)
+	}
+
+	outputs, ok := result["outputs"].([]interface{})
+	if !ok || len(outputs) == 0 {
+		return "", fmt.Errorf("langflow response missing outputs")
+	}
+
+	firstOutput, ok := outputs[0].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("langflow response invalid output format")
+	}
+
+	innerOutputs, ok := firstOutput["outputs"].([]interface{})
+	if !ok || len(innerOutputs) == 0 {
+		return "", fmt.Errorf("langflow response missing inner outputs")
+	}
+
+	innerFirst, ok := innerOutputs[0].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("langflow response invalid inner output format")
+	}
+
+	results, ok := innerFirst["results"].(map[string]interface{})
+	if !ok {
+		if text, ok := innerFirst["text"].(string); ok {
+			return text, nil
+		}
+		if msgs, ok := innerFirst["messages"].([]interface{}); ok && len(msgs) > 0 {
+			if msgObj, ok := msgs[0].(map[string]interface{}); ok {
+				if text, ok := msgObj["message"].(string); ok {
+					return text, nil
+				}
+				if text, ok := msgObj["text"].(string); ok {
+					return text, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("langflow response missing results: %v", innerFirst)
+	}
+
+	msgObj, ok := results["message"].(map[string]interface{})
+	if !ok {
+		if textObj, ok := results["text"].(string); ok {
+			return textObj, nil
+		}
+		return "", fmt.Errorf("langflow response missing message in results")
+	}
+
+	text, ok := msgObj["text"].(string)
+	if !ok {
+		return "", fmt.Errorf("langflow response missing text in message")
+	}
+
+	return text, nil
+}

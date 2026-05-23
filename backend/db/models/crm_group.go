@@ -1,0 +1,37 @@
+package models
+
+import "time"
+
+type CRMGroup struct {
+	ID          string         `gorm:"type:char(36);primaryKey" json:"id"`
+	TenantID    string         `gorm:"type:char(36);not null;index" json:"tenant_id"`
+	Name        string         `gorm:"type:varchar(255);not null" json:"name"`
+	Description string         `gorm:"type:text" json:"description"`
+	CreatedAt   time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt   time.Time      `gorm:"not null" json:"updated_at"`
+
+	Employees   []User         `gorm:"many2many:crm_group_employees;joinForeignKey:GroupID;joinReferences:UserID" json:"employees,omitempty"`
+	Customers   []ZaloCustomer `gorm:"many2many:crm_group_customers;joinForeignKey:GroupID;joinReferences:ZaloCustomerID" json:"customers,omitempty"`
+}
+
+func (CRMGroup) TableName() string {
+	return "crm_groups"
+}
+
+type CRMGroupEmployee struct {
+	GroupID string `gorm:"type:char(36);primaryKey" json:"group_id"`
+	UserID  string `gorm:"type:char(36);primaryKey" json:"user_id"`
+}
+
+func (CRMGroupEmployee) TableName() string {
+	return "crm_group_employees"
+}
+
+type CRMGroupCustomer struct {
+	GroupID        string `gorm:"type:char(36);primaryKey" json:"group_id"`
+	ZaloCustomerID string `gorm:"type:char(36);primaryKey" json:"zalo_customer_id"`
+}
+
+func (CRMGroupCustomer) TableName() string {
+	return "crm_group_customers"
+}

@@ -58,6 +58,10 @@ func AutoMigrate() error {
 		&models.ActivityLog{},
 		&models.ZaloWhitelist{},
 		&models.ERPEndpoint{},
+		&models.ZaloCustomer{},
+		&models.CRMGroup{},
+		&models.CRMGroupEmployee{},
+		&models.CRMGroupCustomer{},
 	)
 	if err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)

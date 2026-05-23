@@ -112,6 +112,12 @@ const router = createRouter({
           meta: { perm: 'settings' },
         },
         {
+          path: 'crm',
+          name: 'crm',
+          component: () => import('../views/CRM.vue'),
+          meta: { perm: 'settings' },
+        },
+        {
           path: 'users',
           name: 'users',
           component: () => import('../views/Users.vue'),

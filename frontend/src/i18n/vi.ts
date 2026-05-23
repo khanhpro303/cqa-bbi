@@ -484,4 +484,11 @@ export default {
   jobs_validation_chatbot_status: 'Vui lòng chọn trạng thái chatbot mong muốn',
   jobs_wizard_step_status_config: 'Cấu hình trạng thái',
   job_chatbot_toggle: 'Bật/Tắt Chatbot',
+
+  // CRM & GMF
+  nav_crm: 'CRM Khách hàng',
+  crm_groups: 'Nhóm CRM',
+  crm_customers: 'Khách hàng Zalo',
+  crm_approvals: 'Phê duyệt khách hàng',
+  crm_customer_code: 'Mã khách hàng',
 }

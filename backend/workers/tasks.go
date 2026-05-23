@@ -241,6 +241,32 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 						return nil
 					}
 				} else {
+					// Not found in whitelist staff. Try ZaloCustomer!
+					var customerRec models.ZaloCustomer
+					if err := db.DB.Where("tenant_id = ? AND verify_token = ? AND status = ?", matchedChannel.TenantID, token, "pending_verify").First(&customerRec).Error; err == nil {
+						avatarURL := ""
+						if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
+							avatarURL = profile.Avatar
+							if customerRec.Name == "" {
+								customerRec.Name = profile.DisplayName
+							}
+						}
+
+						customerRec.ZaloUserID = payload.Sender.ID
+						if avatarURL != "" {
+							customerRec.Avatar = avatarURL
+						}
+						customerRec.Status = "pending_approval"
+						customerRec.UpdatedAt = time.Now()
+
+						if err := db.DB.Save(&customerRec).Error; err == nil {
+							successMsg := "Xác thực thành công! Yêu cầu liên kết tài khoản của bạn đã được gửi tới Ban quản trị để phê duyệt."
+							_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
+							log.Printf("[worker] successfully received customer auth request from Zalo user %s for tenant %s", payload.Sender.ID, matchedChannel.TenantID)
+							return nil
+						}
+					}
+
 					// Token invalid or expired
 					errorMsg := "Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra lại."
 					_ = adapter.SendMessage(ctx, payload.Sender.ID, errorMsg)
@@ -249,12 +275,20 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
-		// 2. Determine Whitelist / Staff Routing:
+		// 2. Determine Whitelist / Staff / Customer Routing:
 		// Check if the current sender is active in the Zalo whitelist for this tenant.
 		isWhitelisted := false
 		var whitelistRec models.ZaloWhitelist
 		if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", matchedChannel.TenantID, payload.Sender.ID, "active").First(&whitelistRec).Error; err == nil {
 			isWhitelisted = true
+		}
+
+		isCustomer := false
+		customerCode := ""
+		var customerRec models.ZaloCustomer
+		if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", matchedChannel.TenantID, payload.Sender.ID, "approved").First(&customerRec).Error; err == nil {
+			isCustomer = true
+			customerCode = customerRec.CustomerCode
 		}
 
 		sessionKey := fmt.Sprintf("zalo_session:%s:%s", matchedChannel.ID, payload.Sender.ID)
@@ -331,6 +365,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}()
 
+		// Unverified public user block:
+		if !isWhitelisted && !isCustomer {
+			verifyInstructions := "Tài khoản của bạn chưa được xác thực trên hệ thống CRM. Vui lòng nhắn tin theo cú pháp `verify <mã_xác_thực>` được cung cấp bởi nhân viên để đăng ký sử dụng Bot."
+			_ = adapter.SendMessage(ctx, payload.Sender.ID, verifyInstructions)
+			log.Printf("[worker] blocking unverified Zalo user %s for tenant %s", payload.Sender.ID, matchedChannel.TenantID)
+			return nil
+		}
+
 		// Determine which Flow ID to use
 		flowIDToUse := meta.LangflowPublicFlowID
 		if isWhitelisted {
@@ -340,11 +382,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if flowIDToUse == "" {
 				flowIDToUse = meta.LangflowFlowID
 			}
-			log.Printf("[worker] Routing public user %s to General Flow (%s)", payload.Sender.ID, flowIDToUse)
+			log.Printf("[worker] Routing customer %s (code: %s) to Public Flow (%s)", payload.Sender.ID, customerCode, flowIDToUse)
 		}
 
-		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID)
-		replyText, err := langflowClient.RunFlowWithOverrides(ctx, activeSessionID, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse)
+		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID and customerCode)
+		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}

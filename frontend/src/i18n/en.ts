@@ -484,4 +484,11 @@ export default {
   jobs_validation_chatbot_status: 'Please select the desired chatbot status',
   jobs_wizard_step_status_config: 'Status Configuration',
   job_chatbot_toggle: 'Chatbot Toggle',
+
+  // CRM & GMF
+  nav_crm: 'Customer CRM',
+  crm_groups: 'CRM Groups',
+  crm_customers: 'Zalo Customers',
+  crm_approvals: 'Customer Approvals',
+  crm_customer_code: 'Customer Code',
 }

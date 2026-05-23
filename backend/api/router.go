@@ -212,6 +212,21 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/zalo-whitelist/invite", middleware.RequireRole("owner", "admin"), handlers.InviteZaloWhitelist)
 			tenant.DELETE("/zalo-whitelist/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteZaloWhitelist)
 
+			// CRM & GMF Routes
+			tenant.GET("/crm/groups", handlers.ListCRMGroups)
+			tenant.POST("/crm/groups", middleware.RequireRole("owner", "admin"), handlers.CreateCRMGroup)
+			tenant.PUT("/crm/groups/:id", middleware.RequireRole("owner", "admin"), handlers.UpdateCRMGroup)
+			tenant.DELETE("/crm/groups/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteCRMGroup)
+			tenant.POST("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.AddGroupMembers)
+			tenant.DELETE("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.RemoveGroupMembers)
+
+			tenant.GET("/crm/customers", handlers.ListZaloCustomers)
+			tenant.POST("/crm/customers/invite", middleware.RequireRole("owner", "admin"), handlers.InviteZaloCustomer)
+			tenant.POST("/crm/customers/:id/approve", middleware.RequireRole("owner", "admin"), handlers.ApproveZaloCustomer)
+			tenant.DELETE("/crm/customers/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteZaloCustomer)
+
+			tenant.GET("/crm/customer-profiles", handlers.ListCustomerCodes(cfg))
+
 			// Job all results + export
 			tenant.GET("/jobs/:jobId/results", middleware.RequirePermission("jobs", "r"), handlers.ListAllJobResults)
 			tenant.GET("/jobs/:jobId/results/export", middleware.RequirePermission("jobs", "r"), handlers.ExportJobResults)

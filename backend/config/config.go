@@ -47,6 +47,9 @@ type Config struct {
 	// Redis Task Queue
 	RedisURL string
 
+	// Postgres Connection URL
+	PostgresURL string
+
 	// Astra DB Integration
 	AstraDBAPIEndpoint string
 	AstraDBToken       string
@@ -85,6 +88,7 @@ func Load() (*Config, error) {
 		LangflowFlowID:             getEnv("LANGFLOW_FLOW_ID", ""),
 		LangflowPublicFlowID:       getEnv("LANGFLOW_PUBLIC_FLOW_ID", ""),
 		RedisURL:                   getEnv("REDIS_URL", "redis://localhost:6379/0"),
+		PostgresURL:                getEnv("POSTGRES_URL", "postgresql://bbikhai:Kdoan4801@103.130.218.163:5432/bbi"),
 		AstraDBAPIEndpoint:         strings.TrimRight(getEnv("ASTRA_DB_API_ENDPOINT", ""), "/"),
 		AstraDBToken:               getEnv("ASTRA_DB_TOKEN", ""),
 		AstraDBKeyspace:            getEnv("ASTRA_DB_KEYSPACE", ""),
