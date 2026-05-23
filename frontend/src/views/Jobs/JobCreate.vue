@@ -7,39 +7,26 @@
 
     <v-card class="pa-6">
       <v-stepper v-model="step" :items="stepItems" :alt-labels="mdAndUp" hide-actions>
-        <template v-if="form.job_type === 'chatbot_toggle'">
-          <template #[`item.1`]>
-            <StepType v-model:form="form" />
-          </template>
-          <template #[`item.2`]>
-            <StepRules v-model:form="form" />
-          </template>
-          <template #[`item.3`]>
-            <StepOutputSchedule v-model:form="form" />
-          </template>
-          <template #[`item.4`]>
-            <StepConfirm v-model:form="form" />
-          </template>
+        <template #[`item.1`]>
+          <StepType v-model:form="form" />
         </template>
-        <template v-else>
-          <template #[`item.1`]>
-            <StepType v-model:form="form" />
-          </template>
-          <template #[`item.2`]>
-            <StepInput v-model:form="form" />
-          </template>
-          <template #[`item.3`]>
-            <StepRules v-model:form="form" />
-          </template>
-          <template #[`item.4`]>
-            <StepOutput v-model:form="form" />
-          </template>
-          <template #[`item.5`]>
-            <StepOutputSchedule v-model:form="form" />
-          </template>
-          <template #[`item.6`]>
-            <StepConfirm v-model:form="form" />
-          </template>
+        <template #[`item.2`]>
+          <StepRules v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
+          <StepInput v-else v-model:form="form" />
+        </template>
+        <template #[`item.3`]>
+          <StepOutputSchedule v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
+          <StepRules v-else v-model:form="form" />
+        </template>
+        <template #[`item.4`]>
+          <StepConfirm v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
+          <StepOutput v-else v-model:form="form" />
+        </template>
+        <template #[`item.5`]>
+          <StepOutputSchedule v-model:form="form" />
+        </template>
+        <template #[`item.6`]>
+          <StepConfirm v-model:form="form" />
         </template>
       </v-stepper>
 
