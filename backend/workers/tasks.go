@@ -176,7 +176,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		if !hasSession {
 			// No active session. Check for trigger word.
-			if strings.EqualFold(userText, meta.SessionKeyword) {
+			var isTriggered bool
+			for _, kw := range strings.Split(meta.SessionKeyword, ";") {
+				kw = strings.TrimSpace(kw)
+				if kw != "" && strings.EqualFold(userText, kw) {
+					isTriggered = true
+					break
+				}
+			}
+			if isTriggered {
 				// Open session
 				if db.RedisClient != nil {
 					db.RedisClient.Set(ctx, sessionKey, "1", time.Duration(meta.SessionTimeout)*time.Minute)
@@ -195,7 +203,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// Has session. Check for end word.
-		if strings.EqualFold(userText, meta.SessionEndKeyword) {
+		var isEndTriggered bool
+		for _, kw := range strings.Split(meta.SessionEndKeyword, ";") {
+			kw = strings.TrimSpace(kw)
+			if kw != "" && strings.EqualFold(userText, kw) {
+				isEndTriggered = true
+				break
+			}
+		}
+		if isEndTriggered {
 			if db.RedisClient != nil {
 				db.RedisClient.Del(ctx, sessionKey)
 			}
