@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
@@ -178,15 +179,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		sessionKey := fmt.Sprintf("zalo_session:%s:%s", matchedChannel.ID, payload.Sender.ID)
 		
 		// Check session
-		var hasSession bool
+		var activeSessionID string
 		if db.RedisClient != nil {
-			err := db.RedisClient.Get(ctx, sessionKey).Err()
-			hasSession = (err == nil)
+			val, err := db.RedisClient.Get(ctx, sessionKey).Result()
+			if err == nil && val != "" {
+				activeSessionID = val
+			}
 		}
 
 		userText := strings.TrimSpace(payload.Message.Text)
 
-		if !hasSession {
+		if activeSessionID == "" {
 			// No active session. Check for trigger word.
 			var isTriggered bool
 			for _, kw := range strings.Split(meta.SessionKeyword, ";") {
@@ -197,16 +200,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				}
 			}
 			if isTriggered {
-				// Open session
+				// Open session and generate unique session ID
+				newSessionID := uuid.New().String()
 				if db.RedisClient != nil {
-					db.RedisClient.Set(ctx, sessionKey, "1", time.Duration(meta.SessionTimeout)*time.Minute)
+					db.RedisClient.Set(ctx, sessionKey, newSessionID, time.Duration(meta.SessionTimeout)*time.Minute)
 				}
 				// Send welcome message
 				err := adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionWelcomeMessage)
 				if err != nil {
 					log.Printf("[worker] failed to send welcome message: %v", err)
 				}
-				log.Printf("[worker] opened new session for user %s", payload.Sender.ID)
+				log.Printf("[worker] opened new session %s for user %s", newSessionID, payload.Sender.ID)
 				return nil
 			}
 			// Ignore message
@@ -241,7 +245,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// 2. Call Langflow API
-		replyText, err := langflowClient.RunFlowWithOverrides(ctx, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, meta.LangflowFlowID)
+		replyText, err := langflowClient.RunFlowWithOverrides(ctx, activeSessionID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, meta.LangflowFlowID)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}

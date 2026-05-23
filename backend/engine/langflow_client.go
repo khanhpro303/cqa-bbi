@@ -44,6 +44,7 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, me
 		"input_value": message,
 		"input_type":  "chat",
 		"output_type": "chat",
+		"session_id":  sessionID,
 		"tweaks": map[string]interface{}{
 			// Pass sessionID to memory components if they expose session_id tweak
 			"session_id": sessionID,
