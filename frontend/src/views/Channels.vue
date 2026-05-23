@@ -203,7 +203,7 @@
         </v-tabs>
 
         <v-window v-model="editTab">
-          <v-window-item value="general">
+          <v-window-item value="general" class="pt-3">
             <v-text-field v-model="editForm.name" :label="$t('channel_name')" class="mb-3" />
             <v-switch v-model="editForm.is_active" :label="$t('active')" color="primary" density="compact" class="mb-3" />
             <template v-if="editChannelType !== 'personal_zalo_import'">
@@ -223,7 +223,7 @@
             </template>
           </v-window-item>
           
-          <v-window-item value="chatbot">
+          <v-window-item value="chatbot" class="pt-3">
             <div class="text-subtitle-2 mb-2">{{ $t('session_config') }}</div>
             <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
             <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
