@@ -7,23 +7,39 @@
 
     <v-card class="pa-6">
       <v-stepper v-model="step" :items="stepItems" :alt-labels="mdAndUp" hide-actions>
-        <template #[`item.1`]>
-          <StepType v-model:form="form" />
+        <template v-if="form.job_type === 'chatbot_toggle'">
+          <template #[`item.1`]>
+            <StepType v-model:form="form" />
+          </template>
+          <template #[`item.2`]>
+            <StepRules v-model:form="form" />
+          </template>
+          <template #[`item.3`]>
+            <StepOutputSchedule v-model:form="form" />
+          </template>
+          <template #[`item.4`]>
+            <StepConfirm v-model:form="form" />
+          </template>
         </template>
-        <template #[`item.2`]>
-          <StepInput v-model:form="form" />
-        </template>
-        <template #[`item.3`]>
-          <StepRules v-model:form="form" />
-        </template>
-        <template #[`item.4`]>
-          <StepOutput v-model:form="form" />
-        </template>
-        <template #[`item.5`]>
-          <StepOutputSchedule v-model:form="form" />
-        </template>
-        <template #[`item.6`]>
-          <StepConfirm v-model:form="form" />
+        <template v-else>
+          <template #[`item.1`]>
+            <StepType v-model:form="form" />
+          </template>
+          <template #[`item.2`]>
+            <StepInput v-model:form="form" />
+          </template>
+          <template #[`item.3`]>
+            <StepRules v-model:form="form" />
+          </template>
+          <template #[`item.4`]>
+            <StepOutput v-model:form="form" />
+          </template>
+          <template #[`item.5`]>
+            <StepOutputSchedule v-model:form="form" />
+          </template>
+          <template #[`item.6`]>
+            <StepConfirm v-model:form="form" />
+          </template>
         </template>
       </v-stepper>
 
@@ -33,7 +49,7 @@
           {{ $t('back') }}
         </v-btn>
         <v-spacer />
-        <template v-if="step < 6">
+        <template v-if="step < (form.job_type === 'chatbot_toggle' ? 4 : 6)">
           <v-btn color="primary" :disabled="!canProceed" @click="step++">
             {{ $t('next') }}
             <v-icon end>mdi-chevron-right</v-icon>
@@ -42,7 +58,7 @@
             {{ validationMessage }}
           </div>
         </template>
-        <v-btn v-if="step === 6" color="success" :loading="creating" @click="submitJob">
+        <v-btn v-if="step === (form.job_type === 'chatbot_toggle' ? 4 : 6)" color="success" :loading="creating" @click="submitJob">
           <v-icon start>mdi-check-circle</v-icon>
           {{ $t('confirm') }}
         </v-btn>
@@ -75,6 +91,18 @@ const step = ref(1)
 const creating = ref(false)
 
 const canProceed = computed(() => {
+  if (form.value.job_type === 'chatbot_toggle') {
+    switch (step.value) {
+      case 1: return form.value.name.trim().length >= 2
+      case 2: return !!form.value.rules_content
+      case 3: {
+        if (form.value.schedule_type === 'cron' && !form.value.schedule_cron.trim()) return false
+        return true
+      }
+      default: return true
+    }
+  }
+
   switch (step.value) {
     case 1: return form.value.name.trim().length >= 2
     case 2: return form.value.input_channel_ids.length > 0
@@ -102,6 +130,14 @@ const canProceed = computed(() => {
 })
 
 const validationMessage = computed(() => {
+  if (form.value.job_type === 'chatbot_toggle') {
+    switch (step.value) {
+      case 1: return t('validation_min_chars', { min: 2 })
+      case 2: return 'Vui lòng chọn trạng thái chatbot mong muốn'
+      default: return ''
+    }
+  }
+
   switch (step.value) {
     case 1: return t('validation_min_chars', { min: 2 })
     case 2: return t('validation_select_channel')
@@ -130,22 +166,34 @@ const form = ref({
   schedule_cron: '0 7 * * *',
 })
 
-const stepItems = computed(() => [
-  { title: t('job_wizard_step_type'), value: 1 },
-  { title: t('job_wizard_step_input'), value: 2 },
-  { title: t('job_wizard_step_rules'), value: 3 },
-  { title: t('job_wizard_step_output'), value: 4 },
-  { title: t('job_wizard_step_schedule'), value: 5 },
-  { title: t('job_wizard_step_confirm'), value: 6 },
-])
+const stepItems = computed(() => {
+  if (form.value.job_type === 'chatbot_toggle') {
+    return [
+      { title: t('job_wizard_step_type'), value: 1 },
+      { title: 'Cấu hình trạng thái', value: 2 },
+      { title: t('job_wizard_step_schedule'), value: 3 },
+      { title: t('job_wizard_step_confirm'), value: 4 },
+    ]
+  }
+  return [
+    { title: t('job_wizard_step_type'), value: 1 },
+    { title: t('job_wizard_step_input'), value: 2 },
+    { title: t('job_wizard_step_rules'), value: 3 },
+    { title: t('job_wizard_step_output'), value: 4 },
+    { title: t('job_wizard_step_schedule'), value: 5 },
+    { title: t('job_wizard_step_confirm'), value: 6 },
+  ]
+})
 
 async function submitJob() {
   creating.value = true
   try {
+    const isChatbotToggle = form.value.job_type === 'chatbot_toggle'
     const payload = {
       ...form.value,
-      outputs: JSON.parse(form.value.outputs || '[]'),
-      rules_config: form.value.job_type === 'classification' ? JSON.parse(form.value.rules_config) : undefined,
+      input_channel_ids: isChatbotToggle ? ['global'] : form.value.input_channel_ids,
+      outputs: isChatbotToggle ? [] : JSON.parse(form.value.outputs || '[]'),
+      rules_config: form.value.job_type === 'classification' ? JSON.parse(form.value.rules_config) : (isChatbotToggle ? [] : undefined),
       output_at: form.value.output_at || undefined,
     }
     await jobStore.createJob(tenantId.value, payload)

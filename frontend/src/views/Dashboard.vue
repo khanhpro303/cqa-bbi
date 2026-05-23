@@ -30,6 +30,32 @@
       </v-card>
     </v-dialog>
 
+    <!-- Chatbot Toggle Panel (Admin/Owner only) -->
+    <v-card v-if="isAdmin" class="pa-4 mb-4 border-dashed" variant="outlined" color="primary">
+      <div class="d-flex align-center flex-wrap ga-3">
+        <v-icon color="primary" size="large">mdi-robot</v-icon>
+        <div>
+          <div class="text-subtitle-2 font-weight-bold text-primary">Điều khiển Chatbot OA</div>
+          <div class="text-caption text-grey-darken-1">Bật hoặc tắt chức năng tự động trả lời tin nhắn của Chatbot OA toàn hệ thống.</div>
+        </div>
+        <v-spacer />
+        <div class="d-flex align-center">
+          <span class="text-body-2 font-weight-medium mr-2" :class="chatbotActive ? 'text-success' : 'text-grey'">
+            {{ chatbotActive ? 'ĐANG BẬT' : 'ĐANG TẮT' }}
+          </span>
+          <v-switch
+            v-model="chatbotActive"
+            color="success"
+            hide-details
+            density="compact"
+            :loading="togglingChatbot"
+            :disabled="togglingChatbot"
+            @update:model-value="toggleChatbot"
+          />
+        </div>
+      </div>
+    </v-card>
+
     <div class="d-flex flex-wrap align-center mb-4 ga-2">
       <h1 class="text-h5 font-weight-bold d-none d-md-block">{{ $t('dashboard') }}</h1>
       <v-spacer class="d-none d-md-block" />
@@ -249,6 +275,7 @@ import { useI18n } from 'vue-i18n'
 import { Line } from 'vue-chartjs'
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend } from 'chart.js'
 import api from '../api'
+import { useAuthStore } from '../stores/auth'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend)
 
@@ -256,6 +283,38 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
+
+const authStore = useAuthStore()
+const isAdmin = computed(() => {
+  const role = authStore.tenantPerms.role
+  return role === 'owner' || role === 'admin'
+})
+
+const chatbotActive = ref(true)
+const togglingChatbot = ref(false)
+
+async function fetchChatbotStatus() {
+  if (!isAdmin.value) return
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/settings`)
+    chatbotActive.value = data?.settings?.chatbot_active !== 'false'
+  } catch { /* ignore */ }
+}
+
+async function toggleChatbot(val: any) {
+  togglingChatbot.value = true
+  try {
+    await api.put(`/tenants/${tenantId.value}/settings`, {
+      key: 'chatbot_active',
+      value: val ? 'true' : 'false'
+    })
+  } catch (e: any) {
+    chatbotActive.value = !val
+    alert('Không thể cập nhật trạng thái chatbot: ' + (e.response?.data?.error || e.message))
+  } finally {
+    togglingChatbot.value = false
+  }
+}
 
 const stats = ref([
   { label: 'total_conversations', value: 0, icon: 'mdi-message-text', color: 'primary' },
@@ -467,6 +526,7 @@ async function resetDemo() {
 onMounted(() => {
   loadDemoStatus()
   loadDashboard()
+  fetchChatbotStatus()
 })
 
 function timeAgo(dateStr: string) {

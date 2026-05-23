@@ -492,6 +492,7 @@ var allowedSettingKeys = map[string]bool{
 	"sync_interval":        true,
 	"default_ai_provider":  true,
 	"default_ai_model":     true,
+	"chatbot_active":       true,
 }
 
 // SaveSetting saves a single key-value setting

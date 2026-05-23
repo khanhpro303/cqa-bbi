@@ -1,10 +1,12 @@
 <template>
   <div>
-    <h3 class="text-h6 mb-2">{{ $t('job_wizard_step_rules') }}</h3>
+    <h3 class="text-h6 mb-2">{{ form.job_type === 'chatbot_toggle' ? 'Cấu hình Trạng thái' : $t('job_wizard_step_rules') }}</h3>
     <div class="text-body-2 text-grey-darken-1 mb-4">
       {{ form.job_type === 'qc_analysis'
         ? 'Nhập quy tắc đánh giá chất lượng. AI Agent sẽ phân tích từng cuộc hội thoại dựa trên các quy tắc này để đánh giá nhân viên. Ví dụ: Nhân viên phải chào hỏi lịch sự, trả lời đầy đủ câu hỏi khách hàng...'
-        : 'Cấu hình các nhãn phân loại. AI Agent sẽ tự động phân loại cuộc chat theo các nhãn bạn định nghĩa (feedback, hỏi giá, khiếu nại...).' }}
+        : form.job_type === 'classification'
+        ? 'Cấu hình các nhãn phân loại. AI Agent sẽ tự động phân loại cuộc chat theo các nhãn bạn định nghĩa (feedback, hỏi giá, khiếu nại...).'
+        : 'Chọn trạng thái của chatbot OA mà bạn muốn thiết lập khi công việc chạy.' }}
     </div>
 
     <!-- QC Analysis: markdown rules -->
@@ -44,7 +46,7 @@
     </div>
 
     <!-- Classification: dynamic rules -->
-    <div v-else>
+    <div v-else-if="form.job_type === 'classification'">
       <v-card v-for="(rule, idx) in rules" :key="idx" variant="outlined" class="pa-3 mb-3">
         <div class="d-flex align-center mb-2">
           <span class="text-subtitle-2 font-weight-bold">Rule {{ idx + 1 }}</span>
@@ -65,13 +67,42 @@
         {{ $t('add_rule') }}
       </v-btn>
     </div>
+
+    <!-- Chatbot Toggle state config -->
+    <div v-else-if="form.job_type === 'chatbot_toggle'">
+      <div class="text-subtitle-2 mb-2">Trạng thái chatbot mong muốn</div>
+      <v-radio-group v-model="form.rules_content" class="mt-0">
+        <v-radio value="true">
+          <template #label>
+            <div>
+              <div class="font-weight-medium text-success">Bật Chatbot (ON)</div>
+              <div class="text-caption text-grey">Kích hoạt chatbot tự động trả lời tin nhắn khách hàng.</div>
+            </div>
+          </template>
+        </v-radio>
+        <v-radio value="false">
+          <template #label>
+            <div>
+              <div class="font-weight-medium text-grey">Tắt Chatbot (OFF)</div>
+              <div class="text-caption text-grey">Vô hiệu hóa chatbot tự động trả lời tin nhắn khách hàng.</div>
+            </div>
+          </template>
+        </v-radio>
+      </v-radio-group>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 
 const form = defineModel<Record<string, any>>('form', { required: true })
+
+onMounted(() => {
+  if (form.value.job_type === 'chatbot_toggle' && !form.value.rules_content) {
+    form.value.rules_content = 'true'
+  }
+})
 
 function parseRules() {
   try {

@@ -23,7 +23,7 @@
         </v-expansion-panel>
 
         <!-- Input Channels -->
-        <v-expansion-panel value="input">
+        <v-expansion-panel value="input" v-if="form.job_type !== 'chatbot_toggle'">
           <v-expansion-panel-title>
             <v-icon start size="small">mdi-chat</v-icon>
             {{ $t('job_wizard_step_input') }}
@@ -46,7 +46,7 @@
         </v-expansion-panel>
 
         <!-- Output -->
-        <v-expansion-panel value="output">
+        <v-expansion-panel value="output" v-if="form.job_type !== 'chatbot_toggle'">
           <v-expansion-panel-title>
             <v-icon start size="small">mdi-send</v-icon>
             {{ $t('job_wizard_step_output') }}
@@ -161,21 +161,26 @@ onMounted(async () => {
 async function saveJob() {
   saving.value = true
   try {
+    const isChatbotToggle = form.value.job_type === 'chatbot_toggle'
     await jobStore.updateJob(tenantId.value, jobId.value, {
       name: form.value.name,
       description: form.value.description,
       rules_content: form.value.rules_content,
-      rules_config: form.value.rules_config,
-      skip_conditions: form.value.skip_conditions,
-      input_channel_ids: Array.isArray(form.value.input_channel_ids)
-        ? form.value.input_channel_ids
-        : JSON.parse(form.value.input_channel_ids || '[]'),
-      outputs: typeof form.value.outputs === 'string'
-        ? JSON.parse(form.value.outputs || '[]')
-        : form.value.outputs || [],
-      output_schedule: form.value.output_schedule,
-      output_cron: form.value.output_cron,
-      output_at: form.value.output_at || null,
+      rules_config: isChatbotToggle ? '[]' : form.value.rules_config,
+      skip_conditions: isChatbotToggle ? '' : form.value.skip_conditions,
+      input_channel_ids: isChatbotToggle
+        ? ['global']
+        : (Array.isArray(form.value.input_channel_ids)
+          ? form.value.input_channel_ids
+          : JSON.parse(form.value.input_channel_ids || '[]')),
+      outputs: isChatbotToggle
+        ? []
+        : (typeof form.value.outputs === 'string'
+          ? JSON.parse(form.value.outputs || '[]')
+          : form.value.outputs || []),
+      output_schedule: isChatbotToggle ? 'none' : form.value.output_schedule,
+      output_cron: isChatbotToggle ? '' : form.value.output_cron,
+      output_at: isChatbotToggle ? null : (form.value.output_at || null),
       schedule_type: form.value.schedule_type,
       schedule_cron: form.value.schedule_cron,
     })

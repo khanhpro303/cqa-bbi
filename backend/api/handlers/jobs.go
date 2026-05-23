@@ -28,14 +28,14 @@ var jobCancelFuncs sync.Map
 type CreateJobRequest struct {
 	Name            string          `json:"name" binding:"required,min=2,max=255"`
 	Description     string          `json:"description"`
-	JobType         string          `json:"job_type" binding:"required,oneof=qc_analysis classification"`
-	InputChannelIDs []string        `json:"input_channel_ids" binding:"required,min=1"`
+	JobType         string          `json:"job_type" binding:"required,oneof=qc_analysis classification chatbot_toggle"`
+	InputChannelIDs []string        `json:"input_channel_ids" binding:"required_unless=JobType chatbot_toggle"`
 	RulesContent    string          `json:"rules_content"`
 	RulesConfig     json.RawMessage `json:"rules_config"`
 	SkipConditions  string          `json:"skip_conditions"`
 	AIProvider      string          `json:"ai_provider" binding:"omitempty,oneof=claude gemini openai"`
 	AIModel         string          `json:"ai_model"`
-	Outputs         json.RawMessage `json:"outputs" binding:"required"`
+	Outputs         json.RawMessage `json:"outputs" binding:"required_unless=JobType chatbot_toggle"`
 	OutputSchedule  string          `json:"output_schedule" binding:"required,oneof=instant scheduled cron none"`
 	OutputCron      string          `json:"output_cron"`
 	OutputAt        *time.Time      `json:"output_at"`
@@ -61,10 +61,20 @@ func CreateJob(c *gin.Context) {
 
 	tenantID := middleware.GetTenantID(c)
 
-	channelIDsJSON, _ := json.Marshal(req.InputChannelIDs)
+	inputChannelsVal := req.InputChannelIDs
+	if inputChannelsVal == nil {
+		inputChannelsVal = []string{}
+	}
+	channelIDsJSON, _ := json.Marshal(inputChannelsVal)
+
 	rulesConfig := "{}"
-	if req.RulesConfig != nil {
+	if req.RulesConfig != nil && len(req.RulesConfig) > 0 {
 		rulesConfig = string(req.RulesConfig)
+	}
+
+	outputsStr := "[]"
+	if req.Outputs != nil && len(req.Outputs) > 0 {
+		outputsStr = string(req.Outputs)
 	}
 
 	now := time.Now()
@@ -80,7 +90,7 @@ func CreateJob(c *gin.Context) {
 		SkipConditions:  req.SkipConditions,
 		AIProvider:      req.AIProvider,
 		AIModel:         req.AIModel,
-		Outputs:         string(req.Outputs),
+		Outputs:         outputsStr,
 		OutputSchedule:  req.OutputSchedule,
 		OutputCron:      req.OutputCron,
 		OutputAt:        req.OutputAt,

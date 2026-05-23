@@ -84,6 +84,10 @@ func (a *Analyzer) runJobInternal(ctx context.Context, job models.Job, maxConver
 }
 
 func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxConversations int, injectedProvider ai.AIProvider, fullRerun bool, dateFrom, dateTo string, sinceOverride *time.Time, excludeAnalyzed bool) (*models.JobRun, error) {
+	if job.JobType == "chatbot_toggle" {
+		return a.runChatbotToggleJob(ctx, job)
+	}
+
 	now := time.Now()
 	run := models.JobRun{
 		ID:        pkg.NewUUID(),
@@ -830,4 +834,89 @@ func (a *Analyzer) failRun(run *models.JobRun, err error) (*models.JobRun, error
 	run.FinishedAt = &finishedAt
 	run.ErrorMessage = err.Error()
 	return run, err
+}
+
+func (a *Analyzer) runChatbotToggleJob(ctx context.Context, job models.Job) (*models.JobRun, error) {
+	now := time.Now()
+	run := models.JobRun{
+		ID:        pkg.NewUUID(),
+		JobID:     job.ID,
+		TenantID:  job.TenantID,
+		StartedAt: now,
+		Status:    "running",
+		Summary:   "{}",
+		CreatedAt: now,
+	}
+	if err := db.DB.Create(&run).Error; err != nil {
+		return nil, fmt.Errorf("failed to create job run: %w", err)
+	}
+
+	db.LogActivity(job.TenantID, "", "system", "job.run.started", "job", job.ID,
+		fmt.Sprintf("Job '%s': started chatbot toggle", job.Name), "", "")
+
+	// RulesContent should contain either "true" or "false"
+	targetVal := strings.ToLower(strings.TrimSpace(job.RulesContent))
+	if targetVal == "enable" || targetVal == "on" || targetVal == "true" || targetVal == "1" {
+		targetVal = "true"
+	} else {
+		targetVal = "false"
+	}
+
+	// Update the chatbot_active setting
+	upsertSetting(job.TenantID, "chatbot_active", targetVal)
+
+	finishedAt := time.Now()
+	runStatus := "success"
+	actionStr := "tắt"
+	if targetVal == "true" {
+		actionStr = "bật"
+	}
+	summaryMsg := fmt.Sprintf("Đã tự động %s chatbot", actionStr)
+	summaryJSON, _ := json.Marshal(map[string]interface{}{
+		"message": summaryMsg,
+	})
+
+	if err := db.DB.Model(&run).Updates(map[string]interface{}{
+		"status":      runStatus,
+		"finished_at": &finishedAt,
+		"summary":     string(summaryJSON),
+	}).Error; err != nil {
+		log.Printf("[analyzer] failed to update chatbot toggle job run status: %v", err)
+	}
+
+	// Update job last run status
+	db.DB.Model(&job).Updates(map[string]interface{}{
+		"last_run_at":     &finishedAt,
+		"last_run_status": runStatus,
+		"updated_at":      finishedAt,
+	})
+
+	db.LogActivity(job.TenantID, "", "system", "job.run.completed", "job", job.ID,
+		fmt.Sprintf("Job '%s': completed, %s", job.Name, summaryMsg), "", "")
+
+	return &run, nil
+}
+
+func upsertSetting(tenantID, key, plainValue string) {
+	var existing models.AppSetting
+	result := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&existing)
+
+	if result.Error == nil {
+		updates := map[string]interface{}{
+			"value_plain":     plainValue,
+			"value_encrypted": nil,
+			"updated_at":      time.Now(),
+		}
+		db.DB.Model(&existing).Updates(updates)
+	} else {
+		setting := models.AppSetting{
+			ID:         pkg.NewUUID(),
+			TenantID:   tenantID,
+			SettingKey: key,
+			ValuePlain: plainValue,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+		}
+		db.DB.Create(&setting)
+	}
 }

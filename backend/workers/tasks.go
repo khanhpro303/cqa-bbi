@@ -100,6 +100,18 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return asynq.SkipRetry // Skip retry if channel not found
 		}
 
+		// Check if chatbot is active (defaults to true if setting is not found)
+		var activeSetting models.AppSetting
+		chatbotActive := true
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "chatbot_active").First(&activeSetting).Error; err == nil {
+			chatbotActive = (activeSetting.ValuePlain == "true")
+		}
+
+		if !chatbotActive {
+			log.Printf("[worker] chatbot is disabled for tenant %s (ignoring message from Zalo user %s)", matchedChannel.TenantID, payload.Sender.ID)
+			return nil
+		}
+
 		// Parse metadata for session configuration
 		var meta ChannelMetadata
 		if matchedChannel.Metadata != "" {

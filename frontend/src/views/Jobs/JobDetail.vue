@@ -12,12 +12,14 @@
         </v-tooltip>
         <v-btn v-else variant="outlined" prepend-icon="mdi-pencil" size="small" :to="`/${tenantId}/jobs/${jobId}/edit`" class="ml-2">{{ $t('edit') }}</v-btn>
 
-        <v-tooltip v-if="!mdAndUp" text="Chạy thử" location="bottom">
-          <template #activator="{ props }">
-            <v-btn v-bind="props" variant="outlined" color="primary" icon="mdi-test-tube" size="small" :loading="isJobRunning" :disabled="isJobRunning" class="ml-1" @click="testRun" />
-          </template>
-        </v-tooltip>
-        <v-btn v-else variant="outlined" color="primary" prepend-icon="mdi-test-tube" size="small" :loading="isJobRunning" :disabled="isJobRunning" class="ml-2" @click="testRun">Chạy thử (3 hội thoại)</v-btn>
+        <template v-if="job?.job_type !== 'chatbot_toggle'">
+          <v-tooltip v-if="!mdAndUp" text="Chạy thử" location="bottom">
+            <template #activator="{ props }">
+              <v-btn v-bind="props" variant="outlined" color="primary" icon="mdi-test-tube" size="small" :loading="isJobRunning" :disabled="isJobRunning" class="ml-1" @click="testRun" />
+            </template>
+          </v-tooltip>
+          <v-btn v-else variant="outlined" color="primary" prepend-icon="mdi-test-tube" size="small" :loading="isJobRunning" :disabled="isJobRunning" class="ml-2" @click="testRun">Chạy thử (3 hội thoại)</v-btn>
+        </template>
 
         <v-tooltip v-if="!mdAndUp" text="Chạy ngay" location="bottom">
           <template #activator="{ props }">
@@ -115,13 +117,19 @@
       <v-row dense>
         <v-col cols="6" sm="3">
           <div class="text-caption text-grey">{{ $t('job_type') }}</div>
-          <v-chip size="small" :color="job.job_type === 'qc_analysis' ? 'primary' : 'secondary'" variant="tonal">
-            {{ job.job_type === 'qc_analysis' ? $t('job_qc') : $t('job_classification') }}
+          <v-chip size="small" :color="job.job_type === 'qc_analysis' ? 'primary' : job.job_type === 'classification' ? 'secondary' : 'warning'" variant="tonal">
+            {{ job.job_type === 'qc_analysis' ? $t('job_qc') : job.job_type === 'classification' ? $t('job_classification') : 'Bật/Tắt Chatbot' }}
           </v-chip>
         </v-col>
-        <v-col cols="6" sm="3">
+        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle'">
           <div class="text-caption text-grey">{{ $t('ai_model') }}</div>
           <div class="text-body-2">{{ tenantAIProvider }} / {{ tenantAIModel }}</div>
+        </v-col>
+        <v-col cols="6" sm="3" v-else>
+          <div class="text-caption text-grey">Trạng thái thiết lập</div>
+          <v-chip size="small" :color="job.rules_content === 'true' ? 'success' : 'grey'" variant="tonal">
+            {{ job.rules_content === 'true' ? 'Bật Chatbot (ON)' : 'Tắt Chatbot (OFF)' }}
+          </v-chip>
         </v-col>
         <v-col cols="6" sm="3">
           <div class="text-caption text-grey">{{ $t('job_wizard_step_analysis_schedule') }}</div>
@@ -133,11 +141,11 @@
             {{ job.is_active ? $t('active') : $t('inactive') }}
           </v-chip>
         </v-col>
-        <v-col cols="6" sm="3">
+        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle'">
           <div class="text-caption text-grey">{{ $t('job_input_channels') }}</div>
           <div class="text-body-2">{{ parsedChannelCount }} kênh</div>
         </v-col>
-        <v-col cols="6" sm="3">
+        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle'">
           <div class="text-caption text-grey">{{ $t('job_output') }}</div>
           <div class="d-flex flex-wrap ga-1">
             <v-chip v-for="(o, i) in parsedOutputs" :key="i" size="x-small" variant="tonal" :prepend-icon="o.type === 'telegram' ? 'mdi-send' : 'mdi-email'">
@@ -257,7 +265,7 @@
     </v-row>
 
     <!-- Trend Chart (QC only) -->
-    <v-card class="pa-4 mb-4" v-if="jobStore.jobResults.length > 0 && !isClassification">
+    <v-card class="pa-4 mb-4" v-if="jobStore.jobResults.length > 0 && !isClassification && job?.job_type !== 'chatbot_toggle'">
       <div class="text-subtitle-1 font-weight-bold mb-3">
         <v-icon start size="small">mdi-chart-line</v-icon>
         {{ $t('job_trend') }}
@@ -270,7 +278,7 @@
     <!-- Tabbed Content: History + Results -->
     <v-card class="pa-4">
       <v-tabs v-model="activeTab" density="compact" class="mb-3">
-        <v-tab value="results">
+        <v-tab value="results" v-if="job?.job_type !== 'chatbot_toggle'">
           <v-icon start size="small">mdi-magnify</v-icon>
           {{ $t('tab_results') }}
         </v-tab>
@@ -281,7 +289,7 @@
       </v-tabs>
 
       <!-- Tab: Results -->
-      <div v-if="activeTab === 'results'">
+      <div v-if="activeTab === 'results' && job?.job_type !== 'chatbot_toggle'">
         <!-- Filter + toolbar in one row -->
         <div class="d-flex align-center flex-wrap ga-2 mb-3">
           <!-- Filter chips: Classification -->
@@ -547,7 +555,13 @@
 
         <v-table v-if="jobStore.jobRuns.length" density="compact">
           <thead>
-            <tr>
+            <tr v-if="job?.job_type === 'chatbot_toggle'">
+              <th>Thời gian chạy</th>
+              <th>Trạng thái</th>
+              <th>Hoạt động</th>
+              <th>Chi tiết</th>
+            </tr>
+            <tr v-else>
               <th>{{ $t('sent_at') }}</th>
               <th>{{ $t('status') }}</th>
               <th>{{ $t('conversations_analyzed') }}</th>
@@ -562,18 +576,24 @@
               <td>
                 <v-chip size="x-small" :color="statusColor(run.status)" variant="tonal">{{ run.status }}</v-chip>
               </td>
-              <td>{{ parseSummary(run.summary).conversations_analyzed || 0 }}</td>
-              <td>
-                <span class="text-success font-weight-medium">{{ parseSummary(run.summary).conversations_passed || 0 }}</span>
-                <span class="text-grey"> / {{ parseSummary(run.summary).conversations_analyzed || 0 }}</span>
-              </td>
-              <td>{{ parseSummary(run.summary).issues_found || 0 }}</td>
-              <td>
-                <span v-if="run.error_message" class="text-caption text-error">{{ run.error_message }}</span>
-                <v-btn v-else size="small" variant="text" color="primary" @click="loadResults(run.id)">
-                  {{ $t('view_results') }}
-                </v-btn>
-              </td>
+              <template v-if="job?.job_type === 'chatbot_toggle'">
+                <td class="text-body-2">{{ parseSummary(run.summary).message || 'Đã tự động thay đổi trạng thái chatbot' }}</td>
+                <td>—</td>
+              </template>
+              <template v-else>
+                <td>{{ parseSummary(run.summary).conversations_analyzed || 0 }}</td>
+                <td>
+                  <span class="text-success font-weight-medium">{{ parseSummary(run.summary).conversations_passed || 0 }}</span>
+                  <span class="text-grey"> / {{ parseSummary(run.summary).conversations_analyzed || 0 }}</span>
+                </td>
+                <td>{{ parseSummary(run.summary).issues_found || 0 }}</td>
+                <td>
+                  <span v-if="run.error_message" class="text-caption text-error">{{ run.error_message }}</span>
+                  <v-btn v-else size="small" variant="text" color="primary" @click="loadResults(run.id)">
+                    {{ $t('view_results') }}
+                  </v-btn>
+                </td>
+              </template>
             </tr>
           </tbody>
         </v-table>
@@ -1131,6 +1151,7 @@ const groupedResults = computed<ConversationGroup[]>(() => {
 onMounted(async () => {
   job.value = await jobStore.fetchJob(tenantId.value, jobId.value)
   if (job.value?.job_type === 'classification') resultFilter.value = 'classified'
+  if (job.value?.job_type === 'chatbot_toggle') activeTab.value = 'history'
   await jobStore.fetchJobRuns(tenantId.value, jobId.value)
   await jobStore.fetchAllJobResults(tenantId.value, jobId.value)
   // Load tenant AI settings (jobs use global settings)
@@ -1204,6 +1225,15 @@ async function checkAIConfigured(): Promise<boolean> {
 }
 
 async function openRunDialog() {
+  if (job.value?.job_type === 'chatbot_toggle') {
+    try {
+      await jobStore.triggerJob(tenantId.value, jobId.value, 'since_last', {})
+      startPolling()
+    } catch {
+      await jobStore.fetchJobRuns(tenantId.value, jobId.value)
+    }
+    return
+  }
   if (!(await checkAIConfigured())) return
   runDialog.value = true
 }

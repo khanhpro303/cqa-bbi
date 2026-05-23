@@ -29,6 +29,14 @@
           </div>
         </template>
       </v-radio>
+      <v-radio value="chatbot_toggle">
+        <template #label>
+          <div>
+            <div class="font-weight-medium">Bật/Tắt Chatbot tự động</div>
+            <div class="text-caption text-grey">Tự động bật hoặc tắt chatbot OA theo khung giờ cấu hình (cron job).</div>
+          </div>
+        </template>
+      </v-radio>
     </v-radio-group>
   </div>
 </template>
