@@ -264,6 +264,8 @@
                       <v-chip size="x-small" :color="isEndpointEnabled('public', 'products') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Prod</v-chip>
                       <v-chip size="x-small" :color="isEndpointEnabled('public', 'inventory') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Stock</v-chip>
                       <v-chip size="x-small" :color="isEndpointEnabled('public', 'orders') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Ord</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('public', 'customers') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Cust</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('public', 'debt') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Debt</v-chip>
                     </div>
                   </div>
 
