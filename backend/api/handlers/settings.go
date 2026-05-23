@@ -44,6 +44,9 @@ func GetSettings(c *gin.Context) {
 	if _, ok := result["ai_engine_langflow_flow_id"]; !ok && cfg.LangflowFlowID != "" {
 		result["ai_engine_langflow_flow_id"] = cfg.LangflowFlowID
 	}
+	if _, ok := result["ai_engine_langflow_public_flow_id"]; !ok && cfg.LangflowPublicFlowID != "" {
+		result["ai_engine_langflow_public_flow_id"] = cfg.LangflowPublicFlowID
+	}
 	if _, ok := result["ai_engine_langflow_token"]; !ok && cfg.LangflowAPIKey != "" {
 		result["ai_engine_langflow_token"] = "••••••••"
 	}
@@ -178,9 +181,10 @@ func SaveAnalysisSettings(c *gin.Context) {
 func SaveAIEnginesSettings(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	var req struct {
-		LangflowBaseURL string `json:"langflow_base_url"`
-		LangflowFlowID  string `json:"langflow_flow_id"`
-		LangflowToken   string `json:"langflow_token"`
+		LangflowBaseURL      string `json:"langflow_base_url"`
+		LangflowFlowID       string `json:"langflow_flow_id"`
+		LangflowPublicFlowID string `json:"langflow_public_flow_id"`
+		LangflowToken        string `json:"langflow_token"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -201,6 +205,13 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		upsertSetting(tenantID, "ai_engine_langflow_flow_id", req.LangflowFlowID, nil)
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_flow_id").Delete(&models.AppSetting{})
+	}
+
+	// Public Flow ID
+	if req.LangflowPublicFlowID != "" {
+		upsertSetting(tenantID, "ai_engine_langflow_public_flow_id", req.LangflowPublicFlowID, nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_public_flow_id").Delete(&models.AppSetting{})
 	}
 
 	// Token

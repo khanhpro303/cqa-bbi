@@ -58,9 +58,10 @@ type ChannelMetadata struct {
 	SessionGoodbyeMessage string `json:"session_goodbye_message"`
 	SessionTimeout        int    `json:"session_timeout_minutes"`
 
-	LangflowAPIURL string `json:"langflow_api_url"`
-	LangflowAPIKey string `json:"langflow_api_key"`
-	LangflowFlowID string `json:"langflow_flow_id"`
+	LangflowAPIURL       string `json:"langflow_api_url"`
+	LangflowAPIKey       string `json:"langflow_api_key"`
+	LangflowFlowID       string `json:"langflow_flow_id"`
+	LangflowPublicFlowID string `json:"langflow_public_flow_id"`
 
 	AstraDBAPIEndpoint string `json:"astradb_api_endpoint"`
 	AstraDBToken       string `json:"astradb_token"`
@@ -168,6 +169,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				meta.LangflowFlowID = cfg.LangflowFlowID
 			}
 		}
+		if meta.LangflowPublicFlowID == "" {
+			var setting models.AppSetting
+			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_public_flow_id").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+				meta.LangflowPublicFlowID = setting.ValuePlain
+			} else {
+				meta.LangflowPublicFlowID = cfg.LangflowPublicFlowID
+			}
+		}
 
 		// Astra DB Configuration Fallbacks
 		if meta.AstraDBAPIEndpoint == "" {
@@ -240,18 +249,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
-		// 2. Apply Whitelist Access Control:
-		// Check if there are any active whitelisted records for this tenant.
-		// If yes, restrict access to only whitelisted users.
-		var activeCount int64
-		if err := db.DB.Model(&models.ZaloWhitelist{}).Where("tenant_id = ? AND status = ?", matchedChannel.TenantID, "active").Count(&activeCount).Error; err == nil && activeCount > 0 {
-			// Whitelist is active! Check if the current sender's ZaloUserID is whitelisted
-			var whitelistRec models.ZaloWhitelist
-			if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", matchedChannel.TenantID, payload.Sender.ID, "active").First(&whitelistRec).Error; err != nil {
-				// Not whitelisted! Log access denied and ignore the message
-				log.Printf("[worker] access denied for Zalo user %s (not in whitelist for tenant %s)", payload.Sender.ID, matchedChannel.TenantID)
-				return nil
-			}
+		// 2. Determine Whitelist / Staff Routing:
+		// Check if the current sender is active in the Zalo whitelist for this tenant.
+		isWhitelisted := false
+		var whitelistRec models.ZaloWhitelist
+		if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", matchedChannel.TenantID, payload.Sender.ID, "active").First(&whitelistRec).Error; err == nil {
+			isWhitelisted = true
 		}
 
 		sessionKey := fmt.Sprintf("zalo_session:%s:%s", matchedChannel.ID, payload.Sender.ID)
@@ -328,8 +331,20 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}()
 
+		// Determine which Flow ID to use
+		flowIDToUse := meta.LangflowPublicFlowID
+		if isWhitelisted {
+			flowIDToUse = meta.LangflowFlowID
+			log.Printf("[worker] Routing whitelisted internal staff %s to RAG Agent Flow (%s)", payload.Sender.ID, flowIDToUse)
+		} else {
+			if flowIDToUse == "" {
+				flowIDToUse = meta.LangflowFlowID
+			}
+			log.Printf("[worker] Routing public user %s to General Flow (%s)", payload.Sender.ID, flowIDToUse)
+		}
+
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID)
-		replyText, err := langflowClient.RunFlowWithOverrides(ctx, activeSessionID, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, meta.LangflowFlowID)
+		replyText, err := langflowClient.RunFlowWithOverrides(ctx, activeSessionID, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}

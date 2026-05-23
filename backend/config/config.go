@@ -39,9 +39,10 @@ type Config struct {
 	PersonalZaloGatewayBaseURL string
 
 	// Langflow Integration
-	LangflowAPIURL string
-	LangflowAPIKey string
-	LangflowFlowID string
+	LangflowAPIURL       string
+	LangflowAPIKey       string
+	LangflowFlowID       string
+	LangflowPublicFlowID string
 
 	// Redis Task Queue
 	RedisURL string
@@ -82,6 +83,7 @@ func Load() (*Config, error) {
 		LangflowAPIURL:             strings.TrimRight(getEnv("LANGFLOW_API_URL", ""), "/"),
 		LangflowAPIKey:             getEnv("LANGFLOW_API_KEY", ""),
 		LangflowFlowID:             getEnv("LANGFLOW_FLOW_ID", ""),
+		LangflowPublicFlowID:       getEnv("LANGFLOW_PUBLIC_FLOW_ID", ""),
 		RedisURL:                   getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		AstraDBAPIEndpoint:         strings.TrimRight(getEnv("ASTRA_DB_API_ENDPOINT", ""), "/"),
 		AstraDBToken:               getEnv("ASTRA_DB_TOKEN", ""),
