@@ -1,10 +1,12 @@
 package workers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -58,6 +60,11 @@ type ChannelMetadata struct {
 	LangflowAPIURL string `json:"langflow_api_url"`
 	LangflowAPIKey string `json:"langflow_api_key"`
 	LangflowFlowID string `json:"langflow_flow_id"`
+
+	AstraDBAPIEndpoint string `json:"astradb_api_endpoint"`
+	AstraDBToken       string `json:"astradb_token"`
+	AstraDBKeyspace    string `json:"astradb_keyspace"`
+	AstraDBCollection  string `json:"astradb_collection"`
 }
 
 // HandleZaloWebhookTask processes the webhook task
@@ -158,6 +165,20 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
+		// Astra DB Configuration Fallbacks
+		if meta.AstraDBAPIEndpoint == "" {
+			meta.AstraDBAPIEndpoint = cfg.AstraDBAPIEndpoint
+		}
+		if meta.AstraDBToken == "" {
+			meta.AstraDBToken = cfg.AstraDBToken
+		}
+		if meta.AstraDBKeyspace == "" {
+			meta.AstraDBKeyspace = cfg.AstraDBKeyspace
+		}
+		if meta.AstraDBCollection == "" {
+			meta.AstraDBCollection = cfg.AstraDBCollection
+		}
+
 		// Setup Zalo adapter for replies
 		adapter := channels.NewZaloOAAdapter(zaloCreds)
 		adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
@@ -244,8 +265,16 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			db.RedisClient.Expire(ctx, sessionKey, time.Duration(meta.SessionTimeout)*time.Minute)
 		}
 
-		// 2. Call Langflow API
-		replyText, err := langflowClient.RunFlowWithOverrides(ctx, activeSessionID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, meta.LangflowFlowID)
+		// Save user message to Astra DB asynchronously
+		go func() {
+			err := saveMessageToAstraDB(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, payload.Sender.ID, activeSessionID, "user", payload.Message.Text)
+			if err != nil {
+				log.Printf("[worker] failed to save user message to Astra DB: %v", err)
+			}
+		}()
+
+		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID)
+		replyText, err := langflowClient.RunFlowWithOverrides(ctx, activeSessionID, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, meta.LangflowFlowID)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}
@@ -254,6 +283,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] langflow returned empty response")
 			return nil
 		}
+
+		// Save assistant reply to Astra DB asynchronously
+		go func() {
+			err := saveMessageToAstraDB(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, payload.Sender.ID, activeSessionID, "assistant", replyText)
+			if err != nil {
+				log.Printf("[worker] failed to save assistant message to Astra DB: %v", err)
+			}
+		}()
 
 		// 3. Send message back to Zalo
 		err = adapter.SendMessage(ctx, payload.Sender.ID, replyText)
@@ -264,4 +301,60 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		log.Printf("[worker] successfully replied to user %s via Langflow", payload.Sender.ID)
 		return nil
 	}
+}
+
+// saveMessageToAstraDB saves a chat message to DataStax Astra DB asynchronously.
+func saveMessageToAstraDB(ctx context.Context, apiEndpoint, token, keyspace, collection, zaloUserID, sessionID, role, content string) error {
+	if apiEndpoint == "" || token == "" || collection == "" {
+		// Skip if not configured
+		return nil
+	}
+
+	// Format endpoint: https://<ASTRA_DB_ID>-<REGION>.apps.astra.datastax.com/api/json/v1/<KEYSPACE>/<COLLECTION>
+	if keyspace == "" {
+		keyspace = "default_keyspace"
+	}
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+
+	// Build the document representing the chat log
+	document := map[string]interface{}{
+		"zalo_user_id": zaloUserID,
+		"session_id":   sessionID,
+		"role":         role,
+		"content":      content,
+		"created_at":   time.Now().Unix(),
+	}
+
+	// Payload for inserting one document into Astra DB
+	payload := map[string]interface{}{
+		"insertOne": map[string]interface{}{
+			"document": document,
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal astra db payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("create astra db request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("astra db request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("astra db api error (status %d)", resp.StatusCode)
+	}
+
+	return nil
 }

@@ -28,27 +28,38 @@ func NewLangflowClient(cfg *config.Config) *LangflowClient {
 }
 
 // RunFlow sends a message to a Langflow flow using global config.
-func (l *LangflowClient) RunFlow(ctx context.Context, sessionID, message string) (string, error) {
-	return l.RunFlowWithOverrides(ctx, sessionID, message, l.cfg.LangflowAPIURL, l.cfg.LangflowAPIKey, l.cfg.LangflowFlowID)
+func (l *LangflowClient) RunFlow(ctx context.Context, sessionID, zaloUserID, message string) (string, error) {
+	return l.RunFlowWithOverrides(ctx, sessionID, zaloUserID, message, l.cfg.LangflowAPIURL, l.cfg.LangflowAPIKey, l.cfg.LangflowFlowID)
 }
 
 // RunFlowWithOverrides allows passing specific API URL, Key, and Flow ID.
-func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, message, apiURL, apiKey, flowID string) (string, error) {
+func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID string) (string, error) {
 	if apiURL == "" || flowID == "" {
 		return "", fmt.Errorf("langflow integration is not configured")
 	}
 
 	url := fmt.Sprintf("%s/api/v1/run/%s", apiURL, flowID)
 
+	tweaks := map[string]interface{}{
+		// Pass sessionID to memory components if they expose session_id tweak
+		"session_id": sessionID,
+	}
+
+	if zaloUserID != "" {
+		// Pass advanced search metadata filter dynamically for the Astra DB history retriever
+		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{
+			"advanced_search_filter": map[string]interface{}{
+				"zalo_user_id": zaloUserID,
+			},
+		}
+	}
+
 	payload := map[string]interface{}{
 		"input_value": message,
 		"input_type":  "chat",
 		"output_type": "chat",
 		"session_id":  sessionID,
-		"tweaks": map[string]interface{}{
-			// Pass sessionID to memory components if they expose session_id tweak
-			"session_id": sessionID,
-		},
+		"tweaks":      tweaks,
 	}
 
 	bodyBytes, err := json.Marshal(payload)

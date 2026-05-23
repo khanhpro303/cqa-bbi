@@ -46,6 +46,12 @@ type Config struct {
 	// Redis Task Queue
 	RedisURL string
 
+	// Astra DB Integration
+	AstraDBAPIEndpoint string
+	AstraDBToken       string
+	AstraDBKeyspace    string
+	AstraDBCollection  string
+
 	// Session Gateway Defaults
 	ChatbotSessionKeyword        string
 	ChatbotSessionEndKeyword     string
@@ -75,6 +81,10 @@ func Load() (*Config, error) {
 		LangflowAPIKey:             getEnv("LANGFLOW_API_KEY", ""),
 		LangflowFlowID:             getEnv("LANGFLOW_FLOW_ID", ""),
 		RedisURL:                   getEnv("REDIS_URL", "redis://localhost:6379/0"),
+		AstraDBAPIEndpoint:         strings.TrimRight(getEnv("ASTRA_DB_API_ENDPOINT", ""), "/"),
+		AstraDBToken:               getEnv("ASTRA_DB_TOKEN", ""),
+		AstraDBKeyspace:            getEnv("ASTRA_DB_KEYSPACE", ""),
+		AstraDBCollection:          getEnv("ASTRA_DB_COLLECTION", "zalo_chat_history"),
 		ChatbotSessionKeyword:        getEnv("CHATBOT_SESSION_KEYWORD", "chào bull"),
 		ChatbotSessionEndKeyword:     getEnv("CHATBOT_SESSION_END_KEYWORD", "tạm biệt"),
 		ChatbotSessionWelcomeMessage: getEnv("CHATBOT_SESSION_WELCOME_MESSAGE", "Chào bạn, tôi đã sẵn sàng!"),

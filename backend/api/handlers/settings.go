@@ -282,7 +282,7 @@ func TestLangflowConnection(c *gin.Context) {
 	// Try calling run flow with a ping using the actual LangflowClient logic
 	lfClient := engine.NewLangflowClient(cfg)
 	
-	_, err := lfClient.RunFlowWithOverrides(c.Request.Context(), "ping_test_session", "ping", baseURL, token, flowID)
+	_, err := lfClient.RunFlowWithOverrides(c.Request.Context(), "ping_test_session", "", "ping", baseURL, token, flowID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
