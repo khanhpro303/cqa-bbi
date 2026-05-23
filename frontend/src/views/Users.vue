@@ -3,67 +3,150 @@
     <div class="d-flex align-center mb-6">
       <h1 class="text-h5 font-weight-bold">{{ $t('nav_users') }}</h1>
       <v-spacer />
-      <v-btn color="primary" prepend-icon="mdi-account-plus" @click="inviteDialog = true">
+      <v-btn v-if="currentTab === 'users'" color="primary" prepend-icon="mdi-account-plus" @click="inviteDialog = true">
         {{ $t('create_user') }}
+      </v-btn>
+      <v-btn v-else color="teal" prepend-icon="mdi-plus" @click="whitelistDialog = true; whitelistForm = { name: '', zalo_user_id: '', mode: 'qr', selectedOA: activeZaloOAs.length > 0 ? activeZaloOAs[0].external_id : '' }">
+        Thêm nhân viên Whitelist
       </v-btn>
     </div>
 
-    <v-card>
-      <v-table density="compact">
-        <thead>
-          <tr>
-            <th>{{ $t('display_name') }}</th>
-            <th>{{ $t('email') }}</th>
-            <th>{{ $t('role') }}</th>
-            <th>{{ $t('actions') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="u in userStore.users" :key="u.user_id">
-            <td>{{ u.name }}</td>
-            <td>{{ u.email }}</td>
-            <td>
-              <v-select
-                :model-value="u.role"
-                :items="roleOptions"
-                density="compact"
-                variant="plain"
-                hide-details
-                style="max-width: 140px"
-                :disabled="u.user_id === authStore.user?.id"
-                @update:model-value="changeRole(u.user_id, $event)"
-              />
-            </td>
-            <td>
-              <v-btn
-                v-if="u.role === 'member' && u.user_id !== authStore.user?.id"
-                icon="mdi-shield-edit"
-                size="small"
-                variant="text"
-                @click="openPermissions(u)"
-                title="Phân quyền"
-              />
-              <v-btn
-                v-if="u.user_id !== authStore.user?.id"
-                icon="mdi-lock-reset"
-                size="small"
-                variant="text"
-                @click="openResetPassword(u)"
-                title="Đặt lại mật khẩu"
-              />
-              <v-btn
-                v-if="u.user_id !== authStore.user?.id"
-                icon="mdi-delete"
-                size="small"
-                color="error"
-                variant="text"
-                @click="confirmRemove(u)"
-              />
-            </td>
-          </tr>
-        </tbody>
-      </v-table>
-    </v-card>
+    <v-tabs v-model="currentTab" color="primary" class="mb-4">
+      <v-tab value="users">Người dùng hệ thống</v-tab>
+      <v-tab value="whitelist">Whitelist nhân viên Zalo OA</v-tab>
+    </v-tabs>
+
+    <v-window v-model="currentTab">
+      <v-window-item value="users" class="pt-2">
+        <v-card>
+          <v-table density="compact">
+            <thead>
+              <tr>
+                <th>{{ $t('display_name') }}</th>
+                <th>{{ $t('email') }}</th>
+                <th>{{ $t('role') }}</th>
+                <th>{{ $t('actions') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="u in userStore.users" :key="u.user_id">
+                <td>{{ u.name }}</td>
+                <td>{{ u.email }}</td>
+                <td>
+                  <v-select
+                    :model-value="u.role"
+                    :items="roleOptions"
+                    density="compact"
+                    variant="plain"
+                    hide-details
+                    style="max-width: 140px"
+                    :disabled="u.user_id === authStore.user?.id"
+                    @update:model-value="changeRole(u.user_id, $event)"
+                  />
+                </td>
+                <td>
+                  <v-btn
+                    v-if="u.role === 'member' && u.user_id !== authStore.user?.id"
+                    icon="mdi-shield-edit"
+                    size="small"
+                    variant="text"
+                    @click="openPermissions(u)"
+                    title="Phân quyền"
+                  />
+                  <v-btn
+                    v-if="u.user_id !== authStore.user?.id"
+                    icon="mdi-lock-reset"
+                    size="small"
+                    variant="text"
+                    @click="openResetPassword(u)"
+                    title="Đặt lại mật khẩu"
+                  />
+                  <v-btn
+                    v-if="u.user_id !== authStore.user?.id"
+                    icon="mdi-delete"
+                    size="small"
+                    color="error"
+                    variant="text"
+                    @click="confirmRemove(u)"
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </v-table>
+        </v-card>
+      </v-window-item>
+
+      <v-window-item value="whitelist" class="pt-2">
+        <v-alert v-if="activeZaloOAs.length === 0" type="warning" variant="tonal" class="mb-4">
+          Không tìm thấy Zalo OA hoạt động nào. Hãy kết nối và kích hoạt Zalo OA trong mục <strong>Kênh chat</strong> trước để nhân viên có thể xác thực qua mã QR.
+        </v-alert>
+
+        <v-card>
+          <v-table density="compact">
+            <thead>
+              <tr>
+                <th>Ảnh</th>
+                <th>Tên nhân viên</th>
+                <th>Zalo User ID</th>
+                <th>Trạng thái</th>
+                <th>Ngày tạo</th>
+                <th>Hành động</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in whitelist" :key="item.id">
+                <td>
+                  <v-avatar size="32" color="teal-lighten-4">
+                    <v-img v-if="item.avatar" :src="item.avatar" />
+                    <v-icon v-else color="teal" size="20">mdi-account</v-icon>
+                  </v-avatar>
+                </td>
+                <td>
+                  <div class="font-weight-bold">{{ item.name }}</div>
+                </td>
+                <td>
+                  <code class="text-caption bg-grey-lighten-3 px-1 rounded">{{ item.zalo_user_id || '—' }}</code>
+                </td>
+                <td>
+                  <v-chip size="x-small" :color="item.status === 'active' ? 'success' : 'warning'" variant="tonal">
+                    {{ item.status === 'active' ? 'Đã liên kết' : 'Chờ quét QR' }}
+                  </v-chip>
+                </td>
+                <td>{{ new Date(item.created_at).toLocaleString() }}</td>
+                <td>
+                  <v-btn
+                    v-if="item.status === 'pending'"
+                    icon="mdi-qrcode"
+                    size="small"
+                    color="teal"
+                    variant="text"
+                    @click="showPendingQR(item)"
+                    title="Xem mã QR"
+                  />
+                  <v-btn
+                    icon="mdi-delete"
+                    size="small"
+                    color="error"
+                    variant="text"
+                    @click="deleteWhitelist(item.id)"
+                    title="Xóa khỏi whitelist"
+                  />
+                </td>
+              </tr>
+              <tr v-if="whitelist.length === 0">
+                <td colspan="6" class="text-center py-8 text-grey text-body-2">
+                  <v-icon size="40" color="grey-lighten-1" class="mb-2">mdi-shield-account-outline</v-icon>
+                  <div>Chưa có nhân viên nào trong whitelist Zalo.</div>
+                  <div class="text-caption text-grey-darken-1 mt-1" style="max-width: 600px; margin: 0 auto;">
+                    Khi Whitelist trống, bất kỳ ai cũng có thể chat với chatbot Zalo OA. Khi có ít nhất 1 nhân viên trong whitelist hoạt động, chatbot sẽ tự động chặn tất cả người lạ.
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </v-table>
+        </v-card>
+      </v-window-item>
+    </v-window>
 
     <!-- Create user dialog -->
     <v-dialog v-model="inviteDialog" max-width="450">
@@ -96,6 +179,110 @@
           <v-spacer />
           <v-btn @click="inviteDialog = false">{{ $t('cancel') }}</v-btn>
           <v-btn color="primary" :loading="inviting" @click="doInvite">{{ $t('create_user') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Add Whitelist Staff Dialog -->
+    <v-dialog v-model="whitelistDialog" max-width="500">
+      <v-card class="pa-4">
+        <v-card-title class="font-weight-bold">Thêm nhân viên vào Whitelist</v-card-title>
+        <v-card-text>
+          <v-form ref="whitelistFormRef">
+            <v-text-field
+              v-model="whitelistForm.name"
+              label="Tên nhân viên nội bộ"
+              hint="Ví dụ: Nguyễn Văn A (Nhân viên kinh doanh)"
+              persistent-hint
+              class="mb-4"
+              :rules="[v => !!v || 'Trường này là bắt buộc']"
+            />
+
+            <v-radio-group v-model="whitelistForm.mode" inline class="mb-2">
+              <v-radio label="Xác minh quét QR (Khuyên dùng)" value="qr" color="teal" />
+              <v-radio label="Thêm trực tiếp User ID" value="direct" color="teal" />
+            </v-radio-group>
+
+            <v-expand-transition>
+              <div v-if="whitelistForm.mode === 'direct'">
+                <v-text-field
+                  v-model="whitelistForm.zalo_user_id"
+                  label="Zalo User ID"
+                  hint="Nhập Zalo User ID chính xác của nhân viên"
+                  persistent-hint
+                  class="mb-2"
+                  :rules="[v => !!v || 'Trường này là bắt buộc']"
+                />
+              </div>
+              <div v-else>
+                <v-select
+                  v-if="activeZaloOAs.length > 1"
+                  v-model="whitelistForm.selectedOA"
+                  :items="activeZaloOAs.map(oa => ({ title: oa.name, value: oa.external_id }))"
+                  label="Chọn Zalo OA nhận mã xác thực"
+                  class="mb-2"
+                />
+                <div class="text-caption text-grey-darken-1 mb-2">
+                  Hệ thống sẽ tạo ra một mã xác nhận và mã QR. Nhân viên chỉ cần dùng app Zalo quét mã QR và gửi tin nhắn chứa mã để hoàn tất liên kết tài khoản tự động.
+                </div>
+              </div>
+            </v-expand-transition>
+          </v-form>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="whitelistDialog = false">Hủy</v-btn>
+          <v-btn color="teal" :loading="creatingWhitelist" @click="addWhitelist">
+            {{ whitelistForm.mode === 'qr' ? 'Tạo mã liên kết' : 'Thêm vào Whitelist' }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- QR Code / Instruction Verification Dialog -->
+    <v-dialog v-model="qrDialog" max-width="480">
+      <v-card class="pa-6 text-center">
+        <v-card-title class="font-weight-bold text-h6 justify-center">Quét QR liên kết Zalo</v-card-title>
+        <v-card-text>
+          <div class="text-body-1 font-weight-bold mb-1 text-teal">Nhân viên: {{ activeInvite?.name }}</div>
+          <div class="text-body-2 text-grey-darken-1 mb-4">
+            Vui lòng gửi hướng dẫn dưới đây cho nhân viên để thực hiện liên kết tài khoản.
+          </div>
+
+          <!-- QR code container -->
+          <div class="d-flex justify-center mb-4">
+            <v-card variant="outlined" class="pa-2" style="border-color: #008fe5 !important;">
+              <v-img
+                v-if="whitelistForm.selectedOA || (activeZaloOAs.length > 0)"
+                :src="`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent('https://zalo.me/' + (whitelistForm.selectedOA || activeZaloOAs[0].external_id))}`"
+                width="200"
+                height="200"
+              />
+              <div v-else class="pa-6 text-caption text-grey">Chưa chọn Zalo OA</div>
+            </v-card>
+          </div>
+
+          <!-- Instruction code card -->
+          <v-card color="teal-lighten-5" class="pa-4 mb-4" variant="flat">
+            <div class="text-caption text-grey-darken-2 mb-1">Cú pháp tin nhắn cần gửi:</div>
+            <div class="text-h5 font-weight-black text-teal" style="letter-spacing: 1px;">
+              verify {{ activeInvite?.verify_token }}
+            </div>
+          </v-card>
+
+          <v-divider class="mb-4" />
+
+          <div class="text-left text-body-2">
+            <div class="font-weight-bold mb-1">Các bước thực hiện:</div>
+            <ol class="pl-4">
+              <li class="mb-1">Dùng ứng dụng Zalo quét mã QR ở trên để truy cập cuộc trò chuyện Zalo OA.</li>
+              <li>Gửi chính xác tin nhắn chứa mã xác nhận bên trên (chữ thường hoặc hoa đều được).</li>
+              <li>Chờ chatbot Zalo phản hồi <strong>"Xác thực thành công"</strong>. Trạng thái trên web sẽ tự động cập nhật!</li>
+            </ol>
+          </div>
+        </v-card-text>
+        <v-card-actions class="justify-center">
+          <v-btn color="teal" variant="elevated" class="px-6" @click="qrDialog = false; fetchWhitelist()">Hoàn tất</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -165,13 +352,32 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUserStore, type TenantUser } from '../stores/users'
+import { useChannelStore } from '../stores/channels'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const route = useRoute()
 const userStore = useUserStore()
 const authStore = useAuthStore()
+const channelStore = useChannelStore()
 const tenantId = computed(() => route.params.tenantId as string)
+
+const currentTab = ref('users')
+
+// Whitelist state
+const whitelist = ref<any[]>([])
+const loadingWhitelist = ref(false)
+const whitelistDialog = ref(false)
+const creatingWhitelist = ref(false)
+const whitelistForm = ref({ name: '', zalo_user_id: '', mode: 'qr', selectedOA: '' })
+const activeInvite = ref<any>(null)
+const qrDialog = ref(false)
+const whitelistFormRef = ref<any>(null)
+
+// Computed active Zalo OAs
+const activeZaloOAs = computed(() => {
+  return channelStore.channels.filter((c: any) => c.channel_type === 'zalo_oa' && c.is_active)
+})
 
 const roleOptions = [
   { title: 'Owner', value: 'owner' },
@@ -207,7 +413,80 @@ const snack = ref(false)
 const snackText = ref('')
 const snackColor = ref('success')
 
-onMounted(() => userStore.fetchUsers(tenantId.value))
+onMounted(async () => {
+  await userStore.fetchUsers(tenantId.value)
+  await channelStore.fetchChannels(tenantId.value)
+  await fetchWhitelist()
+})
+
+async function fetchWhitelist() {
+  loadingWhitelist.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/zalo-whitelist`)
+    whitelist.value = data
+  } catch (err) {
+    showSnack('Không thể tải whitelist Zalo', 'error')
+  } finally {
+    loadingWhitelist.value = false
+  }
+}
+
+async function addWhitelist() {
+  const { valid } = await whitelistFormRef.value?.validate() || {}
+  if (!valid) return
+
+  creatingWhitelist.value = true
+  try {
+    if (whitelistForm.value.mode === 'direct') {
+      await api.post(`/tenants/${tenantId.value}/zalo-whitelist`, {
+        zalo_user_id: whitelistForm.value.zalo_user_id,
+        name: whitelistForm.value.name,
+      })
+      whitelistDialog.value = false
+      showSnack('Đã thêm nhân viên trực tiếp vào Whitelist', 'success')
+      await fetchWhitelist()
+    } else {
+      // QR verification mode
+      const { data } = await api.post(`/tenants/${tenantId.value}/zalo-whitelist/invite`, {
+        name: whitelistForm.value.name,
+      })
+      activeInvite.value = data
+      
+      // Auto-select first Zalo OA if select field not filled
+      if (!whitelistForm.value.selectedOA && activeZaloOAs.value.length > 0) {
+        whitelistForm.value.selectedOA = activeZaloOAs.value[0].external_id
+      }
+      
+      whitelistDialog.value = false
+      qrDialog.value = true
+      await fetchWhitelist()
+    }
+  } catch (err: any) {
+    showSnack(err.response?.data?.error || 'Có lỗi xảy ra', 'error')
+  } finally {
+    creatingWhitelist.value = false
+  }
+}
+
+async function deleteWhitelist(id: string) {
+  if (!confirm('Xóa nhân viên này khỏi whitelist Zalo?')) return
+  try {
+    await api.delete(`/tenants/${tenantId.value}/zalo-whitelist/${id}`)
+    showSnack('Đã xóa khỏi whitelist', 'success')
+    await fetchWhitelist()
+  } catch (err) {
+    showSnack('Lỗi xóa whitelist', 'error')
+  }
+}
+
+function showPendingQR(item: any) {
+  activeInvite.value = item
+  // Select first OA if not selected
+  if (!whitelistForm.value.selectedOA && activeZaloOAs.value.length > 0) {
+    whitelistForm.value.selectedOA = activeZaloOAs.value[0].external_id
+  }
+  qrDialog.value = true
+}
 
 async function doInvite() {
   const { valid } = await createFormRef.value?.validate() || {}

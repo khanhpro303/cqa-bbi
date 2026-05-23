@@ -201,6 +201,62 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		})
 
+		userText := strings.TrimSpace(payload.Message.Text)
+
+		// 1. Check for verification token command: "verify <token>"
+		if strings.HasPrefix(strings.ToLower(userText), "verify ") {
+			token := strings.TrimSpace(userText[7:])
+			if token != "" {
+				// Try to find a pending whitelist record for this tenant with this token
+				var whitelistRec models.ZaloWhitelist
+				if err := db.DB.Where("tenant_id = ? AND verify_token = ? AND status = ?", matchedChannel.TenantID, token, "pending").First(&whitelistRec).Error; err == nil {
+					// Found! Fetch their Zalo profile to get their name and avatar
+					displayName := payload.Sender.ID
+					avatarURL := ""
+					if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
+						if profile.DisplayName != "" {
+							displayName = profile.DisplayName
+						}
+						avatarURL = profile.Avatar
+					}
+
+					// Update whitelist record
+					whitelistRec.ZaloUserID = payload.Sender.ID
+					whitelistRec.Name = displayName
+					whitelistRec.Avatar = avatarURL
+					whitelistRec.Status = "active"
+					whitelistRec.UpdatedAt = time.Now()
+
+					if err := db.DB.Save(&whitelistRec).Error; err == nil {
+						// Send success message back to Zalo
+						successMsg := "Xác thực thành công! Tài khoản Zalo của bạn đã được thêm vào danh sách nhân viên nội bộ được phép sử dụng Chatbot."
+						_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
+						log.Printf("[worker] successfully whitelisted Zalo user %s for tenant %s", payload.Sender.ID, matchedChannel.TenantID)
+						return nil
+					}
+				} else {
+					// Token invalid or expired
+					errorMsg := "Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra lại."
+					_ = adapter.SendMessage(ctx, payload.Sender.ID, errorMsg)
+					return nil
+				}
+			}
+		}
+
+		// 2. Apply Whitelist Access Control:
+		// Check if there are any active whitelisted records for this tenant.
+		// If yes, restrict access to only whitelisted users.
+		var activeCount int64
+		if err := db.DB.Model(&models.ZaloWhitelist{}).Where("tenant_id = ? AND status = ?", matchedChannel.TenantID, "active").Count(&activeCount).Error; err == nil && activeCount > 0 {
+			// Whitelist is active! Check if the current sender's ZaloUserID is whitelisted
+			var whitelistRec models.ZaloWhitelist
+			if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", matchedChannel.TenantID, payload.Sender.ID, "active").First(&whitelistRec).Error; err != nil {
+				// Not whitelisted! Log access denied and ignore the message
+				log.Printf("[worker] access denied for Zalo user %s (not in whitelist for tenant %s)", payload.Sender.ID, matchedChannel.TenantID)
+				return nil
+			}
+		}
+
 		sessionKey := fmt.Sprintf("zalo_session:%s:%s", matchedChannel.ID, payload.Sender.ID)
 		
 		// Check session
@@ -211,8 +267,6 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				activeSessionID = val
 			}
 		}
-
-		userText := strings.TrimSpace(payload.Message.Text)
 
 		if activeSessionID == "" {
 			// No active session. Check for trigger word.

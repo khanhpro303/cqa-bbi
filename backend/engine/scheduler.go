@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -69,6 +71,16 @@ func (s *Scheduler) Start() {
 	)
 	if err != nil {
 		log.Printf("[scheduler] failed to create cleanup job: %v", err)
+	}
+
+	// Cleanup old Astra DB chat history daily (keep N days retention)
+	_, err = s.scheduler.NewJob(
+		gocron.DurationJob(24*time.Hour),
+		gocron.NewTask(s.cleanupAstraDBChatHistory),
+		gocron.WithName("cleanup-astradb-chat-history"),
+	)
+	if err != nil {
+		log.Printf("[scheduler] failed to create Astra DB cleanup job: %v", err)
 	}
 
 	// Load and schedule cron-based analysis jobs
@@ -265,4 +277,64 @@ func (s *Scheduler) TriggerAfterSyncJobs(tenantID, channelID string) {
 // SyncEngine returns the sync engine for manual trigger.
 func (s *Scheduler) SyncEngine() *SyncEngine {
 	return s.syncEngine
+}
+
+// cleanupAstraDBChatHistory removes old chat logs from Astra DB daily.
+func (s *Scheduler) cleanupAstraDBChatHistory() {
+	if s.cfg.AstraDBAPIEndpoint == "" || s.cfg.AstraDBToken == "" || s.cfg.AstraDBCollection == "" {
+		return
+	}
+
+	retentionDays := s.cfg.ChatbotHistoryRetentionDays
+	if retentionDays <= 0 {
+		retentionDays = 30 // fallback
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -retentionDays).Unix()
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", s.cfg.AstraDBAPIEndpoint, s.cfg.AstraDBKeyspace, s.cfg.AstraDBCollection)
+
+	// Build the JSON payload to delete all documents older than the cutoff
+	payload := map[string]interface{}{
+		"deleteMany": map[string]interface{}{
+			"filter": map[string]interface{}{
+				"created_at": map[string]interface{}{
+					"$lt": cutoff,
+				},
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[scheduler] failed to marshal Astra DB cleanup payload: %v", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		log.Printf("[scheduler] failed to create Astra DB cleanup request: %v", err)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", s.cfg.AstraDBToken)
+
+	client := &http.Client{Timeout: 50 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[scheduler] Astra DB cleanup request failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		log.Printf("[scheduler] Astra DB cleanup returned error status %d", resp.StatusCode)
+		return
+	}
+
+	log.Printf("[scheduler] successfully cleaned up Astra DB chat history older than %d days (cutoff: %v)", retentionDays, time.Unix(cutoff, 0))
 }

@@ -377,3 +377,35 @@ func (z *ZaloOAAdapter) SendMessage(ctx context.Context, conversationID string, 
 	return nil
 }
 
+type ZaloUserProfile struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	Avatar      string `json:"avatar"`
+}
+
+func (z *ZaloOAAdapter) FetchUserProfile(ctx context.Context, userID string) (*ZaloUserProfile, error) {
+	result, err := z.doRequest(ctx, "GET", zaloAPIBaseV2+"/getprofile", map[string]interface{}{
+		"user_id": userID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	data, ok := result["data"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid profile data in response")
+	}
+
+	profile := &ZaloUserProfile{
+		UserID: userID,
+	}
+	if name, ok := data["display_name"].(string); ok {
+		profile.DisplayName = name
+	}
+	if avatar, ok := data["avatar"].(string); ok {
+		profile.Avatar = avatar
+	}
+
+	return profile, nil
+}
+

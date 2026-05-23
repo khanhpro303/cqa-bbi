@@ -202,6 +202,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.PUT("/users/:userId/reset-password", middleware.RequireRole("owner", "admin"), handlers.ResetUserPassword)
 			tenant.DELETE("/users/:userId", middleware.RequireRole("owner"), handlers.RemoveUserFromTenant)
 
+			// Zalo Whitelist
+			tenant.GET("/zalo-whitelist", handlers.ListZaloWhitelist)
+			tenant.POST("/zalo-whitelist", middleware.RequireRole("owner", "admin"), handlers.AddZaloWhitelist)
+			tenant.POST("/zalo-whitelist/invite", middleware.RequireRole("owner", "admin"), handlers.InviteZaloWhitelist)
+			tenant.DELETE("/zalo-whitelist/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteZaloWhitelist)
+
 			// Job all results + export
 			tenant.GET("/jobs/:jobId/results", middleware.RequirePermission("jobs", "r"), handlers.ListAllJobResults)
 			tenant.GET("/jobs/:jobId/results/export", middleware.RequirePermission("jobs", "r"), handlers.ExportJobResults)
