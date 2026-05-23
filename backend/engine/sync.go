@@ -112,6 +112,7 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 	log.Printf("[sync] channel %s: sync_files=%v, metadata=%s", channel.Name, syncFiles, channel.Metadata)
 
 	totalMessages := 0
+	totalInserted := 0
 	for _, conv := range conversations {
 		convID, err := s.ingestor.EnsureConversation(channel.TenantID, channel.ID, conv)
 		if err != nil {
@@ -142,13 +143,16 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 			continue
 		}
 		totalMessages += ingestResult.MessagesProcessed
+		totalInserted += ingestResult.MessagesInserted
 	}
 
-	log.Printf("[sync] channel %s: synced %d conversations, %d messages", channel.Name, len(conversations), totalMessages)
+	log.Printf("[sync] channel %s: synced %d conversations, %d messages (%d new)", channel.Name, len(conversations), totalMessages, totalInserted)
 
-	// Log activity
-	db.LogActivity(channel.TenantID, "", "system", "sync.completed", "channel", channel.ID,
-		fmt.Sprintf("Sync '%s': %d conversations, %d messages", channel.Name, len(conversations), totalMessages), "", "")
+	// Log activity only when there are new messages
+	if totalInserted > 0 {
+		db.LogActivity(channel.TenantID, "", "system", "sync.completed", "channel", channel.ID,
+			fmt.Sprintf("Sync '%s': %d conversations, %d messages (%d new)", channel.Name, len(conversations), totalMessages, totalInserted), "", "")
+	}
 
 	// Trigger after-sync jobs for this channel
 	if sched := GetDefaultScheduler(); sched != nil {

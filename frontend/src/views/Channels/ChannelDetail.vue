@@ -296,9 +296,21 @@
 
     <!-- Sync History -->
     <v-card class="pa-4">
-      <div class="text-subtitle-1 font-weight-bold mb-3">
-        <v-icon start size="small">mdi-history</v-icon>
-        Lịch sử đồng bộ
+      <div class="d-flex align-center mb-3 flex-wrap ga-2">
+        <div class="text-subtitle-1 font-weight-bold">
+          <v-icon start size="small">mdi-history</v-icon>
+          Lịch sử đồng bộ
+        </div>
+        <v-spacer />
+        <v-select
+          v-model="syncStatusFilter"
+          :items="syncFilterOptions"
+          density="compact"
+          variant="outlined"
+          hide-details
+          style="max-width: 180px"
+          @update:model-value="onSyncFilterChange"
+        />
       </div>
       <v-table density="compact" v-if="channelStore.syncHistory.length > 0">
         <thead>
@@ -438,6 +450,17 @@ const confirmDelete = ref(false)
 const confirmPurge = ref(false)
 const syncResult = ref<{ type: 'success' | 'warning' | 'error' | 'info'; message: string } | null>(null)
 const syncPage = ref(1)
+const syncStatusFilter = ref('')
+const syncFilterOptions = [
+  { title: 'Tất cả', value: '' },
+  { title: 'Chỉ lỗi', value: 'error' },
+  { title: 'Thành công', value: 'success' },
+]
+
+function onSyncFilterChange() {
+  syncPage.value = 1
+  channelStore.fetchSyncHistory(tenantId.value, channelId.value, 1, syncStatusFilter.value)
+}
 const syncTotalPages = computed(() => Math.ceil(channelStore.syncHistoryTotal / 10))
 const accountOwnerDrafts = ref<Array<{ account_external_id: string; user_id: string }>>([])
 const savingAccountOwners = ref(false)
@@ -635,7 +658,7 @@ async function syncGateway() {
   try {
     gatewayState.value = await channelStore.syncPersonalZaloGateway(tenantId.value, channelId.value)
     await channelStore.fetchChannel(tenantId.value, channelId.value)
-    await channelStore.fetchSyncHistory(tenantId.value, channelId.value, syncPage.value)
+    await channelStore.fetchSyncHistory(tenantId.value, channelId.value, syncPage.value, syncStatusFilter.value)
     syncResult.value = { type: 'success', message: 'Đã bắt đầu lấy dữ liệu. Tin nhắn mới sẽ xuất hiện sau ít phút.' }
   } catch (err: any) {
     syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.message || err.response?.data?.error || 'Lấy dữ liệu thất bại' }
@@ -663,7 +686,7 @@ async function doSync() {
       syncing.value = false
       return
     }
-    await channelStore.fetchSyncHistory(tenantId.value, channelId.value, syncPage.value)
+    await channelStore.fetchSyncHistory(tenantId.value, channelId.value, syncPage.value, syncStatusFilter.value)
     const ch = channelStore.currentChannel
     if (ch?.last_sync_status === 'success') {
       syncResult.value = { type: 'success', message: 'Đồng bộ thành công' }
@@ -784,7 +807,7 @@ watch(editDialog, (v) => {
 })
 
 watch(syncPage, (p) => {
-  channelStore.fetchSyncHistory(tenantId.value, channelId.value, p)
+  channelStore.fetchSyncHistory(tenantId.value, channelId.value, p, syncStatusFilter.value)
 })
 
 watch(() => gatewayAccount.value?.status, () => {
@@ -803,7 +826,7 @@ onMounted(async () => {
   }
 
   await channelStore.fetchChannel(tenantId.value, channelId.value)
-  await channelStore.fetchSyncHistory(tenantId.value, channelId.value, 1)
+  await channelStore.fetchSyncHistory(tenantId.value, channelId.value, 1, syncStatusFilter.value)
   if (channelStore.currentChannel?.channel_type === 'personal_zalo_import') {
     await userStore.fetchUsers(tenantId.value)
     await loadAccountOwners()

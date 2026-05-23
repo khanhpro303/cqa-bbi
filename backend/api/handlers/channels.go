@@ -978,6 +978,7 @@ func GetChannelSyncHistory(c *gin.Context) {
 	channelID := c.Param("channelId")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "10"))
+	statusFilter := c.DefaultQuery("status", "")
 	if page < 1 {
 		page = 1
 	}
@@ -985,14 +986,22 @@ func GetChannelSyncHistory(c *gin.Context) {
 		perPage = 10
 	}
 
+	query := db.DB.Model(&models.ActivityLog{}).
+		Where("tenant_id = ? AND resource_type = 'channel' AND resource_id = ?", tenantID, channelID).
+		Where("action LIKE 'sync.%' OR action LIKE 'import.personal_zalo%'")
+
+	switch statusFilter {
+	case "error":
+		query = query.Where("action LIKE '%.error%'")
+	case "success":
+		query = query.Where("action NOT LIKE '%.error%'")
+	}
+
 	var total int64
-	db.DB.Model(&models.ActivityLog{}).
-		Where("tenant_id = ? AND resource_type = 'channel' AND resource_id = ? AND (action LIKE 'sync.%' OR action LIKE 'import.personal_zalo%')", tenantID, channelID).
-		Count(&total)
+	query.Count(&total)
 
 	var logs []models.ActivityLog
-	db.DB.Where("tenant_id = ? AND resource_type = 'channel' AND resource_id = ? AND (action LIKE 'sync.%' OR action LIKE 'import.personal_zalo%')", tenantID, channelID).
-		Order("created_at DESC").
+	query.Order("created_at DESC").
 		Offset((page - 1) * perPage).
 		Limit(perPage).
 		Find(&logs)

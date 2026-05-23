@@ -99,8 +99,10 @@ export const useChannelStore = defineStore('channels', () => {
     return data
   }
 
-  async function fetchSyncHistory(tenantId: string, channelId: string, page = 1) {
-    const { data } = await api.get(`/tenants/${tenantId}/channels/${channelId}/sync-history`, { params: { page, per_page: 10 } })
+  async function fetchSyncHistory(tenantId: string, channelId: string, page = 1, status = '') {
+    const params: Record<string, any> = { page, per_page: 10 }
+    if (status) params.status = status
+    const { data } = await api.get(`/tenants/${tenantId}/channels/${channelId}/sync-history`, { params })
     syncHistory.value = data.data || []
     syncHistoryTotal.value = data.total || 0
     return data

@@ -59,6 +59,18 @@ func (s *Scheduler) Start() {
 		log.Printf("[scheduler] failed to create sync job: %v", err)
 	}
 
+	// Cleanup old sync activity logs daily (keep success 90d, error 180d)
+	_, err = s.scheduler.NewJob(
+		gocron.DurationJob(24*time.Hour),
+		gocron.NewTask(func() {
+			CleanupOldSyncLogs(90, 180)
+		}),
+		gocron.WithName("cleanup-sync-logs"),
+	)
+	if err != nil {
+		log.Printf("[scheduler] failed to create cleanup job: %v", err)
+	}
+
 	// Load and schedule cron-based analysis jobs
 	s.loadCronJobs()
 
@@ -140,10 +152,8 @@ func (s *Scheduler) syncAllChannelsTask() {
 
 		if err := s.syncEngine.SyncChannel(ctx, ch); err != nil {
 			log.Printf("[scheduler] sync channel %s failed: %v", ch.Name, err)
-			db.LogActivity(ch.TenantID, "", "system", "sync.error", "channel", ch.ID, "Sync failed: "+ch.Name, err.Error(), "")
 		} else {
 			synced++
-			db.LogActivity(ch.TenantID, "", "system", "sync.completed", "channel", ch.ID, "Sync completed: "+ch.Name, "", "")
 		}
 	}
 	if synced > 0 {

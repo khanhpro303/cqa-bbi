@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -101,17 +102,20 @@ func NewPersonalZaloImportHandler(ingestor engine.ConversationIngester) gin.Hand
 			totalDeduplicated += result.MessagesDeduplicated
 		}
 
-		db.LogActivity(
-			req.TenantID,
-			"",
-			"system",
-			"import.personal_zalo",
-			"channel",
-			req.ChannelID,
-			"Imported personal Zalo conversations",
-			"",
-			c.ClientIP(),
-		)
+		if totalInserted > 0 {
+			db.LogActivity(
+				req.TenantID,
+				"",
+				"system",
+				"import.personal_zalo",
+				"channel",
+				req.ChannelID,
+				fmt.Sprintf("Zalo import: %d conversations, %d new, %d dedup",
+					len(req.Conversations), totalInserted, totalDeduplicated),
+				"",
+				c.ClientIP(),
+			)
+		}
 		updates := map[string]interface{}{
 			"last_sync_at":     req.ImportedAt.UTC(),
 			"last_sync_status": "success",
