@@ -60,6 +60,13 @@ func GetSettings(c *gin.Context) {
 		}
 	}
 
+	// Ensure ai_agent_erp_token is generated
+	if _, ok := result["ai_agent_erp_token"]; !ok {
+		newToken := strings.ReplaceAll(pkg.NewUUID()+pkg.NewUUID(), "-", "")
+		upsertSetting(tenantID, "ai_agent_erp_token", newToken, nil)
+		result["ai_agent_erp_token"] = newToken
+	}
+
 	// Also get tenant info
 	var tenant models.Tenant
 	db.DB.First(&tenant, "id = ?", tenantID)

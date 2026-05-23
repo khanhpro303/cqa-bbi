@@ -110,6 +110,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			auth.POST("/refresh", handlers.RefreshTokenHandler)
 			auth.POST("/logout", handlers.Logout)
 		}
+
+		// ERP Gateway for AI Agent
+		api.GET("/tenants/:tenantId/erp/query", handlers.ERPQuery)
+		api.POST("/tenants/:tenantId/erp/query", handlers.ERPQuery)
 	}
 
 	// OAuth callbacks (public — platforms redirect here)
@@ -224,6 +228,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/settings/ai/test", middleware.RequirePermission("settings", "w"), handlers.TestAIKey)
 			tenant.PUT("/settings/general", middleware.RequirePermission("settings", "w"), handlers.SaveGeneralSettings)
 			tenant.PUT("/settings/password", handlers.ChangePassword)
+
+			// ERP Settings & Test Connect
+			tenant.PUT("/settings/erp", middleware.RequirePermission("settings", "w"), handlers.SaveERPSettings)
+			tenant.POST("/settings/erp/test", middleware.RequirePermission("settings", "w"), handlers.TestERPConnection)
 
 			// Notification logs
 			tenant.GET("/notification-logs", handlers.ListNotificationLogs)
