@@ -210,20 +210,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				// Try to find a pending whitelist record for this tenant with this token
 				var whitelistRec models.ZaloWhitelist
 				if err := db.DB.Where("tenant_id = ? AND verify_token = ? AND status = ?", matchedChannel.TenantID, token, "pending").First(&whitelistRec).Error; err == nil {
-					// Found! Fetch their Zalo profile to get their name and avatar
-					displayName := payload.Sender.ID
+					// Found! Fetch their Zalo profile to get their avatar
 					avatarURL := ""
 					if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
-						if profile.DisplayName != "" {
-							displayName = profile.DisplayName
-						}
 						avatarURL = profile.Avatar
 					}
 
-					// Update whitelist record
+					// Update whitelist record (Keep the original Name entered by the admin)
 					whitelistRec.ZaloUserID = payload.Sender.ID
-					whitelistRec.Name = displayName
-					whitelistRec.Avatar = avatarURL
+					if avatarURL != "" {
+						whitelistRec.Avatar = avatarURL
+					}
 					whitelistRec.Status = "active"
 					whitelistRec.UpdatedAt = time.Now()
 
