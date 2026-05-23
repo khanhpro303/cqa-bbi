@@ -261,27 +261,27 @@
                     <v-icon color="success" size="small" class="mb-1">mdi-shield-check-outline</v-icon>
                     <div class="text-caption font-weight-bold">Gateway (Public Scopes)</div>
                     <div class="mt-1 d-flex justify-center ga-1 flex-wrap">
-                      <v-chip size="x-small" :color="erp.publicScopes.includes('read_products') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Prod</v-chip>
-                      <v-chip size="x-small" :color="erp.publicScopes.includes('read_inventory') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Stock</v-chip>
-                      <v-chip size="x-small" :color="erp.publicScopes.includes('read_orders') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Ord</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('public', 'products') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Prod</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('public', 'inventory') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Stock</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('public', 'orders') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Ord</v-chip>
                     </div>
                   </div>
 
                   <!-- Path Center-to-Right -->
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
-                    <div class="arrow-line" :class="{ 'animated-flow-success': erp.publicScopes.length > 0 }"></div>
-                    <v-icon class="arrow-tip" :color="erp.publicScopes.length > 0 ? 'success' : 'grey'" size="20">mdi-chevron-right</v-icon>
-                    <span class="text-caption graph-arrow-label px-2 position-absolute" :class="erp.publicScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
-                      {{ erp.publicScopes.length > 0 ? 'Cho phép' : 'Chặn' }}
+                    <div class="arrow-line" :class="{ 'animated-flow-success': hasAnyEnabledEndpoint('public') }"></div>
+                    <v-icon class="arrow-tip" :color="hasAnyEnabledEndpoint('public') ? 'success' : 'grey'" size="20">mdi-chevron-right</v-icon>
+                    <span class="text-caption graph-arrow-label px-2 position-absolute" :class="hasAnyEnabledEndpoint('public') ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
+                      {{ hasAnyEnabledEndpoint('public') ? 'Cho phép' : 'Chặn' }}
                     </span>
                   </div>
 
                   <!-- Node Right: Cloudify ERP -->
-                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '150px', borderColor: erp.publicScopes.length > 0 ? '#ff9800' : '#9e9e9e' }">
-                    <v-icon :color="erp.publicScopes.length > 0 ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
-                    <div class="text-caption font-weight-bold" :class="{ 'text-grey': erp.publicScopes.length === 0 }">Cloudify ERP</div>
-                    <div class="text-grey text-caption" style="font-size: 0.65rem !important" v-if="erp.publicScopes.includes('read_inventory') && erp.publicProductGroups">
-                      Filter: {{ erp.publicProductGroups }}
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '150px', borderColor: hasAnyEnabledEndpoint('public') ? '#ff9800' : '#9e9e9e' }">
+                    <v-icon :color="hasAnyEnabledEndpoint('public') ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
+                    <div class="text-caption font-weight-bold" :class="{ 'text-grey': !hasAnyEnabledEndpoint('public') }">Cloudify ERP</div>
+                    <div class="text-grey text-caption" style="font-size: 0.65rem !important" v-if="isEndpointEnabled('public', 'inventory') && getProductGroups('public', 'inventory')">
+                      Filter: {{ getProductGroups('public', 'inventory') }}
                     </div>
                   </div>
                 </div>
@@ -418,28 +418,29 @@
                     <v-icon color="success" size="small" class="mb-1">mdi-shield-check-outline</v-icon>
                     <div class="text-caption font-weight-bold">Gateway (Private Scopes)</div>
                     <div class="mt-1 d-flex justify-center ga-1 flex-wrap">
-                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_products') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Prod</v-chip>
-                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_inventory') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Stock</v-chip>
-                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_orders') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Ord</v-chip>
-                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_customers') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Cust</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('private', 'products') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Prod</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('private', 'inventory') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Stock</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('private', 'orders') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Ord</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('private', 'customers') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Cust</v-chip>
+                      <v-chip size="x-small" :color="isEndpointEnabled('private', 'debt') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Debt</v-chip>
                     </div>
                   </div>
 
                   <!-- Path Center-to-Right -->
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
-                    <div class="arrow-line" :class="{ 'animated-flow-success': erp.privateScopes.length > 0 }"></div>
-                    <v-icon class="arrow-tip" :color="erp.privateScopes.length > 0 ? 'success' : 'grey'" size="20">mdi-chevron-right</v-icon>
-                    <span class="text-caption graph-arrow-label px-2 position-absolute" :class="erp.privateScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
-                      {{ erp.privateScopes.length > 0 ? 'Cho phép' : 'Chặn' }}
+                    <div class="arrow-line" :class="{ 'animated-flow-success': hasAnyEnabledEndpoint('private') }"></div>
+                    <v-icon class="arrow-tip" :color="hasAnyEnabledEndpoint('private') ? 'success' : 'grey'" size="20">mdi-chevron-right</v-icon>
+                    <span class="text-caption graph-arrow-label px-2 position-absolute" :class="hasAnyEnabledEndpoint('private') ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
+                      {{ hasAnyEnabledEndpoint('private') ? 'Cho phép' : 'Chặn' }}
                     </span>
                   </div>
 
                   <!-- Node Right: Cloudify ERP -->
-                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '150px', borderColor: erp.privateScopes.length > 0 ? '#ff9800' : '#9e9e9e' }">
-                    <v-icon :color="erp.privateScopes.length > 0 ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
-                    <div class="text-caption font-weight-bold" :class="{ 'text-grey': erp.privateScopes.length === 0 }">Cloudify ERP</div>
-                    <div class="text-grey text-caption" style="font-size: 0.65rem !important" v-if="erp.privateScopes.includes('read_inventory') && erp.privateProductGroups">
-                      Filter: {{ erp.privateProductGroups }}
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '150px', borderColor: hasAnyEnabledEndpoint('private') ? '#ff9800' : '#9e9e9e' }">
+                    <v-icon :color="hasAnyEnabledEndpoint('private') ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
+                    <div class="text-caption font-weight-bold" :class="{ 'text-grey': !hasAnyEnabledEndpoint('private') }">Cloudify ERP</div>
+                    <div class="text-grey text-caption" style="font-size: 0.65rem !important" v-if="isEndpointEnabled('private', 'inventory') && getProductGroups('private', 'inventory')">
+                      Filter: {{ getProductGroups('private', 'inventory') }}
                     </div>
                   </div>
                 </div>
@@ -606,6 +607,20 @@ async function quickToggle(agentType: string, ep: ERPEndpoint) {
     // revert toggle on error
     ep.is_enabled = !ep.is_enabled
   }
+}
+
+function isEndpointEnabled(agentType: 'public' | 'private', resource: string): boolean {
+  const ep = erpEndpoints.value.find(e => e.agent_type === agentType && e.resource === resource)
+  return ep ? ep.is_enabled : false
+}
+
+function hasAnyEnabledEndpoint(agentType: 'public' | 'private'): boolean {
+  return erpEndpoints.value.some(e => e.agent_type === agentType && e.is_enabled)
+}
+
+function getProductGroups(agentType: 'public' | 'private', resource: string): string {
+  const ep = erpEndpoints.value.find(e => e.agent_type === agentType && e.resource === resource)
+  return ep ? ep.product_groups : ''
 }
 
 const gatewayUrl = computed(() => {
