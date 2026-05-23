@@ -14,13 +14,16 @@
     class="border-e"
   >
     <!-- Logo -->
-    <v-list-item class="px-4 py-3">
+    <v-list-item :class="isRail ? 'px-2 py-3' : 'px-4 py-3'">
+      <template #prepend v-if="!isRail">
+        <img src="/bbi-logo.ico" style="width: 28px; height: 28px; object-fit: contain; margin-right: 8px;" alt="Logo" />
+      </template>
       <v-list-item-title v-if="!isRail" class="text-subtitle-2 font-weight-bold text-primary" style="white-space: normal; line-height: 1.3">
         BBI CRM Agent
       </v-list-item-title>
-      <v-list-item-title v-else class="text-caption font-weight-bold text-primary text-center">
-        CQ
-      </v-list-item-title>
+      <div v-else class="d-flex justify-center w-100">
+        <img src="/bbi-logo.ico" style="width: 28px; height: 28px; object-fit: contain;" alt="Logo" />
+      </div>
       <template #append>
         <v-btn v-if="mdAndUp && !rail" icon="mdi-chevron-left" variant="text" size="small" @click="rail = true" />
       </template>
