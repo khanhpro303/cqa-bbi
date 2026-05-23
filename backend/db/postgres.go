@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/lib/pq"
 )
@@ -11,6 +12,15 @@ import (
 func GetCustomerCodes(postgresURL string) ([]string, error) {
 	if postgresURL == "" {
 		return nil, fmt.Errorf("postgres url is empty")
+	}
+
+	// Auto-append sslmode=disable if not already present
+	if !strings.Contains(postgresURL, "sslmode=") {
+		if strings.Contains(postgresURL, "?") {
+			postgresURL += "&sslmode=disable"
+		} else {
+			postgresURL += "?sslmode=disable"
+		}
 	}
 
 	db, err := sql.Open("postgres", postgresURL)
@@ -23,15 +33,10 @@ func GetCustomerCodes(postgresURL string) ([]string, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	// Query ma_khach_hang
-	// Standard PostgreSQL table names are case-sensitive if created with quotes. We try case-sensitive first.
-	rows, err := db.Query(`SELECT ma_khach_hang FROM "CloudifyCustomer" WHERE ma_khach_hang IS NOT NULL AND ma_khach_hang != '' ORDER BY ma_khach_hang ASC`)
+	// Query ma_khach_hang from the correct schema and table: cloudify.cloudify_customers
+	rows, err := db.Query(`SELECT ma_khach_hang FROM cloudify.cloudify_customers WHERE ma_khach_hang IS NOT NULL AND ma_khach_hang != '' ORDER BY ma_khach_hang ASC`)
 	if err != nil {
-		// Fallback: Try without quotes in case it is case-insensitive or all lowercase
-		rows, err = db.Query(`SELECT ma_khach_hang FROM CloudifyCustomer WHERE ma_khach_hang IS NOT NULL AND ma_khach_hang != '' ORDER BY ma_khach_hang ASC`)
-		if err != nil {
-			return nil, fmt.Errorf("query cloudify customer: %w", err)
-		}
+		return nil, fmt.Errorf("query cloudify customers: %w", err)
 	}
 	defer rows.Close()
 
