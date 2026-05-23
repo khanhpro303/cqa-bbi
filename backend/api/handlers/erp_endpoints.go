@@ -21,21 +21,39 @@ var (
 // ListERPEndpoints — GET /settings/erp/endpoints
 // ---------------------------------------------------------------------------
 
-// ListERPEndpoints returns all ERP endpoint permission configs for the tenant.
-// If no config exists yet, returns the default structure (all disabled) so the
-// frontend can render the UI immediately.
 func ListERPEndpoints(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
 	var endpoints []models.ERPEndpoint
-	db.DB.Where("tenant_id = ?", tenantID).Order("agent_type, resource").Find(&endpoints)
+	db.DB.Where("tenant_id = ?", tenantID).Find(&endpoints)
 
-	// If no rows exist, seed defaults in memory (not persisted until user saves)
-	if len(endpoints) == 0 {
-		endpoints = buildDefaultEndpoints(tenantID)
+	// Index existing endpoints for quick lookup
+	existing := make(map[string]*models.ERPEndpoint)
+	for i := range endpoints {
+		key := endpoints[i].AgentType + ":" + endpoints[i].Resource
+		existing[key] = &endpoints[i]
 	}
 
-	c.JSON(http.StatusOK, gin.H{"endpoints": endpoints})
+	// Reconstruct the slice in canonical order, adding default entries for any missing resources
+	var orderedEndpoints []models.ERPEndpoint
+	for _, agentType := range erpAgentTypes {
+		for _, resource := range erpAvailableResources {
+			key := agentType + ":" + resource
+			if ep, found := existing[key]; found {
+				orderedEndpoints = append(orderedEndpoints, *ep)
+			} else {
+				orderedEndpoints = append(orderedEndpoints, models.ERPEndpoint{
+					TenantID:  tenantID,
+					AgentType: agentType,
+					Resource:  resource,
+					IsEnabled: false,
+					ScopeType: "all",
+				})
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"endpoints": orderedEndpoints})
 }
 
 // ---------------------------------------------------------------------------
