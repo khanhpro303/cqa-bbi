@@ -31,7 +31,7 @@
     </v-dialog>
 
     <!-- Chatbot Toggle Panel (Admin/Owner only) -->
-    <v-card v-if="isAdmin" class="pa-4 mb-4 border-dashed" variant="outlined" color="primary">
+    <v-card v-if="isAdmin" class="pa-4 mb-4" variant="tonal" color="primary">
       <div class="d-flex align-center flex-wrap ga-3">
         <v-icon color="primary" size="large">mdi-robot</v-icon>
         <div>
