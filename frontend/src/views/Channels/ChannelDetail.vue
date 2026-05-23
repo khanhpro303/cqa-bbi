@@ -337,7 +337,7 @@
     <v-dialog v-model="editDialog" max-width="500">
       <v-card>
         <v-card-title>Sửa kênh chat</v-card-title>
-        <v-card-text>
+        <v-card-text class="pt-3">
           <v-text-field v-model="editForm.name" label="Tên kênh" density="compact" class="mb-2" />
           <v-switch v-model="editForm.is_active" label="Hoạt động" density="compact" color="primary" class="mb-2" />
           <template v-if="channel.channel_type !== 'personal_zalo_import'">

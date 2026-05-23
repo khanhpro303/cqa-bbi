@@ -21,7 +21,7 @@ Key routing rules:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **cqa-personal-zalo** (4298 symbols, 8918 relationships, 165 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **cqa-bbi** (4298 symbols, 8918 relationships, 165 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -44,10 +44,10 @@ This project is indexed by GitNexus as **cqa-personal-zalo** (4298 symbols, 8918
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/cqa-personal-zalo/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/cqa-personal-zalo/clusters` | All functional areas |
-| `gitnexus://repo/cqa-personal-zalo/processes` | All execution flows |
-| `gitnexus://repo/cqa-personal-zalo/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/cqa-bbi/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/cqa-bbi/clusters` | All functional areas |
+| `gitnexus://repo/cqa-bbi/processes` | All execution flows |
+| `gitnexus://repo/cqa-bbi/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
