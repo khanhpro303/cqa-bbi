@@ -65,7 +65,7 @@
       </div>
 
       <!-- Part 1: ERP Cloudify Connection (Shared) -->
-      <div class="text-subtitle-2 mb-3 font-weight-bold text-grey-darken-3">{{ $t('erp_part1_title') }}</div>
+      <div class="text-subtitle-2 mb-3 font-weight-bold" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-3'">{{ $t('erp_part1_title') }}</div>
       
       <v-row class="mb-4">
         <v-col cols="12" md="6">
@@ -117,7 +117,7 @@
       <v-divider class="mb-6"></v-divider>
 
       <!-- Part 2: Dynamic Bot Configurations (Public vs Whitelist/Private) -->
-      <div class="text-subtitle-2 mb-3 font-weight-bold text-grey-darken-3">{{ $t('erp_part2_title') }}</div>
+      <div class="text-subtitle-2 mb-3 font-weight-bold" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-3'">{{ $t('erp_part2_title') }}</div>
       
       <v-tabs v-model="activeBotTab" color="primary" class="mb-4">
         <v-tab value="public" class="text-none">
@@ -149,7 +149,7 @@
               <v-row class="px-3">
                 <v-col cols="12" md="6">
                   <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_scopes_label') }}</div>
-                  <v-card variant="outlined" class="pa-4 rounded-lg bg-grey-lighten-5">
+                  <v-card variant="outlined" class="pa-4 rounded-lg scopes-card">
                     <v-checkbox
                       v-model="erp.publicScopes"
                       value="read_products"
@@ -216,7 +216,7 @@
                       density="compact"
                       variant="outlined"
                       class="mb-3"
-                      bg-color="white"
+                      :bg-color="isDark ? '#2a2a2a' : 'white'"
                     />
                     <v-text-field
                       :model-value="erp.publicAgentToken"
@@ -226,9 +226,9 @@
                       @click:append-inner="copyToClipboard(erp.publicAgentToken, 'Đã copy Public Agent Token')"
                       density="compact"
                       variant="outlined"
-                      bg-color="white"
+                      :bg-color="isDark ? '#2a2a2a' : 'white'"
                     />
-                    <div class="text-caption text-grey-darken-2 mt-2">{{ $t('erp_agent_token_hint') }}</div>
+                    <div class="text-caption mt-2" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-2'">{{ $t('erp_agent_token_hint') }}</div>
                   </v-alert>
                 </v-col>
               </v-row>
@@ -238,7 +238,7 @@
                 <div class="text-subtitle-2 mb-3 font-weight-bold">{{ $t('erp_flow_title') }}</div>
                 <div class="erp-visual-graph pa-6 rounded-lg d-flex flex-column flex-sm-row justify-space-between align-center border">
                   <!-- Node Left: Public Agent -->
-                  <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '160px', borderColor: '#3f51b5' }">
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '160px', borderColor: '#3f51b5' }">
                     <v-icon color="primary" size="small" class="mb-1">mdi-account-multiple-outline</v-icon>
                     <div class="text-caption font-weight-bold">Public Bot</div>
                     <div class="text-grey text-caption" style="font-size: 0.65rem !important">Khách hàng chat</div>
@@ -248,17 +248,17 @@
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
                     <div class="arrow-line animated-flow"></div>
                     <v-icon class="arrow-tip" color="indigo">mdi-chevron-right</v-icon>
-                    <span class="text-caption bg-white px-2 position-absolute" style="font-size: 0.6rem !important; top: -14px;">X-Agent-Token (Public)</span>
+                    <span class="text-caption graph-arrow-label px-2 position-absolute" style="font-size: 0.6rem !important; top: -14px;">X-Agent-Token (Public)</span>
                   </div>
 
                   <!-- Node Center: CQA Gateway Checks -->
-                  <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '200px', borderColor: '#4caf50' }">
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '200px', borderColor: '#4caf50' }">
                     <v-icon color="success" size="small" class="mb-1">mdi-shield-check-outline</v-icon>
                     <div class="text-caption font-weight-bold">Gateway (Public Scopes)</div>
                     <div class="mt-1 d-flex justify-center ga-1 flex-wrap">
-                      <v-chip size="x-small" :color="erp.publicScopes.includes('read_products') ? 'success' : 'grey-lighten-2'">Prod</v-chip>
-                      <v-chip size="x-small" :color="erp.publicScopes.includes('read_inventory') ? 'success' : 'grey-lighten-2'">Stock</v-chip>
-                      <v-chip size="x-small" :color="erp.publicScopes.includes('read_orders') ? 'success' : 'grey-lighten-2'">Ord</v-chip>
+                      <v-chip size="x-small" :color="erp.publicScopes.includes('read_products') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Prod</v-chip>
+                      <v-chip size="x-small" :color="erp.publicScopes.includes('read_inventory') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Stock</v-chip>
+                      <v-chip size="x-small" :color="erp.publicScopes.includes('read_orders') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Ord</v-chip>
                     </div>
                   </div>
 
@@ -266,13 +266,13 @@
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
                     <div class="arrow-line" :class="{ 'animated-flow-success': erp.publicScopes.length > 0 }"></div>
                     <v-icon class="arrow-tip" :color="erp.publicScopes.length > 0 ? 'success' : 'grey'">mdi-chevron-right</v-icon>
-                    <span class="text-caption bg-white px-2 position-absolute" :class="erp.publicScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
+                    <span class="text-caption graph-arrow-label px-2 position-absolute" :class="erp.publicScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
                       {{ erp.publicScopes.length > 0 ? 'Cho phép' : 'Chặn' }}
                     </span>
                   </div>
 
                   <!-- Node Right: Cloudify ERP -->
-                  <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '150px', borderColor: erp.publicScopes.length > 0 ? '#ff9800' : '#9e9e9e' }">
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '150px', borderColor: erp.publicScopes.length > 0 ? '#ff9800' : '#9e9e9e' }">
                     <v-icon :color="erp.publicScopes.length > 0 ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
                     <div class="text-caption font-weight-bold" :class="{ 'text-grey': erp.publicScopes.length === 0 }">Cloudify ERP</div>
                     <div class="text-grey text-caption" style="font-size: 0.65rem !important" v-if="erp.publicScopes.includes('read_inventory') && erp.publicProductGroups">
@@ -302,7 +302,7 @@
               <v-row class="px-3">
                 <v-col cols="12" md="6">
                   <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_scopes_label') }}</div>
-                  <v-card variant="outlined" class="pa-4 rounded-lg bg-grey-lighten-5">
+                  <v-card variant="outlined" class="pa-4 rounded-lg scopes-card">
                     <v-checkbox
                       v-model="erp.privateScopes"
                       value="read_products"
@@ -369,7 +369,7 @@
                       density="compact"
                       variant="outlined"
                       class="mb-3"
-                      bg-color="white"
+                      :bg-color="isDark ? '#2a2a2a' : 'white'"
                     />
                     <v-text-field
                       :model-value="erp.privateAgentToken"
@@ -379,9 +379,9 @@
                       @click:append-inner="copyToClipboard(erp.privateAgentToken, 'Đã copy Private Agent Token')"
                       density="compact"
                       variant="outlined"
-                      bg-color="white"
+                      :bg-color="isDark ? '#2a2a2a' : 'white'"
                     />
-                    <div class="text-caption text-grey-darken-2 mt-2">{{ $t('erp_agent_token_hint') }}</div>
+                    <div class="text-caption mt-2" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-2'">{{ $t('erp_agent_token_hint') }}</div>
                   </v-alert>
                 </v-col>
               </v-row>
@@ -391,7 +391,7 @@
                 <div class="text-subtitle-2 mb-3 font-weight-bold">{{ $t('erp_flow_title') }}</div>
                 <div class="erp-visual-graph pa-6 rounded-lg d-flex flex-column flex-sm-row justify-space-between align-center border">
                   <!-- Node Left: Private Agent -->
-                  <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '160px', borderColor: '#3f51b5' }">
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '160px', borderColor: '#3f51b5' }">
                     <v-icon color="primary" size="small" class="mb-1">mdi-shield-account-outline</v-icon>
                     <div class="text-caption font-weight-bold">Private Bot</div>
                     <div class="text-grey text-caption" style="font-size: 0.65rem !important">Nhân viên chat</div>
@@ -401,18 +401,18 @@
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
                     <div class="arrow-line animated-flow"></div>
                     <v-icon class="arrow-tip" color="indigo">mdi-chevron-right</v-icon>
-                    <span class="text-caption bg-white px-2 position-absolute" style="font-size: 0.6rem !important; top: -14px;">X-Agent-Token (Private)</span>
+                    <span class="text-caption graph-arrow-label px-2 position-absolute" style="font-size: 0.6rem !important; top: -14px;">X-Agent-Token (Private)</span>
                   </div>
 
                   <!-- Node Center: CQA Gateway Checks -->
-                  <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '200px', borderColor: '#4caf50' }">
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '200px', borderColor: '#4caf50' }">
                     <v-icon color="success" size="small" class="mb-1">mdi-shield-check-outline</v-icon>
                     <div class="text-caption font-weight-bold">Gateway (Private Scopes)</div>
                     <div class="mt-1 d-flex justify-center ga-1 flex-wrap">
-                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_products') ? 'success' : 'grey-lighten-2'">Prod</v-chip>
-                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_inventory') ? 'success' : 'grey-lighten-2'">Stock</v-chip>
-                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_orders') ? 'success' : 'grey-lighten-2'">Ord</v-chip>
-                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_customers') ? 'success' : 'grey-lighten-2'">Cust</v-chip>
+                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_products') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Prod</v-chip>
+                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_inventory') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Stock</v-chip>
+                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_orders') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Ord</v-chip>
+                      <v-chip size="x-small" :color="erp.privateScopes.includes('read_customers') ? 'success' : (isDark ? 'grey-darken-3' : 'grey-lighten-2')">Cust</v-chip>
                     </div>
                   </div>
 
@@ -420,13 +420,13 @@
                   <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
                     <div class="arrow-line" :class="{ 'animated-flow-success': erp.privateScopes.length > 0 }"></div>
                     <v-icon class="arrow-tip" :color="erp.privateScopes.length > 0 ? 'success' : 'grey'">mdi-chevron-right</v-icon>
-                    <span class="text-caption bg-white px-2 position-absolute" :class="erp.privateScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
+                    <span class="text-caption graph-arrow-label px-2 position-absolute" :class="erp.privateScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
                       {{ erp.privateScopes.length > 0 ? 'Cho phép' : 'Chặn' }}
                     </span>
                   </div>
 
                   <!-- Node Right: Cloudify ERP -->
-                  <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '150px', borderColor: erp.privateScopes.length > 0 ? '#ff9800' : '#9e9e9e' }">
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '150px', borderColor: erp.privateScopes.length > 0 ? '#ff9800' : '#9e9e9e' }">
                     <v-icon :color="erp.privateScopes.length > 0 ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
                     <div class="text-caption font-weight-bold" :class="{ 'text-grey': erp.privateScopes.length === 0 }">Cloudify ERP</div>
                     <div class="text-grey text-caption" style="font-size: 0.65rem !important" v-if="erp.privateScopes.includes('read_inventory') && erp.privateProductGroups">
@@ -455,11 +455,15 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { useTheme } from 'vuetify'
 import api from '../api'
 
 const route = useRoute()
 const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
+
+const theme = useTheme()
+const isDark = computed(() => theme.global.current.value.dark)
 
 const showKey = ref(false)
 const snackbar = ref(false)
@@ -645,9 +649,22 @@ onMounted(loadSettings)
 </script>
 
 <style scoped>
+.scopes-card {
+  background-color: #fafafa;
+  border-color: #e0e0e0 !important;
+}
+.v-theme--dark .scopes-card {
+  background-color: #252525;
+  border-color: #333333 !important;
+}
 .erp-visual-graph {
   background-color: #f8fafc;
+  border-color: #e2e8f0 !important;
   transition: all 0.3s ease;
+}
+.v-theme--dark .erp-visual-graph {
+  background-color: #1a1a1a;
+  border-color: #333333 !important;
 }
 .graph-node {
   transition: all 0.3s ease;
@@ -655,6 +672,12 @@ onMounted(loadSettings)
 }
 .graph-node:hover {
   transform: translateY(-2px);
+}
+.graph-node-card {
+  background-color: #ffffff;
+}
+.v-theme--dark .graph-node-card {
+  background-color: #242424;
 }
 .graph-arrow {
   position: relative;
@@ -669,15 +692,24 @@ onMounted(loadSettings)
   left: 0;
   transform: translateY(-50%);
 }
+.v-theme--dark .arrow-line {
+  background: #475569;
+}
 .animated-flow {
   background: linear-gradient(90deg, #3f51b5, #cbd5e1);
   background-size: 200% 100%;
   animation: dataflow 1.5s linear infinite;
 }
+.v-theme--dark .animated-flow {
+  background: linear-gradient(90deg, #818cf8, #475569);
+}
 .animated-flow-success {
   background: linear-gradient(90deg, #4caf50, #cbd5e1);
   background-size: 200% 100%;
   animation: dataflow 1.5s linear infinite;
+}
+.v-theme--dark .animated-flow-success {
+  background: linear-gradient(90deg, #4caf50, #475569);
 }
 .arrow-tip {
   position: absolute;
@@ -685,6 +717,12 @@ onMounted(loadSettings)
   top: 50%;
   transform: translateY(-50%);
   z-index: 1;
+}
+.graph-arrow-label {
+  background-color: #ffffff;
+}
+.v-theme--dark .graph-arrow-label {
+  background-color: #1a1a1a;
 }
 @keyframes dataflow {
   0% { background-position: 100% 0; }
