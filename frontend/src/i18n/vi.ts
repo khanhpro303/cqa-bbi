@@ -397,6 +397,14 @@ export default {
   erp_blocked: 'Bị chặn (Không đủ quyền)',
   erp_active_route: 'Đang hoạt động',
   erp_inactive_route: 'Chưa kích hoạt',
+  erp_part1_title: '1. Kết nối Cloudify ERP (Dùng chung)',
+  erp_part2_title: '2. Phân quyền và Cấu hình từng Agent',
+  erp_tab_public: 'Bot Public (Khách hàng)',
+  erp_tab_private: 'Bot Whitelist (Nhân viên)',
+  erp_active_public: 'Kích hoạt ERP cho Bot Public',
+  erp_active_private: 'Kích hoạt ERP cho Bot Whitelist (Nhân viên)',
+  erp_info_public: 'Thông tin kết nối Bot Public',
+  erp_info_private: 'Thông tin kết nối Bot Whitelist',
 
   // Zalo Whitelist & User Management
   users_system_tab: 'Người dùng hệ thống',

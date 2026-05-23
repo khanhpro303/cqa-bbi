@@ -64,56 +64,90 @@
         {{ $t('erp_config_title') }}
       </div>
 
-      <v-switch
-        v-model="erp.active"
-        :label="$t('erp_active')"
-        color="primary"
-        density="compact"
-        class="mb-4"
-      />
+      <!-- Part 1: ERP Cloudify Connection (Shared) -->
+      <div class="text-subtitle-2 mb-3 font-weight-bold text-grey-darken-3">{{ $t('erp_part1_title') }}</div>
+      
+      <v-row class="mb-4">
+        <v-col cols="12" md="6">
+          <v-text-field
+            v-model="erp.url"
+            :label="$t('erp_url_label')"
+            placeholder="https://api.cloudify.vn/api/v1"
+            class="mb-3"
+            clearable
+            density="compact"
+          />
+          <v-text-field
+            v-model="erp.username"
+            :label="$t('erp_username_label')"
+            placeholder="cqa_agent_readonly"
+            class="mb-3"
+            clearable
+            density="compact"
+          />
+        </v-col>
+        <v-col cols="12" md="6">
+          <v-text-field
+            v-model="erp.password"
+            :label="$t('erp_password_label')"
+            type="password"
+            placeholder="••••••••"
+            class="mb-3"
+            clearable
+            density="compact"
+          />
+          <v-text-field
+            v-model="erp.token"
+            :label="$t('erp_token_label')"
+            type="password"
+            placeholder="••••••••"
+            class="mb-3"
+            clearable
+            density="compact"
+          />
+        </v-col>
+      </v-row>
 
-      <v-expand-transition>
-        <div v-if="erp.active">
-          <v-row>
-            <v-col cols="12" md="6">
-              <v-text-field
-                v-model="erp.url"
-                :label="$t('erp_url_label')"
-                placeholder="https://api.cloudify.vn/api/v1"
-                class="mb-3"
-                clearable
-              />
-              <v-text-field
-                v-model="erp.username"
-                :label="$t('erp_username_label')"
-                placeholder="cqa_agent_readonly"
-                class="mb-3"
-                clearable
-              />
-              <v-text-field
-                v-model="erp.password"
-                :label="$t('erp_password_label')"
-                type="password"
-                placeholder="••••••••"
-                class="mb-3"
-                clearable
-              />
-              <v-text-field
-                v-model="erp.token"
-                :label="$t('erp_token_label')"
-                type="password"
-                placeholder="••••••••"
-                class="mb-3"
-                clearable
-              />
-            </v-col>
+      <div class="d-flex ga-2 mb-6">
+        <v-btn variant="outlined" size="small" :loading="testingERP" @click="testERPConnection">
+          {{ $t('erp_connection_test') }}
+        </v-btn>
+      </div>
 
+      <v-divider class="mb-6"></v-divider>
+
+      <!-- Part 2: Dynamic Bot Configurations (Public vs Whitelist/Private) -->
+      <div class="text-subtitle-2 mb-3 font-weight-bold text-grey-darken-3">{{ $t('erp_part2_title') }}</div>
+      
+      <v-tabs v-model="activeBotTab" color="primary" class="mb-4">
+        <v-tab value="public" class="text-none">
+          <v-icon start>mdi-account-multiple-outline</v-icon>
+          {{ $t('erp_tab_public') }}
+        </v-tab>
+        <v-tab value="private" class="text-none">
+          <v-icon start>mdi-shield-account-outline</v-icon>
+          {{ $t('erp_tab_private') }}
+        </v-tab>
+      </v-tabs>
+
+      <v-window v-model="activeBotTab" class="py-4">
+        
+        <!-- Public Bot Tab Panel -->
+        <v-window-item value="public">
+          <v-switch
+            v-model="erp.publicActive"
+            :label="$t('erp_active_public')"
+            color="primary"
+            density="compact"
+            class="mb-4"
+          />
+          
+          <v-row v-if="erp.publicActive">
             <v-col cols="12" md="6">
               <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_scopes_label') }}</div>
-              
               <v-card variant="outlined" class="pa-4 rounded-lg bg-grey-lighten-5">
                 <v-checkbox
-                  v-model="erp.scopes"
+                  v-model="erp.publicScopes"
                   value="read_products"
                   :label="$t('erp_scopes_products')"
                   density="compact"
@@ -121,9 +155,8 @@
                   color="primary"
                   class="mb-1"
                 />
-                
                 <v-checkbox
-                  v-model="erp.scopes"
+                  v-model="erp.publicScopes"
                   value="read_inventory"
                   :label="$t('erp_scopes_inventory')"
                   density="compact"
@@ -132,11 +165,108 @@
                   class="mb-1"
                 />
                 
-                <!-- Inventory category conditions filter -->
                 <v-expand-transition>
-                  <div v-if="erp.scopes.includes('read_inventory')" class="pl-8 pt-2 pb-2">
+                  <div v-if="erp.publicScopes.includes('read_inventory')" class="pl-8 pt-2 pb-2">
                     <v-text-field
-                      v-model="erp.productGroups"
+                      v-model="erp.publicProductGroups"
+                      :label="$t('erp_inventory_product_groups')"
+                      :hint="$t('erp_inventory_groups_hint')"
+                      persistent-hint
+                      density="compact"
+                      variant="outlined"
+                      class="mb-2"
+                      placeholder="e.g. Mỹ Phẩm"
+                    />
+                  </div>
+                </v-expand-transition>
+
+                <v-checkbox
+                  v-model="erp.publicScopes"
+                  value="read_orders"
+                  :label="$t('erp_scopes_orders') + ' (Không khuyến nghị cho Public)'"
+                  density="compact"
+                  hide-details
+                  color="primary"
+                  class="mb-1"
+                />
+                <v-checkbox
+                  v-model="erp.publicScopes"
+                  value="read_customers"
+                  :label="$t('erp_scopes_customers') + ' (Không khuyến nghị cho Public)'"
+                  density="compact"
+                  hide-details
+                  color="primary"
+                />
+              </v-card>
+            </v-col>
+            
+            <v-col cols="12" md="6">
+              <v-alert color="info" variant="tonal" icon="mdi-information-outline" class="h-100">
+                <div class="text-subtitle-2 font-weight-bold mb-2">{{ $t('erp_info_public') }}</div>
+                <v-text-field
+                  :model-value="gatewayUrl"
+                  label="Endpoint URL"
+                  readonly
+                  append-inner-icon="mdi-content-copy"
+                  @click:append-inner="copyToClipboard(gatewayUrl, 'Đã copy URL Endpoint')"
+                  density="compact"
+                  variant="outlined"
+                  class="mb-3"
+                  bg-color="white"
+                />
+                <v-text-field
+                  :model-value="erp.publicAgentToken"
+                  label="Agent Secure Token (Public)"
+                  readonly
+                  append-inner-icon="mdi-content-copy"
+                  @click:append-inner="copyToClipboard(erp.publicAgentToken, 'Đã copy Public Agent Token')"
+                  density="compact"
+                  variant="outlined"
+                  bg-color="white"
+                />
+                <div class="text-caption text-grey-darken-2 mt-2">{{ $t('erp_agent_token_hint') }}</div>
+              </v-alert>
+            </v-col>
+          </v-row>
+        </v-window-item>
+
+        <!-- Private Bot Tab Panel -->
+        <v-window-item value="private">
+          <v-switch
+            v-model="erp.privateActive"
+            :label="$t('erp_active_private')"
+            color="primary"
+            density="compact"
+            class="mb-4"
+          />
+          
+          <v-row v-if="erp.privateActive">
+            <v-col cols="12" md="6">
+              <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_scopes_label') }}</div>
+              <v-card variant="outlined" class="pa-4 rounded-lg bg-grey-lighten-5">
+                <v-checkbox
+                  v-model="erp.privateScopes"
+                  value="read_products"
+                  :label="$t('erp_scopes_products')"
+                  density="compact"
+                  hide-details
+                  color="primary"
+                  class="mb-1"
+                />
+                <v-checkbox
+                  v-model="erp.privateScopes"
+                  value="read_inventory"
+                  :label="$t('erp_scopes_inventory')"
+                  density="compact"
+                  hide-details
+                  color="primary"
+                  class="mb-1"
+                />
+                
+                <v-expand-transition>
+                  <div v-if="erp.privateScopes.includes('read_inventory')" class="pl-8 pt-2 pb-2">
+                    <v-text-field
+                      v-model="erp.privateProductGroups"
                       :label="$t('erp_inventory_product_groups')"
                       :hint="$t('erp_inventory_groups_hint')"
                       persistent-hint
@@ -149,7 +279,7 @@
                 </v-expand-transition>
 
                 <v-checkbox
-                  v-model="erp.scopes"
+                  v-model="erp.privateScopes"
                   value="read_orders"
                   :label="$t('erp_scopes_orders')"
                   density="compact"
@@ -157,9 +287,8 @@
                   color="primary"
                   class="mb-1"
                 />
-                
                 <v-checkbox
-                  v-model="erp.scopes"
+                  v-model="erp.privateScopes"
                   value="read_customers"
                   :label="$t('erp_scopes_customers')"
                   density="compact"
@@ -168,110 +297,148 @@
                 />
               </v-card>
             </v-col>
-          </v-row>
-
-          <!-- Interactive Sơ đồ SVG Flow Chart Visual -->
-          <div class="mt-6 mb-6">
-            <div class="text-subtitle-2 mb-3 font-weight-bold">{{ $t('erp_flow_title') }}</div>
-            <div class="erp-visual-graph pa-6 rounded-lg d-flex flex-column flex-sm-row justify-space-between align-center border">
-              
-              <!-- Langflow Agent Node -->
-              <div class="graph-node pa-4 text-center rounded-xl elevation-2 bg-white border-2" style="width: 160px; border-color: #3f51b5">
-                <v-icon color="primary" size="large" class="mb-2">mdi-robot-outline</v-icon>
-                <div class="text-caption font-weight-bold">{{ $t('erp_langflow_node') }}</div>
-                <div class="text-grey text-caption" style="font-size: 0.7rem !important">Zalo OA Chatflow</div>
-              </div>
-
-              <!-- Animated Data Path 1 -->
-              <div class="graph-arrow flex-grow-1 mx-2 my-4 my-sm-0 position-relative text-center d-flex align-center justify-center">
-                <div class="arrow-line" :class="{ 'animated-flow': erp.active }"></div>
-                <v-icon class="arrow-tip" color="indigo">mdi-chevron-right</v-icon>
-                <span class="text-caption text-indigo bg-white px-2 position-absolute" style="font-size: 0.65rem !important; top: -14px;">HTTP Query</span>
-              </div>
-
-              <!-- CQA Secure Gateway Node -->
-              <div class="graph-node pa-4 text-center rounded-xl elevation-2 bg-white border-2" style="width: 200px; border-color: #4caf50">
-                <v-icon color="success" size="large" class="mb-2">mdi-shield-check-outline</v-icon>
-                <div class="text-caption font-weight-bold">{{ $t('erp_cqa_gateway') }}</div>
-                <div class="mt-2 d-flex justify-center ga-1 flex-wrap">
-                  <v-chip size="x-small" :color="erp.scopes.includes('read_products') ? 'success' : 'grey-lighten-2'" :variant="erp.scopes.includes('read_products') ? 'flat' : 'outlined'">Prod</v-chip>
-                  <v-chip size="x-small" :color="erp.scopes.includes('read_inventory') ? 'success' : 'grey-lighten-2'" :variant="erp.scopes.includes('read_inventory') ? 'flat' : 'outlined'">Stock</v-chip>
-                  <v-chip size="x-small" :color="erp.scopes.includes('read_orders') ? 'success' : 'grey-lighten-2'" :variant="erp.scopes.includes('read_orders') ? 'flat' : 'outlined'">Ord</v-chip>
-                  <v-chip size="x-small" :color="erp.scopes.includes('read_customers') ? 'success' : 'grey-lighten-2'" :variant="erp.scopes.includes('read_customers') ? 'flat' : 'outlined'">Cust</v-chip>
-                </div>
-              </div>
-
-              <!-- Animated Data Path 2 -->
-              <div class="graph-arrow flex-grow-1 mx-2 my-4 my-sm-0 position-relative text-center d-flex align-center justify-center">
-                <div class="arrow-line" :class="{ 'animated-flow-success': erp.active && erp.scopes.length > 0 }"></div>
-                <v-icon class="arrow-tip" :color="erp.scopes.length > 0 ? 'success' : 'grey'">mdi-chevron-right</v-icon>
-                <span class="text-caption bg-white px-2 position-absolute" :class="erp.scopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.65rem !important; top: -14px;">
-                  {{ erp.scopes.length > 0 ? $t('erp_verified') : $t('erp_blocked') }}
-                </span>
-              </div>
-
-              <!-- Cloudify ERP Node -->
-              <div class="graph-node pa-4 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '160px', borderColor: erp.scopes.length > 0 ? '#ff9800' : '#9e9e9e' }">
-                <v-icon :color="erp.scopes.length > 0 ? 'warning' : 'grey'" size="large" class="mb-2">mdi-server-network</v-icon>
-                <div class="text-caption font-weight-bold" :class="{ 'text-grey-darken-1': erp.scopes.length === 0 }">{{ $t('erp_cloudify') }}</div>
-                <div class="text-caption text-grey mt-1" style="font-size: 0.7rem !important" v-if="erp.scopes.includes('read_inventory') && erp.productGroups">
-                  {{ erp.productGroups.split(',').filter(Boolean).length }} Groups Filter
-                </div>
-                <div class="text-caption text-grey mt-1" style="font-size: 0.7rem !important" v-else>
-                  {{ erp.scopes.length > 0 ? $t('erp_active_route') : $t('erp_inactive_route') }}
-                </div>
-              </div>
-
-            </div>
-          </div>
-
-          <!-- Gateway credentials for Langflow node -->
-          <v-alert
-            color="info"
-            variant="tonal"
-            icon="mdi-information-outline"
-            class="mb-4"
-          >
-            <div class="text-subtitle-2 font-weight-bold mb-2">{{ $t('erp_agent_credentials') }}</div>
             
-            <div class="mb-3">
-              <div class="text-caption text-grey-darken-2 font-weight-bold mb-1">{{ $t('erp_gateway_url_label') }}</div>
-              <v-text-field
-                :model-value="gatewayUrl"
-                readonly
-                append-inner-icon="mdi-content-copy"
-                @click:append-inner="copyToClipboard(gatewayUrl, 'Đã copy URL Endpoint')"
-                density="compact"
-                variant="outlined"
-                hide-details
-                bg-color="white"
-              />
+            <v-col cols="12" md="6">
+              <v-alert color="info" variant="tonal" icon="mdi-information-outline" class="h-100">
+                <div class="text-subtitle-2 font-weight-bold mb-2">{{ $t('erp_info_private') }}</div>
+                <v-text-field
+                  :model-value="gatewayUrl"
+                  label="Endpoint URL"
+                  readonly
+                  append-inner-icon="mdi-content-copy"
+                  @click:append-inner="copyToClipboard(gatewayUrl, 'Đã copy URL Endpoint')"
+                  density="compact"
+                  variant="outlined"
+                  class="mb-3"
+                  bg-color="white"
+                />
+                <v-text-field
+                  :model-value="erp.privateAgentToken"
+                  label="Agent Secure Token (Private)"
+                  readonly
+                  append-inner-icon="mdi-content-copy"
+                  @click:append-inner="copyToClipboard(erp.privateAgentToken, 'Đã copy Private Agent Token')"
+                  density="compact"
+                  variant="outlined"
+                  bg-color="white"
+                />
+                <div class="text-caption text-grey-darken-2 mt-2">{{ $t('erp_agent_token_hint') }}</div>
+              </v-alert>
+            </v-col>
+          </v-row>
+        </v-window-item>
+
+      </v-window>
+
+      <!-- Part 3: Dual Sơ đồ Visual Graph (Showcasing both bot routes) -->
+      <div class="mt-6 mb-6">
+        <div class="text-subtitle-2 mb-3 font-weight-bold">{{ $t('erp_flow_title') }}</div>
+        <div class="erp-visual-graph pa-6 rounded-lg d-flex flex-column border">
+          
+          <!-- Route 1: Public Bot Flow Line -->
+          <div class="d-flex flex-column flex-sm-row justify-space-between align-center my-3 w-100">
+            <!-- Node Left: Public Agent -->
+            <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '160px', borderColor: erp.publicActive ? '#3f51b5' : '#9e9e9e' }">
+              <v-icon :color="erp.publicActive ? 'primary' : 'grey'" size="small" class="mb-1">mdi-account-multiple-outline</v-icon>
+              <div class="text-caption font-weight-bold" :class="{ 'text-grey': !erp.publicActive }">Public Bot</div>
+              <div class="text-grey text-caption" style="font-size: 0.65rem !important">Khách hàng chat</div>
             </div>
 
-            <div>
-              <div class="text-caption text-grey-darken-2 font-weight-bold mb-1">{{ $t('erp_agent_token_label') }}</div>
-              <v-text-field
-                :model-value="erp.agentToken"
-                readonly
-                append-inner-icon="mdi-content-copy"
-                @click:append-inner="copyToClipboard(erp.agentToken, 'Đã copy Agent Token')"
-                density="compact"
-                variant="outlined"
-                hide-details
-                bg-color="white"
-              />
-              <div class="text-caption text-grey-darken-2 mt-1">{{ $t('erp_agent_token_hint') }}</div>
+            <!-- Path Left-to-Center -->
+            <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
+              <div class="arrow-line" :class="{ 'animated-flow': erp.publicActive }"></div>
+              <v-icon class="arrow-tip" :color="erp.publicActive ? 'indigo' : 'grey'">mdi-chevron-right</v-icon>
+              <span class="text-caption bg-white px-2 position-absolute" :class="erp.publicActive ? 'text-indigo' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">X-Agent-Token (Public)</span>
             </div>
-          </v-alert>
 
-          <div class="d-flex ga-2 mt-4">
-            <v-btn color="primary" :loading="savingERP" @click="saveERP">{{ $t('save') }}</v-btn>
-            <v-btn variant="outlined" :loading="testingERP" @click="testERPConnection">
-              {{ $t('erp_connection_test') }}
-            </v-btn>
+            <!-- Node Center: CQA Gateway Checks -->
+            <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '200px', borderColor: erp.publicActive ? '#4caf50' : '#9e9e9e' }">
+              <v-icon :color="erp.publicActive ? 'success' : 'grey'" size="small" class="mb-1">mdi-shield-check-outline</v-icon>
+              <div class="text-caption font-weight-bold" :class="{ 'text-grey': !erp.publicActive }">Gateway (Public Scopes)</div>
+              <div class="mt-1 d-flex justify-center ga-1 flex-wrap" v-if="erp.publicActive">
+                <v-chip size="x-small" :color="erp.publicScopes.includes('read_products') ? 'success' : 'grey-lighten-2'">Prod</v-chip>
+                <v-chip size="x-small" :color="erp.publicScopes.includes('read_inventory') ? 'success' : 'grey-lighten-2'">Stock</v-chip>
+                <v-chip size="x-small" :color="erp.publicScopes.includes('read_orders') ? 'success' : 'grey-lighten-2'">Ord</v-chip>
+              </div>
+              <div class="text-caption text-grey" style="font-size: 0.65rem !important" v-else>Chưa kích hoạt</div>
+            </div>
+
+            <!-- Path Center-to-Right -->
+            <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
+              <div class="arrow-line" :class="{ 'animated-flow-success': erp.publicActive && erp.publicScopes.length > 0 }"></div>
+              <v-icon class="arrow-tip" :color="erp.publicActive && erp.publicScopes.length > 0 ? 'success' : 'grey'">mdi-chevron-right</v-icon>
+              <span class="text-caption bg-white px-2 position-absolute" :class="erp.publicActive && erp.publicScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
+                {{ erp.publicActive && erp.publicScopes.length > 0 ? 'Cho phép' : 'Chặn' }}
+              </span>
+            </div>
+
+            <!-- Node Right: Cloudify ERP -->
+            <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '150px', borderColor: erp.publicActive && erp.publicScopes.length > 0 ? '#ff9800' : '#9e9e9e' }">
+              <v-icon :color="erp.publicActive && erp.publicScopes.length > 0 ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
+              <div class="text-caption font-weight-bold" :class="{ 'text-grey': !(erp.publicActive && erp.publicScopes.length > 0) }">Cloudify ERP</div>
+              <div class="text-grey text-caption" style="font-size: 0.65rem !important" v-if="erp.publicActive && erp.publicScopes.includes('read_inventory') && erp.publicProductGroups">
+                Filter: {{ erp.publicProductGroups }}
+              </div>
+            </div>
           </div>
+
+          <v-divider class="my-4"></v-divider>
+
+          <!-- Route 2: Whitelist/Private Bot Flow Line -->
+          <div class="d-flex flex-column flex-sm-row justify-space-between align-center my-3 w-100">
+            <!-- Node Left: Private Agent -->
+            <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '160px', borderColor: erp.privateActive ? '#3f51b5' : '#9e9e9e' }">
+              <v-icon :color="erp.privateActive ? 'primary' : 'grey'" size="small" class="mb-1">mdi-shield-account-outline</v-icon>
+              <div class="text-caption font-weight-bold" :class="{ 'text-grey': !erp.privateActive }">Private Bot</div>
+              <div class="text-grey text-caption" style="font-size: 0.65rem !important">Nhân viên chat</div>
+            </div>
+
+            <!-- Path Left-to-Center -->
+            <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
+              <div class="arrow-line" :class="{ 'animated-flow': erp.privateActive }"></div>
+              <v-icon class="arrow-tip" :color="erp.privateActive ? 'indigo' : 'grey'">mdi-chevron-right</v-icon>
+              <span class="text-caption bg-white px-2 position-absolute" :class="erp.privateActive ? 'text-indigo' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">X-Agent-Token (Private)</span>
+            </div>
+
+            <!-- Node Center: CQA Gateway Checks -->
+            <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '200px', borderColor: erp.privateActive ? '#4caf50' : '#9e9e9e' }">
+              <v-icon :color="erp.privateActive ? 'success' : 'grey'" size="small" class="mb-1">mdi-shield-check-outline</v-icon>
+              <div class="text-caption font-weight-bold" :class="{ 'text-grey': !erp.privateActive }">Gateway (Private Scopes)</div>
+              <div class="mt-1 d-flex justify-center ga-1 flex-wrap" v-if="erp.privateActive">
+                <v-chip size="x-small" :color="erp.privateScopes.includes('read_products') ? 'success' : 'grey-lighten-2'">Prod</v-chip>
+                <v-chip size="x-small" :color="erp.privateScopes.includes('read_inventory') ? 'success' : 'grey-lighten-2'">Stock</v-chip>
+                <v-chip size="x-small" :color="erp.privateScopes.includes('read_orders') ? 'success' : 'grey-lighten-2'">Ord</v-chip>
+                <v-chip size="x-small" :color="erp.privateScopes.includes('read_customers') ? 'success' : 'grey-lighten-2'">Cust</v-chip>
+              </div>
+              <div class="text-caption text-grey" style="font-size: 0.65rem !important" v-else>Chưa kích hoạt</div>
+            </div>
+
+            <!-- Path Center-to-Right -->
+            <div class="graph-arrow flex-grow-1 mx-2 my-2 my-sm-0 position-relative text-center d-flex align-center justify-center">
+              <div class="arrow-line" :class="{ 'animated-flow-success': erp.privateActive && erp.privateScopes.length > 0 }"></div>
+              <v-icon class="arrow-tip" :color="erp.privateActive && erp.privateScopes.length > 0 ? 'success' : 'grey'">mdi-chevron-right</v-icon>
+              <span class="text-caption bg-white px-2 position-absolute" :class="erp.privateActive && erp.privateScopes.length > 0 ? 'text-success' : 'text-grey'" style="font-size: 0.6rem !important; top: -14px;">
+                {{ erp.privateActive && erp.privateScopes.length > 0 ? 'Cho phép' : 'Chặn' }}
+              </span>
+            </div>
+
+            <!-- Node Right: Cloudify ERP -->
+            <div class="graph-node pa-3 text-center rounded-xl elevation-2 bg-white border-2" :style="{ width: '150px', borderColor: erp.privateActive && erp.privateScopes.length > 0 ? '#ff9800' : '#9e9e9e' }">
+              <v-icon :color="erp.privateActive && erp.privateScopes.length > 0 ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
+              <div class="text-caption font-weight-bold" :class="{ 'text-grey': !(erp.privateActive && erp.privateScopes.length > 0) }">Cloudify ERP</div>
+              <div class="text-grey text-caption" style="font-size: 0.65rem !important" v-if="erp.privateActive && erp.privateScopes.includes('read_inventory') && erp.privateProductGroups">
+                Filter: {{ erp.privateProductGroups }}
+              </div>
+            </div>
+          </div>
+
         </div>
-      </v-expand-transition>
+      </div>
+
+      <!-- Action Save Settings -->
+      <div class="d-flex ga-2 mt-4">
+        <v-btn color="primary" :loading="savingERP" @click="saveERP">{{ $t('save') }}</v-btn>
+      </div>
     </v-card>
 
     <v-snackbar v-model="snackbar" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
@@ -299,6 +466,8 @@ const testing = ref(false)
 const savingERP = ref(false)
 const testingERP = ref(false)
 
+const activeBotTab = ref('public')
+
 const langflow = reactive({
   baseUrl: '',
   flowId: '',
@@ -307,14 +476,20 @@ const langflow = reactive({
 })
 
 const erp = reactive({
-  active: false,
   url: '',
   token: '',
   username: '',
   password: '',
-  productGroups: '',
-  scopes: [] as string[],
-  agentToken: '',
+  // Public Bot Config
+  publicActive: false,
+  publicScopes: [] as string[],
+  publicProductGroups: '',
+  publicAgentToken: '',
+  // Private Bot Config
+  privateActive: false,
+  privateScopes: [] as string[],
+  privateProductGroups: '',
+  privateAgentToken: '',
 })
 
 const gatewayUrl = computed(() => {
@@ -339,11 +514,8 @@ async function loadSettings() {
       langflow.token = settings.ai_engine_langflow_token
     }
 
-    erp.active = settings.erp_integration_active === 'true'
     erp.url = settings.erp_api_url || ''
     erp.username = settings.erp_api_username || ''
-    erp.productGroups = settings.erp_inventory_product_groups || ''
-    erp.agentToken = settings.ai_agent_erp_token || ''
     
     if (settings.erp_api_token) {
       erp.token = settings.erp_api_token
@@ -351,8 +523,21 @@ async function loadSettings() {
     if (settings.erp_api_password) {
       erp.password = settings.erp_api_password
     }
-    if (settings.erp_api_scopes) {
-      erp.scopes = settings.erp_api_scopes.split(',').filter(Boolean)
+
+    // Public Bot
+    erp.publicActive = settings.erp_public_active === 'true'
+    erp.publicProductGroups = settings.erp_public_product_groups || ''
+    erp.publicAgentToken = settings.ai_agent_erp_token_public || ''
+    if (settings.erp_public_scopes) {
+      erp.publicScopes = settings.erp_public_scopes.split(',').filter(Boolean)
+    }
+
+    // Private Bot
+    erp.privateActive = settings.erp_private_active === 'true'
+    erp.privateProductGroups = settings.erp_private_product_groups || ''
+    erp.privateAgentToken = settings.ai_agent_erp_token_private || ''
+    if (settings.erp_private_scopes) {
+      erp.privateScopes = settings.erp_private_scopes.split(',').filter(Boolean)
     }
   } catch {
     // Ignore
@@ -401,13 +586,18 @@ async function saveERP() {
   savingERP.value = true
   try {
     await api.put(`/tenants/${tenantId.value}/settings/erp`, {
-      active: erp.active ? 'true' : 'false',
       url: erp.url,
       token: erp.token,
       username: erp.username,
       password: erp.password,
-      product_groups: erp.productGroups,
-      scopes: erp.scopes.join(','),
+      // Public bot settings
+      public_active: erp.publicActive ? 'true' : 'false',
+      public_scopes: erp.publicScopes.join(','),
+      public_product_groups: erp.publicProductGroups,
+      // Private bot settings
+      private_active: erp.privateActive ? 'true' : 'false',
+      private_scopes: erp.privateScopes.join(','),
+      private_product_groups: erp.privateProductGroups,
     })
     showSnack(t('success'), 'success')
   } catch (err: any) {
@@ -451,7 +641,6 @@ onMounted(loadSettings)
 <style scoped>
 .erp-visual-graph {
   background-color: #f8fafc;
-  min-height: 120px;
   transition: all 0.3s ease;
 }
 .graph-node {
@@ -459,7 +648,7 @@ onMounted(loadSettings)
   z-index: 2;
 }
 .graph-node:hover {
-  transform: translateY(-3px);
+  transform: translateY(-2px);
 }
 .graph-arrow {
   position: relative;

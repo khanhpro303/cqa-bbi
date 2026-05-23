@@ -37,28 +37,62 @@ func ERPQuery(c *gin.Context) {
 		return
 	}
 
-	// Retrieve agent token from DB
-	var tokenSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_agent_erp_token").First(&tokenSetting).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "message": "Agent token not configured for this tenant"})
-		return
+	// Identify Agent Type based on which token matched
+	agentType := "" // "public" or "private"
+
+	var publicTokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_agent_erp_token_public").First(&publicTokenSetting).Error; err == nil {
+		if subtle.ConstantTimeCompare([]byte(publicTokenSetting.ValuePlain), []byte(token)) == 1 {
+			agentType = "public"
+		}
 	}
 
-	// Constant-time compare to prevent timing attacks
-	if subtle.ConstantTimeCompare([]byte(tokenSetting.ValuePlain), []byte(token)) != 1 {
+	if agentType == "" {
+		var privateTokenSetting models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_agent_erp_token_private").First(&privateTokenSetting).Error; err == nil {
+			if subtle.ConstantTimeCompare([]byte(privateTokenSetting.ValuePlain), []byte(token)) == 1 {
+				agentType = "private"
+			}
+		}
+	}
+
+	// Backward compatibility fallback to old single token key
+	if agentType == "" {
+		var legacyTokenSetting models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_agent_erp_token").First(&legacyTokenSetting).Error; err == nil {
+			if subtle.ConstantTimeCompare([]byte(legacyTokenSetting.ValuePlain), []byte(token)) == 1 {
+				agentType = "private"
+			}
+		}
+	}
+
+	if agentType == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "message": "Invalid Agent Token"})
 		return
 	}
 
-	// Check if ERP integration is active
+	// Load settings based on Agent Type
+	activeKey := "erp_" + agentType + "_active"
+	scopesKey := "erp_" + agentType + "_scopes"
+	groupsKey := "erp_" + agentType + "_product_groups"
+
+	// Check if ERP integration is active for this agent type
 	var activeSetting models.AppSetting
 	isActive := false
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "erp_integration_active").First(&activeSetting).Error; err == nil {
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, activeKey).First(&activeSetting).Error; err == nil {
 		isActive = (activeSetting.ValuePlain == "true")
 	}
 
+	// Fallback to general integration active flag if the specific one is not found
 	if !isActive {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "erp_inactive", "message": "Tích hợp ERP hiện đang tắt"})
+		var generalActiveSetting models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_integration_active'").First(&generalActiveSetting).Error; err == nil {
+			isActive = (generalActiveSetting.ValuePlain == "true")
+		}
+	}
+
+	if !isActive {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "erp_inactive", "message": "Tích hợp ERP cho loại Bot này hiện đang tắt"})
 		return
 	}
 
@@ -91,8 +125,16 @@ func ERPQuery(c *gin.Context) {
 	// 3. Verify Scopes (Phân quyền dữ liệu live)
 	var scopesSetting models.AppSetting
 	allowedScopes := ""
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "erp_api_scopes").First(&scopesSetting).Error; err == nil {
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, scopesKey).First(&scopesSetting).Error; err == nil {
 		allowedScopes = scopesSetting.ValuePlain
+	}
+
+	// Fallback to legacy scopes if specific scopes are not found
+	if allowedScopes == "" {
+		var legacyScopesSetting models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_api_scopes'").First(&legacyScopesSetting).Error; err == nil {
+			allowedScopes = legacyScopesSetting.ValuePlain
+		}
 	}
 
 	requiredScope := "read_" + req.Resource
@@ -111,7 +153,7 @@ func ERPQuery(c *gin.Context) {
 	if !hasScope {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden_scope",
-			"message": fmt.Sprintf("Agent không có quyền truy cập thông tin %s. Vui lòng cấp quyền %s.", req.Resource, requiredScope),
+			"message": fmt.Sprintf("Agent (%s) không có quyền truy cập thông tin %s. Vui lòng cấp quyền %s.", agentType, req.Resource, requiredScope),
 		})
 		return
 	}
@@ -119,11 +161,22 @@ func ERPQuery(c *gin.Context) {
 	// 4. Check inventory category filters (Bộ lọc nhóm sản phẩm)
 	var allowedGroups []string
 	var groupsSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "erp_inventory_product_groups").First(&groupsSetting).Error; err == nil && groupsSetting.ValuePlain != "" {
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, groupsKey).First(&groupsSetting).Error; err == nil && groupsSetting.ValuePlain != "" {
 		for _, g := range strings.Split(groupsSetting.ValuePlain, ",") {
 			gTrim := strings.TrimSpace(g)
 			if gTrim != "" {
 				allowedGroups = append(allowedGroups, strings.ToLower(gTrim))
+			}
+		}
+	} else {
+		// Fallback to legacy allowed groups
+		var legacyGroupsSetting models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_inventory_product_groups'").First(&legacyGroupsSetting).Error; err == nil && legacyGroupsSetting.ValuePlain != "" {
+			for _, g := range strings.Split(legacyGroupsSetting.ValuePlain, ",") {
+				gTrim := strings.TrimSpace(g)
+				if gTrim != "" {
+					allowedGroups = append(allowedGroups, strings.ToLower(gTrim))
+				}
 			}
 		}
 	}
@@ -357,13 +410,16 @@ func respondWithMockData(c *gin.Context, resource, search string, limit int, all
 func SaveERPSettings(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 	var req struct {
-		Active         string `json:"active" binding:"required,oneof=true false"`
-		URL            string `json:"url"`
-		Token          string `json:"token"`
-		Username       string `json:"username"`
-		Password       string `json:"password"`
-		ProductGroups  string `json:"product_groups"`
-		Scopes         string `json:"scopes"` // comma-separated scopes
+		URL                  string `json:"url"`
+		Token                string `json:"token"`
+		Username             string `json:"username"`
+		Password             string `json:"password"`
+		PublicActive         string `json:"public_active" binding:"required,oneof=true false"`
+		PublicScopes         string `json:"public_scopes"`
+		PublicProductGroups  string `json:"public_product_groups"`
+		PrivateActive        string `json:"private_active" binding:"required,oneof=true false"`
+		PrivateScopes        string `json:"private_scopes"`
+		PrivateProductGroups string `json:"private_product_groups"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -373,30 +429,19 @@ func SaveERPSettings(c *gin.Context) {
 
 	cfg, _ := config.Load()
 
-	// Update active state
-	upsertSetting(tenantID, "erp_integration_active", req.Active, nil)
-
-	// URL
+	// 1. Connection (Shared)
 	if req.URL != "" {
 		upsertSetting(tenantID, "erp_api_url", req.URL, nil)
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "erp_api_url").Delete(&models.AppSetting{})
 	}
 
-	// Username
 	if req.Username != "" {
 		upsertSetting(tenantID, "erp_api_username", req.Username, nil)
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "erp_api_username").Delete(&models.AppSetting{})
 	}
 
-	// Product groups
-	upsertSetting(tenantID, "erp_inventory_product_groups", req.ProductGroups, nil)
-
-	// Scopes
-	upsertSetting(tenantID, "erp_api_scopes", req.Scopes, nil)
-
-	// Token (Encrypt)
 	if req.Token != "" {
 		if !isMaskedSecret(req.Token) {
 			encrypted, err := pkg.Encrypt([]byte(req.Token), cfg.EncryptionKey)
@@ -410,7 +455,6 @@ func SaveERPSettings(c *gin.Context) {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "erp_api_token").Delete(&models.AppSetting{})
 	}
 
-	// Password (Encrypt)
 	if req.Password != "" {
 		if !isMaskedSecret(req.Password) {
 			encrypted, err := pkg.Encrypt([]byte(req.Password), cfg.EncryptionKey)
@@ -423,6 +467,23 @@ func SaveERPSettings(c *gin.Context) {
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "erp_api_password").Delete(&models.AppSetting{})
 	}
+
+	// 2. Public Bot Config
+	upsertSetting(tenantID, "erp_public_active", req.PublicActive, nil)
+	upsertSetting(tenantID, "erp_public_scopes", req.PublicScopes, nil)
+	upsertSetting(tenantID, "erp_public_product_groups", req.PublicProductGroups, nil)
+
+	// Backward compatibility flag
+	overallActive := "false"
+	if req.PublicActive == "true" || req.PrivateActive == "true" {
+		overallActive = "true"
+	}
+	upsertSetting(tenantID, "erp_integration_active", overallActive, nil)
+
+	// 3. Private Bot Config
+	upsertSetting(tenantID, "erp_private_active", req.PrivateActive, nil)
+	upsertSetting(tenantID, "erp_private_scopes", req.PrivateScopes, nil)
+	upsertSetting(tenantID, "erp_private_product_groups", req.PrivateProductGroups, nil)
 
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})
 }

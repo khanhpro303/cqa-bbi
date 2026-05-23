@@ -60,11 +60,16 @@ func GetSettings(c *gin.Context) {
 		}
 	}
 
-	// Ensure ai_agent_erp_token is generated
-	if _, ok := result["ai_agent_erp_token"]; !ok {
+	// Ensure ai_agent_erp_token_public and ai_agent_erp_token_private are generated
+	if _, ok := result["ai_agent_erp_token_public"]; !ok {
 		newToken := strings.ReplaceAll(pkg.NewUUID()+pkg.NewUUID(), "-", "")
-		upsertSetting(tenantID, "ai_agent_erp_token", newToken, nil)
-		result["ai_agent_erp_token"] = newToken
+		upsertSetting(tenantID, "ai_agent_erp_token_public", newToken, nil)
+		result["ai_agent_erp_token_public"] = newToken
+	}
+	if _, ok := result["ai_agent_erp_token_private"]; !ok {
+		newToken := strings.ReplaceAll(pkg.NewUUID()+pkg.NewUUID(), "-", "")
+		upsertSetting(tenantID, "ai_agent_erp_token_private", newToken, nil)
+		result["ai_agent_erp_token_private"] = newToken
 	}
 
 	// Also get tenant info
