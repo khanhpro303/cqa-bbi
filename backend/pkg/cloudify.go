@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -398,21 +397,7 @@ func (c *CloudifyClient) doRESTPost(endpoint string, params map[string]string, s
 	baseURL := c.getDataBaseURL()
 	apiURL := fmt.Sprintf("%s/rest_api/private/%s", baseURL, endpoint)
 
-	bodyMap := make(map[string]interface{})
-	for k, v := range params {
-		if valInt, err := strconv.Atoi(v); err == nil {
-			bodyMap[k] = valInt
-		} else {
-			bodyMap[k] = v
-		}
-	}
-
-	bodyBytes, err := json.Marshal(bodyMap)
-	if err != nil {
-		return nil, 0, fmt.Errorf("marshal request body: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequest("POST", apiURL, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
