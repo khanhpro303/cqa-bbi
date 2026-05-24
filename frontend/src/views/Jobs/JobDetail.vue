@@ -343,28 +343,37 @@
             <v-table density="compact" hover>
               <thead>
                 <tr>
+                  <th class="text-no-wrap text-center" style="width: 50px;">Ảnh</th>
                   <th class="text-no-wrap">Mã SKU</th>
-                  <th class="text-no-wrap">Tên đồng bộ web</th>
-                  <th class="text-no-wrap">Tên hàng</th>
+                  <th class="text-no-wrap" style="min-width: 150px;">Tên đồng bộ web</th>
+                  <th class="text-no-wrap" style="min-width: 150px;">Tên gốc ERP</th>
+                  <th class="text-no-wrap">Mã cha</th>
                   <th class="text-no-wrap">Nhãn hiệu</th>
-                  <th class="text-no-wrap">ĐVT</th>
-                  <th class="text-no-wrap">Kho</th>
-                  <th class="text-no-wrap">Nhóm VTHH</th>
                   <th class="text-no-wrap">Màu sắc</th>
                   <th class="text-no-wrap">Size</th>
+                  <th class="text-no-wrap text-right">Giá bán</th>
+                  <th class="text-no-wrap">ĐVT</th>
+                  <th class="text-no-wrap">Kho</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(p, idx) in erpCachePaginatedProducts" :key="idx">
-                  <td class="text-caption font-weight-medium">{{ p.ma_hang || '—' }}</td>
-                  <td class="text-caption">{{ p.ten_dong_bo_web || '—' }}</td>
-                  <td class="text-caption text-grey">{{ p.ten_hang || '—' }}</td>
-                  <td class="text-caption">{{ p.nhan_hieu_name || '—' }}</td>
-                  <td class="text-caption">{{ p.dvt_chinh_id || '—' }}</td>
-                  <td class="text-caption">{{ p.khosp || '—' }}</td>
-                  <td class="text-caption" style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="p.list_ten_nhom_vthh">{{ p.list_ten_nhom_vthh || '—' }}</td>
-                  <td class="text-caption">{{ p.thuoc_tinh_1 || '—' }}</td>
-                  <td class="text-caption">{{ p.thuoc_tinh_2 || '—' }}</td>
+                  <td class="text-center py-1">
+                    <v-avatar size="32" rounded="sm" color="grey-lighten-4">
+                      <v-img v-if="p.LINK_ANH" :src="p.LINK_ANH" cover />
+                      <v-icon v-else size="18" color="grey">mdi-image-outline</v-icon>
+                    </v-avatar>
+                  </td>
+                  <td class="text-caption font-weight-medium text-no-wrap" style="max-width: 100px; overflow: hidden; text-overflow: ellipsis;" :title="p.MA">{{ p.MA || '—' }}</td>
+                  <td class="text-caption" style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="p.TEN_DONG_BO_WEB">{{ p.TEN_DONG_BO_WEB || '—' }}</td>
+                  <td class="text-caption text-grey" style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="p.TEN">{{ p.TEN || '—' }}</td>
+                  <td class="text-caption text-no-wrap" style="max-width: 100px; overflow: hidden; text-overflow: ellipsis;" :title="p.MA_CHA">{{ p.MA_CHA || '—' }}</td>
+                  <td class="text-caption text-no-wrap" style="max-width: 120px; overflow: hidden; text-overflow: ellipsis;" :title="p.NHAN_HIEU_NAME">{{ p.NHAN_HIEU_NAME || '—' }}</td>
+                  <td class="text-caption text-no-wrap">{{ p.THUOC_TINH_1 || '—' }}</td>
+                  <td class="text-caption text-no-wrap">{{ p.THUOC_TINH_2 || '—' }}</td>
+                  <td class="text-caption text-right font-weight-medium text-no-wrap">{{ formatPrice(p.DON_GIA_BAN) }}</td>
+                  <td class="text-caption text-no-wrap">{{ p.DVT || '—' }}</td>
+                  <td class="text-caption text-no-wrap" style="max-width: 120px; overflow: hidden; text-overflow: ellipsis;" :title="p.KHO">{{ p.KHO || '—' }}</td>
                 </tr>
               </tbody>
             </v-table>
@@ -968,12 +977,13 @@ const erpCacheFilteredProducts = computed(() => {
   const q = erpCacheSearch.value?.toLowerCase().trim()
   if (!q) return erpCacheProducts.value
   return erpCacheProducts.value.filter(p =>
-    (p.ma_hang || '').toLowerCase().includes(q) ||
-    (p.ten_dong_bo_web || '').toLowerCase().includes(q) ||
-    (p.ten_hang || '').toLowerCase().includes(q) ||
-    (p.nhan_hieu_name || '').toLowerCase().includes(q) ||
-    (p.list_ten_nhom_vthh || '').toLowerCase().includes(q) ||
-    (p.khosp || '').toLowerCase().includes(q)
+    (p.MA || '').toLowerCase().includes(q) ||
+    (p.TEN_DONG_BO_WEB || '').toLowerCase().includes(q) ||
+    (p.TEN || '').toLowerCase().includes(q) ||
+    (p.NHAN_HIEU_NAME || '').toLowerCase().includes(q) ||
+    (p.KHO || '').toLowerCase().includes(q) ||
+    (p.MA_CHA || '').toLowerCase().includes(q) ||
+    (p.DVT || '').toLowerCase().includes(q)
   )
 })
 
@@ -1249,6 +1259,13 @@ function formatTime(dateStr: string): string {
   } catch { return '' }
 }
 
+function formatPrice(val: any): string {
+  if (val === null || val === undefined || val === '') return '—'
+  const num = Number(val)
+  if (isNaN(num)) return val
+  return num.toLocaleString('vi-VN')
+}
+
 const groupedResults = computed<ConversationGroup[]>(() => {
   const results = jobStore.jobResults
   if (!results.length) return []
@@ -1308,7 +1325,7 @@ async function fetchERPCache() {
   erpCacheLoading.value = true
   erpCacheError.value = ''
   try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache?limit=1000`)
+    const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache?limit=50000`)
     erpCacheProducts.value = data?.data || []
   } catch (err: any) {
     const msg = err?.response?.data?.message || err?.response?.data?.error || ''

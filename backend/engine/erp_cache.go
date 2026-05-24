@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,17 +62,23 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		return a.failRun(&run, fmt.Errorf("pull ERP products: %w", err))
 	}
 
-	// Deduplicate by ma_hang to be safe
+	// Deduplicate by MA / ma_hang to be safe
 	var allProducts []map[string]interface{}
 	seenCodes := make(map[string]bool)
 	for _, p := range data {
-		maHang := getStringVal(p, "ma_hang")
-		if maHang == "" {
-			maHang = getStringVal(p, "MA_HANG")
+		ma := getStringVal(p, "MA")
+		if ma == "" {
+			ma = getStringVal(p, "ma")
 		}
-		if maHang != "" {
-			if !seenCodes[maHang] {
-				seenCodes[maHang] = true
+		if ma == "" {
+			ma = getStringVal(p, "MA_HANG")
+		}
+		if ma == "" {
+			ma = getStringVal(p, "ma_hang")
+		}
+		if ma != "" {
+			if !seenCodes[ma] {
+				seenCodes[ma] = true
 				allProducts = append(allProducts, p)
 			}
 		} else {
@@ -84,58 +91,121 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 	// 4. Map products to the cache structure
 	cachedProducts := make([]map[string]interface{}, 0, len(allProducts))
 	for _, p := range allProducts {
-		listTenNhomVTHH := getStringVal(p, "list_ten_nhom_vthh")
-		if listTenNhomVTHH == "" {
-			listTenNhomVTHH = getStringVal(p, "LIST_TEN_NHOM_VTHH")
+		// 1. MA
+		ma := getStringVal(p, "MA")
+		if ma == "" {
+			ma = getStringVal(p, "ma")
+		}
+		if ma == "" {
+			ma = getStringVal(p, "MA_HANG")
+		}
+		if ma == "" {
+			ma = getStringVal(p, "ma_hang")
 		}
 
-		khosp := getStringVal(p, "khosp")
-		if khosp == "" {
-			khosp = getStringVal(p, "KHOSP")
+		// 2. TEN_DONG_BO_WEB
+		tenDongBoWeb := getStringVal(p, "TEN_DONG_BO_WEB")
+		if tenDongBoWeb == "" {
+			tenDongBoWeb = getStringVal(p, "ten_dong_bo_web")
 		}
 
-		dvtChinhID := getStringVal(p, "dvt_chinh_id")
-		if dvtChinhID == "" {
-			dvtChinhID = getStringVal(p, "DVT_CHINH_ID")
+		// 3. TEN
+		ten := getStringVal(p, "TEN")
+		if ten == "" {
+			ten = getStringVal(p, "ten")
+		}
+		if ten == "" {
+			ten = getStringVal(p, "TEN_HANG")
+		}
+		if ten == "" {
+			ten = getStringVal(p, "ten_hang")
 		}
 
-		maHang := getStringVal(p, "ma_hang")
-		if maHang == "" {
-			maHang = getStringVal(p, "MA_HANG")
+		// 4. THUOC_TINH_1
+		thuocTinh1 := getStringVal(p, "THUOC_TINH_1")
+		if thuocTinh1 == "" {
+			thuocTinh1 = getStringVal(p, "thuoc_tinh_1")
 		}
 
-		tenHang := getStringVal(p, "ten_hang")
-		if tenHang == "" {
-			tenHang = getStringVal(p, "TEN_HANG")
+		// 5. THUOC_TINH_2
+		thuocTinh2 := getStringVal(p, "THUOC_TINH_2")
+		if thuocTinh2 == "" {
+			thuocTinh2 = getStringVal(p, "thuoc_tinh_2")
 		}
 
-		nhanHieuName := getStringVal(p, "nhan_hieu_name")
+		// 6. DON_GIA_BAN
+		donGiaBanVal, _ := getFloatVal(p, "DON_GIA_BAN")
+		if donGiaBanVal == 0 {
+			donGiaBanVal, _ = getFloatVal(p, "don_gia_ban")
+		}
+		if donGiaBanVal == 0 {
+			donGiaBanVal, _ = getFloatVal(p, "DON_GIA")
+		}
+		if donGiaBanVal == 0 {
+			donGiaBanVal, _ = getFloatVal(p, "don_gia")
+		}
+
+		// 7. LINK_ANH
+		linkAnh := getStringVal(p, "LINK_ANH")
+		if linkAnh == "" {
+			linkAnh = getStringVal(p, "link_anh")
+		}
+
+		// 8. NHAN_HIEU_NAME (lấy từ list NHAN_HIEU)
+		nhanHieuName := getStringVal(p, "NHAN_HIEU")
+		if nhanHieuName == "" {
+			nhanHieuName = getStringVal(p, "nhan_hieu")
+		}
 		if nhanHieuName == "" {
 			nhanHieuName = getStringVal(p, "NHAN_HIEU_NAME")
 		}
-
-		thuocTinh1 := getStringVal(p, "thuoc_tinh_1")
-		if thuocTinh1 == "" {
-			thuocTinh1 = getStringVal(p, "THUOC_TINH_1")
+		if nhanHieuName == "" {
+			nhanHieuName = getStringVal(p, "nhan_hieu_name")
 		}
 
-		thuocTinh2 := getStringVal(p, "thuoc_tinh_2")
-		if thuocTinh2 == "" {
-			thuocTinh2 = getStringVal(p, "THUOC_TINH_2")
+		// 9. KHO (lấy từ list KHO_NGAM_DINH_ID)
+		kho := getStringVal(p, "KHO_NGAM_DINH_ID")
+		if kho == "" {
+			kho = getStringVal(p, "kho_ngam_dinh_id")
+		}
+		if kho == "" {
+			kho = getStringVal(p, "KHO")
+		}
+		if kho == "" {
+			kho = getStringVal(p, "kho")
+		}
+		if kho == "" {
+			kho = getStringVal(p, "KHOSP")
+		}
+		if kho == "" {
+			kho = getStringVal(p, "khosp")
 		}
 
-		tenDongBoWeb := getStringVal(p, "ten_dong_bo_web")
-		if tenDongBoWeb == "" {
-			tenDongBoWeb = getStringVal(p, "TEN_DONG_BO_WEB")
+		// 10. MA_CHA
+		maCha := getStringVal(p, "MA_CHA")
+		if maCha == "" {
+			maCha = getStringVal(p, "ma_cha")
+		}
+
+		// 11. DVT (lấy từ list DVT_CHINH_ID)
+		dvt := getStringVal(p, "DVT_CHINH_ID")
+		if dvt == "" {
+			dvt = getStringVal(p, "dvt_chinh_id")
+		}
+		if dvt == "" {
+			dvt = getStringVal(p, "DVT")
+		}
+		if dvt == "" {
+			dvt = getStringVal(p, "dvt")
 		}
 
 		// Create combined vectorize string for Astra DB auto-embedding
 		vectorizeParts := []string{}
-		if maHang != "" {
-			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Mã: %s", maHang))
+		if ma != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Mã: %s", ma))
 		}
-		if tenHang != "" {
-			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Tên: %s", tenHang))
+		if ten != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Tên: %s", ten))
 		}
 		if tenDongBoWeb != "" {
 			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Đồng bộ web: %s", tenDongBoWeb))
@@ -143,14 +213,11 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		if nhanHieuName != "" {
 			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Nhãn hiệu: %s", nhanHieuName))
 		}
-		if listTenNhomVTHH != "" {
-			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Nhóm: %s", listTenNhomVTHH))
+		if dvt != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Đơn vị tính: %s", dvt))
 		}
-		if dvtChinhID != "" {
-			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Đơn vị tính: %s", dvtChinhID))
-		}
-		if khosp != "" {
-			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Kho: %s", khosp))
+		if kho != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Kho: %s", kho))
 		}
 		if thuocTinh1 != "" {
 			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Màu sắc: %s", thuocTinh1))
@@ -160,22 +227,19 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		}
 		vectorizeStr := strings.Join(vectorizeParts, ". ") + "."
 
-		// Clone original map p to doc
+		// Build the clean document with ONLY the requested fields
 		doc := make(map[string]interface{})
-		for k, v := range p {
-			doc[k] = v
-		}
-
-		// Inject lowercase values so frontend matches its column fields
-		doc["ma_hang"] = maHang
-		doc["ten_hang"] = tenHang
-		doc["nhan_hieu_name"] = nhanHieuName
-		doc["thuoc_tinh_1"] = thuocTinh1
-		doc["thuoc_tinh_2"] = thuocTinh2
-		doc["ten_dong_bo_web"] = tenDongBoWeb
-		doc["list_ten_nhom_vthh"] = listTenNhomVTHH
-		doc["khosp"] = khosp
-		doc["dvt_chinh_id"] = dvtChinhID
+		doc["MA"] = ma
+		doc["TEN_DONG_BO_WEB"] = tenDongBoWeb
+		doc["TEN"] = ten
+		doc["THUOC_TINH_1"] = thuocTinh1
+		doc["THUOC_TINH_2"] = thuocTinh2
+		doc["DON_GIA_BAN"] = donGiaBanVal
+		doc["LINK_ANH"] = linkAnh
+		doc["NHAN_HIEU_NAME"] = nhanHieuName
+		doc["KHO"] = kho
+		doc["MA_CHA"] = maCha
+		doc["DVT"] = dvt
 		doc["$vectorize"] = vectorizeStr
 		doc["created_at"] = time.Now().Unix()
 
@@ -417,4 +481,24 @@ func getStringVal(m map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+func getFloatVal(m map[string]interface{}, key string) (float64, bool) {
+	if val, ok := m[key]; ok && val != nil {
+		switch v := val.(type) {
+		case float64:
+			return v, true
+		case float32:
+			return float64(v), true
+		case int:
+			return float64(v), true
+		case int64:
+			return float64(v), true
+		case string:
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				return f, true
+			}
+		}
+	}
+	return 0, false
 }

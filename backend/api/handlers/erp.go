@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -432,15 +433,15 @@ func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, lim
 		documents, err = executeAstraQuery(payload)
 		if err != nil {
 			log.Printf("[erp_search] Astra DB vector search failed for query '%s': %v. Trying text fallback...", search, err)
-			// B. Fallback to regex text search over ten_hang, ma_hang, ten_dong_bo_web
+			// B. Fallback to regex text search over TEN, MA, TEN_DONG_BO_WEB
 			regexPattern := "(?i)" + search
 			payloadFallback := map[string]interface{}{
 				"find": map[string]interface{}{
 					"filter": map[string]interface{}{
 						"$or": []map[string]interface{}{
-							{"ten_hang": map[string]interface{}{"$regex": regexPattern}},
-							{"ma_hang": map[string]interface{}{"$regex": regexPattern}},
-							{"ten_dong_bo_web": map[string]interface{}{"$regex": regexPattern}},
+							{"TEN": map[string]interface{}{"$regex": regexPattern}},
+							{"MA": map[string]interface{}{"$regex": regexPattern}},
+							{"TEN_DONG_BO_WEB": map[string]interface{}{"$regex": regexPattern}},
 						},
 					},
 					"options": map[string]interface{}{
@@ -485,36 +486,65 @@ func mapCachedProductToAPIResponse(p map[string]interface{}) map[string]interfac
 		res[k] = v
 	}
 
-	// Set code alias
-	if _, ok := res["code"]; !ok {
-		res["code"] = p["ma_hang"]
-	}
+	// Extract values using helper for uppercase/lowercase keys
+	maVal := getMapString(p, "MA", "ma_hang", "ma")
+	tenVal := getMapString(p, "TEN", "ten_hang", "ten")
+	webNameVal := getMapString(p, "TEN_DONG_BO_WEB", "ten_dong_bo_web")
+	dvtVal := getMapString(p, "DVT", "dvt_chinh_id", "dvt")
+	priceVal := getMapFloat(p, "DON_GIA_BAN", "don_gia_ban", "price")
 
-	// Set name alias
-	if _, ok := res["name"]; !ok {
-		if webName, ok := p["ten_dong_bo_web"].(string); ok && webName != "" {
-			res["name"] = webName
-		} else {
-			res["name"] = p["ten_hang"]
-		}
-	}
+	// Inject old keys to maintain backward compatibility
+	res["ma_hang"] = maVal
+	res["ten_hang"] = tenVal
+	res["ten_dong_bo_web"] = webNameVal
+	res["dvt_chinh_id"] = dvtVal
+	res["don_gia_ban"] = priceVal
 
-	// Set group alias
-	if _, ok := res["group"]; !ok {
-		res["group"] = p["list_ten_nhom_vthh"]
+	res["code"] = maVal
+	if webNameVal != "" {
+		res["name"] = webNameVal
+	} else {
+		res["name"] = tenVal
 	}
-
-	// Set unit alias
-	if _, ok := res["unit"]; !ok {
-		res["unit"] = p["dvt_chinh_id"]
-	}
-
-	// Set price alias (default to 0 if not stored)
-	if _, ok := res["price"]; !ok {
-		res["price"] = 0
-	}
+	res["unit"] = dvtVal
+	res["price"] = priceVal
+	res["group"] = getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name", "list_ten_nhom_vthh", "group")
 
 	return res
+}
+
+func getMapString(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if val, ok := m[k]; ok && val != nil {
+			if s, ok := val.(string); ok {
+				return s
+			}
+			return fmt.Sprintf("%v", val)
+		}
+	}
+	return ""
+}
+
+func getMapFloat(m map[string]interface{}, keys ...string) float64 {
+	for _, k := range keys {
+		if val, ok := m[k]; ok && val != nil {
+			switch v := val.(type) {
+			case float64:
+				return v
+			case float32:
+				return float64(v)
+			case int:
+				return float64(v)
+			case int64:
+				return float64(v)
+			case string:
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					return f
+				}
+			}
+		}
+	}
+	return 0
 }
 
 // ---------------------------------------------------------------------------
