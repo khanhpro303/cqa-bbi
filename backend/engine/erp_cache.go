@@ -99,16 +99,55 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 			dvtChinhID = getStringVal(p, "DVT_CHINH_ID")
 		}
 
+		maHang := getStringVal(p, "ma_hang")
+		tenHang := getStringVal(p, "ten_hang")
+		nhanHieuName := getStringVal(p, "nhan_hieu_name")
+		thuocTinh1 := getStringVal(p, "thuoc_tinh_1")
+		thuocTinh2 := getStringVal(p, "thuoc_tinh_2")
+		tenDongBoWeb := getStringVal(p, "ten_dong_bo_web")
+
+		// Create combined vectorize string for Astra DB auto-embedding
+		vectorizeParts := []string{}
+		if maHang != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Mã: %s", maHang))
+		}
+		if tenHang != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Tên: %s", tenHang))
+		}
+		if tenDongBoWeb != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Đồng bộ web: %s", tenDongBoWeb))
+		}
+		if nhanHieuName != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Nhãn hiệu: %s", nhanHieuName))
+		}
+		if listTenNhomVTHH != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Nhóm: %s", listTenNhomVTHH))
+		}
+		if dvtChinhID != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Đơn vị tính: %s", dvtChinhID))
+		}
+		if khosp != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Kho: %s", khosp))
+		}
+		if thuocTinh1 != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Màu sắc: %s", thuocTinh1))
+		}
+		if thuocTinh2 != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Kích thước: %s", thuocTinh2))
+		}
+		vectorizeStr := strings.Join(vectorizeParts, ". ") + "."
+
 		cachedProducts = append(cachedProducts, map[string]interface{}{
-			"ma_hang":             getStringVal(p, "ma_hang"),
-			"ten_hang":            getStringVal(p, "ten_hang"),
-			"nhan_hieu_name":      getStringVal(p, "nhan_hieu_name"),
-			"thuoc_tinh_1":        getStringVal(p, "thuoc_tinh_1"),
-			"thuoc_tinh_2":        getStringVal(p, "thuoc_tinh_2"),
-			"ten_dong_bo_web":     getStringVal(p, "ten_dong_bo_web"),
+			"ma_hang":             maHang,
+			"ten_hang":            tenHang,
+			"nhan_hieu_name":      nhanHieuName,
+			"thuoc_tinh_1":        thuocTinh1,
+			"thuoc_tinh_2":        thuocTinh2,
+			"ten_dong_bo_web":     tenDongBoWeb,
 			"list_ten_nhom_vthh":  listTenNhomVTHH,
 			"khosp":               khosp,
 			"dvt_chinh_id":        dvtChinhID,
+			"$vectorize":          vectorizeStr,
 			"created_at":          time.Now().Unix(),
 		})
 	}

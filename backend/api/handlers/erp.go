@@ -1,10 +1,15 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
@@ -118,7 +123,24 @@ func ERPQuery(c *gin.Context) {
 		return
 	}
 
-	// ── 7. Execute live Cloudify call ─────────────────────────────────────
+	// ── 7. Check if resource is products and attempt cached search in Astra DB ──
+	if req.Resource == "products" {
+		cachedData, err := searchProductsFromAstraDB(c.Request.Context(), tenantID, req.Search, req.Limit)
+		if err != nil {
+			log.Printf("[erp_query] Astra DB cache search error: %v. Falling back to live Cloudify ERP.", err)
+		} else if cachedData != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"status":   "success",
+				"data":     cachedData,
+				"source":   "astradb_cache",
+				"resource": req.Resource,
+				"count":    len(cachedData),
+			})
+			return
+		}
+	}
+
+	// ── 8. Execute live Cloudify call ─────────────────────────────────────
 	client := &pkg.CloudifyClient{
 		BaseURL:  erpURL,
 		DB:       erpDB,
@@ -296,6 +318,187 @@ func loadAllowedGroupsForCustomer(tenantID, zaloUserID, resource string) []strin
 		}
 	}
 	return groups
+}
+
+// ---------------------------------------------------------------------------
+// searchProductsFromAstraDB — queries the cached product collection in Astra DB.
+// Uses vector search ($vectorize) if query is non-empty, with a text-regex search fallback.
+// Returns (nil, nil) if Astra DB is not configured, allowing live fallback.
+// ---------------------------------------------------------------------------
+func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, limit int) ([]map[string]interface{}, error) {
+	// 1. Load Astra DB credentials
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+	keyspace := "cache_product"
+	collection := "erp_product_bbi"
+
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+
+	if apiEndpoint == "" || token == "" {
+		return nil, nil // Not configured, fallback to live
+	}
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+
+	// Helper function to execute POST request to Astra DB and parse documents
+	executeAstraQuery := func(payload interface{}) ([]map[string]interface{}, error) {
+		bodyBytes, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal payload: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Token", token)
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("execute HTTP post: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			return nil, fmt.Errorf("HTTP status %d", resp.StatusCode)
+		}
+
+		var astraResp struct {
+			Data struct {
+				Documents []map[string]interface{} `json:"documents"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+
+		if len(astraResp.Errors) > 0 {
+			return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+		}
+
+		return astraResp.Data.Documents, nil
+	}
+
+	var documents []map[string]interface{}
+	var err error
+
+	// A. Try Vector Search first if search query is provided
+	if search != "" {
+		payload := map[string]interface{}{
+			"find": map[string]interface{}{
+				"sort": map[string]interface{}{
+					"$vectorize": search,
+				},
+				"options": map[string]interface{}{
+					"limit": limit,
+				},
+			},
+		}
+		documents, err = executeAstraQuery(payload)
+		if err != nil {
+			log.Printf("[erp_search] Astra DB vector search failed for query '%s': %v. Trying text fallback...", search, err)
+			// B. Fallback to regex text search over ten_hang, ma_hang, ten_dong_bo_web
+			regexPattern := "(?i)" + search
+			payloadFallback := map[string]interface{}{
+				"find": map[string]interface{}{
+					"filter": map[string]interface{}{
+						"$or": []map[string]interface{}{
+							{"ten_hang": map[string]interface{}{"$regex": regexPattern}},
+							{"ma_hang": map[string]interface{}{"$regex": regexPattern}},
+							{"ten_dong_bo_web": map[string]interface{}{"$regex": regexPattern}},
+						},
+					},
+					"options": map[string]interface{}{
+						"limit": limit,
+					},
+				},
+			}
+			documents, err = executeAstraQuery(payloadFallback)
+			if err != nil {
+				return nil, fmt.Errorf("text fallback search failed: %w", err)
+			}
+		}
+	} else {
+		// No search string, do plain find query
+		payload := map[string]interface{}{
+			"find": map[string]interface{}{
+				"options": map[string]interface{}{
+					"limit": limit,
+				},
+			},
+		}
+		documents, err = executeAstraQuery(payload)
+		if err != nil {
+			return nil, fmt.Errorf("plain query failed: %w", err)
+		}
+	}
+
+	// 3. Map returned documents to compatibility output format
+	mappedResults := make([]map[string]interface{}, 0, len(documents))
+	for _, doc := range documents {
+		mappedResults = append(mappedResults, mapCachedProductToAPIResponse(doc))
+	}
+
+	return mappedResults, nil
+}
+
+// mapCachedProductToAPIResponse maps a cached product document to include aliases
+// for backward compatibility with chatbot prompts/HTTP Request Nodes.
+func mapCachedProductToAPIResponse(p map[string]interface{}) map[string]interface{} {
+	res := make(map[string]interface{})
+	for k, v := range p {
+		res[k] = v
+	}
+
+	// Set code alias
+	if _, ok := res["code"]; !ok {
+		res["code"] = p["ma_hang"]
+	}
+
+	// Set name alias
+	if _, ok := res["name"]; !ok {
+		if webName, ok := p["ten_dong_bo_web"].(string); ok && webName != "" {
+			res["name"] = webName
+		} else {
+			res["name"] = p["ten_hang"]
+		}
+	}
+
+	// Set group alias
+	if _, ok := res["group"]; !ok {
+		res["group"] = p["list_ten_nhom_vthh"]
+	}
+
+	// Set unit alias
+	if _, ok := res["unit"]; !ok {
+		res["unit"] = p["dvt_chinh_id"]
+	}
+
+	// Set price alias (default to 0 if not stored)
+	if _, ok := res["price"]; !ok {
+		res["price"] = 0
+	}
+
+	return res
 }
 
 // ---------------------------------------------------------------------------
