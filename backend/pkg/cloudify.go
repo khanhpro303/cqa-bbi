@@ -229,6 +229,10 @@ func (c *CloudifyClient) doRESTGet(endpoint string, params map[string]string, se
 	if c.DB != "" {
 		q.Set("db", c.DB)
 	}
+	if session != "" {
+		sessionID := strings.TrimPrefix(session, "session_id=")
+		q.Set("session_id", sessionID)
+	}
 	for k, v := range params {
 		if v != "" {
 			q.Set(k, v)

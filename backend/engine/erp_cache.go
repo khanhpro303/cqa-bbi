@@ -55,7 +55,7 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 
 	// 3. Fetch products from ERP using pagination
 	var allProducts []map[string]interface{}
-	limit := 1000
+	limit := 100
 	offset := 0
 	for {
 		params := map[string]string{
