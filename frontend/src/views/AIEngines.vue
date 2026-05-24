@@ -123,6 +123,62 @@
       </div>
     </v-card>
 
+    <!-- Integration info card -->
+    <v-card class="pa-6 mb-6">
+      <div class="text-subtitle-1 font-weight-bold mb-4 d-flex align-center">
+        <v-icon start size="small" color="primary" class="mr-2">mdi-information-outline</v-icon>
+        {{ $t('erp_agent_credentials') }}
+      </div>
+      
+      <v-alert color="info" variant="tonal" class="mb-4">
+        <div class="text-caption" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-2'">
+          {{ $t('erp_agent_token_hint') }}
+        </div>
+      </v-alert>
+
+      <v-row>
+        <v-col cols="12" md="4">
+          <v-text-field
+            :model-value="gatewayUrl"
+            label="CQA Secure Gateway Endpoint"
+            readonly
+            append-inner-icon="mdi-content-copy"
+            @click:append-inner="copyToClipboard(gatewayUrl, 'Đã copy URL Endpoint')"
+            density="compact"
+            variant="outlined"
+            class="mb-3"
+            :bg-color="isDark ? '#2a2a2a' : 'white'"
+          />
+        </v-col>
+        <v-col cols="12" md="4">
+          <v-text-field
+            :model-value="erp.publicAgentToken"
+            label="Agent Secure Token (Public Bot)"
+            readonly
+            append-inner-icon="mdi-content-copy"
+            @click:append-inner="copyToClipboard(erp.publicAgentToken, 'Đã copy Public Agent Token')"
+            density="compact"
+            variant="outlined"
+            class="mb-3"
+            :bg-color="isDark ? '#2a2a2a' : 'white'"
+          />
+        </v-col>
+        <v-col cols="12" md="4">
+          <v-text-field
+            :model-value="erp.privateAgentToken"
+            label="Agent Secure Token (Private/Whitelist Bot)"
+            readonly
+            append-inner-icon="mdi-content-copy"
+            @click:append-inner="copyToClipboard(erp.privateAgentToken, 'Đã copy Private Agent Token')"
+            density="compact"
+            variant="outlined"
+            class="mb-3"
+            :bg-color="isDark ? '#2a2a2a' : 'white'"
+          />
+        </v-col>
+      </v-row>
+    </v-card>
+
     <v-snackbar v-model="snackbar" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
   </div>
 </template>
@@ -164,7 +220,18 @@ const erp = reactive({
   dbName: '',
   username: '',
   password: '',
+  publicAgentToken: '',
+  privateAgentToken: '',
 })
+
+const gatewayUrl = computed(() => {
+  return `${window.location.origin}/api/v1/tenants/${tenantId.value}/erp/query`
+})
+
+function copyToClipboard(text: string, msg: string) {
+  navigator.clipboard.writeText(text)
+  showSnack(msg, 'success')
+}
 
 async function loadSettings() {
   try {
@@ -186,6 +253,9 @@ async function loadSettings() {
     if (settings.erp_api_password) {
       erp.password = settings.erp_api_password
     }
+
+    erp.publicAgentToken = settings.ai_agent_erp_token_public || ''
+    erp.privateAgentToken = settings.ai_agent_erp_token_private || ''
   } catch {
     // Ignore
   }
