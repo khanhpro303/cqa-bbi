@@ -53,8 +53,10 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		Password: erpPassword,
 	}
 
-	// 3. Fetch products from ERP (no pagination, single POST request with empty {})
-	data, err := client.SearchCustomEndpoint("danhmucvattuhanghoa/search", nil)
+	// 3. Fetch products from ERP (requesting up to 50000 items)
+	data, err := client.SearchCustomEndpoint("danhmucvattuhanghoa/search", map[string]string{
+		"limit": "50000",
+	})
 	if err != nil {
 		return a.failRun(&run, fmt.Errorf("pull ERP products: %w", err))
 	}
@@ -98,11 +100,34 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		}
 
 		maHang := getStringVal(p, "ma_hang")
+		if maHang == "" {
+			maHang = getStringVal(p, "MA_HANG")
+		}
+
 		tenHang := getStringVal(p, "ten_hang")
+		if tenHang == "" {
+			tenHang = getStringVal(p, "TEN_HANG")
+		}
+
 		nhanHieuName := getStringVal(p, "nhan_hieu_name")
+		if nhanHieuName == "" {
+			nhanHieuName = getStringVal(p, "NHAN_HIEU_NAME")
+		}
+
 		thuocTinh1 := getStringVal(p, "thuoc_tinh_1")
+		if thuocTinh1 == "" {
+			thuocTinh1 = getStringVal(p, "THUOC_TINH_1")
+		}
+
 		thuocTinh2 := getStringVal(p, "thuoc_tinh_2")
+		if thuocTinh2 == "" {
+			thuocTinh2 = getStringVal(p, "THUOC_TINH_2")
+		}
+
 		tenDongBoWeb := getStringVal(p, "ten_dong_bo_web")
+		if tenDongBoWeb == "" {
+			tenDongBoWeb = getStringVal(p, "TEN_DONG_BO_WEB")
+		}
 
 		// Create combined vectorize string for Astra DB auto-embedding
 		vectorizeParts := []string{}
@@ -135,19 +160,26 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		}
 		vectorizeStr := strings.Join(vectorizeParts, ". ") + "."
 
-		cachedProducts = append(cachedProducts, map[string]interface{}{
-			"ma_hang":             maHang,
-			"ten_hang":            tenHang,
-			"nhan_hieu_name":      nhanHieuName,
-			"thuoc_tinh_1":        thuocTinh1,
-			"thuoc_tinh_2":        thuocTinh2,
-			"ten_dong_bo_web":     tenDongBoWeb,
-			"list_ten_nhom_vthh":  listTenNhomVTHH,
-			"khosp":               khosp,
-			"dvt_chinh_id":        dvtChinhID,
-			"$vectorize":          vectorizeStr,
-			"created_at":          time.Now().Unix(),
-		})
+		// Clone original map p to doc
+		doc := make(map[string]interface{})
+		for k, v := range p {
+			doc[k] = v
+		}
+
+		// Inject lowercase values so frontend matches its column fields
+		doc["ma_hang"] = maHang
+		doc["ten_hang"] = tenHang
+		doc["nhan_hieu_name"] = nhanHieuName
+		doc["thuoc_tinh_1"] = thuocTinh1
+		doc["thuoc_tinh_2"] = thuocTinh2
+		doc["ten_dong_bo_web"] = tenDongBoWeb
+		doc["list_ten_nhom_vthh"] = listTenNhomVTHH
+		doc["khosp"] = khosp
+		doc["dvt_chinh_id"] = dvtChinhID
+		doc["$vectorize"] = vectorizeStr
+		doc["created_at"] = time.Now().Unix()
+
+		cachedProducts = append(cachedProducts, doc)
 	}
 
 	// 5. Connect to Astra DB and cache the data

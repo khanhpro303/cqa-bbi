@@ -417,6 +417,11 @@ func (c *CloudifyClient) doRESTPost(endpoint string, params map[string]string, s
 		sessionID := strings.TrimPrefix(session, "session_id=")
 		q.Set("session_id", sessionID)
 	}
+	for k, v := range params {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
 	req.URL.RawQuery = q.Encode()
 
 	req.Header.Set("Cookie", session)
