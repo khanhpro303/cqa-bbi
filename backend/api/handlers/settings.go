@@ -197,6 +197,13 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		LangflowFlowID       string `json:"langflow_flow_id"`
 		LangflowPublicFlowID string `json:"langflow_public_flow_id"`
 		LangflowToken        string `json:"langflow_token"`
+
+		// Astra DB configuration
+		AstraDBAPIEndpoint       string `json:"astradb_api_endpoint"`
+		AstraDBToken             string `json:"astradb_token"`
+		AstraDBKeyspace          string `json:"astradb_keyspace"`
+		AstraDBProductCollection string `json:"astradb_product_collection"`
+		AstraDBCollection        string `json:"astradb_collection"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -238,6 +245,48 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		}
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_token").Delete(&models.AppSetting{})
+	}
+
+	// Astra DB API Endpoint
+	if req.AstraDBAPIEndpoint != "" {
+		upsertSetting(tenantID, "astradb_api_endpoint", strings.TrimRight(req.AstraDBAPIEndpoint, "/"), nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = 'astradb_api_endpoint'", tenantID).Delete(&models.AppSetting{})
+	}
+
+	// Astra DB Keyspace
+	if req.AstraDBKeyspace != "" {
+		upsertSetting(tenantID, "astradb_keyspace", req.AstraDBKeyspace, nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = 'astradb_keyspace'", tenantID).Delete(&models.AppSetting{})
+	}
+
+	// Astra DB Product Collection
+	if req.AstraDBProductCollection != "" {
+		upsertSetting(tenantID, "astradb_product_collection", req.AstraDBProductCollection, nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = 'astradb_product_collection'", tenantID).Delete(&models.AppSetting{})
+	}
+
+	// Astra DB Chat History Collection
+	if req.AstraDBCollection != "" {
+		upsertSetting(tenantID, "astradb_collection", req.AstraDBCollection, nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = 'astradb_collection'", tenantID).Delete(&models.AppSetting{})
+	}
+
+	// Astra DB Token
+	if req.AstraDBToken != "" {
+		if !isMaskedSecret(req.AstraDBToken) {
+			encrypted, err := pkg.Encrypt([]byte(req.AstraDBToken), cfg.EncryptionKey)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "encryption_failed"})
+				return
+			}
+			upsertSetting(tenantID, "astradb_token", "", encrypted)
+		}
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = 'astradb_token'", tenantID).Delete(&models.AppSetting{})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})

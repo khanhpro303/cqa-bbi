@@ -57,6 +57,75 @@
       </div>
     </v-card>
 
+    <!-- Astra DB Config -->
+    <v-card class="pa-6 mb-6">
+      <div class="text-subtitle-1 font-weight-bold mb-4 d-flex align-center">
+        <v-icon start size="small" color="primary" class="mr-2">mdi-database-cog</v-icon>
+        Cấu hình Astra DB (AI Memory & Product Cache)
+      </div>
+
+      <v-row>
+        <v-col cols="12" md="6">
+          <v-text-field
+            v-model="astradb.apiEndpoint"
+            label="Astra DB API Endpoint"
+            placeholder="https://<database-id>-<region>.apps.astra.datastax.com"
+            class="mb-3"
+            clearable
+            density="compact"
+          />
+        </v-col>
+        <v-col cols="12" md="6">
+          <v-text-field
+            v-model="astradb.token"
+            label="Astra DB Application Token"
+            type="password"
+            placeholder="••••••••"
+            class="mb-3"
+            clearable
+            density="compact"
+          />
+        </v-col>
+      </v-row>
+
+      <v-row>
+        <v-col cols="12" md="4">
+          <v-text-field
+            v-model="astradb.keyspace"
+            label="Keyspace"
+            placeholder="cqa_bbi"
+            class="mb-3"
+            clearable
+            density="compact"
+          />
+        </v-col>
+        <v-col cols="12" md="4">
+          <v-text-field
+            v-model="astradb.collection"
+            label="Chat History Collection"
+            placeholder="zalo_chat_history"
+            class="mb-3"
+            clearable
+            density="compact"
+          />
+        </v-col>
+        <v-col cols="12" md="4">
+          <v-text-field
+            v-model="astradb.productCollection"
+            label="Product Cache Collection"
+            placeholder="erp_product_bbi"
+            class="mb-3"
+            clearable
+            density="compact"
+          />
+        </v-col>
+      </v-row>
+
+      <div class="d-flex ga-2 mt-4">
+        <v-btn color="primary" :loading="saving" @click="save">{{ $t('save') }}</v-btn>
+      </div>
+    </v-card>
+
     <!-- ERP Config -->
     <v-card class="pa-6 mb-6">
       <div class="text-subtitle-1 font-weight-bold mb-4 d-flex align-center">
@@ -242,6 +311,14 @@ const erp = reactive({
   privateAgentToken: '',
 })
 
+const astradb = reactive({
+  apiEndpoint: '',
+  token: '',
+  keyspace: '',
+  collection: '',
+  productCollection: '',
+})
+
 const gatewayUrl = computed(() => {
   return `${window.location.origin}/api/v1/tenants/${tenantId.value}/erp/query`
 })
@@ -274,6 +351,14 @@ async function loadSettings() {
 
     erp.publicAgentToken = settings.ai_agent_erp_token_public || ''
     erp.privateAgentToken = settings.ai_agent_erp_token_private || ''
+
+    astradb.apiEndpoint = settings.astradb_api_endpoint || ''
+    astradb.keyspace = settings.astradb_keyspace || ''
+    astradb.productCollection = settings.astradb_product_collection || ''
+    astradb.collection = settings.astradb_collection || ''
+    if (settings.astradb_token) {
+      astradb.token = settings.astradb_token
+    }
   } catch {
     // Ignore
   }
@@ -287,6 +372,12 @@ async function save() {
       langflow_flow_id: langflow.flowId,
       langflow_public_flow_id: langflow.publicFlowId,
       langflow_token: langflow.token,
+
+      astradb_api_endpoint: astradb.apiEndpoint,
+      astradb_token: astradb.token,
+      astradb_keyspace: astradb.keyspace,
+      astradb_product_collection: astradb.productCollection,
+      astradb_collection: astradb.collection,
     })
     showSnack(t('success'), 'success')
   } catch (err: any) {
