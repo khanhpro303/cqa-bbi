@@ -51,10 +51,11 @@ type Config struct {
 	PostgresURL string
 
 	// Astra DB Integration
-	AstraDBAPIEndpoint string
-	AstraDBToken       string
-	AstraDBKeyspace    string
-	AstraDBCollection  string
+	AstraDBAPIEndpoint       string
+	AstraDBToken             string
+	AstraDBKeyspace          string
+	AstraDBCollection        string
+	AstraDBProductCollection string
 
 	// Session Gateway Defaults
 	ChatbotSessionKeyword        string
@@ -93,6 +94,7 @@ func Load() (*Config, error) {
 		AstraDBToken:               getEnv("ASTRA_DB_TOKEN", ""),
 		AstraDBKeyspace:            getEnv("ASTRA_DB_KEYSPACE", ""),
 		AstraDBCollection:          getEnv("ASTRA_DB_COLLECTION", "zalo_chat_history"),
+		AstraDBProductCollection:   getEnv("ASTRA_DB_PRODUCT_COLLECTION", "erp_product_bbi"),
 		ChatbotSessionKeyword:        getEnv("CHATBOT_SESSION_KEYWORD", "chào bull"),
 		ChatbotSessionEndKeyword:     getEnv("CHATBOT_SESSION_END_KEYWORD", "tạm biệt"),
 		ChatbotSessionWelcomeMessage: getEnv("CHATBOT_SESSION_WELCOME_MESSAGE", "Chào bạn, tôi đã sẵn sàng!"),

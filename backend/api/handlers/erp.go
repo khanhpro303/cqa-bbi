@@ -330,8 +330,16 @@ func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, lim
 	cfg, _ := config.Load()
 	apiEndpoint := cfg.AstraDBAPIEndpoint
 	token := cfg.AstraDBToken
+
 	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+
 	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
 
 	var endpointSetting models.AppSetting
 	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
@@ -346,6 +354,14 @@ func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, lim
 		} else if tokenSetting.ValuePlain != "" {
 			token = tokenSetting.ValuePlain
 		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
 	}
 
 	if apiEndpoint == "" || token == "" {

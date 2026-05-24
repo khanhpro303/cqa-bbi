@@ -155,8 +155,16 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 	// 5. Connect to Astra DB and cache the data
 	apiEndpoint := a.cfg.AstraDBAPIEndpoint
 	token := a.cfg.AstraDBToken
+
 	keyspace := "cache_product"
+	if a.cfg.AstraDBKeyspace != "" {
+		keyspace = a.cfg.AstraDBKeyspace
+	}
+
 	collection := "erp_product_bbi"
+	if a.cfg.AstraDBProductCollection != "" {
+		collection = a.cfg.AstraDBProductCollection
+	}
 
 	// Fallback to setting values if configured on the tenant level
 	var endpointSetting models.AppSetting
@@ -172,6 +180,14 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		} else if tokenSetting.ValuePlain != "" {
 			token = tokenSetting.ValuePlain
 		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
 	}
 
 	if apiEndpoint == "" || token == "" {
