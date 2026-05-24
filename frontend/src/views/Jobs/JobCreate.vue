@@ -12,10 +12,12 @@
         </template>
         <template #[`item.2`]>
           <StepRules v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
+          <StepOutputSchedule v-else-if="form.job_type === 'erp_product_cache'" v-model:form="form" />
           <StepInput v-else v-model:form="form" />
         </template>
         <template #[`item.3`]>
           <StepOutputSchedule v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
+          <StepConfirm v-else-if="form.job_type === 'erp_product_cache'" v-model:form="form" />
           <StepRules v-else v-model:form="form" />
         </template>
         <template #[`item.4`]>
@@ -36,7 +38,7 @@
           {{ $t('back') }}
         </v-btn>
         <v-spacer />
-        <template v-if="step < (form.job_type === 'chatbot_toggle' ? 4 : 6)">
+        <template v-if="step < (form.job_type === 'erp_product_cache' ? 3 : (form.job_type === 'chatbot_toggle' ? 4 : 6))">
           <v-btn color="primary" :disabled="!canProceed" @click="step++">
             {{ $t('next') }}
             <v-icon end>mdi-chevron-right</v-icon>
@@ -45,7 +47,7 @@
             {{ validationMessage }}
           </div>
         </template>
-        <v-btn v-if="step === (form.job_type === 'chatbot_toggle' ? 4 : 6)" color="success" :loading="creating" @click="submitJob">
+        <v-btn v-if="step === (form.job_type === 'erp_product_cache' ? 3 : (form.job_type === 'chatbot_toggle' ? 4 : 6))" color="success" :loading="creating" @click="submitJob">
           <v-icon start>mdi-check-circle</v-icon>
           {{ $t('confirm') }}
         </v-btn>
@@ -78,6 +80,17 @@ const step = ref(1)
 const creating = ref(false)
 
 const canProceed = computed(() => {
+  if (form.value.job_type === 'erp_product_cache') {
+    switch (step.value) {
+      case 1: return form.value.name.trim().length >= 2
+      case 2: {
+        if (form.value.schedule_type === 'cron' && !form.value.schedule_cron.trim()) return false
+        return true
+      }
+      default: return true
+    }
+  }
+
   if (form.value.job_type === 'chatbot_toggle') {
     switch (step.value) {
       case 1: return form.value.name.trim().length >= 2
@@ -117,6 +130,13 @@ const canProceed = computed(() => {
 })
 
 const validationMessage = computed(() => {
+  if (form.value.job_type === 'erp_product_cache') {
+    switch (step.value) {
+      case 1: return t('validation_min_chars', { min: 2 })
+      default: return ''
+    }
+  }
+
   if (form.value.job_type === 'chatbot_toggle') {
     switch (step.value) {
       case 1: return t('validation_min_chars', { min: 2 })
@@ -154,6 +174,13 @@ const form = ref({
 })
 
 const stepItems = computed(() => {
+  if (form.value.job_type === 'erp_product_cache') {
+    return [
+      { title: t('job_wizard_step_type'), value: 1 },
+      { title: t('job_wizard_step_schedule'), value: 2 },
+      { title: t('job_wizard_step_confirm'), value: 3 },
+    ]
+  }
   if (form.value.job_type === 'chatbot_toggle') {
     return [
       { title: t('job_wizard_step_type'), value: 1 },
@@ -175,12 +202,12 @@ const stepItems = computed(() => {
 async function submitJob() {
   creating.value = true
   try {
-    const isChatbotToggle = form.value.job_type === 'chatbot_toggle'
+    const isSpecialJob = form.value.job_type === 'chatbot_toggle' || form.value.job_type === 'erp_product_cache'
     const payload = {
       ...form.value,
-      input_channel_ids: isChatbotToggle ? ['global'] : form.value.input_channel_ids,
-      outputs: isChatbotToggle ? [] : JSON.parse(form.value.outputs || '[]'),
-      rules_config: form.value.job_type === 'classification' ? JSON.parse(form.value.rules_config) : (isChatbotToggle ? [] : undefined),
+      input_channel_ids: isSpecialJob ? ['global'] : form.value.input_channel_ids,
+      outputs: isSpecialJob ? [] : JSON.parse(form.value.outputs || '[]'),
+      rules_config: form.value.job_type === 'classification' ? JSON.parse(form.value.rules_config) : (isSpecialJob ? [] : undefined),
       output_at: form.value.output_at || undefined,
     }
     await jobStore.createJob(tenantId.value, payload)

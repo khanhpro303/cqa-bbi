@@ -487,6 +487,10 @@ export default {
   jobs_validation_chatbot_status: 'Please select the desired chatbot status',
   jobs_wizard_step_status_config: 'Status Configuration',
   job_chatbot_toggle: 'Chatbot Toggle',
+  jobs_type_erp_product_cache_title: 'Sync & Cache ERP Products',
+  jobs_type_erp_product_cache_caption: 'Sync product catalog from ERP and cache to Astra DB for chatbot queries.',
+  job_erp_product_cache: 'Sync & Cache ERP Products',
+
 
   // CRM & GMF
   nav_crm: 'Customer CRM',
@@ -494,4 +498,8 @@ export default {
   crm_customers: 'Zalo Customers',
   crm_approvals: 'Customer Approvals',
   crm_customer_code: 'Customer Code',
+  crm_group_perms_title: 'Agent Permissions & Live Data Flow Chart:',
+  crm_live_flow_title: 'AI Agent Real-time Data Flow Chart',
+  crm_load_perms_error: 'Failed to load CRM group permissions',
+  crm_save_perms_success: 'CRM group permissions saved successfully',
 }

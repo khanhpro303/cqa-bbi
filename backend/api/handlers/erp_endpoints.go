@@ -11,45 +11,43 @@ import (
 	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
-// Available ERP resources and agent types for validation
-var (
-	erpAvailableResources = []string{"products", "inventory", "orders", "customers", "debt"}
-	erpAgentTypes         = []string{"public", "private"}
-)
+// Available ERP resources for validation
+var erpAvailableResources = []string{"products", "inventory", "orders", "customers", "debt"}
 
 // ---------------------------------------------------------------------------
-// ListERPEndpoints — GET /settings/erp/endpoints
+// ListGroupERPEndpoints — GET /crm/groups/:id/erp/endpoints
 // ---------------------------------------------------------------------------
 
-func ListERPEndpoints(c *gin.Context) {
+func ListGroupERPEndpoints(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
+	groupID := c.Param("id")
+	if groupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "group_id_required"})
+		return
+	}
 
 	var endpoints []models.ERPEndpoint
-	db.DB.Where("tenant_id = ?", tenantID).Find(&endpoints)
+	db.DB.Where("tenant_id = ? AND group_id = ?", tenantID, groupID).Find(&endpoints)
 
 	// Index existing endpoints for quick lookup
 	existing := make(map[string]*models.ERPEndpoint)
 	for i := range endpoints {
-		key := endpoints[i].AgentType + ":" + endpoints[i].Resource
-		existing[key] = &endpoints[i]
+		existing[endpoints[i].Resource] = &endpoints[i]
 	}
 
 	// Reconstruct the slice in canonical order, adding default entries for any missing resources
 	var orderedEndpoints []models.ERPEndpoint
-	for _, agentType := range erpAgentTypes {
-		for _, resource := range erpAvailableResources {
-			key := agentType + ":" + resource
-			if ep, found := existing[key]; found {
-				orderedEndpoints = append(orderedEndpoints, *ep)
-			} else {
-				orderedEndpoints = append(orderedEndpoints, models.ERPEndpoint{
-					TenantID:  tenantID,
-					AgentType: agentType,
-					Resource:  resource,
-					IsEnabled: false,
-					ScopeType: "all",
-				})
-			}
+	for _, resource := range erpAvailableResources {
+		if ep, found := existing[resource]; found {
+			orderedEndpoints = append(orderedEndpoints, *ep)
+		} else {
+			orderedEndpoints = append(orderedEndpoints, models.ERPEndpoint{
+				TenantID:  tenantID,
+				GroupID:   groupID,
+				Resource:  resource,
+				IsEnabled: false,
+				ScopeType: "all",
+			})
 		}
 	}
 
@@ -57,16 +55,20 @@ func ListERPEndpoints(c *gin.Context) {
 }
 
 // ---------------------------------------------------------------------------
-// SaveERPEndpoints — PUT /settings/erp/endpoints
+// SaveGroupERPEndpoints — PUT /crm/groups/:id/erp/endpoints
 // Bulk upsert: caller sends the full list of endpoints to save.
 // ---------------------------------------------------------------------------
 
-func SaveERPEndpoints(c *gin.Context) {
+func SaveGroupERPEndpoints(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
+	groupID := c.Param("id")
+	if groupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "group_id_required"})
+		return
+	}
 
 	var req struct {
 		Endpoints []struct {
-			AgentType     string `json:"agent_type" binding:"required"`
 			Resource      string `json:"resource" binding:"required"`
 			IsEnabled     bool   `json:"is_enabled"`
 			ScopeType     string `json:"scope_type"`     // "all" | "own" | "assigned"
@@ -80,7 +82,7 @@ func SaveERPEndpoints(c *gin.Context) {
 	}
 
 	for _, ep := range req.Endpoints {
-		if !isValidERPAgentType(ep.AgentType) || !isValidERPResource(ep.Resource) {
+		if !isValidERPResource(ep.Resource) {
 			continue
 		}
 
@@ -90,8 +92,8 @@ func SaveERPEndpoints(c *gin.Context) {
 		}
 
 		var existing models.ERPEndpoint
-		result := db.DB.Where("tenant_id = ? AND agent_type = ? AND resource = ?",
-			tenantID, ep.AgentType, ep.Resource).First(&existing)
+		result := db.DB.Where("tenant_id = ? AND group_id = ? AND resource = ?",
+			tenantID, groupID, ep.Resource).First(&existing)
 
 		if result.Error == nil {
 			// Update existing
@@ -106,7 +108,7 @@ func SaveERPEndpoints(c *gin.Context) {
 			db.DB.Create(&models.ERPEndpoint{
 				ID:            pkg.NewUUID(),
 				TenantID:      tenantID,
-				AgentType:     ep.AgentType,
+				GroupID:       groupID,
 				Resource:      ep.Resource,
 				IsEnabled:     ep.IsEnabled,
 				ScopeType:     scopeType,
@@ -121,15 +123,19 @@ func SaveERPEndpoints(c *gin.Context) {
 }
 
 // ---------------------------------------------------------------------------
-// ToggleERPEndpoint — POST /settings/erp/endpoints/toggle
+// ToggleGroupERPEndpoint — POST /crm/groups/:id/erp/endpoints/toggle
 // Quickly enable or disable a single endpoint without a full save.
 // ---------------------------------------------------------------------------
 
-func ToggleERPEndpoint(c *gin.Context) {
+func ToggleGroupERPEndpoint(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
+	groupID := c.Param("id")
+	if groupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "group_id_required"})
+		return
+	}
 
 	var req struct {
-		AgentType string `json:"agent_type" binding:"required"`
 		Resource  string `json:"resource" binding:"required"`
 		IsEnabled bool   `json:"is_enabled"`
 	}
@@ -139,17 +145,17 @@ func ToggleERPEndpoint(c *gin.Context) {
 		return
 	}
 
-	if !isValidERPAgentType(req.AgentType) || !isValidERPResource(req.Resource) {
+	if !isValidERPResource(req.Resource) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "invalid_params",
-			"message": "agent_type hoặc resource không hợp lệ",
+			"message": "resource không hợp lệ",
 		})
 		return
 	}
 
 	var existing models.ERPEndpoint
-	result := db.DB.Where("tenant_id = ? AND agent_type = ? AND resource = ?",
-		tenantID, req.AgentType, req.Resource).First(&existing)
+	result := db.DB.Where("tenant_id = ? AND group_id = ? AND resource = ?",
+		tenantID, groupID, req.Resource).First(&existing)
 
 	if result.Error == nil {
 		db.DB.Model(&existing).Updates(map[string]interface{}{
@@ -161,7 +167,7 @@ func ToggleERPEndpoint(c *gin.Context) {
 		db.DB.Create(&models.ERPEndpoint{
 			ID:        pkg.NewUUID(),
 			TenantID:  tenantID,
-			AgentType: req.AgentType,
+			GroupID:   groupID,
 			Resource:  req.Resource,
 			IsEnabled: req.IsEnabled,
 			ScopeType: "all",
@@ -176,31 +182,6 @@ func ToggleERPEndpoint(c *gin.Context) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-func buildDefaultEndpoints(tenantID string) []models.ERPEndpoint {
-	var endpoints []models.ERPEndpoint
-	for _, agentType := range erpAgentTypes {
-		for _, resource := range erpAvailableResources {
-			endpoints = append(endpoints, models.ERPEndpoint{
-				TenantID:  tenantID,
-				AgentType: agentType,
-				Resource:  resource,
-				IsEnabled: false,
-				ScopeType: "all",
-			})
-		}
-	}
-	return endpoints
-}
-
-func isValidERPAgentType(t string) bool {
-	for _, v := range erpAgentTypes {
-		if v == t {
-			return true
-		}
-	}
-	return false
-}
 
 func isValidERPResource(r string) bool {
 	for _, v := range erpAvailableResources {

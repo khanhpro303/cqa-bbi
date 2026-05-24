@@ -28,14 +28,14 @@ var jobCancelFuncs sync.Map
 type CreateJobRequest struct {
 	Name            string          `json:"name" binding:"required,min=2,max=255"`
 	Description     string          `json:"description"`
-	JobType         string          `json:"job_type" binding:"required,oneof=qc_analysis classification chatbot_toggle"`
-	InputChannelIDs []string        `json:"input_channel_ids" binding:"required_unless=JobType chatbot_toggle"`
+	JobType         string          `json:"job_type" binding:"required,oneof=qc_analysis classification chatbot_toggle erp_product_cache"`
+	InputChannelIDs []string        `json:"input_channel_ids"`
 	RulesContent    string          `json:"rules_content"`
 	RulesConfig     json.RawMessage `json:"rules_config"`
 	SkipConditions  string          `json:"skip_conditions"`
 	AIProvider      string          `json:"ai_provider" binding:"omitempty,oneof=claude gemini openai"`
 	AIModel         string          `json:"ai_model"`
-	Outputs         json.RawMessage `json:"outputs" binding:"required_unless=JobType chatbot_toggle"`
+	Outputs         json.RawMessage `json:"outputs"`
 	OutputSchedule  string          `json:"output_schedule" binding:"required,oneof=instant scheduled cron none"`
 	OutputCron      string          `json:"output_cron"`
 	OutputAt        *time.Time      `json:"output_at"`
@@ -57,6 +57,18 @@ func CreateJob(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
 		return
+	}
+
+	// Manual validation for standard analysis jobs
+	if req.JobType == "qc_analysis" || req.JobType == "classification" {
+		if len(req.InputChannelIDs) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": "input_channel_ids is required for this job type"})
+			return
+		}
+		if req.Outputs == nil || len(req.Outputs) == 0 || string(req.Outputs) == "null" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": "outputs is required for this job type"})
+			return
+		}
 	}
 
 	tenantID := middleware.GetTenantID(c)

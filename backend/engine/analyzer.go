@@ -87,6 +87,9 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 	if job.JobType == "chatbot_toggle" {
 		return a.runChatbotToggleJob(ctx, job)
 	}
+	if job.JobType == "erp_product_cache" {
+		return a.runERPProductCacheJob(ctx, job)
+	}
 
 	now := time.Now()
 	run := models.JobRun{

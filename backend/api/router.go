@@ -221,6 +221,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.AddGroupMembers)
 			tenant.DELETE("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.RemoveGroupMembers)
 			tenant.POST("/crm/groups/:id/invite-customer", middleware.RequireRole("owner", "admin"), handlers.InviteGMFGroupCustomer)
+			tenant.GET("/crm/groups/:id/erp/endpoints", handlers.ListGroupERPEndpoints)
+			tenant.PUT("/crm/groups/:id/erp/endpoints", middleware.RequireRole("owner", "admin"), handlers.SaveGroupERPEndpoints)
+			tenant.POST("/crm/groups/:id/erp/endpoints/toggle", middleware.RequireRole("owner", "admin"), handlers.ToggleGroupERPEndpoint)
 
 			tenant.GET("/crm/customers", handlers.ListZaloCustomers)
 			tenant.POST("/crm/customers/invite", middleware.RequireRole("owner", "admin"), handlers.InviteZaloCustomer)
@@ -250,9 +253,6 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			// ERP Settings, Test Connect & Endpoint Permission Management
 			tenant.PUT("/settings/erp", middleware.RequirePermission("settings", "w"), handlers.SaveERPSettings)
 			tenant.POST("/settings/erp/test", middleware.RequirePermission("settings", "w"), handlers.TestERPConnection)
-			tenant.GET("/settings/erp/endpoints", middleware.RequirePermission("settings", "r"), handlers.ListERPEndpoints)
-			tenant.PUT("/settings/erp/endpoints", middleware.RequirePermission("settings", "w"), handlers.SaveERPEndpoints)
-			tenant.POST("/settings/erp/endpoints/toggle", middleware.RequirePermission("settings", "w"), handlers.ToggleERPEndpoint)
 
 			// Notification logs
 			tenant.GET("/notification-logs", handlers.ListNotificationLogs)

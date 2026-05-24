@@ -74,6 +74,7 @@
                 <td>
                   <v-btn v-if="g.zalo_group_link" icon="mdi-qrcode" size="small" variant="text" color="success" @click="showGroupQR(g)" title="QR / Link nhóm Zalo" />
                   <v-btn icon="mdi-account-cog" size="small" variant="text" color="teal" @click="openManageMembersDialog(g)" title="Quản lý thành viên" />
+                  <v-btn icon="mdi-shield-lock-outline" size="small" variant="text" color="indigo" @click="openGroupPermissionsDialog(g)" title="Phân quyền Endpoint & Sơ đồ live" />
                   <v-btn icon="mdi-pencil" size="small" variant="text" color="blue" @click="openEditGroupDialog(g)" title="Sửa nhóm" />
                   <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="deleteGroup(g.id)" title="Xóa nhóm" />
                 </td>
@@ -521,6 +522,136 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog 7: Phân quyền Endpoint & Sơ đồ tương tác dữ liệu live -->
+    <v-dialog v-model="permsDialog" max-width="960">
+      <v-card class="pa-4">
+        <v-card-title class="font-weight-bold d-flex align-center pb-2">
+          <v-icon start color="indigo">mdi-shield-lock-outline</v-icon>
+          {{ $t('crm_group_perms_title') }} <span class="text-indigo ml-1">{{ activeGroupForPerms?.name }}</span>
+        </v-card-title>
+
+        <v-card-text>
+          <v-row>
+            <!-- Left: Table of endpoints -->
+            <v-col cols="12" md="6">
+              <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_endpoints_title') }}</div>
+              <v-card variant="outlined" class="rounded-lg scopes-card pa-1">
+                <v-table density="compact">
+                  <thead>
+                    <tr>
+                      <th style="width:36%">{{ $t('erp_endpoint_resource') }}</th>
+                      <th style="width:14%" class="text-center">{{ $t('erp_endpoint_enabled') }}</th>
+                      <th style="width:26%">{{ $t('erp_endpoint_scope') }}</th>
+                      <th style="width:24%">{{ $t('erp_endpoint_groups') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="ep in groupEndpoints" :key="ep.resource">
+                      <td class="text-caption font-weight-bold">{{ resourceLabel(ep.resource) }}</td>
+                      <td class="text-center">
+                        <v-switch
+                          v-model="ep.is_enabled"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          @change="quickToggleGroupEndpoint(ep)"
+                        />
+                      </td>
+                      <td>
+                        <v-select
+                          v-model="ep.scope_type"
+                          :items="scopeOptions"
+                          density="compact"
+                          variant="plain"
+                          hide-details
+                          :disabled="!ep.is_enabled"
+                          style="font-size:0.75rem"
+                        />
+                      </td>
+                      <td>
+                        <v-text-field
+                          v-if="ep.resource === 'products' || ep.resource === 'inventory'"
+                          v-model="ep.product_groups"
+                          density="compact"
+                          variant="plain"
+                          hide-details
+                          :disabled="!ep.is_enabled"
+                          placeholder="e.g. Nguyên Đầu"
+                          style="font-size:0.75rem"
+                        />
+                        <span v-else class="text-caption text-grey">—</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </v-table>
+                <div class="pa-3 d-flex align-center ga-2">
+                  <v-btn size="small" color="primary" variant="tonal" :loading="savingGroupEndpoints" @click="saveGroupEndpoints">
+                    <v-icon start size="small">mdi-content-save</v-icon>
+                    {{ $t('erp_save_endpoints') }}
+                  </v-btn>
+                  <v-progress-circular v-if="loadingGroupEndpoints" indeterminate size="16" width="2" color="primary" />
+                </div>
+              </v-card>
+            </v-col>
+
+            <!-- Right: Sơ đồ tương tác dữ liệu Live -->
+            <v-col cols="12" md="6">
+              <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('crm_live_flow_title') }}</div>
+              <div class="erp-visual-graph pa-6 rounded-lg d-flex flex-column justify-space-between align-center border h-100" style="min-height: 250px;">
+                <div class="d-flex flex-row justify-space-between align-center w-100 my-auto">
+                  <!-- Node Left: CRM Group -->
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '130px', borderColor: '#3f51b5' }">
+                    <v-icon color="primary" size="small" class="mb-1">mdi-account-group</v-icon>
+                    <div class="text-caption font-weight-bold text-truncate" style="max-width: 110px;">{{ activeGroupForPerms?.name }}</div>
+                    <div class="text-grey text-caption" style="font-size: 0.6rem !important">{{ $t('crm_groups') }}</div>
+                  </div>
+
+                  <!-- Path Left-to-Center -->
+                  <div class="graph-arrow flex-grow-1 mx-2 position-relative text-center d-flex align-center justify-center">
+                    <div class="arrow-line animated-flow"></div>
+                    <v-icon class="arrow-tip" color="indigo" size="20">mdi-chevron-right</v-icon>
+                  </div>
+
+                  <!-- Node Center: CQA Gateway Checks -->
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '160px', borderColor: '#4caf50' }">
+                    <v-icon color="success" size="small" class="mb-1">mdi-shield-check-outline</v-icon>
+                    <div class="text-caption font-weight-bold" style="font-size: 0.7rem !important">Gateway (Group Scopes)</div>
+                    <div class="mt-1 d-flex justify-center ga-1 flex-wrap">
+                      <v-chip size="x-small" :color="isGroupEndpointEnabled('products') ? 'success' : 'grey-lighten-2'">Prod</v-chip>
+                      <v-chip size="x-small" :color="isGroupEndpointEnabled('inventory') ? 'success' : 'grey-lighten-2'">Stock</v-chip>
+                      <v-chip size="x-small" :color="isGroupEndpointEnabled('orders') ? 'success' : 'grey-lighten-2'">Ord</v-chip>
+                      <v-chip size="x-small" :color="isGroupEndpointEnabled('customers') ? 'success' : 'grey-lighten-2'">Cust</v-chip>
+                      <v-chip size="x-small" :color="isGroupEndpointEnabled('debt') ? 'success' : 'grey-lighten-2'">Debt</v-chip>
+                    </div>
+                  </div>
+
+                  <!-- Path Center-to-Right -->
+                  <div class="graph-arrow flex-grow-1 mx-2 position-relative text-center d-flex align-center justify-center">
+                    <div class="arrow-line" :class="{ 'animated-flow-success': hasAnyGroupEndpointEnabled() }"></div>
+                    <v-icon class="arrow-tip" :color="hasAnyGroupEndpointEnabled() ? 'success' : 'grey'" size="20">mdi-chevron-right</v-icon>
+                  </div>
+
+                  <!-- Node Right: Cloudify ERP -->
+                  <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '120px', borderColor: hasAnyGroupEndpointEnabled() ? '#ff9800' : '#9e9e9e' }">
+                    <v-icon :color="hasAnyGroupEndpointEnabled() ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
+                    <div class="text-caption font-weight-bold" :class="{ 'text-grey': !hasAnyGroupEndpointEnabled() }">Cloudify ERP</div>
+                    <div class="text-grey text-caption text-truncate" style="font-size: 0.6rem !important; max-width: 100px;" v-if="isGroupEndpointEnabled('inventory') && getGroupProductGroups('inventory')">
+                      Filter: {{ getGroupProductGroups('inventory') }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </v-col>
+          </v-row>
+        </v-card-text>
+
+        <v-card-actions>
+          <v-spacer />
+          <v-btn color="indigo" variant="elevated" @click="permsDialog = false">{{ $t('mcp_close') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-snackbar v-model="snack" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
   </div>
 </template>
@@ -528,11 +659,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useUserStore } from '../stores/users'
 import { useChannelStore } from '../stores/channels'
 import api from '../api'
 
 const route = useRoute()
+const { t } = useI18n()
 const userStore = useUserStore()
 const channelStore = useChannelStore()
 const tenantId = computed(() => route.params.tenantId as string)
@@ -900,6 +1033,88 @@ function showSnack(text: string, color: string) {
   snackColor.value = color
   snack.value = true
 }
+
+// CRM Group ERP endpoint permissions management
+const permsDialog = ref(false)
+const activeGroupForPerms = ref<any>(null)
+const groupEndpoints = ref<any[]>([])
+const loadingGroupEndpoints = ref(false)
+const savingGroupEndpoints = ref(false)
+
+const scopeOptions = [
+  { title: 'Tất cả', value: 'all' },
+  { title: 'Của họ (OWN)', value: 'own' },
+  { title: 'Phân công (ASSIGNED)', value: 'assigned' },
+]
+
+const resourceLabels: Record<string, string> = {
+  products: '🛍 Sản phẩm',
+  inventory: '📦 Tồn kho',
+  orders: '📋 Đơn hàng',
+  customers: '👥 Khách hàng',
+  debt: '💰 Công nợ',
+}
+
+function resourceLabel(r: string): string {
+  return resourceLabels[r] || r
+}
+
+async function openGroupPermissionsDialog(g: any) {
+  activeGroupForPerms.value = g
+  permsDialog.value = true
+  await loadGroupEndpoints(g.id)
+}
+
+async function loadGroupEndpoints(groupId: string) {
+  loadingGroupEndpoints.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups/${groupId}/erp/endpoints`)
+    groupEndpoints.value = data.endpoints || []
+  } catch (err) {
+    showSnack(t('crm_load_perms_error'), 'error')
+  } finally {
+    loadingGroupEndpoints.value = false
+  }
+}
+
+async function saveGroupEndpoints() {
+  savingGroupEndpoints.value = true
+  try {
+    await api.put(`/tenants/${tenantId.value}/crm/groups/${activeGroupForPerms.value.id}/erp/endpoints`, {
+      endpoints: groupEndpoints.value
+    })
+    showSnack(t('crm_save_perms_success'), 'success')
+  } catch (err: any) {
+    showSnack(err.response?.data?.error || t('error'), 'error')
+  } finally {
+    savingGroupEndpoints.value = false
+  }
+}
+
+async function quickToggleGroupEndpoint(ep: any) {
+  try {
+    await api.post(`/tenants/${tenantId.value}/crm/groups/${activeGroupForPerms.value.id}/erp/endpoints/toggle`, {
+      resource: ep.resource,
+      is_enabled: ep.is_enabled,
+    })
+  } catch {
+    ep.is_enabled = !ep.is_enabled
+  }
+}
+
+function isGroupEndpointEnabled(resource: string): boolean {
+  const ep = groupEndpoints.value.find(e => e.resource === resource)
+  return ep ? ep.is_enabled : false
+}
+
+function hasAnyGroupEndpointEnabled(): boolean {
+  return groupEndpoints.value.some(e => e.is_enabled)
+}
+
+function getGroupProductGroups(resource: string): string {
+  const ep = groupEndpoints.value.find(e => e.resource === resource)
+  return ep ? ep.product_groups : ''
+}
 </script>
 
 <style scoped>
@@ -908,5 +1123,89 @@ function showSnack(text: string, color: string) {
 }
 .v-list-item {
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.scopes-card {
+  background-color: #fafafa;
+  border-color: #e0e0e0 !important;
+}
+.v-theme--dark .scopes-card {
+  background-color: #252525;
+  border-color: #333333 !important;
+}
+.erp-visual-graph {
+  background-color: #f8fafc;
+  border-color: #e2e8f0 !important;
+  transition: all 0.3s ease;
+}
+.v-theme--dark .erp-visual-graph {
+  background-color: #1a1a1a;
+  border-color: #333333 !important;
+}
+.graph-node {
+  transition: all 0.3s ease;
+  z-index: 2;
+}
+.graph-node:hover {
+  transform: translateY(-2px);
+}
+.graph-node-card {
+  background-color: #ffffff;
+}
+.v-theme--dark .graph-node-card {
+  background-color: #242424;
+}
+.graph-arrow {
+  position: relative;
+  height: 3px;
+}
+.arrow-line {
+  height: 3px;
+  background: #cbd5e1;
+  width: 100%;
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+}
+.v-theme--dark .arrow-line {
+  background: #334155;
+}
+.animated-flow {
+  background: linear-gradient(90deg, #3f51b5, #cbd5e1);
+  background-size: 200% 100%;
+  animation: dataflow 1.5s linear infinite;
+}
+.v-theme--dark .animated-flow {
+  background: linear-gradient(90deg, #334155 0%, #818cf8 40%, #ffffff 50%, #818cf8 60%, #334155 100%);
+}
+.animated-flow-success {
+  background: linear-gradient(90deg, #4caf50, #cbd5e1);
+  background-size: 200% 100%;
+  animation: dataflow 1.5s linear infinite;
+}
+.v-theme--dark .animated-flow-success {
+  background: linear-gradient(90deg, #334155 0%, #4caf50 40%, #a7f3d0 50%, #4caf50 60%, #334155 100%);
+}
+.arrow-tip {
+  position: absolute;
+  right: -6px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-top: -1px;
+  z-index: 1;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+}
+.graph-arrow-label {
+  background-color: #ffffff;
+}
+.v-theme--dark .graph-arrow-label {
+  background-color: #1a1a1a;
+}
+@keyframes dataflow {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 </style>

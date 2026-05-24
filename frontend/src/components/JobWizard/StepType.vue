@@ -37,6 +37,14 @@
           </div>
         </template>
       </v-radio>
+      <v-radio value="erp_product_cache">
+        <template #label>
+          <div>
+            <div class="font-weight-medium">{{ $t('jobs_type_erp_product_cache_title') }}</div>
+            <div class="text-caption text-grey">{{ $t('jobs_type_erp_product_cache_caption') }}</div>
+          </div>
+        </template>
+      </v-radio>
     </v-radio-group>
   </div>
 </template>

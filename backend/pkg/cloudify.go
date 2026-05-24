@@ -348,3 +348,9 @@ func (c *CloudifyClient) SearchPurchaseDocuments(search string, limit int) ([]ma
 		"limit":   fmt.Sprintf("%d", limit),
 	})
 }
+
+// SearchCustomEndpoint queries a custom endpoint under /rest_api/private/
+func (c *CloudifyClient) SearchCustomEndpoint(endpoint string, params map[string]string) ([]map[string]interface{}, error) {
+	return c.restSearch(endpoint, params)
+}
+

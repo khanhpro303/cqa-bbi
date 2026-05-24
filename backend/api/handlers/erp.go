@@ -88,10 +88,10 @@ func ERPQuery(c *gin.Context) {
 	}
 
 	// ── 4. Scope / permission check ───────────────────────────────────────
-	if !isResourcePermitted(tenantID, agentType, req.Resource) {
+	if !isResourcePermitted(tenantID, agentType, req.Resource, req.ZaloUserID) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden_scope",
-			"message": fmt.Sprintf("Agent '%s' không có quyền truy cập tài nguyên '%s'. Vui lòng bật quyền này trong cài đặt ERP.", agentType, req.Resource),
+			"message": fmt.Sprintf("Quyền truy cập tài nguyên '%s' bị từ chối cho Agent hoặc khách hàng hiện tại.", req.Resource),
 		})
 		return
 	}
@@ -108,7 +108,12 @@ func ERPQuery(c *gin.Context) {
 	// ── 6. If no credentials → fallback mock (dev only) ──────────────────
 	if erpURL == "" || erpLogin == "" || erpPassword == "" {
 		// Load allowed product groups for mock filtering
-		allowedGroups := loadAllowedGroups(tenantID, agentType)
+		var allowedGroups []string
+		if agentType == "private" {
+			allowedGroups = []string{}
+		} else {
+			allowedGroups = loadAllowedGroupsForCustomer(tenantID, req.ZaloUserID, req.Resource)
+		}
 		respondWithMockData(c, req.Resource, req.Search, req.Limit, allowedGroups)
 		return
 	}
@@ -156,56 +161,62 @@ func resolveAgentType(tenantID, token string) string {
 // ---------------------------------------------------------------------------
 
 func isERPActive(tenantID, agentType string) bool {
-	activeKey := "erp_" + agentType + "_active"
-	var s models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, activeKey).First(&s).Error; err == nil {
-		return s.ValuePlain == "true"
+	if agentType == "private" {
+		activeKey := "erp_private_active"
+		var s models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, activeKey).First(&s).Error; err == nil {
+			return s.ValuePlain == "true"
+		}
 	}
+
 	// Fallback to global flag
 	var global models.AppSetting
 	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_integration_active'", tenantID).First(&global).Error; err == nil {
 		return global.ValuePlain == "true"
 	}
+
+	// Check if API URL is configured
+	var urlSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_api_url'", tenantID).First(&urlSetting).Error; err == nil {
+		return urlSetting.ValuePlain != ""
+	}
+
 	return false
 }
 
 // ---------------------------------------------------------------------------
-// isResourcePermitted — checks ERPEndpoint table, falls back to CSV scopes
+// isResourcePermitted — checks ERPEndpoint table for customer's GMF groups
 // ---------------------------------------------------------------------------
 
-func isResourcePermitted(tenantID, agentType, resource string) bool {
-	// New config: ERPEndpoint table
+func isResourcePermitted(tenantID, agentType, resource, zaloUserID string) bool {
+	if agentType == "private" {
+		return true
+	}
+
+	if zaloUserID == "" {
+		return false
+	}
+
+	// 1. Find ZaloCustomer
+	var customer models.ZaloCustomer
+	if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", tenantID, zaloUserID, "approved").First(&customer).Error; err != nil {
+		return false
+	}
+
+	// 2. Find groups that customer belongs to
+	var groupIDs []string
+	db.DB.Table("crm_group_customers").Where("zalo_customer_id = ?", customer.ID).Pluck("group_id", &groupIDs)
+	if len(groupIDs) == 0 {
+		return false
+	}
+
+	// 3. Check if any group has this resource enabled
 	var count int64
-	db.DB.Model(&models.ERPEndpoint{}).Where("tenant_id = ?", tenantID).Count(&count)
+	db.DB.Model(&models.ERPEndpoint{}).
+		Where("tenant_id = ? AND group_id IN (?) AND resource = ? AND is_enabled = ?", tenantID, groupIDs, resource, true).
+		Count(&count)
 
-	if count > 0 {
-		var ep models.ERPEndpoint
-		err := db.DB.Where("tenant_id = ? AND agent_type = ? AND resource = ? AND is_enabled = ?",
-			tenantID, agentType, resource, true).First(&ep).Error
-		return err == nil
-	}
-
-	// Legacy fallback: CSV scopes in app_settings
-	scopesKey := "erp_" + agentType + "_scopes"
-	var s models.AppSetting
-	allowedScopes := ""
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, scopesKey).First(&s).Error; err == nil {
-		allowedScopes = s.ValuePlain
-	}
-	if allowedScopes == "" {
-		var legacy models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_api_scopes'", tenantID).First(&legacy).Error; err == nil {
-			allowedScopes = legacy.ValuePlain
-		}
-	}
-
-	requiredScope := "read_" + resource
-	for _, sc := range strings.Split(allowedScopes, ",") {
-		if strings.TrimSpace(sc) == requiredScope {
-			return true
-		}
-	}
-	return false
+	return count > 0
 }
 
 // ---------------------------------------------------------------------------
@@ -244,26 +255,44 @@ func loadCloudifyCredentials(tenantID string, cfg *config.Config) (erpURL, erpDB
 }
 
 // ---------------------------------------------------------------------------
-// loadAllowedGroups — for mock data fallback filtering
+// loadAllowedGroupsForCustomer — for mock data fallback filtering based on GMF groups
 // ---------------------------------------------------------------------------
 
-func loadAllowedGroups(tenantID, agentType string) []string {
-	groupsKey := "erp_" + agentType + "_product_groups"
-	var s models.AppSetting
-	raw := ""
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, groupsKey).First(&s).Error; err == nil {
-		raw = s.ValuePlain
+func loadAllowedGroupsForCustomer(tenantID, zaloUserID, resource string) []string {
+	var groups []string
+	if zaloUserID == "" {
+		return groups
 	}
-	if raw == "" {
-		var legacy models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_inventory_product_groups'", tenantID).First(&legacy).Error; err == nil {
-			raw = legacy.ValuePlain
+
+	// 1. Find ZaloCustomer
+	var customer models.ZaloCustomer
+	if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", tenantID, zaloUserID, "approved").First(&customer).Error; err != nil {
+		return groups
+	}
+
+	// 2. Find groups that customer belongs to
+	var groupIDs []string
+	db.DB.Table("crm_group_customers").Where("zalo_customer_id = ?", customer.ID).Pluck("group_id", &groupIDs)
+	if len(groupIDs) == 0 {
+		return groups
+	}
+
+	// 3. Load enabled endpoints
+	var endpoints []models.ERPEndpoint
+	db.DB.Where("tenant_id = ? AND group_id IN (?) AND resource = ? AND is_enabled = ?", tenantID, groupIDs, resource, true).Find(&endpoints)
+
+	var rawGroups []string
+	for _, ep := range endpoints {
+		if ep.ProductGroups != "" {
+			rawGroups = append(rawGroups, ep.ProductGroups)
 		}
 	}
-	var groups []string
-	for _, g := range strings.Split(raw, ",") {
-		if t := strings.TrimSpace(g); t != "" {
-			groups = append(groups, strings.ToLower(t))
+
+	for _, raw := range rawGroups {
+		for _, g := range strings.Split(raw, ",") {
+			if t := strings.TrimSpace(g); t != "" {
+				groups = append(groups, strings.ToLower(t))
+			}
 		}
 	}
 	return groups

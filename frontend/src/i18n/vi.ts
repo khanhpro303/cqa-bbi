@@ -487,6 +487,10 @@ export default {
   jobs_validation_chatbot_status: 'Vui lòng chọn trạng thái chatbot mong muốn',
   jobs_wizard_step_status_config: 'Cấu hình trạng thái',
   job_chatbot_toggle: 'Bật/Tắt Chatbot',
+  jobs_type_erp_product_cache_title: 'Đồng bộ & Cache sản phẩm ERP',
+  jobs_type_erp_product_cache_caption: 'Đồng bộ danh mục vật tư hàng hóa từ ERP và lưu trữ (cache) vào Astra DB để chatbot truy vấn.',
+  job_erp_product_cache: 'Đồng bộ & Cache sản phẩm ERP',
+
 
   // CRM & GMF
   nav_crm: 'CRM Khách hàng',
@@ -494,4 +498,8 @@ export default {
   crm_customers: 'Khách hàng Zalo',
   crm_approvals: 'Phê duyệt khách hàng',
   crm_customer_code: 'Mã khách hàng',
+  crm_group_perms_title: 'Phân quyền Agent & Sơ đồ tương tác dữ liệu live:',
+  crm_live_flow_title: 'Sơ đồ tương tác dữ liệu Live của AI Agent',
+  crm_load_perms_error: 'Không thể tải phân quyền nhóm CRM',
+  crm_save_perms_success: 'Đã lưu phân quyền nhóm CRM thành công',
 }

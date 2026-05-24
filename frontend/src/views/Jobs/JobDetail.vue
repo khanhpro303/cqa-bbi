@@ -12,7 +12,7 @@
         </v-tooltip>
         <v-btn v-else variant="outlined" prepend-icon="mdi-pencil" size="small" :to="`/${tenantId}/jobs/${jobId}/edit`" class="ml-2">{{ $t('edit') }}</v-btn>
 
-        <template v-if="job?.job_type !== 'chatbot_toggle'">
+        <template v-if="job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache'">
           <v-tooltip v-if="!mdAndUp" text="Chạy thử" location="bottom">
             <template #activator="{ props }">
               <v-btn v-bind="props" variant="outlined" color="primary" icon="mdi-test-tube" size="small" :loading="isJobRunning" :disabled="isJobRunning" class="ml-1" @click="testRun" />
@@ -117,13 +117,17 @@
       <v-row dense>
         <v-col cols="6" sm="3">
           <div class="text-caption text-grey">{{ $t('job_type') }}</div>
-          <v-chip size="small" :color="job.job_type === 'qc_analysis' ? 'primary' : job.job_type === 'classification' ? 'secondary' : 'warning'" variant="tonal">
-            {{ job.job_type === 'qc_analysis' ? $t('job_qc') : job.job_type === 'classification' ? $t('job_classification') : $t('job_chatbot_toggle') }}
+          <v-chip size="small" :color="job.job_type === 'qc_analysis' ? 'primary' : job.job_type === 'classification' ? 'secondary' : (job.job_type === 'erp_product_cache' ? 'info' : 'warning')" variant="tonal">
+            {{ job.job_type === 'qc_analysis' ? $t('job_qc') : job.job_type === 'classification' ? $t('job_classification') : (job.job_type === 'erp_product_cache' ? $t('job_erp_product_cache') : $t('job_chatbot_toggle')) }}
           </v-chip>
         </v-col>
-        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle'">
+        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle' && job.job_type !== 'erp_product_cache'">
           <div class="text-caption text-grey">{{ $t('ai_model') }}</div>
           <div class="text-body-2">{{ tenantAIProvider }} / {{ tenantAIModel }}</div>
+        </v-col>
+        <v-col cols="6" sm="3" v-else-if="job.job_type === 'erp_product_cache'">
+          <div class="text-caption text-grey">Endpoint ERP</div>
+          <div class="text-body-2 font-weight-medium">danhmucvattuhanghoa/search</div>
         </v-col>
         <v-col cols="6" sm="3" v-else>
           <div class="text-caption text-grey">Trạng thái thiết lập</div>
@@ -141,11 +145,11 @@
             {{ job.is_active ? $t('active') : $t('inactive') }}
           </v-chip>
         </v-col>
-        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle'">
+        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle' && job.job_type !== 'erp_product_cache'">
           <div class="text-caption text-grey">{{ $t('job_input_channels') }}</div>
           <div class="text-body-2">{{ parsedChannelCount }} kênh</div>
         </v-col>
-        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle'">
+        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle' && job.job_type !== 'erp_product_cache'">
           <div class="text-caption text-grey">{{ $t('job_output') }}</div>
           <div class="d-flex flex-wrap ga-1">
             <v-chip v-for="(o, i) in parsedOutputs" :key="i" size="x-small" variant="tonal" :prepend-icon="o.type === 'telegram' ? 'mdi-send' : 'mdi-email'">
@@ -278,7 +282,7 @@
     <!-- Tabbed Content: History + Results -->
     <v-card class="pa-4">
       <v-tabs v-model="activeTab" density="compact" class="mb-3">
-        <v-tab value="results" v-if="job?.job_type !== 'chatbot_toggle'">
+        <v-tab value="results" v-if="job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache'">
           <v-icon start size="small">mdi-magnify</v-icon>
           {{ $t('tab_results') }}
         </v-tab>
@@ -289,7 +293,7 @@
       </v-tabs>
 
       <!-- Tab: Results -->
-      <div v-if="activeTab === 'results' && job?.job_type !== 'chatbot_toggle'">
+      <div v-if="activeTab === 'results' && job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache'">
         <!-- Filter + toolbar in one row -->
         <div class="d-flex align-center flex-wrap ga-2 mb-3">
           <!-- Filter chips: Classification -->
@@ -555,7 +559,7 @@
 
         <v-table v-if="jobStore.jobRuns.length" density="compact">
           <thead>
-            <tr v-if="job?.job_type === 'chatbot_toggle'">
+            <tr v-if="job?.job_type === 'chatbot_toggle' || job?.job_type === 'erp_product_cache'">
               <th>Thời gian chạy</th>
               <th>Trạng thái</th>
               <th>Hoạt động</th>
@@ -576,8 +580,15 @@
               <td>
                 <v-chip size="x-small" :color="statusColor(run.status)" variant="tonal">{{ run.status }}</v-chip>
               </td>
-              <template v-if="job?.job_type === 'chatbot_toggle'">
-                <td class="text-body-2">{{ parseSummary(run.summary).message || 'Đã tự động thay đổi trạng thái chatbot' }}</td>
+              <template v-if="job?.job_type === 'chatbot_toggle' || job?.job_type === 'erp_product_cache'">
+                <td class="text-body-2">
+                  <template v-if="job?.job_type === 'erp_product_cache'">
+                    {{ parseSummary(run.summary).message || 'Đã đồng bộ sản phẩm từ ERP vào Astra DB' }}
+                  </template>
+                  <template v-else>
+                    {{ parseSummary(run.summary).message || 'Đã tự động thay đổi trạng thái chatbot' }}
+                  </template>
+                </td>
                 <td>—</td>
               </template>
               <template v-else>
@@ -1151,7 +1162,7 @@ const groupedResults = computed<ConversationGroup[]>(() => {
 onMounted(async () => {
   job.value = await jobStore.fetchJob(tenantId.value, jobId.value)
   if (job.value?.job_type === 'classification') resultFilter.value = 'classified'
-  if (job.value?.job_type === 'chatbot_toggle') activeTab.value = 'history'
+  if (job.value?.job_type === 'chatbot_toggle' || job.value?.job_type === 'erp_product_cache') activeTab.value = 'history'
   await jobStore.fetchJobRuns(tenantId.value, jobId.value)
   await jobStore.fetchAllJobResults(tenantId.value, jobId.value)
   // Load tenant AI settings (jobs use global settings)
@@ -1225,7 +1236,7 @@ async function checkAIConfigured(): Promise<boolean> {
 }
 
 async function openRunDialog() {
-  if (job.value?.job_type === 'chatbot_toggle') {
+  if (job.value?.job_type === 'chatbot_toggle' || job.value?.job_type === 'erp_product_cache') {
     try {
       await jobStore.triggerJob(tenantId.value, jobId.value, 'since_last', {})
       startPolling()
