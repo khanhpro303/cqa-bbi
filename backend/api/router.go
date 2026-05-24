@@ -192,6 +192,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/jobs/:jobId/cancel", middleware.RequirePermission("jobs", "w"), handlers.CancelJob)
 			tenant.GET("/jobs/:jobId/runs", middleware.RequirePermission("jobs", "r"), handlers.ListJobRuns)
 			tenant.GET("/jobs/:jobId/erp-cache", middleware.RequirePermission("jobs", "r"), handlers.GetJobERPCache)
+			tenant.DELETE("/jobs/:jobId/erp-cache", middleware.RequirePermission("jobs", "d"), handlers.ClearJobERPCache)
 			tenant.GET("/jobs/:jobId/runs/:runId/results", middleware.RequirePermission("jobs", "r"), handlers.ListJobResults)
 			tenant.POST("/test-output", middleware.RequirePermission("jobs", "w"), handlers.TestOutput)
 

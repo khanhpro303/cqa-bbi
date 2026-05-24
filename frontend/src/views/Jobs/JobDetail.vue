@@ -320,7 +320,16 @@
             prepend-icon="mdi-refresh"
             :loading="erpCacheLoading"
             @click="fetchERPCache"
+            class="mr-2"
           >Tải lại</v-btn>
+          <v-btn
+            size="small"
+            variant="outlined"
+            prepend-icon="mdi-delete-sweep"
+            color="error"
+            :loading="erpCacheClearing"
+            @click="clearERPCacheDialog = true"
+          >Xóa cache</v-btn>
         </div>
 
         <v-progress-linear v-if="erpCacheLoading" indeterminate color="info" class="mb-3" />
@@ -855,6 +864,22 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Clear ERP cache dialog -->
+    <v-dialog v-model="clearERPCacheDialog" max-width="450">
+      <v-card class="pa-6">
+        <v-card-title class="text-error">Xóa cache sản phẩm ERP</v-card-title>
+        <v-card-text>
+          Hành động này sẽ xóa toàn bộ dữ liệu danh mục sản phẩm đã cache trong Astra DB. Bạn sẽ cần chạy lại công việc này để đồng bộ lại dữ liệu từ ERP.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn @click="clearERPCacheDialog = false">Hủy</v-btn>
+          <v-btn color="error" :loading="erpCacheClearing" @click="clearERPCache">Xóa cache</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Lightbox overlay for image zoom -->
     <div v-if="lightboxSrc" class="lightbox-overlay" @click="lightboxSrc = ''">
       <img :src="lightboxSrc" class="lightbox-img" @click.stop />
@@ -936,6 +961,8 @@ const erpCacheError = ref('')
 const erpCacheSearch = ref('')
 const erpCachePage = ref(1)
 const erpCachePerPage = 20
+const clearERPCacheDialog = ref(false)
+const erpCacheClearing = ref(false)
 
 const erpCacheFilteredProducts = computed(() => {
   const q = erpCacheSearch.value?.toLowerCase().trim()
@@ -1288,6 +1315,21 @@ async function fetchERPCache() {
     erpCacheError.value = msg || 'Không thể tải danh sách sản phẩm đã cache. Vui lòng kiểm tra cấu hình Astra DB.'
   } finally {
     erpCacheLoading.value = false
+  }
+}
+
+async function clearERPCache() {
+  erpCacheClearing.value = true
+  erpCacheError.value = ''
+  try {
+    await api.delete(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache`)
+    clearERPCacheDialog.value = false
+    erpCacheProducts.value = []
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || err?.response?.data?.error || ''
+    erpCacheError.value = msg || 'Không thể xóa cache sản phẩm ERP.'
+  } finally {
+    erpCacheClearing.value = false
   }
 }
 

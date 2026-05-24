@@ -898,3 +898,119 @@ func GetJobERPCache(c *gin.Context) {
 		"count":  len(astraResp.Data.Documents),
 	})
 }
+
+// ClearJobERPCache clears cached products from Astra DB for erp_product_cache jobs.
+func ClearJobERPCache(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	jobID := c.Param("jobId")
+
+	// 1. Verify job exists and belongs to tenant, and is of type erp_product_cache
+	var job models.Job
+	if err := db.DB.Where("id = ? AND tenant_id = ? AND job_type = ?", jobID, tenantID, "erp_product_cache").First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job_not_found"})
+		return
+	}
+
+	// 2. Load Astra DB credentials
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+
+	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+
+	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	// Fallback to setting values if configured on the tenant level
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "astradb_not_configured", "message": "Astra DB is not configured"})
+		return
+	}
+
+	// 3. Clear Astra DB collection
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+	payload := map[string]interface{}{
+		"deleteMany": map[string]interface{}{
+			"filter": map[string]interface{}{},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "marshal_payload_failed"})
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create_request_failed"})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_connection_failed", "message": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_api_error", "status": resp.StatusCode})
+		return
+	}
+
+	// Parse body for errors field inside the JSON response
+	var responseBody struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&responseBody); err == nil {
+		if len(responseBody.Errors) > 0 {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_api_error", "message": responseBody.Errors[0].Message})
+			return
+		}
+	}
+
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "job.clear_erp_cache", "job", jobID, "Cleared ERP product cache for job: "+job.Name, "", c.ClientIP())
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "success",
+		"message": "Xoá cache sản phẩm ERP thành công",
+	})
+}
+
