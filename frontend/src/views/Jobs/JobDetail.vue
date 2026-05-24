@@ -1338,7 +1338,9 @@ async function fetchERPCache() {
   const currentId = erpCacheLoadId
 
   try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache?limit=1000`)
+    const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache`, {
+      params: { limit: 1000 }
+    })
     if (currentId !== erpCacheLoadId) return
 
     erpCacheProducts.value = data?.data || []
@@ -1361,7 +1363,12 @@ async function loadNextPages(initialPageState: string, loadId: number) {
   let pageState = initialPageState
   try {
     while (pageState && loadId === erpCacheLoadId) {
-      const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache?limit=1000&pageState=${pageState}`)
+      const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache`, {
+        params: {
+          limit: 1000,
+          pageState: pageState
+        }
+      })
       if (loadId !== erpCacheLoadId) break
 
       const newProducts = data?.data || []
