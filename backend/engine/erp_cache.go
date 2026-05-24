@@ -84,14 +84,32 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 	// 4. Map products to the cache structure
 	cachedProducts := make([]map[string]interface{}, 0, len(allProducts))
 	for _, p := range allProducts {
+		listTenNhomVTHH := getStringVal(p, "list_ten_nhom_vthh")
+		if listTenNhomVTHH == "" {
+			listTenNhomVTHH = getStringVal(p, "LIST_TEN_NHOM_VTHH")
+		}
+
+		khosp := getStringVal(p, "khosp")
+		if khosp == "" {
+			khosp = getStringVal(p, "KHOSP")
+		}
+
+		dvtChinhID := getStringVal(p, "dvt_chinh_id")
+		if dvtChinhID == "" {
+			dvtChinhID = getStringVal(p, "DVT_CHINH_ID")
+		}
+
 		cachedProducts = append(cachedProducts, map[string]interface{}{
-			"ma_hang":         getStringVal(p, "ma_hang"),
-			"ten_hang":        getStringVal(p, "ten_hang"),
-			"nhan_hieu_name":  getStringVal(p, "nhan_hieu_name"),
-			"thuoc_tinh_1":    getStringVal(p, "thuoc_tinh_1"),
-			"thuoc_tinh_2":    getStringVal(p, "thuoc_tinh_2"),
-			"ten_dong_bo_web": getStringVal(p, "ten_dong_bo_web"),
-			"created_at":      time.Now().Unix(),
+			"ma_hang":             getStringVal(p, "ma_hang"),
+			"ten_hang":            getStringVal(p, "ten_hang"),
+			"nhan_hieu_name":      getStringVal(p, "nhan_hieu_name"),
+			"thuoc_tinh_1":        getStringVal(p, "thuoc_tinh_1"),
+			"thuoc_tinh_2":        getStringVal(p, "thuoc_tinh_2"),
+			"ten_dong_bo_web":     getStringVal(p, "ten_dong_bo_web"),
+			"list_ten_nhom_vthh":  listTenNhomVTHH,
+			"khosp":               khosp,
+			"dvt_chinh_id":        dvtChinhID,
+			"created_at":          time.Now().Unix(),
 		})
 	}
 

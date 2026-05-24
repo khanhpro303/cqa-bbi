@@ -286,11 +286,95 @@
           <v-icon start size="small">mdi-magnify</v-icon>
           {{ $t('tab_results') }}
         </v-tab>
+        <v-tab value="erp_cache" v-if="job?.job_type === 'erp_product_cache'">
+          <v-icon start size="small">mdi-database-check</v-icon>
+          Danh mục đã cache
+        </v-tab>
         <v-tab value="history">
           <v-icon start size="small">mdi-history</v-icon>
           {{ $t('run_history') }}
         </v-tab>
       </v-tabs>
+
+      <!-- Tab: ERP Cache Products -->
+      <div v-if="activeTab === 'erp_cache' && job?.job_type === 'erp_product_cache'">
+        <div class="d-flex align-center flex-wrap ga-2 mb-3">
+          <v-text-field
+            v-model="erpCacheSearch"
+            density="compact"
+            variant="outlined"
+            hide-details
+            prepend-inner-icon="mdi-magnify"
+            placeholder="Tìm theo mã SKU, tên sản phẩm, nhãn hiệu..."
+            clearable
+            style="max-width: 360px;"
+            @input="erpCachePage = 1"
+          />
+          <v-chip size="small" variant="tonal" color="info" class="ml-auto">
+            <v-icon start size="small">mdi-package-variant</v-icon>
+            {{ erpCacheFilteredProducts.length }} / {{ erpCacheProducts.length }} sản phẩm
+          </v-chip>
+          <v-btn
+            size="small"
+            variant="outlined"
+            prepend-icon="mdi-refresh"
+            :loading="erpCacheLoading"
+            @click="fetchERPCache"
+          >Tải lại</v-btn>
+        </div>
+
+        <v-progress-linear v-if="erpCacheLoading" indeterminate color="info" class="mb-3" />
+
+        <template v-if="!erpCacheLoading">
+          <v-alert v-if="erpCacheError" type="error" variant="tonal" density="compact" class="mb-3">
+            {{ erpCacheError }}
+          </v-alert>
+
+          <template v-else-if="erpCacheProducts.length > 0">
+            <v-table density="compact" hover>
+              <thead>
+                <tr>
+                  <th class="text-no-wrap">Mã SKU</th>
+                  <th class="text-no-wrap">Tên đồng bộ web</th>
+                  <th class="text-no-wrap">Tên hàng</th>
+                  <th class="text-no-wrap">Nhãn hiệu</th>
+                  <th class="text-no-wrap">ĐVT</th>
+                  <th class="text-no-wrap">Kho</th>
+                  <th class="text-no-wrap">Nhóm VTHH</th>
+                  <th class="text-no-wrap">Màu sắc</th>
+                  <th class="text-no-wrap">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(p, idx) in erpCachePaginatedProducts" :key="idx">
+                  <td class="text-caption font-weight-medium">{{ p.ma_hang || '—' }}</td>
+                  <td class="text-caption">{{ p.ten_dong_bo_web || '—' }}</td>
+                  <td class="text-caption text-grey">{{ p.ten_hang || '—' }}</td>
+                  <td class="text-caption">{{ p.nhan_hieu_name || '—' }}</td>
+                  <td class="text-caption">{{ p.dvt_chinh_id || '—' }}</td>
+                  <td class="text-caption">{{ p.khosp || '—' }}</td>
+                  <td class="text-caption" style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="p.list_ten_nhom_vthh">{{ p.list_ten_nhom_vthh || '—' }}</td>
+                  <td class="text-caption">{{ p.thuoc_tinh_1 || '—' }}</td>
+                  <td class="text-caption">{{ p.thuoc_tinh_2 || '—' }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+            <v-pagination
+              v-if="erpCacheTotalPages > 1"
+              v-model="erpCachePage"
+              :length="erpCacheTotalPages"
+              :total-visible="7"
+              density="compact"
+              class="mt-3"
+            />
+          </template>
+
+          <div v-else class="text-center text-grey pa-6">
+            <v-icon size="48" color="grey-lighten-1">mdi-database-off-outline</v-icon>
+            <div class="mt-2 text-body-2">Chưa có dữ liệu cache. Hãy chạy job để đồng bộ sản phẩm từ ERP.</div>
+          </div>
+        </template>
+      </div>
 
       <!-- Tab: Results -->
       <div v-if="activeTab === 'results' && job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache'">
@@ -837,6 +921,33 @@ const runConditionalError = computed(() => {
   return ''
 })
 const activeTab = ref('results')
+
+// ERP Cache Products
+const erpCacheProducts = ref<Record<string, any>[]>([])
+const erpCacheLoading = ref(false)
+const erpCacheError = ref('')
+const erpCacheSearch = ref('')
+const erpCachePage = ref(1)
+const erpCachePerPage = 20
+
+const erpCacheFilteredProducts = computed(() => {
+  const q = erpCacheSearch.value?.toLowerCase().trim()
+  if (!q) return erpCacheProducts.value
+  return erpCacheProducts.value.filter(p =>
+    (p.ma_hang || '').toLowerCase().includes(q) ||
+    (p.ten_dong_bo_web || '').toLowerCase().includes(q) ||
+    (p.ten_hang || '').toLowerCase().includes(q) ||
+    (p.nhan_hieu_name || '').toLowerCase().includes(q) ||
+    (p.list_ten_nhom_vthh || '').toLowerCase().includes(q) ||
+    (p.khosp || '').toLowerCase().includes(q)
+  )
+})
+
+const erpCacheTotalPages = computed(() => Math.ceil(erpCacheFilteredProducts.value.length / erpCachePerPage))
+const erpCachePaginatedProducts = computed(() => {
+  const start = (erpCachePage.value - 1) * erpCachePerPage
+  return erpCacheFilteredProducts.value.slice(start, start + erpCachePerPage)
+})
 const resultFilter = ref<'all' | 'fail' | 'pass' | 'skip' | 'classified'>('all')
 const tagFilter = ref<string | null>(null)
 const viewMode = ref<'card' | 'table'>('card')
@@ -1159,10 +1270,28 @@ const groupedResults = computed<ConversationGroup[]>(() => {
   })
 })
 
+async function fetchERPCache() {
+  erpCacheLoading.value = true
+  erpCacheError.value = ''
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache?limit=1000`)
+    erpCacheProducts.value = data?.data || []
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || err?.response?.data?.error || ''
+    erpCacheError.value = msg || 'Không thể tải danh sách sản phẩm đã cache. Vui lòng kiểm tra cấu hình Astra DB.'
+  } finally {
+    erpCacheLoading.value = false
+  }
+}
+
 onMounted(async () => {
   job.value = await jobStore.fetchJob(tenantId.value, jobId.value)
   if (job.value?.job_type === 'classification') resultFilter.value = 'classified'
-  if (job.value?.job_type === 'chatbot_toggle' || job.value?.job_type === 'erp_product_cache') activeTab.value = 'history'
+  if (job.value?.job_type === 'chatbot_toggle') activeTab.value = 'history'
+  if (job.value?.job_type === 'erp_product_cache') {
+    activeTab.value = 'erp_cache'
+    fetchERPCache() // non-blocking, loads in background
+  }
   await jobStore.fetchJobRuns(tenantId.value, jobId.value)
   await jobStore.fetchAllJobResults(tenantId.value, jobId.value)
   // Load tenant AI settings (jobs use global settings)

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -775,4 +776,109 @@ func exportClassification(c *gin.Context, results []JobResultWithConvDate, forma
 func cellName(col, row int) string {
 	name, _ := excelize.CoordinatesToCellName(col, row)
 	return name
+}
+
+// GetJobERPCache retrieves cached products from Astra DB for erp_product_cache jobs.
+func GetJobERPCache(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	jobID := c.Param("jobId")
+
+	// 1. Verify job exists and belongs to tenant, and is of type erp_product_cache
+	var job models.Job
+	if err := db.DB.Where("id = ? AND tenant_id = ? AND job_type = ?", jobID, tenantID, "erp_product_cache").First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job_not_found"})
+		return
+	}
+
+	// 2. Load Astra DB credentials
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+	keyspace := "cache_product"
+	collection := "erp_product_bbi"
+
+	// Fallback to setting values if configured on the tenant level
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+
+	if apiEndpoint == "" || token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "astradb_not_configured", "message": "Astra DB is not configured"})
+		return
+	}
+
+	// 3. Query Astra DB for documents
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+
+	limitStr := c.DefaultQuery("limit", "100")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+
+	payload := map[string]interface{}{
+		"find": map[string]interface{}{
+			"filter": map[string]interface{}{},
+			"options": map[string]interface{}{
+				"limit": limit,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "marshal_payload_failed"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create_request_failed"})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_connection_failed", "message": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_api_error", "status": resp.StatusCode})
+		return
+	}
+
+	var astraResp struct {
+		Data struct {
+			Documents []map[string]interface{} `json:"documents"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "decode_response_failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data":   astraResp.Data.Documents,
+		"count":  len(astraResp.Data.Documents),
+	})
 }
