@@ -76,6 +76,7 @@
         :key="item.route"
         :to="item.route"
         :exact="item.exact"
+        :active="isItemActive(item)"
         :prepend-icon="item.icon"
         :title="$t(item.label)"
         rounded="lg"
@@ -569,6 +570,14 @@ const navItems = computed(() => {
   ]
   return all.filter(item => !item.perm || authStore.canView(item.perm))
 })
+
+const isItemActive = (item: any) => {
+  const currentPath = route.path
+  if (item.exact) {
+    return currentPath === item.route
+  }
+  return currentPath === item.route || currentPath.startsWith(item.route + '/')
+}
 
 const userInitials = computed(() => {
   const name = authStore.user?.name || authStore.user?.email || '?'
