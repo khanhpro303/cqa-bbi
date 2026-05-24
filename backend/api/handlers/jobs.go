@@ -832,7 +832,7 @@ func GetJobERPCache(c *gin.Context) {
 	// 3. Query Astra DB for documents (retrieve all pages)
 	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second) // Increased timeout for multi-page retrieval
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second) // Increased timeout for multi-page retrieval
 	defer cancel()
 
 	var allDocuments []map[string]interface{}
@@ -867,7 +867,7 @@ func GetJobERPCache(c *gin.Context) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Token", token)
 
-		client := &http.Client{Timeout: 20 * time.Second}
+		client := &http.Client{Timeout: 60 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_connection_failed", "message": err.Error()})
@@ -995,7 +995,7 @@ func ClearJobERPCache(c *gin.Context) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Token", token)
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: 40 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_connection_failed", "message": err.Error()})
