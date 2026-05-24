@@ -418,7 +418,6 @@ func (c *CloudifyClient) doRESTPost(endpoint string, params map[string]string, s
 	req.URL.RawQuery = q.Encode()
 
 	req.Header.Set("Cookie", session)
-	req.Header.Set("Content-Type", "application/json")
 
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := httpClient.Do(req)
