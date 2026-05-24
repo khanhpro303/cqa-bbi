@@ -53,49 +53,27 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		Password: erpPassword,
 	}
 
-	// 3. Fetch products from ERP using pagination
-	var allProducts []map[string]interface{}
-	limit := 100
-	offset := 0
-	seenCodes := make(map[string]bool) // Track seen product codes to detect non-paginating endpoints
-	for {
-		params := map[string]string{
-			"limit":  fmt.Sprintf("%d", limit),
-			"offset": fmt.Sprintf("%d", offset),
-		}
-		data, err := client.SearchCustomEndpoint("danhmucvattuhanghoa/search", params)
-		if err != nil {
-			return a.failRun(&run, fmt.Errorf("pull ERP products at offset %d: %w", offset, err))
-		}
-		if len(data) == 0 {
-			break
-		}
+	// 3. Fetch products from ERP (no pagination, single POST request with empty {})
+	data, err := client.SearchCustomEndpoint("danhmucvattuhanghoa/search", nil)
+	if err != nil {
+		return a.failRun(&run, fmt.Errorf("pull ERP products: %w", err))
+	}
 
-		hasNewItem := false
-		for _, p := range data {
-			maHang := getStringVal(p, "ma_hang")
-			if maHang == "" {
-				maHang = getStringVal(p, "MA_HANG")
-			}
-			if maHang != "" && !seenCodes[maHang] {
+	// Deduplicate by ma_hang to be safe
+	var allProducts []map[string]interface{}
+	seenCodes := make(map[string]bool)
+	for _, p := range data {
+		maHang := getStringVal(p, "ma_hang")
+		if maHang == "" {
+			maHang = getStringVal(p, "MA_HANG")
+		}
+		if maHang != "" {
+			if !seenCodes[maHang] {
 				seenCodes[maHang] = true
 				allProducts = append(allProducts, p)
-				hasNewItem = true
 			}
-		}
-
-		// If no new products were added in this batch, it means we reached the end
-		// or the endpoint does not support offset pagination (returning duplicate data)
-		if !hasNewItem {
-			break
-		}
-
-		if len(data) < limit {
-			break
-		}
-		offset += limit
-		if offset > 50000 { // safeguard
-			break
+		} else {
+			allProducts = append(allProducts, p)
 		}
 	}
 
