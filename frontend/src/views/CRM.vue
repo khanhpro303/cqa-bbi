@@ -526,7 +526,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUserStore } from '../stores/users'
 import { useChannelStore } from '../stores/channels'
@@ -622,12 +622,17 @@ const availableCustomers = computed(() => {
 })
 
 onMounted(async () => {
+  window.addEventListener('crm-data-updated', fetchCustomers)
   await userStore.fetchUsers(tenantId.value)
   await channelStore.fetchChannels(tenantId.value)
   await fetchGroups()
   await fetchCustomers()
   await fetchCustomerCodes()
   await fetchGmfPackages()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('crm-data-updated', fetchCustomers)
 })
 
 // Load Groups from Backend

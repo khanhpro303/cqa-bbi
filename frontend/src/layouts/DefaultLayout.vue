@@ -165,6 +165,43 @@
         </div>
       </v-alert>
 
+      <!-- Pending customer approval banner -->
+      <v-alert
+        v-if="pendingCustomers.length > 0"
+        type="warning"
+        variant="tonal"
+        class="mb-4 elevation-2 border-warning"
+        border="start"
+      >
+        <template #prepend>
+          <div class="bell-ring-container mr-3">
+            <v-icon color="warning" class="bell-ring-animation text-h5">mdi-bell-ring</v-icon>
+          </div>
+        </template>
+        
+        <div class="d-flex align-center justify-space-between flex-wrap w-100">
+          <div class="flex-grow-1 pr-4">
+            <span class="text-subtitle-2 font-weight-bold">
+              Có {{ pendingCustomers.length }} yêu cầu phê duyệt khách hàng Zalo OA đang chờ xử lý!
+            </span>
+            <div class="text-caption text-grey-darken-2 mt-1">
+              Vui lòng phê duyệt và gán mã khách hàng để cho phép nhắn tin với Bot.
+            </div>
+          </div>
+          <div class="mt-2 mt-sm-0">
+            <v-btn
+              color="warning"
+              variant="flat"
+              class="text-none font-weight-bold"
+              prepend-icon="mdi-account-check"
+              @click="openGlobalApproveModal"
+            >
+              Phê duyệt ngay
+            </v-btn>
+          </div>
+        </div>
+      </v-alert>
+
       <slot />
     </v-container>
   </v-main>
@@ -240,11 +277,123 @@
     </v-card>
   </v-dialog>
 
+  <!-- Global Approval Modal -->
+  <v-dialog v-model="globalApproveDialog" max-width="550" persistent>
+    <v-card class="pa-4 rounded-xl">
+      <v-card-title class="font-weight-bold d-flex align-center pb-2">
+        <v-icon start color="warning" class="bell-ring-animation">mdi-bell-ring</v-icon>
+        Duyệt yêu cầu khách hàng Zalo
+        <v-spacer />
+        <v-btn icon="mdi-close" variant="text" size="small" @click="closeGlobalApproveModal" />
+      </v-card-title>
+      
+      <v-divider class="mb-4" />
+
+      <v-card-text class="pa-1">
+        <div v-if="pendingCustomers.length === 0" class="text-center py-6 text-grey">
+          Không còn yêu cầu phê duyệt nào.
+        </div>
+        
+        <v-expansion-panels v-else variant="accordion" class="border rounded-lg">
+          <v-expansion-panel
+            v-for="c in pendingCustomers"
+            :key="c.id"
+            class="elevation-0"
+          >
+            <v-expansion-panel-title class="py-3">
+              <template #default>
+                <div class="d-flex align-center w-100">
+                  <v-avatar size="36" color="warning-lighten-4" class="mr-3">
+                    <v-img v-if="c.avatar" :src="c.avatar" />
+                    <v-icon v-else color="warning">mdi-account</v-icon>
+                  </v-avatar>
+                  <div class="text-left">
+                    <div class="font-weight-bold text-subtitle-2">{{ c.name }}</div>
+                    <div class="text-caption text-grey">SĐT: {{ c.phone_number || '—' }}</div>
+                  </div>
+                  <v-spacer />
+                  <v-chip size="x-small" color="warning" variant="flat" class="mr-2 font-weight-bold">
+                    Chờ duyệt
+                  </v-chip>
+                </div>
+              </template>
+            </v-expansion-panel-title>
+            
+            <v-expansion-panel-text>
+              <div class="pt-2">
+                <div class="text-caption text-grey-darken-1 mb-4">
+                  Zalo ID: <code class="bg-grey-lighten-3 px-1 rounded">{{ c.zalo_user_id }}</code>
+                  <span class="mx-1">•</span>
+                  Yêu cầu lúc: {{ new Date(c.updated_at).toLocaleString() }}
+                </div>
+
+                <v-form :ref="el => { if (el) globalApproveFormRefs[c.id] = el }">
+                  <!-- Searchable Dropdown for Postgres ma_khach_hang -->
+                  <v-autocomplete
+                    v-model="globalApproveForms[c.id].customer_code"
+                    :items="globalCustomerCodes"
+                    label="Chọn mã khách hàng (Từ Cloudify) *"
+                    :rules="[v => !!v || 'Vui lòng chọn mã khách hàng']"
+                    :loading="loadingGlobalCodes"
+                    class="mb-3"
+                    variant="outlined"
+                    density="comfortable"
+                    no-data-text="Không tìm thấy mã khách hàng nào"
+                  />
+
+                  <!-- Select groups to add customer to -->
+                  <v-select
+                    v-model="globalApproveForms[c.id].group_ids"
+                    :items="globalGroups"
+                    item-title="name"
+                    item-value="id"
+                    label="Gán vào các nhóm CRM (Tùy chọn)"
+                    multiple
+                    chips
+                    variant="outlined"
+                    density="comfortable"
+                    class="mb-4"
+                  />
+                </v-form>
+
+                <v-divider class="mb-4" />
+
+                <div class="d-flex justify-end ga-2">
+                  <v-btn
+                    color="error"
+                    variant="text"
+                    size="small"
+                    prepend-icon="mdi-delete"
+                    class="text-none font-weight-bold"
+                    :loading="submittingApproveId === c.id"
+                    @click="deleteGlobalCustomer(c.id)"
+                  >
+                    Từ chối / Xóa
+                  </v-btn>
+                  <v-btn
+                    color="success"
+                    size="small"
+                    prepend-icon="mdi-check"
+                    class="text-none font-weight-bold"
+                    :loading="submittingApproveId === c.id"
+                    @click="submitGlobalApprove(c.id)"
+                  >
+                    Xác nhận duyệt
+                  </v-btn>
+                </div>
+              </div>
+            </v-expansion-panel-text>
+          </v-expansion-panel>
+        </v-expansion-panels>
+      </v-card-text>
+    </v-card>
+  </v-dialog>
+
   <v-snackbar v-model="snackbar" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { clearTenantCache, permissionDeniedMsg, clearPermissionDeniedMsg } from '../router'
 import { useTheme, useDisplay } from 'vuetify'
@@ -493,4 +642,183 @@ async function changePassword() {
     changingPassword.value = false
   }
 }
+
+// Global Customer Approval Banner & Modal State
+const pendingCustomers = ref<any[]>([])
+const pollingInterval = ref<any>(null)
+const globalApproveDialog = ref(false)
+const globalCustomerCodes = ref<string[]>([])
+const globalGroups = ref<any[]>([])
+const loadingGlobalCodes = ref(false)
+const loadingGlobalGroups = ref(false)
+const submittingApproveId = ref<string | null>(null)
+const globalApproveForms = ref<Record<string, { customer_code: string; group_ids: string[] }>>({})
+const globalApproveFormRefs = ref<Record<string, any>>({})
+
+async function fetchPendingCustomers() {
+  if (!tenantId.value) {
+    pendingCustomers.value = []
+    return
+  }
+  if (authStore.canView('settings')) {
+    try {
+      const { data } = await api.get(`/tenants/${tenantId.value}/crm/customers`)
+      if (Array.isArray(data)) {
+        pendingCustomers.value = data.filter((c: any) => c.status === 'pending_approval')
+      } else {
+        pendingCustomers.value = []
+      }
+    } catch (err) {
+      console.error('Failed to fetch pending customers', err)
+    }
+  } else {
+    pendingCustomers.value = []
+  }
+}
+
+function startPolling() {
+  stopPolling()
+  fetchPendingCustomers()
+  pollingInterval.value = window.setInterval(fetchPendingCustomers, 10000)
+}
+
+function stopPolling() {
+  if (pollingInterval.value) {
+    window.clearInterval(pollingInterval.value)
+    pollingInterval.value = null
+  }
+}
+
+watch(tenantId, (newId) => {
+  if (newId) {
+    startPolling()
+  } else {
+    stopPolling()
+    pendingCustomers.value = []
+  }
+}, { immediate: true })
+
+watch(pendingCustomers, (newCustomers) => {
+  if (Array.isArray(newCustomers)) {
+    newCustomers.forEach((c) => {
+      if (!globalApproveForms.value[c.id]) {
+        globalApproveForms.value[c.id] = {
+          customer_code: '',
+          group_ids: []
+        }
+      }
+    })
+  }
+}, { deep: true, immediate: true })
+
+onUnmounted(() => {
+  stopPolling()
+})
+
+async function openGlobalApproveModal() {
+  globalApproveDialog.value = true
+  await Promise.all([
+    fetchGlobalCustomerCodes(),
+    fetchGlobalGroups()
+  ])
+}
+
+function closeGlobalApproveModal() {
+  globalApproveDialog.value = false
+}
+
+async function fetchGlobalCustomerCodes() {
+  loadingGlobalCodes.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/customer-profiles`)
+    globalCustomerCodes.value = data || []
+  } catch (err) {
+    console.error('Failed to fetch customer codes', err)
+  } finally {
+    loadingGlobalCodes.value = false
+  }
+}
+
+async function fetchGlobalGroups() {
+  loadingGlobalGroups.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups`)
+    globalGroups.value = data || []
+  } catch (err) {
+    console.error('Failed to fetch groups', err)
+  } finally {
+    loadingGlobalGroups.value = false
+  }
+}
+
+async function submitGlobalApprove(customerId: string) {
+  const formRef = globalApproveFormRefs.value[customerId]
+  const { valid } = await formRef?.validate() || {}
+  if (!valid) return
+
+  const formData = globalApproveForms.value[customerId]
+  submittingApproveId.value = customerId
+  try {
+    await api.post(`/tenants/${tenantId.value}/crm/customers/${customerId}/approve`, {
+      customer_code: formData.customer_code,
+      group_ids: formData.group_ids
+    })
+    
+    showSnack('Đã phê duyệt khách hàng thành công', 'success')
+    window.dispatchEvent(new CustomEvent('crm-data-updated'))
+    
+    await fetchPendingCustomers()
+    
+    delete globalApproveForms.value[customerId]
+    delete globalApproveFormRefs.value[customerId]
+    
+  } catch (err: any) {
+    showSnack(err.response?.data?.error || 'Lỗi phê duyệt khách hàng', 'error')
+  } finally {
+    submittingApproveId.value = null
+  }
+}
+
+async function deleteGlobalCustomer(customerId: string) {
+  if (!confirm('Bạn có chắc chắn muốn từ chối và xóa yêu cầu phê duyệt này?')) return
+
+  submittingApproveId.value = customerId
+  try {
+    await api.delete(`/tenants/${tenantId.value}/crm/customers/${customerId}`)
+    showSnack('Đã xóa yêu cầu thành công', 'success')
+    window.dispatchEvent(new CustomEvent('crm-data-updated'))
+    
+    await fetchPendingCustomers()
+    
+    delete globalApproveForms.value[customerId]
+    delete globalApproveFormRefs.value[customerId]
+    
+  } catch (err) {
+    showSnack('Lỗi khi từ chối yêu cầu', 'error')
+  } finally {
+    submittingApproveId.value = null
+  }
+}
 </script>
+
+<style scoped>
+.bell-ring-animation {
+  animation: bell-ring 1.5s infinite;
+  transform-origin: top center;
+  display: inline-block;
+}
+
+@keyframes bell-ring {
+  0% { transform: rotate(0); }
+  10% { transform: rotate(15deg); }
+  20% { transform: rotate(-10deg); }
+  30% { transform: rotate(12deg); }
+  40% { transform: rotate(-8deg); }
+  50% { transform: rotate(6deg); }
+  60% { transform: rotate(-4deg); }
+  70% { transform: rotate(2deg); }
+  80% { transform: rotate(-1deg); }
+  90% { transform: rotate(1deg); }
+  100% { transform: rotate(0); }
+}
+</style>
