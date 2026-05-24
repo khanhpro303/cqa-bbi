@@ -243,7 +243,7 @@ func (c *CloudifyClient) doRESTGet(endpoint string, params map[string]string, se
 	req.Header.Set("Cookie", session)
 	req.Header.Set("Content-Type", "application/json")
 
-	httpClient := &http.Client{Timeout: 15 * time.Second}
+	httpClient := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("Cloudify API request to %s failed: %w", endpoint, err)
@@ -427,7 +427,7 @@ func (c *CloudifyClient) doRESTPost(endpoint string, params map[string]string, s
 	req.Header.Set("Cookie", session)
 	req.Header.Set("Content-Type", "application/json")
 
-	httpClient := &http.Client{Timeout: 15 * time.Second}
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("Cloudify API request to %s failed: %w", endpoint, err)
