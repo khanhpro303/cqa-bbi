@@ -115,68 +115,85 @@
         </v-btn>
       </div>
 
+      <v-divider class="mb-4"></v-divider>
+
+      <!-- Advanced Section Toggle -->
+      <div 
+        class="d-flex align-center cursor-pointer py-2 px-3 rounded advanced-header mb-4"
+        @click="showAdvanced = !showAdvanced"
+        style="user-select: none;"
+      >
+        <div class="text-subtitle-2 font-weight-bold d-flex align-center">
+          <v-icon start size="small" class="mr-2">mdi-cog-outline</v-icon>
+          Nâng cao
+        </div>
+        <v-spacer></v-spacer>
+        <v-icon>{{ showAdvanced ? 'mdi-chevron-up' : 'mdi-chevron-down' }}</v-icon>
+      </div>
+
+      <v-expand-transition>
+        <div v-show="showAdvanced" class="mb-6">
+          <div class="text-subtitle-2 font-weight-bold mb-3 d-flex align-center" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-3'">
+            <v-icon start size="small" color="primary" class="mr-2">mdi-information-outline</v-icon>
+            {{ $t('erp_agent_credentials') }}
+          </div>
+          
+          <v-alert color="info" variant="tonal" class="mb-4">
+            <div class="text-caption" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-2'">
+              {{ $t('erp_agent_token_hint') }}
+            </div>
+          </v-alert>
+
+          <v-row>
+            <v-col cols="12" md="4">
+              <v-text-field
+                :model-value="gatewayUrl"
+                label="CQA Secure Gateway Endpoint"
+                readonly
+                append-inner-icon="mdi-content-copy"
+                @click:append-inner="copyToClipboard(gatewayUrl, 'Đã copy URL Endpoint')"
+                density="compact"
+                variant="outlined"
+                class="mb-3"
+                :bg-color="isDark ? '#2a2a2a' : 'white'"
+              />
+            </v-col>
+            <v-col cols="12" md="4">
+              <v-text-field
+                :model-value="erp.publicAgentToken"
+                label="Agent Secure Token (Public Bot)"
+                readonly
+                append-inner-icon="mdi-content-copy"
+                @click:append-inner="copyToClipboard(erp.publicAgentToken, 'Đã copy Public Agent Token')"
+                density="compact"
+                variant="outlined"
+                class="mb-3"
+                :bg-color="isDark ? '#2a2a2a' : 'white'"
+              />
+            </v-col>
+            <v-col cols="12" md="4">
+              <v-text-field
+                :model-value="erp.privateAgentToken"
+                label="Agent Secure Token (Private/Whitelist Bot)"
+                readonly
+                append-inner-icon="mdi-content-copy"
+                @click:append-inner="copyToClipboard(erp.privateAgentToken, 'Đã copy Private Agent Token')"
+                density="compact"
+                variant="outlined"
+                class="mb-3"
+                :bg-color="isDark ? '#2a2a2a' : 'white'"
+              />
+            </v-col>
+          </v-row>
+        </div>
+      </v-expand-transition>
+
       <v-divider class="mb-6"></v-divider>
 
       <!-- Action Save Settings -->
       <div class="d-flex ga-2">
         <v-btn color="primary" :loading="savingERP" @click="saveERP">{{ $t('save') }}</v-btn>
       </div>
-    </v-card>
-
-    <!-- Integration info card -->
-    <v-card class="pa-6 mb-6">
-      <div class="text-subtitle-1 font-weight-bold mb-4 d-flex align-center">
-        <v-icon start size="small" color="primary" class="mr-2">mdi-information-outline</v-icon>
-        {{ $t('erp_agent_credentials') }}
-      </div>
-      
-      <v-alert color="info" variant="tonal" class="mb-4">
-        <div class="text-caption" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-2'">
-          {{ $t('erp_agent_token_hint') }}
-        </div>
-      </v-alert>
-
-      <v-row>
-        <v-col cols="12" md="4">
-          <v-text-field
-            :model-value="gatewayUrl"
-            label="CQA Secure Gateway Endpoint"
-            readonly
-            append-inner-icon="mdi-content-copy"
-            @click:append-inner="copyToClipboard(gatewayUrl, 'Đã copy URL Endpoint')"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-            :bg-color="isDark ? '#2a2a2a' : 'white'"
-          />
-        </v-col>
-        <v-col cols="12" md="4">
-          <v-text-field
-            :model-value="erp.publicAgentToken"
-            label="Agent Secure Token (Public Bot)"
-            readonly
-            append-inner-icon="mdi-content-copy"
-            @click:append-inner="copyToClipboard(erp.publicAgentToken, 'Đã copy Public Agent Token')"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-            :bg-color="isDark ? '#2a2a2a' : 'white'"
-          />
-        </v-col>
-        <v-col cols="12" md="4">
-          <v-text-field
-            :model-value="erp.privateAgentToken"
-            label="Agent Secure Token (Private/Whitelist Bot)"
-            readonly
-            append-inner-icon="mdi-content-copy"
-            @click:append-inner="copyToClipboard(erp.privateAgentToken, 'Đã copy Private Agent Token')"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-            :bg-color="isDark ? '#2a2a2a' : 'white'"
-          />
-        </v-col>
-      </v-row>
     </v-card>
 
     <v-snackbar v-model="snackbar" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
@@ -207,6 +224,7 @@ const testing = ref(false)
 
 const savingERP = ref(false)
 const testingERP = ref(false)
+const showAdvanced = ref(false)
 
 const langflow = reactive({
   baseUrl: '',
@@ -361,4 +379,10 @@ onMounted(loadSettings)
 
 <style scoped>
 /* Scoped styles are kept minimal here */
+.advanced-header {
+  transition: background-color 0.2s ease;
+}
+.advanced-header:hover {
+  background-color: rgba(128, 128, 128, 0.08);
+}
 </style>

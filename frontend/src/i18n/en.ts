@@ -400,7 +400,7 @@ export default {
   erp_blocked: 'Blocked (Insufficient permission)',
   erp_active_route: 'Active',
   erp_inactive_route: 'Inactive',
-  erp_part1_title: '1. Cloudify ERP Connection (Shared)',
+  erp_part1_title: 'Cloudify ERP Connection (Shared)',
   erp_part2_title: '2. Permission & Configuration per Agent',
   erp_tab_public: 'Public Bot (Customers)',
   erp_tab_private: 'Whitelist Bot (Staff)',
