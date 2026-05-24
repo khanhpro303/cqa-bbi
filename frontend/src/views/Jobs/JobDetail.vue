@@ -310,7 +310,11 @@
             style="max-width: 360px;"
             @input="erpCachePage = 1"
           />
-          <v-chip size="small" variant="tonal" color="info" class="ml-auto">
+          <div v-if="erpCacheBackgroundLoading" class="ml-auto d-flex align-center text-caption text-info mr-3">
+            <v-progress-circular indeterminate size="16" width="2" color="info" class="mr-2" />
+            Đang tải thêm sản phẩm từ Astra DB...
+          </div>
+          <v-chip :class="erpCacheBackgroundLoading ? 'mr-3' : 'ml-auto mr-3'" size="small" variant="tonal" color="info">
             <v-icon start size="small">mdi-package-variant</v-icon>
             {{ erpCacheFilteredProducts.length }} / {{ erpCacheProducts.length }} sản phẩm
           </v-chip>
@@ -966,6 +970,7 @@ const activeTab = ref('results')
 // ERP Cache Products
 const erpCacheProducts = ref<Record<string, any>[]>([])
 const erpCacheLoading = ref(false)
+const erpCacheBackgroundLoading = ref(false)
 const erpCacheError = ref('')
 const erpCacheSearch = ref('')
 const erpCachePage = ref(1)
@@ -1321,17 +1326,57 @@ const groupedResults = computed<ConversationGroup[]>(() => {
   })
 })
 
+let erpCacheLoadId = 0
+
 async function fetchERPCache() {
   erpCacheLoading.value = true
+  erpCacheBackgroundLoading.value = false
   erpCacheError.value = ''
+  erpCacheProducts.value = []
+  erpCachePage.value = 1
+  erpCacheLoadId++
+  const currentId = erpCacheLoadId
+
   try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache?limit=50000`)
+    const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache?limit=1000`)
+    if (currentId !== erpCacheLoadId) return
+
     erpCacheProducts.value = data?.data || []
+    erpCacheLoading.value = false
+
+    const nextState = data?.nextPageState
+    if (nextState) {
+      erpCacheBackgroundLoading.value = true
+      loadNextPages(nextState, currentId)
+    }
   } catch (err: any) {
+    if (currentId !== erpCacheLoadId) return
     const msg = err?.response?.data?.message || err?.response?.data?.error || ''
     erpCacheError.value = msg || 'Không thể tải danh sách sản phẩm đã cache. Vui lòng kiểm tra cấu hình Astra DB.'
-  } finally {
     erpCacheLoading.value = false
+  }
+}
+
+async function loadNextPages(initialPageState: string, loadId: number) {
+  let pageState = initialPageState
+  try {
+    while (pageState && loadId === erpCacheLoadId) {
+      const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache?limit=1000&pageState=${pageState}`)
+      if (loadId !== erpCacheLoadId) break
+
+      const newProducts = data?.data || []
+      if (newProducts.length > 0) {
+        erpCacheProducts.value = [...erpCacheProducts.value, ...newProducts]
+      }
+      pageState = data?.nextPageState || ''
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+  } catch (err) {
+    console.error('Failed to load next cache pages in background:', err)
+  } finally {
+    if (loadId === erpCacheLoadId) {
+      erpCacheBackgroundLoading.value = false
+    }
   }
 }
 
