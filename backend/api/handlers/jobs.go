@@ -840,7 +840,7 @@ func GetJobERPCache(c *gin.Context) {
 
 	for {
 		options := map[string]interface{}{
-			"limit": 50000,
+			"limit": 1000,
 		}
 		if pageState != "" {
 			options["pageState"] = pageState
