@@ -34,9 +34,19 @@
 
           <div class="d-flex align-center justify-space-between mb-2">
             <span class="text-caption text-grey">{{ $t('status') }}</span>
-            <v-chip size="x-small" :color="ch.is_active ? 'success' : 'grey'" variant="tonal">
-              {{ ch.is_active ? $t('active') : $t('inactive') }}
-            </v-chip>
+            <div class="d-flex align-center ga-1" @click.stop>
+              <v-switch
+                :model-value="ch.is_active"
+                hide-details
+                density="compact"
+                color="success"
+                :disabled="!authStore.canEdit('channels')"
+                @update:model-value="toggleActive(ch)"
+              />
+              <span class="text-caption font-weight-medium" :class="ch.is_active ? 'text-success' : 'text-grey'">
+                {{ ch.is_active ? $t('active') : $t('inactive') }}
+              </span>
+            </div>
           </div>
           <div class="d-flex align-center justify-space-between mb-2">
             <span class="text-caption text-grey">{{ $t('sync_status') }}</span>
@@ -51,13 +61,13 @@
 
           <v-divider class="mb-3" />
           <div class="d-flex ga-2 flex-wrap" @click.stop>
-            <v-btn v-if="ch.channel_type !== 'personal_zalo_import'" size="small" variant="tonal" color="primary" prepend-icon="mdi-sync" :loading="syncing === ch.id" @click="syncNow(ch.id)">
+            <v-btn v-if="ch.channel_type !== 'personal_zalo_import'" size="small" variant="tonal" color="primary" prepend-icon="mdi-sync" :loading="syncing === ch.id" :disabled="!ch.is_active" @click="syncNow(ch.id)">
               {{ $t('sync_now') }}
             </v-btn>
-            <v-btn v-if="ch.channel_type !== 'personal_zalo_import' && ch.last_sync_status === 'error'" size="small" variant="tonal" color="warning" prepend-icon="mdi-link-variant" :loading="reauthing === ch.id" @click="reauthChannel(ch.id)">
+            <v-btn v-if="ch.channel_type !== 'personal_zalo_import' && ch.last_sync_status === 'error'" size="small" variant="tonal" color="warning" prepend-icon="mdi-link-variant" :loading="reauthing === ch.id" :disabled="!ch.is_active" @click="reauthChannel(ch.id)">
               {{ $t('reauth') }}
             </v-btn>
-            <v-btn v-if="ch.channel_type !== 'personal_zalo_import'" size="small" variant="text" color="primary" @click="testConn(ch.id)">
+            <v-btn v-if="ch.channel_type !== 'personal_zalo_import'" size="small" variant="text" color="primary" :disabled="!ch.is_active" @click="testConn(ch.id)">
               {{ $t('test_connection') }}
             </v-btn>
             <v-spacer />
@@ -393,6 +403,19 @@ async function createPersonalZalo() {
   }
 }
 
+
+async function toggleActive(ch: any) {
+  try {
+    const payload = {
+      is_active: !ch.is_active
+    }
+    await channelStore.updateChannel(tenantId.value, ch.id, payload)
+    showSnack(payload.is_active ? t('channel_activated') : t('channel_paused'), 'success')
+    await channelStore.fetchChannels(tenantId.value)
+  } catch {
+    showSnack(t('error'), 'error')
+  }
+}
 
 async function syncNow(channelId: string) {
   syncing.value = channelId

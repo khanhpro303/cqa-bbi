@@ -346,6 +346,9 @@ export default {
   personal_zalo_created: 'Personal Zalo channel created',
   reauth_error: 'Reconnection error',
   reauth: 'Reconnect',
+  channel_paused: 'Chat channel deactivated successfully',
+  channel_activated: 'Chat channel activated successfully',
+  channel_inactive_error: 'Chat channel is inactive. Please activate it to proceed.',
 
   mcp_created_at: 'Created At',
   mcp_not_configured: 'Not configured',

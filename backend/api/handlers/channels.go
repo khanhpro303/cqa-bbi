@@ -655,6 +655,13 @@ func SyncChannelNow(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "channel_not_found"})
 		return
 	}
+	if !channel.IsActive {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "channel_is_inactive",
+			"message": "Kênh chat đã tạm dừng hoạt động.",
+		})
+		return
+	}
 	if channels.IsExternallyManagedImport(channel.ChannelType) {
 		c.JSON(http.StatusConflict, gin.H{
 			"error":   "sync_managed_externally",

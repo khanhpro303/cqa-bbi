@@ -7,10 +7,10 @@
       <v-spacer />
       <template v-if="authStore.canEdit('channels')">
         <v-btn variant="outlined" prepend-icon="mdi-pencil" size="small" @click="editDialog = true">{{ $t('edit') }}</v-btn>
-        <v-btn v-if="channel.channel_type !== 'personal_zalo_import'" color="primary" prepend-icon="mdi-sync" size="small" :loading="syncing" @click="doSync">
+        <v-btn v-if="channel.channel_type !== 'personal_zalo_import'" color="primary" prepend-icon="mdi-sync" size="small" :loading="syncing" :disabled="!channel.is_active" @click="doSync">
           {{ $t('sync_now') || 'Dong bo ngay' }}
         </v-btn>
-        <v-btn v-if="channel.channel_type !== 'personal_zalo_import'" variant="outlined" prepend-icon="mdi-connection" size="small" :loading="testing" @click="doTest">
+        <v-btn v-if="channel.channel_type !== 'personal_zalo_import'" variant="outlined" prepend-icon="mdi-connection" size="small" :loading="testing" :disabled="!channel.is_active" @click="doTest">
           Kiểm tra kết nối
         </v-btn>
         <v-btn color="warning" variant="outlined" prepend-icon="mdi-delete-sweep" size="small" @click="confirmPurge = true">
@@ -19,6 +19,11 @@
         <v-btn color="error" variant="outlined" prepend-icon="mdi-delete" size="small" @click="confirmDelete = true">{{ $t('delete') }}</v-btn>
       </template>
     </div>
+
+    <!-- Alert if inactive -->
+    <v-alert v-if="!channel.is_active" type="warning" variant="tonal" class="mb-4">
+      {{ $t('channel_inactive_error') }}
+    </v-alert>
 
     <!-- Channel Info -->
     <v-card class="pa-4 mb-4">
@@ -160,6 +165,7 @@
                 color="teal"
                 prepend-icon="mdi-qrcode-scan"
                 :loading="gatewayActionLoading === 'connect'"
+                :disabled="!channel.is_active"
                 @click="startGatewayConnect"
               >
                 {{ gatewayState.account_exists ? 'Lấy mã QR mới' : 'Bắt đầu kết nối' }}
@@ -170,6 +176,7 @@
                 variant="tonal"
                 prepend-icon="mdi-connection"
                 :loading="gatewayActionLoading === 'reconnect'"
+                :disabled="!channel.is_active"
                 @click="reconnectGateway"
               >
                 Kết nối lại
@@ -179,6 +186,7 @@
                 color="primary"
                 prepend-icon="mdi-sync"
                 :loading="gatewayActionLoading === 'sync'"
+                :disabled="!channel.is_active"
                 @click="syncGateway"
               >
                 Lấy tin nhắn mới

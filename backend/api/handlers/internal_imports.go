@@ -31,6 +31,13 @@ func NewPersonalZaloImportHandler(ingestor engine.ConversationIngester) gin.Hand
 			c.JSON(http.StatusNotFound, gin.H{"error": "channel_not_found"})
 			return
 		}
+		if !channel.IsActive {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":   "channel_is_inactive",
+				"message": "Kênh chat đã tạm dừng hoạt động.",
+			})
+			return
+		}
 		if channel.ChannelType != "personal_zalo_import" {
 			c.JSON(http.StatusConflict, gin.H{"error": "channel_type_not_supported"})
 			return

@@ -346,6 +346,9 @@ export default {
   personal_zalo_created: 'Đã tạo kênh Zalo cá nhân',
   reauth_error: 'Lỗi kết nối lại',
   reauth: 'Kết nối lại',
+  channel_paused: 'Đã tạm dừng hoạt động kênh chat',
+  channel_activated: 'Đã kích hoạt lại kênh chat',
+  channel_inactive_error: 'Kênh chat đang tạm dừng hoạt động. Vui lòng kích hoạt lại để thực hiện.',
 
   mcp_created_at: 'Tạo lúc',
   mcp_not_configured: 'Chưa cấu hình',

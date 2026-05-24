@@ -92,6 +92,13 @@ func ConnectPersonalZaloGateway(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !channel.IsActive {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "channel_is_inactive",
+			"message": "Kênh chat đã tạm dừng hoạt động.",
+		})
+		return
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -138,6 +145,13 @@ func ReconnectPersonalZaloGateway(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !channel.IsActive {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "channel_is_inactive",
+			"message": "Kênh chat đã tạm dừng hoạt động.",
+		})
+		return
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -172,6 +186,13 @@ func ReconnectPersonalZaloGateway(c *gin.Context) {
 func SyncPersonalZaloGateway(c *gin.Context) {
 	channel, ok := getPersonalZaloImportChannel(c)
 	if !ok {
+		return
+	}
+	if !channel.IsActive {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "channel_is_inactive",
+			"message": "Kênh chat đã tạm dừng hoạt động.",
+		})
 		return
 	}
 
