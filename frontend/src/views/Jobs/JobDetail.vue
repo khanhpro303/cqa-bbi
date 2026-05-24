@@ -353,6 +353,7 @@
                   <th class="text-no-wrap" style="min-width: 150px;">Tên gốc ERP</th>
                   <th class="text-no-wrap">Mã cha</th>
                   <th class="text-no-wrap">Nhãn hiệu</th>
+                  <th class="text-no-wrap">Nhóm VTHH</th>
                   <th class="text-no-wrap">Màu sắc</th>
                   <th class="text-no-wrap">Size</th>
                   <th class="text-no-wrap text-right">Giá bán</th>
@@ -373,6 +374,7 @@
                   <td class="text-caption text-grey" style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="p.TEN">{{ p.TEN || '—' }}</td>
                   <td class="text-caption text-no-wrap" style="max-width: 100px; overflow: hidden; text-overflow: ellipsis;" :title="p.MA_CHA">{{ p.MA_CHA || '—' }}</td>
                   <td class="text-caption text-no-wrap" style="max-width: 120px; overflow: hidden; text-overflow: ellipsis;" :title="p.NHAN_HIEU_NAME">{{ p.NHAN_HIEU_NAME || '—' }}</td>
+                  <td class="text-caption text-no-wrap" style="max-width: 120px; overflow: hidden; text-overflow: ellipsis;" :title="p.LIST_TEN_NHOM_VTHH">{{ p.LIST_TEN_NHOM_VTHH || '—' }}</td>
                   <td class="text-caption text-no-wrap">{{ p.THUOC_TINH_1 || '—' }}</td>
                   <td class="text-caption text-no-wrap">{{ p.THUOC_TINH_2 || '—' }}</td>
                   <td class="text-caption text-right font-weight-medium text-no-wrap">{{ formatPrice(p.DON_GIA_BAN) }}</td>
@@ -986,6 +988,7 @@ const erpCacheFilteredProducts = computed(() => {
     (p.TEN_DONG_BO_WEB || '').toLowerCase().includes(q) ||
     (p.TEN || '').toLowerCase().includes(q) ||
     (p.NHAN_HIEU_NAME || '').toLowerCase().includes(q) ||
+    (p.LIST_TEN_NHOM_VTHH || '').toLowerCase().includes(q) ||
     (p.KHO || '').toLowerCase().includes(q) ||
     (p.MA_CHA || '').toLowerCase().includes(q) ||
     (p.DVT || '').toLowerCase().includes(q)

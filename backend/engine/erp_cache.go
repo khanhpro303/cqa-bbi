@@ -199,6 +199,12 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 			dvt = getStringVal(p, "dvt")
 		}
 
+		// 12. LIST_TEN_NHOM_VTHH
+		listTenNhomVthh := getStringVal(p, "LIST_TEN_NHOM_VTHH")
+		if listTenNhomVthh == "" {
+			listTenNhomVthh = getStringVal(p, "list_ten_nhom_vthh")
+		}
+
 		// Create combined vectorize string for Astra DB auto-embedding
 		vectorizeParts := []string{}
 		if ma != "" {
@@ -212,6 +218,9 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		}
 		if nhanHieuName != "" {
 			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Nhãn hiệu: %s", nhanHieuName))
+		}
+		if listTenNhomVthh != "" {
+			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Nhóm: %s", listTenNhomVthh))
 		}
 		if dvt != "" {
 			vectorizeParts = append(vectorizeParts, fmt.Sprintf("Đơn vị tính: %s", dvt))
@@ -237,6 +246,7 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		doc["DON_GIA_BAN"] = donGiaBanVal
 		doc["LINK_ANH"] = linkAnh
 		doc["NHAN_HIEU_NAME"] = nhanHieuName
+		doc["LIST_TEN_NHOM_VTHH"] = listTenNhomVthh
 		doc["KHO"] = kho
 		doc["MA_CHA"] = maCha
 		doc["DVT"] = dvt

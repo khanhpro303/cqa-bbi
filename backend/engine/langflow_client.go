@@ -170,19 +170,25 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 		"session_id": sessionID,
 	}
 
+	customComponentTweaks := map[string]interface{}{}
+
 	if zaloUserID != "" {
+		tweaks["zalo_user_id"] = zaloUserID
 		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{
 			"advanced_search_filter": map[string]interface{}{
 				"zalo_user_id": zaloUserID,
 			},
 		}
+		customComponentTweaks["zalo_user_id"] = zaloUserID
 	}
 
 	if customerCode != "" {
 		tweaks["customer_code"] = customerCode
-		tweaks["CustomComponent"] = map[string]interface{}{
-			"customer_code": customerCode,
-		}
+		customComponentTweaks["customer_code"] = customerCode
+	}
+
+	if len(customComponentTweaks) > 0 {
+		tweaks["CustomComponent"] = customComponentTweaks
 	}
 
 	payload := map[string]interface{}{

@@ -442,6 +442,7 @@ func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, lim
 							{"TEN": map[string]interface{}{"$regex": regexPattern}},
 							{"MA": map[string]interface{}{"$regex": regexPattern}},
 							{"TEN_DONG_BO_WEB": map[string]interface{}{"$regex": regexPattern}},
+							{"LIST_TEN_NHOM_VTHH": map[string]interface{}{"$regex": regexPattern}},
 						},
 					},
 					"options": map[string]interface{}{
@@ -499,6 +500,7 @@ func mapCachedProductToAPIResponse(p map[string]interface{}) map[string]interfac
 	res["ten_dong_bo_web"] = webNameVal
 	res["dvt_chinh_id"] = dvtVal
 	res["don_gia_ban"] = priceVal
+	res["list_ten_nhom_vthh"] = getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh")
 
 	res["code"] = maVal
 	if webNameVal != "" {
@@ -508,7 +510,7 @@ func mapCachedProductToAPIResponse(p map[string]interface{}) map[string]interfac
 	}
 	res["unit"] = dvtVal
 	res["price"] = priceVal
-	res["group"] = getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name", "list_ten_nhom_vthh", "group")
+	res["group"] = getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name", "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
 
 	return res
 }
