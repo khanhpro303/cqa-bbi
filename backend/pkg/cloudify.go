@@ -44,6 +44,14 @@ func (c *CloudifyClient) cacheKey() string {
 	return c.BaseURL + "|" + c.Login
 }
 
+func (c *CloudifyClient) getDataBaseURL() string {
+	baseURL := strings.TrimRight(c.BaseURL, "/")
+	if strings.Contains(baseURL, "bbiapi.cloudify.vn") {
+		return strings.Replace(baseURL, "bbiapi.cloudify.vn", "bbi.cloudify.vn", 1)
+	}
+	return baseURL
+}
+
 // getSession returns a valid session cookie string, re-authenticating if expired.
 func (c *CloudifyClient) getSession() (string, error) {
 	key := c.cacheKey()
@@ -218,7 +226,7 @@ func (c *CloudifyClient) restSearch(endpoint string, params map[string]string) (
 }
 
 func (c *CloudifyClient) doRESTGet(endpoint string, params map[string]string, session string) ([]map[string]interface{}, int, error) {
-	baseURL := strings.TrimRight(c.BaseURL, "/")
+	baseURL := c.getDataBaseURL()
 	apiURL := fmt.Sprintf("%s/rest_api/private/%s", baseURL, endpoint)
 
 	req, err := http.NewRequest("GET", apiURL, nil)
@@ -387,7 +395,7 @@ func (c *CloudifyClient) restSearchPost(endpoint string, params map[string]strin
 }
 
 func (c *CloudifyClient) doRESTPost(endpoint string, params map[string]string, session string) ([]map[string]interface{}, int, error) {
-	baseURL := strings.TrimRight(c.BaseURL, "/")
+	baseURL := c.getDataBaseURL()
 	apiURL := fmt.Sprintf("%s/rest_api/private/%s", baseURL, endpoint)
 
 	bodyMap := make(map[string]interface{})
