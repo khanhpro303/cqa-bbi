@@ -23,10 +23,10 @@
 
         <v-tooltip v-if="!mdAndUp" text="Chạy ngay" location="bottom">
           <template #activator="{ props }">
-            <v-btn v-bind="props" color="primary" icon="mdi-play" size="small" :disabled="isJobRunning" class="ml-1" @click="openRunDialog" />
+            <v-btn v-bind="props" color="primary" icon="mdi-play" size="small" :loading="triggering || isJobRunning" class="ml-1" @click="openRunDialog" />
           </template>
         </v-tooltip>
-        <v-btn v-else color="primary" prepend-icon="mdi-play" size="small" :disabled="isJobRunning" class="ml-2" @click="openRunDialog">{{ $t('run_now') }}</v-btn>
+        <v-btn v-else color="primary" prepend-icon="mdi-play" size="small" :loading="triggering || isJobRunning" class="ml-2" @click="openRunDialog">{{ $t('run_now') }}</v-btn>
 
         <v-btn v-if="isJobRunning" color="error" variant="outlined" prepend-icon="mdi-stop" size="small" class="ml-2" :loading="cancelling" @click="cancelJob">{{ mdAndUp ? 'Dừng' : '' }}</v-btn>
       </template>
@@ -662,7 +662,10 @@
             <tr v-for="run in paginatedRuns" :key="run.id">
               <td class="text-body-2">{{ formatDateTime(run.started_at) }}</td>
               <td>
-                <v-chip size="x-small" :color="statusColor(run.status)" variant="tonal">{{ run.status }}</v-chip>
+                <v-chip size="x-small" :color="statusColor(run.status)" variant="tonal">
+                  <v-progress-circular v-if="run.status === 'running'" indeterminate size="10" width="1" class="mr-1" />
+                  {{ run.status }}
+                </v-chip>
               </td>
               <template v-if="job?.job_type === 'chatbot_toggle' || job?.job_type === 'erp_product_cache'">
                 <td class="text-body-2">
@@ -892,6 +895,7 @@ function tagColor(tag: string): string {
 }
 const selectedRunId = ref<string | null>(null)
 const cancelling = ref(false)
+const triggering = ref(false)
 const isJobRunning = computed(() => jobStore.jobRuns?.[0]?.status === 'running')
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 const expandedMap = ref<Record<string, boolean>>({})
@@ -1369,11 +1373,14 @@ async function checkAIConfigured(): Promise<boolean> {
 
 async function openRunDialog() {
   if (job.value?.job_type === 'chatbot_toggle' || job.value?.job_type === 'erp_product_cache') {
+    triggering.value = true
     try {
       await jobStore.triggerJob(tenantId.value, jobId.value, 'since_last', {})
       startPolling()
     } catch {
       await jobStore.fetchJobRuns(tenantId.value, jobId.value)
+    } finally {
+      triggering.value = false
     }
     return
   }
@@ -1394,6 +1401,7 @@ async function testRun() {
 async function confirmRun() {
   if (runConditionalError.value) return
   runDialog.value = false
+  triggering.value = true
   try {
     const params: Record<string, string> = {}
     if (runMode.value === 'conditional') {
@@ -1405,6 +1413,8 @@ async function confirmRun() {
     startPolling()
   } catch {
     await jobStore.fetchJobRuns(tenantId.value, jobId.value)
+  } finally {
+    triggering.value = false
   }
 }
 
