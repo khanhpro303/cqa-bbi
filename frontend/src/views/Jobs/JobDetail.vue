@@ -1339,7 +1339,7 @@ async function fetchERPCache() {
 
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache`, {
-      params: { limit: 100000 }
+      params: { limit: 500 }
     })
     if (currentId !== erpCacheLoadId) return
 
@@ -1365,7 +1365,7 @@ async function loadNextPages(initialPageState: string, loadId: number) {
     while (pageState && loadId === erpCacheLoadId) {
       const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-cache`, {
         params: {
-          limit: 100000,
+          limit: 500,
           pageState: pageState
         }
       })
