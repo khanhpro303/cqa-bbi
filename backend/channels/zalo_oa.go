@@ -565,4 +565,27 @@ func (z *ZaloOAAdapter) DeleteGMFGroup(ctx context.Context, groupID string) erro
 	return err
 }
 
+// InviteGMFGroupMembers invites users into a GMF group chat
+func (z *ZaloOAAdapter) InviteGMFGroupMembers(ctx context.Context, groupID string, memberUserIDs []string) error {
+	payload := map[string]interface{}{
+		"group_id":        groupID,
+		"member_user_ids": memberUserIDs,
+	}
+
+	_, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/invite", payload)
+	return err
+}
+
+// RemoveGMFGroupMembers removes users from a GMF group chat
+func (z *ZaloOAAdapter) RemoveGMFGroupMembers(ctx context.Context, groupID string, memberUserIDs []string) error {
+	payload := map[string]interface{}{
+		"group_id":        groupID,
+		"member_user_ids": memberUserIDs,
+	}
+
+	_, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/removemembers", payload)
+	return err
+}
+
+
 

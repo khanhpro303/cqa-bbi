@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -293,6 +294,51 @@ func AddGroupMembers(c *gin.Context) {
 	}
 
 	tx.Commit()
+
+	// Invite customers to Zalo GMF group chat if group has ZaloGroupID
+	if group.ZaloGroupID != "" && len(req.CustomerIDs) > 0 {
+		var zaloUserIDs []string
+		var customers []models.ZaloCustomer
+		if err := db.DB.Where("id IN ? AND tenant_id = ? AND zalo_user_id != ''", req.CustomerIDs, tenantID).Find(&customers).Error; err == nil {
+			for _, cust := range customers {
+				zaloUserIDs = append(zaloUserIDs, cust.ZaloUserID)
+			}
+		}
+
+		if len(zaloUserIDs) > 0 {
+			var channel models.Channel
+			if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err == nil {
+				cfg, _ := config.Load()
+				if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
+					var zaloCreds channels.ZaloOACredentials
+					if err := json.Unmarshal(credBytes, &zaloCreds); err == nil {
+						adapter := channels.NewZaloOAAdapter(zaloCreds)
+						adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+							zaloCreds.AccessToken = newAccess
+							zaloCreds.RefreshToken = newRefresh
+							credsMap := map[string]interface{}{
+								"app_id":        zaloCreds.AppID,
+								"app_secret":    zaloCreds.AppSecret,
+								"access_token":  newAccess,
+								"refresh_token": newRefresh,
+								"oa_id":         zaloCreds.OAId,
+							}
+							newCredJSON, _ := json.Marshal(credsMap)
+							encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+							db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
+						})
+
+						if inviteErr := adapter.InviteGMFGroupMembers(c.Request.Context(), group.ZaloGroupID, zaloUserIDs); inviteErr != nil {
+							log.Printf("[crm] failed to invite customers %v to Zalo GMF group %s (%s): %v", zaloUserIDs, group.Name, group.ZaloGroupID, inviteErr)
+						} else {
+							log.Printf("[crm] successfully invited customers %v to Zalo GMF group %s (%s)", zaloUserIDs, group.Name, group.ZaloGroupID)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "members_added"})
 }
 
@@ -336,6 +382,51 @@ func RemoveGroupMembers(c *gin.Context) {
 	}
 
 	tx.Commit()
+
+	// Remove customers from Zalo GMF group chat if group has ZaloGroupID
+	if group.ZaloGroupID != "" && len(req.CustomerIDs) > 0 {
+		var zaloUserIDs []string
+		var customers []models.ZaloCustomer
+		if err := db.DB.Where("id IN ? AND tenant_id = ? AND zalo_user_id != ''", req.CustomerIDs, tenantID).Find(&customers).Error; err == nil {
+			for _, cust := range customers {
+				zaloUserIDs = append(zaloUserIDs, cust.ZaloUserID)
+			}
+		}
+
+		if len(zaloUserIDs) > 0 {
+			var channel models.Channel
+			if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err == nil {
+				cfg, _ := config.Load()
+				if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
+					var zaloCreds channels.ZaloOACredentials
+					if err := json.Unmarshal(credBytes, &zaloCreds); err == nil {
+						adapter := channels.NewZaloOAAdapter(zaloCreds)
+						adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+							zaloCreds.AccessToken = newAccess
+							zaloCreds.RefreshToken = newRefresh
+							credsMap := map[string]interface{}{
+								"app_id":        zaloCreds.AppID,
+								"app_secret":    zaloCreds.AppSecret,
+								"access_token":  newAccess,
+								"refresh_token": newRefresh,
+								"oa_id":         zaloCreds.OAId,
+							}
+							newCredJSON, _ := json.Marshal(credsMap)
+							encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+							db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
+						})
+
+						if removeErr := adapter.RemoveGMFGroupMembers(c.Request.Context(), group.ZaloGroupID, zaloUserIDs); removeErr != nil {
+							log.Printf("[crm] failed to remove customers %v from Zalo GMF group %s (%s): %v", zaloUserIDs, group.Name, group.ZaloGroupID, removeErr)
+						} else {
+							log.Printf("[crm] successfully removed customers %v from Zalo GMF group %s (%s)", zaloUserIDs, group.Name, group.ZaloGroupID)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "members_removed"})
 }
 
@@ -441,6 +532,48 @@ func ApproveZaloCustomer(c *gin.Context) {
 	}
 
 	tx.Commit()
+
+	// Invite customer to the selected Zalo GMF groups if they have a linked Zalo account
+	if customer.ZaloUserID != "" && len(req.GroupIDs) > 0 {
+		var channel models.Channel
+		if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err == nil {
+			cfg, _ := config.Load()
+			if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
+				var zaloCreds channels.ZaloOACredentials
+				if err := json.Unmarshal(credBytes, &zaloCreds); err == nil {
+					adapter := channels.NewZaloOAAdapter(zaloCreds)
+					adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+						zaloCreds.AccessToken = newAccess
+						zaloCreds.RefreshToken = newRefresh
+						credsMap := map[string]interface{}{
+							"app_id":        zaloCreds.AppID,
+							"app_secret":    zaloCreds.AppSecret,
+							"access_token":  newAccess,
+							"refresh_token": newRefresh,
+							"oa_id":         zaloCreds.OAId,
+						}
+						newCredJSON, _ := json.Marshal(credsMap)
+						encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+						db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
+					})
+
+					for _, groupID := range req.GroupIDs {
+						var grp models.CRMGroup
+						if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&grp).Error; err == nil {
+							if grp.ZaloGroupID != "" {
+								if inviteErr := adapter.InviteGMFGroupMembers(c.Request.Context(), grp.ZaloGroupID, []string{customer.ZaloUserID}); inviteErr != nil {
+									log.Printf("[crm] failed to invite customer %s to Zalo GMF group %s (%s): %v", customer.ID, grp.Name, grp.ZaloGroupID, inviteErr)
+								} else {
+									log.Printf("[crm] successfully invited customer %s to Zalo GMF group %s (%s)", customer.ID, grp.Name, grp.ZaloGroupID)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, customer)
 }
 
