@@ -829,73 +829,88 @@ func GetJobERPCache(c *gin.Context) {
 		collection = collectionSetting.ValuePlain
 	}
 
-	if apiEndpoint == "" || token == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "astradb_not_configured", "message": "Astra DB is not configured"})
-		return
-	}
-
-	// 3. Query Astra DB for documents
+	// 3. Query Astra DB for documents (retrieve all pages)
 	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
 
-	limitStr := c.DefaultQuery("limit", "100")
-	limit, _ := strconv.Atoi(limitStr)
-	if limit <= 0 || limit > 1000 {
-		limit = 100
-	}
-
-	payload := map[string]interface{}{
-		"find": map[string]interface{}{
-			"filter": map[string]interface{}{},
-			"options": map[string]interface{}{
-				"limit": limit,
-			},
-		},
-	}
-
-	bodyBytes, err := json.Marshal(payload)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "marshal_payload_failed"})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second) // Increased timeout for multi-page retrieval
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "create_request_failed"})
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Token", token)
+	var allDocuments []map[string]interface{}
+	pageState := ""
 
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_connection_failed", "message": err.Error()})
-		return
-	}
-	defer resp.Body.Close()
+	for {
+		options := map[string]interface{}{
+			"limit": 1000,
+		}
+		if pageState != "" {
+			options["pageState"] = pageState
+		}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_api_error", "status": resp.StatusCode})
-		return
-	}
+		payload := map[string]interface{}{
+			"find": map[string]interface{}{
+				"filter":  map[string]interface{}{},
+				"options": options,
+			},
+		}
 
-	var astraResp struct {
-		Data struct {
-			Documents []map[string]interface{} `json:"documents"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "decode_response_failed"})
-		return
+		bodyBytes, err := json.Marshal(payload)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "marshal_payload_failed"})
+			return
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "create_request_failed"})
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Token", token)
+
+		client := &http.Client{Timeout: 20 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_connection_failed", "message": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_api_error", "status": resp.StatusCode})
+			return
+		}
+
+		var astraResp struct {
+			Data struct {
+				Documents     []map[string]interface{} `json:"documents"`
+				NextPageState string                   `json:"nextPageState"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "decode_response_failed"})
+			return
+		}
+
+		if len(astraResp.Errors) > 0 {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "astradb_api_error", "message": astraResp.Errors[0].Message})
+			return
+		}
+
+		allDocuments = append(allDocuments, astraResp.Data.Documents...)
+
+		if astraResp.Data.NextPageState == "" {
+			break
+		}
+		pageState = astraResp.Data.NextPageState
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"status": "success",
-		"data":   astraResp.Data.Documents,
-		"count":  len(astraResp.Data.Documents),
+		"data":   allDocuments,
+		"count":  len(allDocuments),
 	})
 }
 
