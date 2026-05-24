@@ -830,14 +830,14 @@ func GetJobERPCache(c *gin.Context) {
 	}
 
 	limitStr := c.Query("limit")
-	limit := 1000
+	limit := 100000
 	if limitStr != "" {
 		if val, err := strconv.Atoi(limitStr); err == nil && val > 0 {
 			limit = val
 		}
 	}
-	if limit > 1000 {
-		limit = 1000
+	if limit > 100000 {
+		limit = 100000
 	}
 
 	pageState := c.Query("pageState")
