@@ -394,7 +394,7 @@ func (c *CloudifyClient) restSearchPost(endpoint string, params map[string]strin
 }
 
 func (c *CloudifyClient) doRESTPost(endpoint string, params map[string]string, session string) ([]map[string]interface{}, int, error) {
-	baseURL := c.getDataBaseURL()
+	baseURL := strings.TrimRight(c.BaseURL, "/")
 	apiURL := fmt.Sprintf("%s/rest_api/private/%s", baseURL, endpoint)
 
 	req, err := http.NewRequest("POST", apiURL, nil)
