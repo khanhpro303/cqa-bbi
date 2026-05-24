@@ -57,6 +57,7 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 	var allProducts []map[string]interface{}
 	limit := 100
 	offset := 0
+	seenCodes := make(map[string]bool) // Track seen product codes to detect non-paginating endpoints
 	for {
 		params := map[string]string{
 			"limit":  fmt.Sprintf("%d", limit),
@@ -69,7 +70,26 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		if len(data) == 0 {
 			break
 		}
-		allProducts = append(allProducts, data...)
+
+		hasNewItem := false
+		for _, p := range data {
+			maHang := getStringVal(p, "ma_hang")
+			if maHang == "" {
+				maHang = getStringVal(p, "MA_HANG")
+			}
+			if maHang != "" && !seenCodes[maHang] {
+				seenCodes[maHang] = true
+				allProducts = append(allProducts, p)
+				hasNewItem = true
+			}
+		}
+
+		// If no new products were added in this batch, it means we reached the end
+		// or the endpoint does not support offset pagination (returning duplicate data)
+		if !hasNewItem {
+			break
+		}
+
 		if len(data) < limit {
 			break
 		}
