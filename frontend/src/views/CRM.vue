@@ -52,6 +52,12 @@
               <tr v-for="g in groups" :key="g.id">
                 <td>
                   <div class="font-weight-bold text-primary">{{ g.name }}</div>
+                  <div v-if="g.zalo_group_id" class="d-flex align-center mt-1">
+                    <v-chip size="x-small" color="success" class="font-weight-bold" variant="flat">
+                      <v-icon start size="10">mdi-message-text-outline</v-icon>
+                      Đã liên kết Zalo GMF
+                    </v-chip>
+                  </div>
                 </td>
                 <td class="text-body-2 text-grey-darken-1">{{ g.description || '—' }}</td>
                 <td>
@@ -66,6 +72,7 @@
                 </td>
                 <td class="text-caption">{{ new Date(g.created_at).toLocaleDateString() }}</td>
                 <td>
+                  <v-btn v-if="g.zalo_group_link" icon="mdi-qrcode" size="small" variant="text" color="success" @click="showGroupQR(g)" title="QR / Link nhóm Zalo" />
                   <v-btn icon="mdi-account-cog" size="small" variant="text" color="teal" @click="openManageMembersDialog(g)" title="Quản lý thành viên" />
                   <v-btn icon="mdi-pencil" size="small" variant="text" color="blue" @click="openEditGroupDialog(g)" title="Sửa nhóm" />
                   <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="deleteGroup(g.id)" title="Xóa nhóm" />
@@ -229,7 +236,22 @@
         <v-card-text>
           <v-form ref="groupFormRef">
             <v-text-field v-model="groupForm.name" label="Tên nhóm *" :rules="[v => !!v || 'Tên nhóm là bắt buộc']" class="mb-3" />
-            <v-textarea v-model="groupForm.description" label="Mô tả nhóm" rows="3" />
+            <v-textarea v-model="groupForm.description" label="Mô tả nhóm" class="mb-3" rows="3" />
+            
+            <!-- GMF Package Selector (only for creating new group) -->
+            <v-select
+              v-if="!isEditGroup"
+              v-model="groupForm.asset_id"
+              :items="gmfPackages"
+              item-title="displayName"
+              item-value="asset_id"
+              label="Gói dịch vụ Zalo GMF (Tự động chọn nếu trống)"
+              :loading="loadingPackages"
+              class="mb-3"
+              clearable
+              hint="Chọn gói để tạo nhóm chat thực tế trên Zalo OA"
+              persistent-hint
+            />
           </v-form>
         </v-card-text>
         <v-card-actions>
@@ -320,6 +342,16 @@
                   </v-list-item-title>
                   <v-list-item-subtitle>Zalo ID: {{ cust.zalo_user_id }}</v-list-item-subtitle>
                   <template #append>
+                    <v-btn
+                      v-if="activeGroup?.zalo_group_link"
+                      icon="mdi-send"
+                      size="small"
+                      variant="text"
+                      color="teal"
+                      class="mr-2"
+                      @click="inviteCustomerToZaloGroup(cust.id)"
+                      title="Gửi tin nhắn mời vào nhóm Zalo"
+                    />
                     <v-btn icon="mdi-close" size="small" variant="text" color="error" @click="removeGroupCustomer(cust.id)" />
                   </template>
                 </v-list-item>
@@ -454,6 +486,41 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog 6: QR Code hiển thị link nhóm GMF -->
+    <v-dialog v-model="groupQrDialog" max-width="450">
+      <v-card class="pa-6 text-center">
+        <v-card-title class="font-weight-bold text-h6 justify-center">QR Nhóm Chat Zalo</v-card-title>
+        <v-card-text>
+          <div class="text-body-1 font-weight-bold mb-1 text-success">{{ activeGroupQR?.name }}</div>
+          <div class="text-caption text-grey-darken-1 mb-4">
+            Quét mã QR dưới đây bằng ứng dụng Zalo để tham gia nhóm chat hỗ trợ.
+          </div>
+
+          <!-- QR code container -->
+          <div class="d-flex justify-center mb-4">
+            <v-card variant="outlined" class="pa-2" style="border-color: #4caf50 !important;">
+              <v-img
+                v-if="activeGroupQR?.zalo_group_link"
+                :src="`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(activeGroupQR.zalo_group_link)}`"
+                width="200"
+                height="200"
+              />
+            </v-card>
+          </div>
+
+          <v-card color="green-lighten-5" class="pa-3 mb-4" variant="flat">
+            <div class="text-caption text-grey-darken-2 mb-1">Đường dẫn tham gia:</div>
+            <a :href="activeGroupQR?.zalo_group_link" target="_blank" class="text-body-2 font-weight-bold text-success text-decoration-none">
+              {{ activeGroupQR?.zalo_group_link }}
+            </a>
+          </v-card>
+        </v-card-text>
+        <v-card-actions class="justify-center">
+          <v-btn color="success" variant="elevated" class="px-6" @click="groupQrDialog = false">Đóng</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-snackbar v-model="snack" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
   </div>
 </template>
@@ -479,8 +546,14 @@ const loadingGroups = ref(false)
 const groupDialog = ref(false)
 const savingGroup = ref(false)
 const isEditGroup = ref(false)
-const groupForm = ref({ id: '', name: '', description: '' })
+const groupForm = ref({ id: '', name: '', description: '', asset_id: '' })
 const groupFormRef = ref<any>(null)
+
+// GMF Packages State
+const gmfPackages = ref<any[]>([])
+const loadingPackages = ref(false)
+const groupQrDialog = ref(false)
+const activeGroupQR = ref<any>(null)
 
 // Group Members management (GMF)
 const activeGroup = ref<any>(null)
@@ -554,6 +627,7 @@ onMounted(async () => {
   await fetchGroups()
   await fetchCustomers()
   await fetchCustomerCodes()
+  await fetchGmfPackages()
 })
 
 // Load Groups from Backend
@@ -595,16 +669,48 @@ async function fetchCustomerCodes() {
   }
 }
 
+async function fetchGmfPackages() {
+  loadingPackages.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/gmf-packages`)
+    gmfPackages.value = (data || []).map((pkg: any) => ({
+      ...pkg,
+      displayName: `${pkg.asset_type} (${pkg.used_group}/${pkg.total_group} nhóm)`
+    }))
+  } catch (err) {
+    console.error('Failed to fetch GMF packages', err)
+  } finally {
+    loadingPackages.value = false
+  }
+}
+
+function showGroupQR(g: any) {
+  activeGroupQR.value = g
+  groupQrDialog.value = true
+}
+
+async function inviteCustomerToZaloGroup(customerId: string) {
+  try {
+    await api.post(`/tenants/${tenantId.value}/crm/groups/${activeGroup.value.id}/invite-customer`, {
+      customer_id: customerId
+    })
+    showSnack('Đã gửi tin nhắn mời khách hàng tham gia nhóm Zalo', 'success')
+  } catch (err: any) {
+    showSnack(err.response?.data?.error || 'Lỗi gửi tin nhắn mời', 'error')
+  }
+}
+
 // Group Actions
 function openCreateGroupDialog() {
   isEditGroup.value = false
-  groupForm.value = { id: '', name: '', description: '' }
+  groupForm.value = { id: '', name: '', description: '', asset_id: '' }
+  fetchGmfPackages()
   groupDialog.value = true
 }
 
 function openEditGroupDialog(g: any) {
   isEditGroup.value = true
-  groupForm.value = { id: g.id, name: g.name, description: g.description }
+  groupForm.value = { id: g.id, name: g.name, description: g.description, asset_id: g.zalo_asset_id || '' }
   groupDialog.value = true
 }
 
@@ -623,7 +729,8 @@ async function saveGroup() {
     } else {
       await api.post(`/tenants/${tenantId.value}/crm/groups`, {
         name: groupForm.value.name,
-        description: groupForm.value.description
+        description: groupForm.value.description,
+        asset_id: groupForm.value.asset_id
       })
       showSnack('Đã tạo nhóm mới thành công', 'success')
     }

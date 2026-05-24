@@ -7,6 +7,9 @@ type CRMGroup struct {
 	TenantID    string         `gorm:"type:char(36);not null;index" json:"tenant_id"`
 	Name        string         `gorm:"type:varchar(255);not null" json:"name"`
 	Description string         `gorm:"type:text" json:"description"`
+	ZaloGroupID   string       `gorm:"type:varchar(255)" json:"zalo_group_id,omitempty"`
+	ZaloGroupLink string       `gorm:"type:text" json:"zalo_group_link,omitempty"`
+	ZaloAssetID   string       `gorm:"type:varchar(255)" json:"zalo_asset_id,omitempty"`
 	CreatedAt   time.Time      `gorm:"not null" json:"created_at"`
 	UpdatedAt   time.Time      `gorm:"not null" json:"updated_at"`
 

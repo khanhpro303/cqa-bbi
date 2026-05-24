@@ -1,6 +1,7 @@
 package channels
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -408,4 +409,160 @@ func (z *ZaloOAAdapter) FetchUserProfile(ctx context.Context, userID string) (*Z
 
 	return profile, nil
 }
+
+// doRequestJSON makes an authenticated Zalo API request with a JSON request body.
+func (z *ZaloOAAdapter) doRequestJSON(ctx context.Context, method, apiURL string, body interface{}) (map[string]interface{}, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		var bodyReader io.Reader
+		if body != nil {
+			bodyBytes, err := json.Marshal(body)
+			if err != nil {
+				return nil, fmt.Errorf("marshal json body: %w", err)
+			}
+			bodyReader = bytes.NewReader(bodyBytes)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, apiURL, bodyReader)
+		if err != nil {
+			return nil, fmt.Errorf("create zalo api json request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		z.mu.Lock()
+		token := z.creds.AccessToken
+		z.mu.Unlock()
+		req.Header.Set("access_token", token)
+
+		resp, err := z.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("zalo api json request failed: %w", err)
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("zalo api json read body failed: %w", err)
+		}
+
+		log.Printf("[zalo] JSON API %s: status=%d len=%d", apiURL, resp.StatusCode, len(respBody))
+
+		var result map[string]interface{}
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			return nil, fmt.Errorf("zalo api json decode failed: %w", err)
+		}
+
+		// Check for token expired error (error=-216)
+		if errCode, ok := result["error"].(float64); ok && errCode == -216 && attempt == 0 {
+			if refreshErr := z.refreshToken(ctx); refreshErr != nil {
+				return nil, fmt.Errorf("token refresh failed: %w", refreshErr)
+			}
+			continue
+		}
+
+		if errCode, ok := result["error"].(float64); ok && errCode != 0 {
+			msg, _ := result["message"].(string)
+			return nil, fmt.Errorf("zalo api json error %v: %s", errCode, msg)
+		}
+
+		return result, nil
+	}
+	return nil, fmt.Errorf("zalo api json failed after retry")
+}
+
+type GMFAssetInfo struct {
+	AssetID      string `json:"asset_id"`
+	AssetType    string `json:"asset_type"` // e.g. GMF-10, GMF-50, GMF-100, GMF-1000
+	TotalGroup   int    `json:"total_group"`
+	UsedGroup    int    `json:"used_group"`
+	ValidThrough int64  `json:"valid_through"` // milliseconds
+}
+
+// GetGMFQuota retrieves the available GMF assets of the OA
+func (z *ZaloOAAdapter) GetGMFQuota(ctx context.Context) ([]GMFAssetInfo, error) {
+	payload := map[string]interface{}{
+		"quota_owner": "OA",
+	}
+	result, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/quota/group", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	data, ok := result["data"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid quota response structure: missing data object")
+	}
+
+	assetsRaw, ok := data["assets"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid quota response structure: missing assets list")
+	}
+
+	var assets []GMFAssetInfo
+	for _, aRaw := range assetsRaw {
+		m, ok := aRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		var asset GMFAssetInfo
+		if id, ok := m["asset_id"].(string); ok {
+			asset.AssetID = id
+		}
+		if aType, ok := m["asset_type"].(string); ok {
+			asset.AssetType = aType
+		}
+		if total, ok := m["total_group"].(float64); ok {
+			asset.TotalGroup = int(total)
+		}
+		if used, ok := m["used_group"].(float64); ok {
+			asset.UsedGroup = int(used)
+		}
+		if vt, ok := m["valid_through"].(float64); ok {
+			asset.ValidThrough = int64(vt)
+		}
+		assets = append(assets, asset)
+	}
+
+	return assets, nil
+}
+
+// CreateGMFGroup calls the creategroupwithoa API
+func (z *ZaloOAAdapter) CreateGMFGroup(ctx context.Context, name, description, assetID string, memberUserIDs []string) (string, string, error) {
+	payload := map[string]interface{}{
+		"group_name":        name,
+		"group_description": description,
+		"asset_id":          assetID,
+		"member_user_ids":   memberUserIDs,
+	}
+
+	result, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/creategroupwithoa", payload)
+	if err != nil {
+		return "", "", err
+	}
+
+	data, ok := result["data"].(map[string]interface{})
+	if !ok {
+		return "", "", fmt.Errorf("invalid create group response structure")
+	}
+
+	groupID, _ := data["group_id"].(string)
+	groupLink, _ := data["group_link"].(string)
+
+	if groupID == "" {
+		return "", "", fmt.Errorf("zalo API did not return group_id")
+	}
+
+	return groupID, groupLink, nil
+}
+
+// DeleteGMFGroup disbands a group chat on Zalo OA
+func (z *ZaloOAAdapter) DeleteGMFGroup(ctx context.Context, groupID string) error {
+	payload := map[string]interface{}{
+		"group_id": groupID,
+	}
+
+	_, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/delete", payload)
+	return err
+}
+
 

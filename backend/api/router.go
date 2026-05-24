@@ -220,6 +220,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.DELETE("/crm/groups/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteCRMGroup)
 			tenant.POST("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.AddGroupMembers)
 			tenant.DELETE("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.RemoveGroupMembers)
+			tenant.POST("/crm/groups/:id/invite-customer", middleware.RequireRole("owner", "admin"), handlers.InviteGMFGroupCustomer)
 
 			tenant.GET("/crm/customers", handlers.ListZaloCustomers)
 			tenant.POST("/crm/customers/invite", middleware.RequireRole("owner", "admin"), handlers.InviteZaloCustomer)
@@ -227,6 +228,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.DELETE("/crm/customers/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteZaloCustomer)
 
 			tenant.GET("/crm/customer-profiles", handlers.ListCustomerCodes(cfg))
+			tenant.GET("/crm/gmf-packages", handlers.ListGMFPackages)
 
 			// Job all results + export
 			tenant.GET("/jobs/:jobId/results", middleware.RequirePermission("jobs", "r"), handlers.ListAllJobResults)
