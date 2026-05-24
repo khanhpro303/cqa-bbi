@@ -673,7 +673,10 @@
                     {{ parseSummary(run.summary).message || 'Đã tự động thay đổi trạng thái chatbot' }}
                   </template>
                 </td>
-                <td>—</td>
+                <td>
+                  <span v-if="run.error_message" class="text-caption text-error">{{ run.error_message }}</span>
+                  <span v-else>—</span>
+                </td>
               </template>
               <template v-else>
                 <td>{{ parseSummary(run.summary).conversations_analyzed || 0 }}</td>
