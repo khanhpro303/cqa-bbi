@@ -8,7 +8,7 @@
       <v-btn v-if="currentTab === 'groups'" color="primary" prepend-icon="mdi-plus-box" @click="openCreateGroupDialog">
         Thêm nhóm mới
       </v-btn>
-      <v-btn v-else color="teal" prepend-icon="mdi-account-plus" @click="inviteDialog = true; inviteForm = { name: '', phone_number: '' }">
+      <v-btn v-else color="teal" prepend-icon="mdi-account-plus" @click="openInviteDialog">
         Tạo mã kích hoạt khách
       </v-btn>
     </div>
@@ -576,7 +576,21 @@
         <v-card-text>
           <v-form ref="inviteFormRef">
             <v-text-field v-model="inviteForm.name" label="Tên khách hàng gợi nhớ *" :rules="[v => !!v || 'Bắt buộc nhập']" class="mb-3" />
-            <v-text-field v-model="inviteForm.phone_number" label="Số điện thoại liên kết" hint="Ví dụ: 0987654321" persistent-hint />
+            <v-text-field v-model="inviteForm.phone_number" label="Số điện thoại liên kết" hint="Ví dụ: 0987654321" persistent-hint class="mb-3" />
+            
+            <!-- Zalo OA Selector Dropdown for Invite -->
+            <v-select
+              v-model="inviteForm.channel"
+              :items="zaloOAChannels"
+              item-title="name"
+              item-value="id"
+              return-object
+              label="Chọn Zalo OA nhận xác thực *"
+              :rules="[v => !!v || 'Vui lòng chọn Zalo OA']"
+              variant="outlined"
+              density="comfortable"
+              hide-details
+            />
           </v-form>
         </v-card-text>
         <v-card-actions>
@@ -948,7 +962,7 @@ const customers = ref<any[]>([])
 const loadingCustomers = ref(false)
 const inviteDialog = ref(false)
 const creatingInvite = ref(false)
-const inviteForm = ref({ name: '', phone_number: '' })
+const inviteForm = ref({ name: '', phone_number: '', channel: null as any })
 const inviteFormRef = ref<any>(null)
 
 // Cloudify Customers State
@@ -1147,11 +1161,25 @@ async function assignCustomerPhone() {
   }
 }
 
-function openQrDialog(inviteData: any) {
+function openInviteDialog() {
+  inviteForm.value = {
+    name: '',
+    phone_number: '',
+    channel: activeZaloOA.value || null
+  }
+  inviteDialog.value = true
+}
+
+function openQrDialog(inviteData: any, selectedChannel?: any) {
   activeInvite.value = inviteData
-  selectedQrOA.value = activeZaloOA.value || null
+  if (selectedChannel) {
+    selectedQrOA.value = selectedChannel
+  } else {
+    selectedQrOA.value = activeZaloOA.value || null
+  }
   qrDialog.value = true
 }
+
 
 function showCloudifyQR(c: any) {
   openQrDialog({
@@ -1435,7 +1463,7 @@ async function createInvite() {
       phone_number: inviteForm.value.phone_number
     })
     inviteDialog.value = false
-    openQrDialog(data)
+    openQrDialog(data, inviteForm.value.channel)
     await fetchCustomers()
   } catch (err) {
     showSnack('Lỗi tạo mã xác thực', 'error')
