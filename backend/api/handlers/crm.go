@@ -1566,92 +1566,107 @@ func fetchUniqueGroupsFromAstraDB(ctx context.Context, tenantID string) ([]strin
 
 	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
 
-	// Fetch up to 10000 documents with only LIST_TEN_NHOM_VTHH projected to keep response size minimal
-	payload := map[string]interface{}{
-		"find": map[string]interface{}{
-			"projection": map[string]interface{}{
-				"LIST_TEN_NHOM_VTHH": 1,
-			},
-			"options": map[string]interface{}{
-				"limit": 10000,
-			},
-		},
-	}
-
-	bodyBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshal payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Token", token)
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("execute HTTP post: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("HTTP status %d", resp.StatusCode)
-	}
-
-	var astraResp struct {
-		Data struct {
-			Documents []map[string]interface{} `json:"documents"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
-	if len(astraResp.Errors) > 0 {
-		return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
-	}
-
 	groupMap := make(map[string]bool)
 	var uniqueGroups []string
+	pageState := ""
 
-	for _, doc := range astraResp.Data.Documents {
-		val, ok := doc["LIST_TEN_NHOM_VTHH"]
-		if !ok || val == nil {
-			val, ok = doc["list_ten_nhom_vthh"]
+	// Loop to fetch all pages (limit to 100 pages / 100k items safety cap)
+	for page := 0; page < 100; page++ {
+		options := map[string]interface{}{
+			"limit": 1000,
 		}
-		if ok && val != nil {
-			var listTenNhomVthh string
-			switch v := val.(type) {
-			case string:
-				listTenNhomVthh = v
-			case []interface{}:
-				if len(v) > 1 {
-					if s, ok := v[1].(string); ok {
-						listTenNhomVthh = s
-					}
-				} else if len(v) > 0 {
-					listTenNhomVthh = fmt.Sprintf("%v", v[0])
-				}
-			default:
-				listTenNhomVthh = fmt.Sprintf("%v", val)
-			}
+		if pageState != "" {
+			options["pageState"] = pageState
+		}
 
-			if listTenNhomVthh != "" {
-				parts := strings.Split(listTenNhomVthh, ",")
-				for _, part := range parts {
-					trimmed := strings.TrimSpace(part)
-					if trimmed != "" && !groupMap[trimmed] {
-						groupMap[trimmed] = true
-						uniqueGroups = append(uniqueGroups, trimmed)
+		payload := map[string]interface{}{
+			"find": map[string]interface{}{
+				"projection": map[string]interface{}{
+					"LIST_TEN_NHOM_VTHH": 1,
+				},
+				"options": options,
+			},
+		}
+
+		bodyBytes, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal payload: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Token", token)
+
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("execute HTTP post: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			return nil, fmt.Errorf("HTTP status %d", resp.StatusCode)
+		}
+
+		var astraResp struct {
+			Data struct {
+				Documents     []map[string]interface{} `json:"documents"`
+				NextPageState string                   `json:"nextPageState"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+
+		if len(astraResp.Errors) > 0 {
+			return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+		}
+
+		// Process this page of documents
+		for _, doc := range astraResp.Data.Documents {
+			val, ok := doc["LIST_TEN_NHOM_VTHH"]
+			if !ok || val == nil {
+				val, ok = doc["list_ten_nhom_vthh"]
+			}
+			if ok && val != nil {
+				var listTenNhomVthh string
+				switch v := val.(type) {
+				case string:
+					listTenNhomVthh = v
+				case []interface{}:
+					if len(v) > 1 {
+						if s, ok := v[1].(string); ok {
+							listTenNhomVthh = s
+						}
+					} else if len(v) > 0 {
+						listTenNhomVthh = fmt.Sprintf("%v", v[0])
+					}
+				default:
+					listTenNhomVthh = fmt.Sprintf("%v", val)
+				}
+
+				if listTenNhomVthh != "" {
+					parts := strings.Split(listTenNhomVthh, ",")
+					for _, part := range parts {
+						trimmed := strings.TrimSpace(part)
+						if trimmed != "" && !groupMap[trimmed] {
+							groupMap[trimmed] = true
+							uniqueGroups = append(uniqueGroups, trimmed)
+						}
 					}
 				}
 			}
+		}
+
+		pageState = astraResp.Data.NextPageState
+		if pageState == "" {
+			break
 		}
 	}
 
