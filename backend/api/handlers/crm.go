@@ -135,7 +135,7 @@ func CreateCRMGroup(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "zalo_create_group_failed",
-			"details": fmt.Sprintf("%s. Theo tài liệu Zalo GMF, member_user_ids phải có ít nhất 1 người là admin của OA; nếu nhân viên đã liên kết nhưng không phải admin OA, Zalo sẽ từ chối tạo nhóm.", err.Error()),
+			"details": err.Error(),
 		})
 		return
 	}
