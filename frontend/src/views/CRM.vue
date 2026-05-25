@@ -171,8 +171,8 @@
           <v-table density="compact">
             <thead>
               <tr>
-                <th style="width: 130px;">Mã Khách Hàng</th>
-                <th style="width: 180px;">Tên Khách Hàng</th>
+                <th style="width: 100px;">Mã Khách Hàng</th>
+                <th style="min-width: 200px;">Tên Khách Hàng</th>
                 <th>Địa chỉ</th>
                 <th style="width: 90px;">Miền</th>
                 <th style="width: 120px;">SĐT Cloudify</th>
@@ -185,9 +185,11 @@
             <tbody>
               <tr v-for="c in filteredCloudifyCustomers" :key="c.customer_code">
                 <td>
-                  <v-chip color="success" size="small" variant="flat" class="font-weight-black">
-                    {{ c.customer_code }}
-                  </v-chip>
+                  <div class="text-truncate" style="max-width: 85px;" :title="c.customer_code">
+                    <v-chip color="success" size="small" variant="flat" class="font-weight-black text-truncate" style="max-width: 100%;">
+                      {{ c.customer_code }}
+                    </v-chip>
+                  </div>
                 </td>
                 <td class="font-weight-bold">{{ c.name }}</td>
                 <td>
@@ -655,12 +657,26 @@
             Khách hàng quét mã QR dưới đây bằng app Zalo để nhắn tin cú pháp kích hoạt.
           </div>
 
+          <!-- Zalo OA Selector Dropdown -->
+          <v-select
+            v-model="selectedQrOA"
+            :items="zaloOAChannels"
+            item-title="name"
+            item-value="id"
+            return-object
+            label="Chọn Zalo OA nhận xác thực *"
+            density="compact"
+            variant="outlined"
+            class="mb-4 text-left"
+            hide-details
+          />
+
           <!-- QR code container -->
           <div class="d-flex justify-center mb-4">
             <v-card variant="outlined" class="pa-2" style="border-color: #008fe5 !important;">
               <v-img
-                v-if="activeZaloOA"
-                :src="`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent('https://zalo.me/' + activeZaloOA.external_id)}`"
+                v-if="selectedQrOA"
+                :src="`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent('https://zalo.me/' + selectedQrOA.external_id)}`"
                 width="200"
                 height="200"
               />
@@ -1095,11 +1111,7 @@ async function assignCustomerPhone() {
 
 function openQrDialog(inviteData: any) {
   activeInvite.value = inviteData
-  if (zaloOAChannels.value && zaloOAChannels.value.length > 0) {
-    selectedQrOA.value = zaloOAChannels.value[0]
-  } else {
-    selectedQrOA.value = null
-  }
+  selectedQrOA.value = activeZaloOA.value || null
   qrDialog.value = true
 }
 
