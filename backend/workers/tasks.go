@@ -357,6 +357,30 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			customerCode = customerRec.CustomerCode
 		}
 
+		// GMF Group Chat Context Detection & CustomerCode Override
+		var matchedGroup models.CRMGroup
+		if err := db.DB.Where("tenant_id = ? AND zalo_group_id = ?", matchedChannel.TenantID, payload.Recipient.ID).First(&matchedGroup).Error; err == nil {
+			// Verify membership
+			isMember := false
+			if isWhitelisted {
+				// Whitelisted internal staff are always allowed
+				isMember = true
+			} else if isCustomer {
+				var count int64
+				db.DB.Model(&models.CRMGroupCustomer{}).Where("group_id = ? AND zalo_customer_id = ?", matchedGroup.ID, customerRec.ID).Count(&count)
+				if count > 0 {
+					isMember = true
+				}
+			}
+
+			if isMember && matchedGroup.CustomerCode != "" {
+				customerCode = matchedGroup.CustomerCode
+				log.Printf("[worker] GMF group chat detected: %s (ID: %s). Overriding customerCode to %s for sender %s", matchedGroup.Name, matchedGroup.ZaloGroupID, customerCode, payload.Sender.ID)
+			} else if !isMember {
+				log.Printf("[worker] Zalo user %s is not a member of GMF group %s (ID: %s). Skipping override.", payload.Sender.ID, matchedGroup.Name, matchedGroup.ZaloGroupID)
+			}
+		}
+
 		sessionKey := fmt.Sprintf("zalo_session:%s:%s", matchedChannel.ID, payload.Sender.ID)
 		
 		// Check session
