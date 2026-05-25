@@ -868,17 +868,27 @@ func (z *ZaloOAAdapter) GetGMFGroupMembers(ctx context.Context, groupID string, 
 		return nil, err
 	}
 
-	dataBytes, err := json.Marshal(result["data"])
+	dataVal := result["data"]
+	if dataVal == nil {
+		return []GMFGroupMember{}, nil
+	}
+
+	dataBytes, err := json.Marshal(dataVal)
 	if err != nil {
 		return nil, fmt.Errorf("marshal data: %w", err)
 	}
 
 	var data GMFGroupMembersData
-	if err := json.Unmarshal(dataBytes, &data); err != nil {
-		return nil, fmt.Errorf("unmarshal data: %w", err)
+	if err := json.Unmarshal(dataBytes, &data); err == nil {
+		return data.Members, nil
 	}
 
-	return data.Members, nil
+	var membersArr []GMFGroupMember
+	if err := json.Unmarshal(dataBytes, &membersArr); err == nil {
+		return membersArr, nil
+	}
+
+	return []GMFGroupMember{}, nil
 }
 
 // GetGMFGroupPendingInvites fetches the list of pending invites in a GMF group chat.
@@ -894,17 +904,27 @@ func (z *ZaloOAAdapter) GetGMFGroupPendingInvites(ctx context.Context, groupID s
 		return nil, err
 	}
 
-	dataBytes, err := json.Marshal(result["data"])
+	dataVal := result["data"]
+	if dataVal == nil {
+		return []GMFGroupMember{}, nil
+	}
+
+	dataBytes, err := json.Marshal(dataVal)
 	if err != nil {
 		return nil, fmt.Errorf("marshal data: %w", err)
 	}
 
 	var data GMFGroupMembersData
-	if err := json.Unmarshal(dataBytes, &data); err != nil {
-		return nil, fmt.Errorf("unmarshal data: %w", err)
+	if err := json.Unmarshal(dataBytes, &data); err == nil {
+		return data.Members, nil
 	}
 
-	return data.Members, nil
+	var membersArr []GMFGroupMember
+	if err := json.Unmarshal(dataBytes, &membersArr); err == nil {
+		return membersArr, nil
+	}
+
+	return []GMFGroupMember{}, nil
 }
 
 // AcceptGMFGroupPendingInvites accepts pending invites to a GMF group chat.
