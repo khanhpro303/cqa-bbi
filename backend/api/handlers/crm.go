@@ -1462,26 +1462,30 @@ func RejectGroupPendingInvite(c *gin.Context) {
 // Returns HTTP 400 Bad Request with error: "product_cache_not_synced" if cache not found.
 func GetListTenNhomVthh(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
-	var s models.AppSetting
-	err := db.DB.Where("tenant_id = ? AND setting_key = 'list_ten_nhom_vthh'", tenantID).First(&s).Error
-	if err == nil && s.ValuePlain != "" {
-		var groups []string
-		if err := json.Unmarshal([]byte(s.ValuePlain), &groups); err == nil {
-			c.JSON(http.StatusOK, groups)
-			return
-		}
-		// Fallback split by comma if not valid JSON
-		parts := strings.Split(s.ValuePlain, ",")
-		var cleanedParts []string
-		for _, p := range parts {
-			trimmed := strings.TrimSpace(p)
-			if trimmed != "" {
-				cleanedParts = append(cleanedParts, trimmed)
+	refresh := c.Query("refresh") == "true"
+
+	if !refresh {
+		var s models.AppSetting
+		err := db.DB.Where("tenant_id = ? AND setting_key = 'list_ten_nhom_vthh'", tenantID).First(&s).Error
+		if err == nil && s.ValuePlain != "" {
+			var groups []string
+			if err := json.Unmarshal([]byte(s.ValuePlain), &groups); err == nil {
+				c.JSON(http.StatusOK, groups)
+				return
 			}
-		}
-		if len(cleanedParts) > 0 {
-			c.JSON(http.StatusOK, cleanedParts)
-			return
+			// Fallback split by comma if not valid JSON
+			parts := strings.Split(s.ValuePlain, ",")
+			var cleanedParts []string
+			for _, p := range parts {
+				trimmed := strings.TrimSpace(p)
+				if trimmed != "" {
+					cleanedParts = append(cleanedParts, trimmed)
+				}
+			}
+			if len(cleanedParts) > 0 {
+				c.JSON(http.StatusOK, cleanedParts)
+				return
+			}
 		}
 	}
 
@@ -1581,8 +1585,10 @@ func fetchUniqueGroupsFromAstraDB(ctx context.Context, tenantID string) ([]strin
 
 		payload := map[string]interface{}{
 			"find": map[string]interface{}{
+				"filter": map[string]interface{}{},
 				"projection": map[string]interface{}{
 					"LIST_TEN_NHOM_VTHH": 1,
+					"list_ten_nhom_vthh": 1,
 				},
 				"options": options,
 			},
