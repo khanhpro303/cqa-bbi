@@ -11,6 +11,7 @@ type CRMGroup struct {
 	ZaloGroupLink string         `gorm:"type:text" json:"zalo_group_link,omitempty"`
 	ZaloAssetID   string         `gorm:"type:varchar(255)" json:"zalo_asset_id,omitempty"`
 	ChannelID     string         `gorm:"type:char(36);index" json:"channel_id,omitempty"`
+	CustomerCode  string         `gorm:"type:varchar(50);index" json:"customer_code,omitempty"`
 	CreatedAt     time.Time      `gorm:"not null" json:"created_at"`
 	UpdatedAt     time.Time      `gorm:"not null" json:"updated_at"`
 

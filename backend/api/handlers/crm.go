@@ -39,10 +39,11 @@ func CreateCRMGroup(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
 	var req struct {
-		Name        string `json:"name" binding:"required"`
-		Description string `json:"description"`
-		AssetID     string `json:"asset_id"`
-		ChannelID   string `json:"channel_id"`
+		Name         string `json:"name" binding:"required"`
+		Description  string `json:"description"`
+		AssetID      string `json:"asset_id"`
+		ChannelID    string `json:"channel_id"`
+		CustomerCode string `json:"customer_code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -152,6 +153,7 @@ func CreateCRMGroup(c *gin.Context) {
 		ZaloGroupID:   zGroupID,
 		ZaloGroupLink: zGroupLink,
 		ZaloAssetID:   assetID,
+		CustomerCode:  req.CustomerCode,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -168,6 +170,9 @@ func CreateCRMGroup(c *gin.Context) {
 		var cust models.ZaloCustomer
 		if tx.Where("tenant_id = ? AND zalo_user_id = ?", tenantID, mID).First(&cust).Error == nil {
 			tx.Create(&models.CRMGroupCustomer{GroupID: group.ID, ZaloCustomerID: cust.ID})
+			if group.CustomerCode != "" {
+				tx.Model(&cust).Update("customer_code", group.CustomerCode)
+			}
 		}
 	}
 	tx.Commit()
@@ -183,8 +188,9 @@ func UpdateCRMGroup(c *gin.Context) {
 	groupID := c.Param("id")
 
 	var req struct {
-		Name        string `json:"name" binding:"required"`
-		Description string `json:"description"`
+		Name         string `json:"name" binding:"required"`
+		Description  string `json:"description"`
+		CustomerCode string `json:"customer_code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -199,6 +205,7 @@ func UpdateCRMGroup(c *gin.Context) {
 
 	group.Name = req.Name
 	group.Description = req.Description
+	group.CustomerCode = req.CustomerCode
 	group.UpdatedAt = time.Now()
 
 	if err := db.DB.Save(&group).Error; err != nil {
@@ -328,6 +335,13 @@ func AddGroupMembers(c *gin.Context) {
 			if err := tx.Create(&models.CRMGroupCustomer{GroupID: groupID, ZaloCustomerID: custID}).Error; err != nil {
 				tx.Rollback()
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_add_customer_to_group"})
+				return
+			}
+		}
+		if group.CustomerCode != "" {
+			if err := tx.Model(&models.ZaloCustomer{}).Where("id = ? AND tenant_id = ?", custID, tenantID).Update("customer_code", group.CustomerCode).Error; err != nil {
+				tx.Rollback()
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_update_customer_code"})
 				return
 			}
 		}
@@ -1318,6 +1332,9 @@ func AcceptGroupPendingInvite(c *gin.Context) {
 			db.DB.Model(&models.CRMGroupCustomer{}).Where("group_id = ? AND zalo_customer_id = ?", groupID, cust.ID).Count(&count)
 			if count == 0 {
 				db.DB.Create(&models.CRMGroupCustomer{GroupID: groupID, ZaloCustomerID: cust.ID})
+			}
+			if group.CustomerCode != "" {
+				db.DB.Model(&cust).Update("customer_code", group.CustomerCode)
 			}
 		}
 	}

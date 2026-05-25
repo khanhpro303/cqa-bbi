@@ -64,6 +64,9 @@
                     <v-chip v-if="g.channel" size="x-small" color="blue-grey" class="font-weight-bold" variant="outlined">
                       OA: {{ g.channel.name }}
                     </v-chip>
+                    <v-chip v-if="g.customer_code" size="x-small" color="indigo" class="font-weight-bold" variant="flat">
+                      Mã KH: {{ g.customer_code }}
+                    </v-chip>
                   </div>
                 </td>
                 <td class="text-body-2 text-grey-darken-1 py-3">{{ g.description || '—' }}</td>
@@ -357,6 +360,20 @@
           <v-form ref="groupFormRef">
             <v-text-field v-model="groupForm.name" label="Tên nhóm *" :rules="[v => !!v || 'Tên nhóm là bắt buộc']" class="mb-3" />
             <v-textarea v-model="groupForm.description" label="Mô tả nhóm" class="mb-3" rows="3" />
+
+            <!-- Customer Code Selector (Required for both create & edit) -->
+            <v-autocomplete
+              v-model="groupForm.customer_code"
+              :items="customerCodes"
+              label="Mã khách hàng phục vụ *"
+              placeholder="Tìm và chọn mã khách hàng..."
+              :rules="[v => !!v || 'Vui lòng chọn mã khách hàng']"
+              :loading="loadingCodes"
+              class="mb-3"
+              variant="outlined"
+              density="comfortable"
+              no-data-text="Không tìm thấy mã khách hàng nào"
+            />
             
             <!-- Zalo OA Account Selector (only for creating new group) -->
             <v-select
@@ -936,7 +953,7 @@ const loadingGroups = ref(false)
 const groupDialog = ref(false)
 const savingGroup = ref(false)
 const isEditGroup = ref(false)
-const groupForm = ref({ id: '', name: '', description: '', asset_id: '', channel_id: '' })
+const groupForm = ref({ id: '', name: '', description: '', asset_id: '', channel_id: '', customer_code: '' })
 const groupFormRef = ref<any>(null)
 
 // GMF Packages State
@@ -1031,7 +1048,10 @@ const availableEmployees = computed(() => {
 const availableCustomers = computed(() => {
   if (!activeGroup.value || !customers.value) return []
   const existingZaloUserIds = new Set(liveCustomers.value.map(c => c.zalo_user_id).filter(id => !!id))
-  return approvedCustomers.value.filter(c => !existingZaloUserIds.has(c.zalo_user_id))
+  return approvedCustomers.value.filter(c => 
+    !existingZaloUserIds.has(c.zalo_user_id) && 
+    c.customer_code === activeGroup.value.customer_code
+  )
 })
 
 const filteredCloudifyCustomers = computed(() => {
@@ -1236,7 +1256,7 @@ function openCreateGroupDialog() {
   isEditGroup.value = false
   const firstOA = zaloOAChannels.value[0]
   const defaultChannelId = firstOA ? firstOA.id : ''
-  groupForm.value = { id: '', name: '', description: '', asset_id: '', channel_id: defaultChannelId }
+  groupForm.value = { id: '', name: '', description: '', asset_id: '', channel_id: defaultChannelId, customer_code: '' }
   if (defaultChannelId) {
     fetchGmfPackages(defaultChannelId)
   } else {
@@ -1256,7 +1276,7 @@ function onChannelSelected(channelId: string) {
 
 function openEditGroupDialog(g: any) {
   isEditGroup.value = true
-  groupForm.value = { id: g.id, name: g.name, description: g.description, asset_id: g.zalo_asset_id || '', channel_id: g.channel_id || '' }
+  groupForm.value = { id: g.id, name: g.name, description: g.description, asset_id: g.zalo_asset_id || '', channel_id: g.channel_id || '', customer_code: g.customer_code || '' }
   groupDialog.value = true
 }
 
@@ -1269,7 +1289,8 @@ async function saveGroup() {
     if (isEditGroup.value) {
       await api.put(`/tenants/${tenantId.value}/crm/groups/${groupForm.value.id}`, {
         name: groupForm.value.name,
-        description: groupForm.value.description
+        description: groupForm.value.description,
+        customer_code: groupForm.value.customer_code
       })
       showSnack('Đã cập nhật nhóm thành công', 'success')
     } else {
@@ -1277,7 +1298,8 @@ async function saveGroup() {
         name: groupForm.value.name,
         description: groupForm.value.description,
         asset_id: groupForm.value.asset_id,
-        channel_id: groupForm.value.channel_id
+        channel_id: groupForm.value.channel_id,
+        customer_code: groupForm.value.customer_code
       })
       showSnack('Đã tạo nhóm mới thành công', 'success')
     }
