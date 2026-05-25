@@ -41,6 +41,8 @@
             v-model="aiSettings.model"
             :label="$t('ai_model')"
             :items="modelOptions"
+            item-title="title"
+            item-value="value"
             class="mb-3"
           />
           <v-combobox
@@ -48,6 +50,9 @@
             v-model="aiSettings.model"
             :label="$t('ai_model')"
             :items="modelOptions"
+            item-title="title"
+            item-value="value"
+            :return-object="false"
             hint="Chọn model gợi ý hoặc nhập model OpenAI tùy chỉnh"
             persistent-hint
             clearable
@@ -359,9 +364,10 @@ async function saveAI() {
   }
   savingAI.value = true
   try {
+    const modelStr = typeof aiSettings.model === 'object' && aiSettings.model ? (aiSettings.model as any).value : aiSettings.model
     await api.put(`/tenants/${tenantId.value}/settings/ai`, {
       provider: aiSettings.provider,
-      model: aiSettings.model,
+      model: modelStr,
       api_key: aiSettings.apiKey,
       base_url: useCustomBaseUrl.value ? (aiSettings.baseUrl || '') : '',
       batch_mode: aiSettings.batchMode ? 'true' : 'false',
@@ -383,10 +389,11 @@ async function testKey() {
   }
   testingKey.value = true
   try {
+    const modelStr = typeof aiSettings.model === 'object' && aiSettings.model ? (aiSettings.model as any).value : aiSettings.model
     const { data } = await api.post(`/tenants/${tenantId.value}/settings/ai/test`, {
       provider: aiSettings.provider,
       api_key: aiSettings.apiKey,
-      model: aiSettings.model,
+      model: modelStr,
       base_url: useCustomBaseUrl.value ? (aiSettings.baseUrl || '') : '',
     })
     showSnack(`${data.provider}: ${data.message}`, 'success')
