@@ -492,6 +492,8 @@ type GMFAssetInfo struct {
 	ValidThrough int64  `json:"valid_through"` // milliseconds
 }
 
+const zaloGMFMaxMembersPerCreateRequest = 99
+
 // GetGMFQuota retrieves the available GMF assets of the OA
 func (z *ZaloOAAdapter) GetGMFQuota(ctx context.Context) ([]GMFAssetInfo, error) {
 	productTypes := []string{"gmf10", "gmf50", "gmf100", "gmf1000"}
@@ -678,11 +680,28 @@ func parseGMFValidThrough(value interface{}) int64 {
 
 // CreateGMFGroup calls the creategroupwithoa API
 func (z *ZaloOAAdapter) CreateGMFGroup(ctx context.Context, name, description, assetID string, memberUserIDs []string) (string, string, error) {
+	groupName := strings.TrimSpace(name)
+	if groupName == "" {
+		return "", "", fmt.Errorf("group_name is required")
+	}
+
+	assetID = strings.TrimSpace(assetID)
+	if assetID == "" {
+		return "", "", fmt.Errorf("asset_id is required")
+	}
+
+	members := normalizeGMFMemberUserIDs(memberUserIDs, zaloGMFMaxMembersPerCreateRequest)
+	if len(members) == 0 {
+		return "", "", fmt.Errorf("member_user_ids is required")
+	}
+
 	payload := map[string]interface{}{
-		"group_name":        name,
-		"group_description": description,
-		"asset_id":          assetID,
-		"member_user_ids":   memberUserIDs,
+		"group_name":      groupName,
+		"asset_id":        assetID,
+		"member_user_ids": members,
+	}
+	if groupDescription := strings.TrimSpace(description); groupDescription != "" {
+		payload["group_description"] = groupDescription
 	}
 
 	result, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/creategroupwithoa", payload)
@@ -703,6 +722,27 @@ func (z *ZaloOAAdapter) CreateGMFGroup(ctx context.Context, name, description, a
 	}
 
 	return groupID, groupLink, nil
+}
+
+func normalizeGMFMemberUserIDs(memberUserIDs []string, limit int) []string {
+	if limit <= 0 {
+		return []string{}
+	}
+
+	seen := make(map[string]bool, len(memberUserIDs))
+	members := make([]string, 0, len(memberUserIDs))
+	for _, rawID := range memberUserIDs {
+		userID := strings.TrimSpace(rawID)
+		if userID == "" || seen[userID] {
+			continue
+		}
+		seen[userID] = true
+		members = append(members, userID)
+		if len(members) >= limit {
+			break
+		}
+	}
+	return members
 }
 
 // DeleteGMFGroup disbands a group chat on Zalo OA

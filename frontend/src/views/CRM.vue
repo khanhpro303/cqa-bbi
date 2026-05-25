@@ -926,7 +926,7 @@ async function saveGroup() {
     groupDialog.value = false
     await fetchGroups()
   } catch (err: any) {
-    showSnack(err.response?.data?.error || 'Có lỗi xảy ra', 'error')
+    showSnack(err.response?.data?.details || err.response?.data?.error || 'Có lỗi xảy ra', 'error')
   } finally {
     savingGroup.value = false
   }

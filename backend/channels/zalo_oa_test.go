@@ -93,3 +93,28 @@ func TestParseGMFQuotaAssetsRejectsUnexpectedShape(t *testing.T) {
 		t.Fatal("expected error for unexpected quota response shape")
 	}
 }
+
+func TestNormalizeGMFMemberUserIDsTrimsDeduplicatesAndLimits(t *testing.T) {
+	members := normalizeGMFMemberUserIDs([]string{"  user-1 ", "", "user-2", "user-1", "user-3"}, 2)
+
+	if len(members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(members))
+	}
+	if members[0] != "user-1" || members[1] != "user-2" {
+		t.Fatalf("unexpected members: %#v", members)
+	}
+}
+
+func TestCreateGMFGroupValidatesRequiredFieldsBeforeRequest(t *testing.T) {
+	adapter := NewZaloOAAdapter(ZaloOACredentials{})
+
+	if _, _, err := adapter.CreateGMFGroup(t.Context(), "", "desc", "asset-1", []string{"user-1"}); err == nil {
+		t.Fatal("expected missing group_name to fail")
+	}
+	if _, _, err := adapter.CreateGMFGroup(t.Context(), "Group", "desc", "", []string{"user-1"}); err == nil {
+		t.Fatal("expected missing asset_id to fail")
+	}
+	if _, _, err := adapter.CreateGMFGroup(t.Context(), "Group", "desc", "asset-1", []string{"  "}); err == nil {
+		t.Fatal("expected missing member_user_ids to fail")
+	}
+}

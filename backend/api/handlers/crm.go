@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -109,17 +110,22 @@ func CreateCRMGroup(c *gin.Context) {
 		}
 	}
 
-	// 3. Find at least one Zalo User ID as initial member (must be an active staff member since Zalo GMF requires at least one OA Admin)
-	var initialMembers []string
-	var activeStaff models.ZaloWhitelist
-	if err := db.DB.Where("tenant_id = ? AND status = ?", tenantID, "active").First(&activeStaff).Error; err == nil && activeStaff.ZaloUserID != "" {
-		initialMembers = append(initialMembers, activeStaff.ZaloUserID)
+	// 3. Find Zalo User IDs as initial members. Zalo GMF requires member_user_ids
+	// to contain at least one OA admin and no more than 99 users.
+	var activeStaff []models.ZaloWhitelist
+	if err := db.DB.
+		Where("tenant_id = ? AND status = ? AND zalo_user_id <> ''", tenantID, "active").
+		Order("updated_at DESC").
+		Limit(99).
+		Find(&activeStaff).Error; err != nil {
+		log.Printf("[crm] failed to load active Zalo whitelist members for tenant %s: %v", tenantID, err)
 	}
+	initialMembers := normalizeZaloWhitelistMemberUserIDs(activeStaff, 99)
 
 	if len(initialMembers) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "zalo_member_required",
-			"details": "Để tạo nhóm GMF trên Zalo, cần ít nhất 1 nhân viên đã liên kết Zalo trong hệ thống (nhân viên này cần có quyền Quản trị viên/Biên tập viên của OA).",
+			"details": "Theo tài liệu Zalo GMF, member_user_ids không được rỗng, không quá 99 người và phải có ít nhất 1 người là admin của OA. Vui lòng liên kết ít nhất 1 nhân viên Zalo có quyền admin OA trước khi tạo nhóm.",
 		})
 		return
 	}
@@ -127,7 +133,10 @@ func CreateCRMGroup(c *gin.Context) {
 	// 4. Create GMF Group on Zalo
 	zGroupID, zGroupLink, err := adapter.CreateGMFGroup(c.Request.Context(), req.Name, req.Description, assetID, initialMembers)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "zalo_create_group_failed", "details": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "zalo_create_group_failed",
+			"details": fmt.Sprintf("%s. Theo tài liệu Zalo GMF, member_user_ids phải có ít nhất 1 người là admin của OA; nếu nhân viên đã liên kết nhưng không phải admin OA, Zalo sẽ từ chối tạo nhóm.", err.Error()),
+		})
 		return
 	}
 
@@ -651,6 +660,27 @@ func crmGenerateVerifyToken() string {
 		b[i] = charset[rand.Intn(len(charset))]
 	}
 	return string(b)
+}
+
+func normalizeZaloWhitelistMemberUserIDs(staff []models.ZaloWhitelist, limit int) []string {
+	if limit <= 0 {
+		return []string{}
+	}
+
+	seen := make(map[string]bool, len(staff))
+	members := make([]string, 0, len(staff))
+	for _, item := range staff {
+		userID := strings.TrimSpace(item.ZaloUserID)
+		if userID == "" || seen[userID] {
+			continue
+		}
+		seen[userID] = true
+		members = append(members, userID)
+		if len(members) >= limit {
+			break
+		}
+	}
+	return members
 }
 
 func ListGMFPackages(c *gin.Context) {
