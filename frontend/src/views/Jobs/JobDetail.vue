@@ -127,7 +127,7 @@
         </v-col>
         <v-col cols="6" sm="3" v-else-if="job.job_type === 'erp_product_cache'">
           <div class="text-caption text-grey">Endpoint ERP</div>
-          <div class="text-body-2 font-weight-medium">danhmucvattuhanghoa/search</div>
+          <div class="text-body-2 font-weight-medium">{{ erpProductEndpoint }}</div>
         </v-col>
         <v-col cols="6" sm="3" v-else>
           <div class="text-caption text-grey">Trạng thái thiết lập</div>
@@ -979,6 +979,7 @@ const erpCachePage = ref(1)
 const erpCachePerPage = 20
 const clearERPCacheDialog = ref(false)
 const erpCacheClearing = ref(false)
+const erpProductEndpoint = ref('danhmucvattuhanghoa/search')
 
 const erpCacheFilteredProducts = computed(() => {
   const q = erpCacheSearch.value?.toLowerCase().trim()
@@ -1420,6 +1421,17 @@ onMounted(async () => {
     const { data } = await api.get(`/tenants/${tenantId.value}/settings`)
     tenantAIProvider.value = data?.settings?.ai_provider || 'claude'
     tenantAIModel.value = data?.settings?.ai_model || ''
+    const perms = data?.settings?.erp_global_method_permissions
+    if (perms) {
+      try {
+        const parsed = JSON.parse(perms)
+        if (parsed.products && parsed.products.path && parsed.products.path !== 'products') {
+          erpProductEndpoint.value = parsed.products.path
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
   } catch { /* fallback empty */ }
   // Auto-start polling if job is currently running (e.g. after F5)
   if (isJobRunning.value) {
