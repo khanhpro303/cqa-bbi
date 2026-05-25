@@ -178,15 +178,15 @@
           <v-table density="compact">
             <thead>
               <tr>
-                <th style="width: 100px;">Mã Khách Hàng</th>
-                <th style="min-width: 200px;">Tên Khách Hàng</th>
+                <th style="width: 90px;">Mã KH</th>
+                <th style="min-width: 180px;">Tên KH</th>
                 <th>Địa chỉ</th>
-                <th style="width: 90px;">Miền</th>
+                <th style="width: 80px;">Miền</th>
                 <th style="width: 120px;">SĐT Cloudify</th>
-                <th style="width: 140px;">SĐT liên kết (CQA)</th>
-                <th style="width: 120px;">Trạng thái Zalo</th>
-                <th style="width: 150px;">Mã Verify / QR</th>
-                <th style="width: 100px;" class="text-center">Hành động</th>
+                <th style="width: 100px;">SĐT CQA</th>
+                <th style="width: 110px;">Trạng thái</th>
+                <th style="width: 130px;">Verify</th>
+                <th style="width: 90px;" class="text-center">Hành động</th>
               </tr>
             </thead>
             <tbody>
