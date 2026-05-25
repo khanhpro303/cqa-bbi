@@ -1292,18 +1292,102 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	case "products":
 		data, err = client.SearchProducts(search, limit)
 	case "inventory":
-		maCha, maChaName, isMaCha := detectMaChaFromSearch(c.Request.Context(), tenantID, search, productGroups)
-		if isMaCha {
-			c.JSON(http.StatusOK, gin.H{
-				"status":      "success",
-				"is_ma_cha":   true,
-				"ma_cha":      maCha,
-				"ma_cha_name": maChaName,
-				"message":     fmt.Sprintf("Dòng sản phẩm %s (%s) có nhiều phân loại màu sắc/kích thước.", maChaName, maCha),
-			})
-			return
+		// Load custom inventory endpoint config
+		inventoryEndpoint := "inventory_receipt/search"
+		var globalPermsSetting models.AppSetting
+		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
+			type EndpointConfig struct {
+				Get  bool   `json:"get"`
+				Post bool   `json:"post"`
+				Path string `json:"path"`
+			}
+			var globalPerms map[string]EndpointConfig
+			if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
+				if invConfig, exists := globalPerms["inventory"]; exists && invConfig.Path != "" && invConfig.Path != "inventory" {
+					path := invConfig.Path
+					path = strings.TrimPrefix(path, "/")
+					path = strings.TrimPrefix(path, "rest_api/private/")
+					path = strings.TrimPrefix(path, "/")
+					inventoryEndpoint = path
+				}
+			}
 		}
-		data, err = client.SearchInventory(search, limit)
+
+		maCha, _, isMaCha := detectMaChaFromSearch(c.Request.Context(), tenantID, search, productGroups)
+		if isMaCha {
+			// Query for parent product line (ma_cha)
+			childProducts, errVal := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, maCha)
+			if errVal != nil {
+				err = fmt.Errorf("failed to fetch variants from cache: %w", errVal)
+			} else if len(childProducts) > 0 {
+				childProducts = filterProductsByGroups(childProducts, productGroups)
+				
+				// Sum stocks for each child variant
+				var variantData []map[string]interface{}
+				for _, child := range childProducts {
+					childSKU := getMapString(child, "MA", "ma", "ma_hang")
+					if childSKU == "" {
+						continue
+					}
+					
+					params := map[string]string{
+						"limit": "100",
+					}
+					if inventoryEndpoint == "inventory_receipt/search" {
+						params["keyword"] = childSKU
+					} else {
+						params["MA_HANG"] = childSKU
+					}
+					
+					skuInventory, errQuery := client.SearchCustomEndpoint(inventoryEndpoint, params)
+					if errQuery != nil {
+						log.Printf("[inventory_query] error querying stock for SKU %s: %v", childSKU, errQuery)
+						continue
+					}
+					
+					var skuStock float64
+					for _, invItem := range skuInventory {
+						stockVal := getMapFloat(invItem, "stock", "ton", "ton_kho")
+						skuStock += stockVal
+					}
+					
+					record := map[string]interface{}{
+						"MA":                 childSKU,
+						"ma":                 childSKU,
+						"code":               childSKU,
+						"ma_hang":            childSKU,
+						"product_code":       childSKU,
+						"TEN":                getMapString(child, "TEN", "ten", "ten_hang"),
+						"ten":                getMapString(child, "TEN", "ten", "ten_hang"),
+						"TEN_DONG_BO_WEB":    getMapString(child, "TEN_DONG_BO_WEB", "ten_dong_bo_web"),
+						"TON_KHO":            skuStock,
+						"ton_kho":            skuStock,
+						"MA_CHA":             maCha,
+						"ma_cha":             maCha,
+						"THUOC_TINH_1":       getMapString(child, "THUOC_TINH_1", "thuoc_tinh_1"),
+						"THUOC_TINH_2":       getMapString(child, "THUOC_TINH_2", "thuoc_tinh_2"),
+						"DON_GIA_BAN":        getMapFloat(child, "DON_GIA_BAN", "don_gia_ban"),
+						"LINK_ANH":           getMapString(child, "LINK_ANH", "link_anh"),
+						"DVT":                getMapString(child, "DVT", "dvt"),
+						"LIST_TEN_NHOM_VTHH": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
+						"list_ten_nhom_vthh": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
+					}
+					variantData = append(variantData, record)
+				}
+				data = variantData
+			}
+		} else {
+			// Query for single SKU
+			params := map[string]string{
+				"limit": strconv.Itoa(limit),
+			}
+			if inventoryEndpoint == "inventory_receipt/search" {
+				params["keyword"] = search
+			} else {
+				params["MA_HANG"] = search
+			}
+			data, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
+		}
 	case "orders":
 		data, err = client.SearchSaleDocuments(partnerID, search, limit)
 	case "customers":
