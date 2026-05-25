@@ -839,7 +839,7 @@
                             density="compact"
                             variant="plain"
                             hide-details
-                            :disabled="!ep.is_enabled"
+                            disabled
                             style="font-size:0.75rem"
                           />
                         </td>
@@ -1606,6 +1606,7 @@ async function loadGroupEndpoints(groupId: string) {
         : []
       return {
         ...ep,
+        scope_type: 'own', // Enforce 'own' scope for GMF groups
         product_groups_arr: groupsArr
       }
     })
@@ -1631,6 +1632,8 @@ async function saveGroupEndpoints() {
       endpoints: payload
     })
     showSnack(t('crm_save_perms_success'), 'success')
+    // Reload endpoints from database to sync frontend state and Live Diagram visual state
+    await loadGroupEndpoints(activeGroupForPerms.value.id)
   } catch (err: any) {
     showSnack(err.response?.data?.error || t('error'), 'error')
   } finally {

@@ -39,6 +39,7 @@ func ListGroupERPEndpoints(c *gin.Context) {
 	var orderedEndpoints []models.ERPEndpoint
 	for _, resource := range erpAvailableResources {
 		if ep, found := existing[resource]; found {
+			ep.ScopeType = "own" // Enforce 'own' scope for GMF groups
 			orderedEndpoints = append(orderedEndpoints, *ep)
 		} else {
 			orderedEndpoints = append(orderedEndpoints, models.ERPEndpoint{
@@ -86,10 +87,7 @@ func SaveGroupERPEndpoints(c *gin.Context) {
 			continue
 		}
 
-		scopeType := ep.ScopeType
-		if scopeType == "" {
-			scopeType = "all"
-		}
+		scopeType := "own" // Enforce 'own' scope for GMF groups
 
 		var existing models.ERPEndpoint
 		result := db.DB.Where("tenant_id = ? AND group_id = ? AND resource = ?",
@@ -97,15 +95,18 @@ func SaveGroupERPEndpoints(c *gin.Context) {
 
 		if result.Error == nil {
 			// Update existing
-			db.DB.Model(&existing).Updates(map[string]interface{}{
+			if err := db.DB.Model(&existing).Updates(map[string]interface{}{
 				"is_enabled":     ep.IsEnabled,
 				"scope_type":     scopeType,
 				"product_groups": ep.ProductGroups,
 				"updated_at":     time.Now(),
-			})
+			}).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "update_failed", "details": err.Error()})
+				return
+			}
 		} else {
 			// Create new
-			db.DB.Create(&models.ERPEndpoint{
+			if err := db.DB.Create(&models.ERPEndpoint{
 				ID:            pkg.NewUUID(),
 				TenantID:      tenantID,
 				GroupID:       groupID,
@@ -115,7 +116,10 @@ func SaveGroupERPEndpoints(c *gin.Context) {
 				ProductGroups: ep.ProductGroups,
 				CreatedAt:     time.Now(),
 				UpdatedAt:     time.Now(),
-			})
+			}).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "create_failed", "details": err.Error()})
+				return
+			}
 		}
 	}
 
@@ -160,28 +164,28 @@ func ToggleGroupERPEndpoint(c *gin.Context) {
 	if result.Error == nil {
 		updates := map[string]interface{}{
 			"is_enabled": req.IsEnabled,
+			"scope_type": "own", // Enforce 'own' scope for GMF groups
 			"updated_at": time.Now(),
 		}
-		if req.IsEnabled {
-			updates["scope_type"] = "own"
+		if err := db.DB.Model(&existing).Updates(updates).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "update_failed", "details": err.Error()})
+			return
 		}
-		db.DB.Model(&existing).Updates(updates)
 	} else {
 		// Row doesn't exist yet — create it
-		scopeType := "all"
-		if req.IsEnabled {
-			scopeType = "own"
-		}
-		db.DB.Create(&models.ERPEndpoint{
+		if err := db.DB.Create(&models.ERPEndpoint{
 			ID:        pkg.NewUUID(),
 			TenantID:  tenantID,
 			GroupID:   groupID,
 			Resource:  req.Resource,
 			IsEnabled: req.IsEnabled,
-			ScopeType: scopeType,
+			ScopeType: "own", // Enforce 'own' scope for GMF groups
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
-		})
+		}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "create_failed", "details": err.Error()})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "updated"})
