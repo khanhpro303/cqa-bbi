@@ -1292,7 +1292,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	case "products":
 		data, err = client.SearchProducts(search, limit)
 	case "inventory":
-		maCha, maChaName, isMaCha := detectMaChaFromSearch(c.Request.Context(), tenantID, search)
+		maCha, maChaName, isMaCha := detectMaChaFromSearch(c.Request.Context(), tenantID, search, productGroups)
 		if isMaCha {
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "success",
@@ -1654,7 +1654,7 @@ func getProductsByMaChaFromAstraDB(ctx context.Context, tenantID, maCha string) 
 	return astraResp.Data.Documents, nil
 }
 
-func detectMaChaFromSearch(ctx context.Context, tenantID, search string) (string, string, bool) {
+func detectMaChaFromSearch(ctx context.Context, tenantID, search string, allowedGroups []string) (string, string, bool) {
 	if search == "" {
 		return "", "", false
 	}
@@ -1662,6 +1662,12 @@ func detectMaChaFromSearch(ctx context.Context, tenantID, search string) (string
 	// 1. Search products from Astra DB using the user's search query (fuzzy search)
 	matchedProducts, err := searchProductsFromAstraDB(ctx, tenantID, search, 50)
 	if err != nil || len(matchedProducts) == 0 {
+		return "", "", false
+	}
+
+	// Filter matched products based on allowed product groups
+	matchedProducts = filterProductsByGroups(matchedProducts, allowedGroups)
+	if len(matchedProducts) == 0 {
 		return "", "", false
 	}
 
