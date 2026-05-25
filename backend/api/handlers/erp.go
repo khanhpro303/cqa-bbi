@@ -288,7 +288,7 @@ func ERPQuery(c *gin.Context) {
 		} else {
 			allowedGroups = productGroups
 		}
-		respondWithMockDataV2(c, req.Resource, req.Search, req.Limit, allowedGroups, scopeType, permCtx.CustomerCode, tenantID, permCtx.Groups)
+		respondWithMockDataV2(c, req.Resource, req.Search, req.Limit, allowedGroups, scopeType, permCtx.CustomerCode, tenantID, permCtx.Groups, permCtx.ZaloUserID)
 		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, 0, c.ClientIP())
 		return
 	}
@@ -1389,7 +1389,131 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			data, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
 		}
 	case "orders":
-		data, err = client.SearchSaleDocuments(partnerID, search, limit)
+		if isGenericOrderSearch(search) {
+			promptMsg := gin.H{
+				"recipient": gin.H{
+					"user_id": permCtx.ZaloUserID,
+				},
+				"message": gin.H{
+					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào dưới đây?",
+					"attachment": gin.H{
+						"type": "template",
+						"payload": gin.H{
+							"buttons": []gin.H{
+								{
+									"title":   "3 ngày gần đây",
+									"type":    "oa.query.show",
+									"payload": "đơn hàng 3 ngày gần đây",
+								},
+								{
+									"title":   "5 ngày gần đây",
+									"type":    "oa.query.show",
+									"payload": "đơn hàng 5 ngày gần đây",
+								},
+								{
+									"title":   "7 ngày gần đây",
+									"type":    "oa.query.show",
+									"payload": "đơn hàng 7 ngày gần đây",
+								},
+							},
+						},
+					},
+				},
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status":            "success",
+				"is_orders_prompt":  true,
+				"zalo_rich_message": promptMsg,
+			})
+			return
+		}
+
+		ordersEndpoint := "sale_document/search" // default
+		var globalPermsSetting models.AppSetting
+		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
+			type EndpointConfig struct {
+				Get  bool   `json:"get"`
+				Post bool   `json:"post"`
+				Path string `json:"path"`
+			}
+			var globalPerms map[string]EndpointConfig
+			if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
+				if orderConfig, exists := globalPerms["orders"]; exists && orderConfig.Path != "" && orderConfig.Path != "orders" {
+					path := orderConfig.Path
+					path = strings.TrimPrefix(path, "/")
+					path = strings.TrimPrefix(path, "rest_api/private/")
+					path = strings.TrimPrefix(path, "/")
+					ordersEndpoint = path
+				}
+			}
+		}
+
+		var allowedCodes []string
+		if scopeType == "assigned" {
+			var groupIDs []string
+			for _, grp := range permCtx.Groups {
+				groupIDs = append(groupIDs, grp.GroupID)
+			}
+			allowedCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
+		}
+
+		days := parseDaysFromSearch(search)
+		if days > 0 {
+			tuNgay := formatDate(time.Now().AddDate(0, 0, -days))
+			denNgay := formatDate(time.Now())
+			params := map[string]string{
+				"TU_NGAY":  tuNgay,
+				"DEN_NGAY": denNgay,
+				"limit":    "200",
+			}
+			data, err = client.SearchCustomEndpoint(ordersEndpoint, params)
+			if err == nil {
+				var filteredData []map[string]interface{}
+				for _, item := range data {
+					itemCustCode := getMapString(item, "MA_KH", "ma_kh", "MA_DT", "ma_dt", "customer_code", "partner_code")
+
+					// Filter by customer code match based on scope
+					if scopeType == "own" && !strings.EqualFold(itemCustCode, permCtx.CustomerCode) {
+						continue
+					}
+					if scopeType == "assigned" {
+						matched := false
+						for _, ac := range allowedCodes {
+							if strings.EqualFold(ac, itemCustCode) {
+								matched = true
+								break
+							}
+						}
+						if !matched {
+							continue
+						}
+					}
+
+					record := map[string]interface{}{
+						"order_id":              getMapString(item, "MA_SO", "ma_so", "MA", "ma", "order_id", "name"),
+						"customer_name":         getMapString(item, "TEN_KH", "ten_kh", "TEN_DT", "ten_dt", "customer_name"),
+						"customer_code":         itemCustCode,
+						"status":                getMapString(item, "TRANG_THAI", "trang_thai", "status"),
+						"trang_thai":            getMapString(item, "TRANG_THAI", "trang_thai"),
+						"ghi_chu":               getMapString(item, "GHI_CHU", "ghi_chu"),
+						"don_dat_hang_chi_tiet": item["DON_DAT_HANG_CHI_TIET"],
+						"total":                 getMapFloat(item, "TONG_TIEN", "tong_tien", "total"),
+						"date":                  getMapString(item, "NGAY_LAP", "ngay_lap", "date"),
+					}
+					filteredData = append(filteredData, record)
+				}
+				data = filteredData
+			}
+		} else {
+			params := map[string]string{
+				"keyword": search,
+				"limit":   strconv.Itoa(limit),
+			}
+			if partnerID != "" {
+				params["partner_id"] = partnerID
+			}
+			data, err = client.SearchCustomEndpoint(ordersEndpoint, params)
+		}
 	case "customers":
 		data, err = client.SearchPartners(search, limit)
 	case "debt":
@@ -1461,7 +1585,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	})
 }
 
-func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, allowedGroups []string, scopeType string, customerCode string, tenantID string, groups []engine.GroupPermission) {
+func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, allowedGroups []string, scopeType string, customerCode string, tenantID string, groups []engine.GroupPermission, zaloUserID string) {
 	searchLower := strings.ToLower(search)
 
 	isGroupAllowed := func(groupName string) bool {
@@ -1478,11 +1602,11 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 	}
 
 	var allowedCodes []string
+	var groupIDs []string
+	for _, gp := range groups {
+		groupIDs = append(groupIDs, gp.GroupID)
+	}
 	if scopeType == "assigned" {
-		var groupIDs []string
-		for _, grp := range groups {
-			groupIDs = append(groupIDs, grp.GroupID)
-		}
 		allowedCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
 	}
 
@@ -1538,11 +1662,57 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
 
 	case "orders":
+		if isGenericOrderSearch(search) {
+			promptMsg := gin.H{
+				"recipient": gin.H{
+					"user_id": zaloUserID,
+				},
+				"message": gin.H{
+					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào dưới đây?",
+					"attachment": gin.H{
+						"type": "template",
+						"payload": gin.H{
+							"buttons": []gin.H{
+								{
+									"title":   "3 ngày gần đây",
+									"type":    "oa.query.show",
+									"payload": "đơn hàng 3 ngày gần đây",
+								},
+								{
+									"title":   "5 ngày gần đây",
+									"type":    "oa.query.show",
+									"payload": "đơn hàng 5 ngày gần đây",
+								},
+								{
+									"title":   "7 ngày gần đây",
+									"type":    "oa.query.show",
+									"payload": "đơn hàng 7 ngày gần đây",
+								},
+							},
+						},
+					},
+				},
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status":            "success",
+				"is_orders_prompt":  true,
+				"zalo_rich_message": promptMsg,
+			})
+			return
+		}
+
 		allOrders := []gin.H{
-			{"order_id": "ORD-2026-001", "customer_name": "Nguyễn Văn A", "customer_code": "CUST-001", "status": "Đang giao hàng", "total": 560000},
-			{"order_id": "ORD-2026-002", "customer_name": "Trần Thị B", "customer_code": "CUST-002", "status": "Đã hoàn thành", "total": 700000},
+			{"order_id": "ORD-2026-001", "customer_name": "Nguyễn Văn A", "customer_code": "CUST-001", "status": "Đang giao hàng", "total": 560000, "date": time.Now().AddDate(0, 0, -1).Format("2006-01-02 15:04:05")},
+			{"order_id": "ORD-2026-002", "customer_name": "Trần Thị B", "customer_code": "CUST-002", "status": "Đã hoàn thành", "total": 700000, "date": time.Now().AddDate(0, 0, -4).Format("2006-01-02 15:04:05")},
+			{"order_id": "ORD-2026-003", "customer_name": "Lê Văn C", "customer_code": "CUST-003", "status": "Đã hoàn thành", "total": 1200000, "date": time.Now().AddDate(0, 0, -6).Format("2006-01-02 15:04:05")},
 		}
 		var filtered []gin.H
+		days := parseDaysFromSearch(search)
+		var cutoff time.Time
+		if days > 0 {
+			cutoff = time.Now().AddDate(0, 0, -days)
+		}
+
 		for _, o := range allOrders {
 			id := strings.ToLower(o["order_id"].(string))
 			cust := strings.ToLower(o["customer_name"].(string))
@@ -1564,9 +1734,18 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 				}
 			}
 
-			if search != "" && !strings.Contains(id, searchLower) && !strings.Contains(cust, searchLower) {
-				continue
+			if days > 0 {
+				orderDateStr := o["date"].(string)
+				orderDate, _ := time.Parse("2006-01-02 15:04:05", orderDateStr)
+				if !orderDate.After(cutoff) {
+					continue
+				}
+			} else {
+				if search != "" && !strings.Contains(id, searchLower) && !strings.Contains(cust, searchLower) {
+					continue
+				}
 			}
+
 			filtered = append(filtered, o)
 			if len(filtered) >= limit {
 				break
@@ -1786,4 +1965,58 @@ func detectMaChaFromSearch(ctx context.Context, tenantID, search string, allowed
 	}
 
 	return "", "", false
+}
+
+func isGenericOrderSearch(search string) bool {
+	s := strings.ToLower(strings.TrimSpace(search))
+	if s == "" || s == "đơn hàng" || s == "don hang" || s == "xem đơn hàng" || s == "xem don hang" || s == "check đơn hàng" || s == "check don hang" || s == "tra cứu đơn hàng" || s == "tra cuu don hang" || s == "đơn đặt hàng" || s == "don dat hang" {
+		return true
+	}
+	return false
+}
+
+func parseDaysFromSearch(search string) int {
+	s := strings.ToLower(search)
+	if strings.Contains(s, "3 ngày") || strings.Contains(s, "3 ngay") {
+		return 3
+	}
+	if strings.Contains(s, "5 ngày") || strings.Contains(s, "5 ngay") {
+		return 5
+	}
+	if strings.Contains(s, "7 ngày") || strings.Contains(s, "7 ngay") || strings.Contains(s, "1 tuần") || strings.Contains(s, "1 tuan") {
+		return 7
+	}
+	return 0
+}
+
+func formatDate(t time.Time) string {
+	return t.Format("02/01/2006")
+}
+
+func parseOrderDate(item map[string]interface{}) (time.Time, bool) {
+	keys := []string{"date", "create_date", "ngay_lap", "ngay_ct", "write_date", "NGAY_LAP", "NGAY_CT"}
+	for _, k := range keys {
+		if val, ok := item[k]; ok && val != nil {
+			if str, ok := val.(string); ok && str != "" {
+				// Try parsing different formats
+				// Format 1: "2006-01-02 15:04:05"
+				if t, err := time.Parse("2006-01-02 15:04:05", str); err == nil {
+					return t, true
+				}
+				// Format 2: "2006-01-02T15:04:05Z"
+				if t, err := time.Parse(time.RFC3339, str); err == nil {
+					return t, true
+				}
+				// Format 3: "2006-01-02"
+				if t, err := time.Parse("2006-01-02", str); err == nil {
+					return t, true
+				}
+				// Format 4: "02/01/2006"
+				if t, err := time.Parse("02/01/2006", str); err == nil {
+					return t, true
+				}
+			}
+		}
+	}
+	return time.Time{}, false
 }
