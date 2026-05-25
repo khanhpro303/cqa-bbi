@@ -19,6 +19,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"github.com/vietbui/chat-quality-agent/ai"
 )
 
 const (
@@ -502,6 +503,39 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
+		// Real-time intent classification for active sessions
+		intent, err := classifyMessageIntent(ctx, matchedChannel.TenantID, payload.Message.Text)
+		if err != nil {
+			log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
+			intent = "IN_SCOPE"
+		}
+
+		if intent == "HANDOVER" {
+			log.Printf("[worker] message classified as HANDOVER. Closing session and sending handover message.")
+			if db.RedisClient != nil {
+				db.RedisClient.Del(ctx, sessionKey)
+			}
+			handoverMsg := "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Em sẽ báo các bạn nhân viên admin liên hệ trực tiếp hỗ trợ mình ngay nhé ạ!"
+			var sendErr error
+			if matchedGroup.ID != "" {
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, handoverMsg)
+			} else {
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, handoverMsg)
+			}
+			if sendErr != nil {
+				log.Printf("[worker] failed to send handover message: %v", sendErr)
+			}
+			return nil
+		}
+
+		if intent == "CASUAL" {
+			log.Printf("[worker] message classified as CASUAL. Closing session and passing through (auto-ignoring).")
+			if db.RedisClient != nil {
+				db.RedisClient.Del(ctx, sessionKey)
+			}
+			return nil
+		}
+
 		// Determine which Flow ID to use
 		flowIDToUse := meta.LangflowPublicFlowID
 		// Only route to the private flow if the user is whitelisted AND we are NOT in a GMF group chat context
@@ -913,4 +947,133 @@ func loadCloudifyCredentials(tenantID string, cfg *config.Config) (erpURL, erpDB
 	}
 
 	return
+}
+
+func classifyMessageIntent(ctx context.Context, tenantID, message string) (string, error) {
+	// 1. Get AI provider from tenant settings
+	provider := "claude"
+	var providerSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_provider'", tenantID).First(&providerSetting).Error; err == nil && providerSetting.ValuePlain != "" {
+		provider = providerSetting.ValuePlain
+	}
+
+	// 2. Get API key from tenant settings (per provider)
+	var setting models.AppSetting
+	keyFound := false
+	for _, key := range ai.ProviderAPIKeySettingKeys(provider) {
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&setting).Error; err == nil {
+			keyFound = true
+			break
+		}
+	}
+
+	cfg, _ := config.Load()
+	apiKey := ""
+	if keyFound {
+		if setting.ValueEncrypted != nil && len(setting.ValueEncrypted) > 0 {
+			decrypted, err := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
+			if err != nil {
+				return "IN_SCOPE", fmt.Errorf("failed to decrypt API key: %w", err)
+			}
+			apiKey = string(decrypted)
+		} else {
+			apiKey = setting.ValuePlain
+		}
+	}
+
+	// If no API key found, fallback to global configs (if any) or skip
+	if apiKey == "" {
+		if provider == "openai" {
+			apiKey = cfg.LangflowAPIKey
+		}
+	}
+
+	if apiKey == "" {
+		return "IN_SCOPE", nil // Fallback if no API key configured
+	}
+
+	// 3. Get model from settings (fallback to provider defaults)
+	model := "claude-haiku-4-5"
+	if provider == "gemini" {
+		model = "gemini-2.0-flash"
+	} else if provider == "openai" {
+		model = "gpt-5-mini"
+	}
+	var modelSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_model'", tenantID).First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
+		model = modelSetting.ValuePlain
+	}
+
+	// 4. Get base URL
+	var baseURL string
+	var baseURLSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_base_url'", tenantID).First(&baseURLSetting).Error; err == nil {
+		baseURL = baseURLSetting.ValuePlain
+	}
+
+	// 5. Initialize provider client
+	var aiClient ai.AIProvider
+	switch provider {
+	case "claude":
+		aiClient = ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL)
+	case "gemini":
+		aiClient = ai.NewGeminiProvider(apiKey, model, baseURL)
+	case "openai":
+		aiClient = ai.NewOpenAIProvider(apiKey, model, baseURL)
+	default:
+		return "IN_SCOPE", fmt.Errorf("unsupported AI provider: %s", provider)
+	}
+
+	// Define system prompt
+	systemPrompt := `Bạn là trợ lý lọc tin nhắn thông minh cho Chatbot doanh nghiệp BBI.
+Nhiệm vụ của bạn là phân loại tin nhắn của khách hàng thành một trong ba nhãn sau:
+1. "IN_SCOPE": Tin nhắn hỏi về thông tin sản phẩm, tồn kho, giá cả, đơn hàng, công nợ (financial debt), hoặc các vấn đề liên quan trực tiếp đến hoạt động mua bán của doanh nghiệp BBI mà RAG Bot có thể tự trả lời dựa trên tài liệu sản phẩm hoặc dữ liệu tồn kho/công nợ.
+2. "HANDOVER": Tin nhắn phàn nàn về chất lượng dịch vụ, sản phẩm lỗi, chậm giao hàng, thái độ phục vụ, yêu cầu gặp nhân viên hoặc các vấn đề nghiêm trọng cần con người giải quyết.
+3. "CASUAL": Tin nhắn chào hỏi xã giao, cảm ơn, đồng ý (ví dụ: "ok", "dạ", "cảm ơn", "hello", "hi") hoặc các câu nói bâng quơ không yêu cầu bot xử lý nghiệp vụ.
+
+Định dạng trả về duy nhất là một đối tượng JSON:
+{
+  "label": "IN_SCOPE" | "HANDOVER" | "CASUAL",
+  "reason": "Giải thích ngắn gọn lý do phân loại"
+}
+CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`
+
+	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	resp, err := aiClient.AnalyzeChat(testCtx, systemPrompt, message)
+	if err != nil {
+		return "IN_SCOPE", err
+	}
+
+	content := strings.TrimSpace(resp.Content)
+	if strings.HasPrefix(content, "```") {
+		if idx := strings.Index(content, "\n"); idx != -1 {
+			content = content[idx+1:]
+		}
+		if idx := strings.LastIndex(content, "```"); idx != -1 {
+			content = content[:idx]
+		}
+		content = strings.TrimSpace(content)
+	}
+
+	var parsed struct {
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		contentUpper := strings.ToUpper(content)
+		if strings.Contains(contentUpper, "HANDOVER") {
+			return "HANDOVER", nil
+		}
+		if strings.Contains(contentUpper, "CASUAL") {
+			return "CASUAL", nil
+		}
+		return "IN_SCOPE", nil
+	}
+
+	label := strings.ToUpper(strings.TrimSpace(parsed.Label))
+	if label == "HANDOVER" || label == "CASUAL" {
+		return label, nil
+	}
+	return "IN_SCOPE", nil
 }
