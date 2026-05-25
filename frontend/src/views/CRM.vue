@@ -168,18 +168,18 @@
               Lấy lại dữ liệu
             </v-btn>
           </v-card-title>
-          <v-table density="comfortable">
+          <v-table density="compact">
             <thead>
               <tr>
-                <th>Mã Khách Hàng</th>
-                <th>Tên Khách Hàng</th>
+                <th style="width: 130px;">Mã Khách Hàng</th>
+                <th style="width: 180px;">Tên Khách Hàng</th>
                 <th>Địa chỉ</th>
-                <th>Miền</th>
-                <th>SĐT Cloudify</th>
-                <th>SĐT liên kết (CQA)</th>
-                <th>Trạng thái Zalo</th>
-                <th>Mã Verify / QR</th>
-                <th>Hành động</th>
+                <th style="width: 90px;">Miền</th>
+                <th style="width: 120px;">SĐT Cloudify</th>
+                <th style="width: 140px;">SĐT liên kết (CQA)</th>
+                <th style="width: 120px;">Trạng thái Zalo</th>
+                <th style="width: 150px;">Mã Verify / QR</th>
+                <th style="width: 100px;" class="text-center">Hành động</th>
               </tr>
             </thead>
             <tbody>
@@ -190,7 +190,11 @@
                   </v-chip>
                 </td>
                 <td class="font-weight-bold">{{ c.name }}</td>
-                <td class="text-body-2 text-grey-darken-1">{{ c.address || '—' }}</td>
+                <td>
+                  <div class="text-body-2 text-grey-darken-1 text-truncate" style="max-width: 320px;" :title="c.address">
+                    {{ c.address || '—' }}
+                  </div>
+                </td>
                 <td>
                   <v-chip v-if="c.region" size="x-small" color="blue-grey" variant="outlined">{{ c.region }}</v-chip>
                   <span v-else>—</span>
@@ -217,7 +221,7 @@
                   </div>
                   <span v-else>—</span>
                 </td>
-                <td>
+                <td class="text-center">
                   <v-btn icon="mdi-cellphone-link" size="small" color="teal" variant="text" @click="openAssignPhoneDialog(c)" title="Gán số điện thoại thủ công" />
                 </td>
               </tr>
@@ -923,6 +927,7 @@ const assignFormRef = ref<any>(null)
 // QR Dialog
 const activeInvite = ref<any>(null)
 const qrDialog = ref(false)
+const selectedQrOA = ref<any>(null)
 
 // Approvals state
 const approveDialog = ref(false)
@@ -1088,12 +1093,21 @@ async function assignCustomerPhone() {
   }
 }
 
-function showCloudifyQR(c: any) {
-  activeInvite.value = {
-    name: c.name,
-    verify_token: c.verify_token
+function openQrDialog(inviteData: any) {
+  activeInvite.value = inviteData
+  if (zaloOAChannels.value && zaloOAChannels.value.length > 0) {
+    selectedQrOA.value = zaloOAChannels.value[0]
+  } else {
+    selectedQrOA.value = null
   }
   qrDialog.value = true
+}
+
+function showCloudifyQR(c: any) {
+  openQrDialog({
+    name: c.name,
+    verify_token: c.verify_token
+  })
 }
 
 
@@ -1370,9 +1384,8 @@ async function createInvite() {
       name: inviteForm.value.name,
       phone_number: inviteForm.value.phone_number
     })
-    activeInvite.value = data
     inviteDialog.value = false
-    qrDialog.value = true
+    openQrDialog(data)
     await fetchCustomers()
   } catch (err) {
     showSnack('Lỗi tạo mã xác thực', 'error')
@@ -1382,8 +1395,7 @@ async function createInvite() {
 }
 
 function showPendingQR(c: any) {
-  activeInvite.value = c
-  qrDialog.value = true
+  openQrDialog(c)
 }
 
 // Approve Customer & Assign ma_khach_hang
