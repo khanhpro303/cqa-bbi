@@ -216,9 +216,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if strings.HasPrefix(strings.ToLower(userText), "verify ") {
 			token := strings.TrimSpace(userText[7:])
 			if token != "" {
-				// Try to find a pending whitelist record for this tenant with this token
+				// Try to find a pending whitelist record for this tenant and channel with this token
 				var whitelistRec models.ZaloWhitelist
-				if err := db.DB.Where("tenant_id = ? AND verify_token = ? AND status = ?", matchedChannel.TenantID, token, "pending").First(&whitelistRec).Error; err == nil {
+				if err := db.DB.Where("tenant_id = ? AND (channel_id = ? OR channel_id = '' OR channel_id IS NULL) AND verify_token = ? AND status = ?", matchedChannel.TenantID, matchedChannel.ID, token, "pending").First(&whitelistRec).Error; err == nil {
 					// Found! Fetch their Zalo profile to get their avatar
 					avatarURL := ""
 					if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
@@ -227,6 +227,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 					// Update whitelist record (Keep the original Name entered by the admin)
 					whitelistRec.ZaloUserID = payload.Sender.ID
+					if whitelistRec.ChannelID == "" {
+						whitelistRec.ChannelID = matchedChannel.ID
+					}
 					if avatarURL != "" {
 						whitelistRec.Avatar = avatarURL
 					}
@@ -276,10 +279,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// 2. Determine Whitelist / Staff / Customer Routing:
-		// Check if the current sender is active in the Zalo whitelist for this tenant.
+		// Check if the current sender is active in the Zalo whitelist for this tenant and channel.
 		isWhitelisted := false
 		var whitelistRec models.ZaloWhitelist
-		if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", matchedChannel.TenantID, payload.Sender.ID, "active").First(&whitelistRec).Error; err == nil {
+		if err := db.DB.Where("tenant_id = ? AND (channel_id = ? OR channel_id = '' OR channel_id IS NULL) AND zalo_user_id = ? AND status = ?", matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, "active").First(&whitelistRec).Error; err == nil {
 			isWhitelisted = true
 		}
 

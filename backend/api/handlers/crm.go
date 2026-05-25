@@ -114,7 +114,7 @@ func CreateCRMGroup(c *gin.Context) {
 	// to contain at least one OA admin and no more than 99 users.
 	var activeStaff []models.ZaloWhitelist
 	if err := db.DB.
-		Where("tenant_id = ? AND status = ? AND zalo_user_id <> ''", tenantID, "active").
+		Where("tenant_id = ? AND (channel_id = ? OR channel_id = '' OR channel_id IS NULL) AND status = ? AND zalo_user_id <> ''", tenantID, channel.ID, "active").
 		Order("updated_at DESC").
 		Limit(99).
 		Find(&activeStaff).Error; err != nil {

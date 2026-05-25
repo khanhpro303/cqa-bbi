@@ -103,6 +103,9 @@
                 </td>
                 <td>
                   <div class="font-weight-bold">{{ item.name }}</div>
+                  <div v-if="item.channel?.name" class="text-caption text-grey">
+                    OA: {{ item.channel.name }}
+                  </div>
                 </td>
                 <td>
                   <code class="text-caption bg-grey-lighten-3 px-1 rounded">{{ item.zalo_user_id || '—' }}</code>
@@ -204,17 +207,7 @@
             </v-radio-group>
 
             <v-expand-transition>
-              <div v-if="whitelistForm.mode === 'direct'">
-                <v-text-field
-                  v-model="whitelistForm.zalo_user_id"
-                  :label="$t('users_whitelist_field_zalo_id')"
-                  :hint="$t('users_whitelist_field_zalo_id_hint')"
-                  persistent-hint
-                  class="mb-2"
-                  :rules="[v => !!v || $t('validation_required')]"
-                />
-              </div>
-              <div v-else>
+              <div>
                 <v-select
                   v-if="activeZaloOAs.length > 1"
                   v-model="whitelistForm.selectedOA"
@@ -222,8 +215,21 @@
                   :label="$t('users_whitelist_select_oa')"
                   class="mb-2"
                 />
-                <div class="text-caption text-grey-darken-1 mb-2">
-                  {{ $t('users_whitelist_qr_instruction') }}
+                
+                <div v-if="whitelistForm.mode === 'direct'">
+                  <v-text-field
+                    v-model="whitelistForm.zalo_user_id"
+                    :label="$t('users_whitelist_field_zalo_id')"
+                    :hint="$t('users_whitelist_field_zalo_id_hint')"
+                    persistent-hint
+                    class="mb-2"
+                    :rules="[v => !!v || $t('validation_required')]"
+                  />
+                </div>
+                <div v-else>
+                  <div class="text-caption text-grey-darken-1 mb-2">
+                    {{ $t('users_whitelist_qr_instruction') }}
+                  </div>
                 </div>
               </div>
             </v-expand-transition>
@@ -438,12 +444,21 @@ async function addWhitelist() {
   const { valid } = await whitelistFormRef.value?.validate() || {}
   if (!valid) return
 
+  // Auto-select first Zalo OA if select field not filled
+  if (!whitelistForm.value.selectedOA && activeZaloOAs.value.length > 0) {
+    whitelistForm.value.selectedOA = activeZaloOAs.value[0].external_id
+  }
+
+  const selectedChannel = activeZaloOAs.value.find(oa => oa.external_id === whitelistForm.value.selectedOA)
+  const channelId = selectedChannel ? selectedChannel.id : ''
+
   creatingWhitelist.value = true
   try {
     if (whitelistForm.value.mode === 'direct') {
       await api.post(`/tenants/${tenantId.value}/zalo-whitelist`, {
         zalo_user_id: whitelistForm.value.zalo_user_id,
         name: whitelistForm.value.name,
+        channel_id: channelId,
       })
       whitelistDialog.value = false
       showSnack(t('users_whitelist_toast_add_direct_success'), 'success')
@@ -452,13 +467,9 @@ async function addWhitelist() {
       // QR verification mode
       const { data } = await api.post(`/tenants/${tenantId.value}/zalo-whitelist/invite`, {
         name: whitelistForm.value.name,
+        channel_id: channelId,
       })
       activeInvite.value = data
-      
-      // Auto-select first Zalo OA if select field not filled
-      if (!whitelistForm.value.selectedOA && activeZaloOAs.value.length > 0) {
-        whitelistForm.value.selectedOA = activeZaloOAs.value[0].external_id
-      }
       
       whitelistDialog.value = false
       qrDialog.value = true
@@ -484,8 +495,11 @@ async function deleteWhitelist(id: string) {
 
 function showPendingQR(item: any) {
   activeInvite.value = item
-  // Select first OA if not selected
-  if (!whitelistForm.value.selectedOA && activeZaloOAs.value.length > 0) {
+  // Select the channel of the invited item if it exists
+  const channel = activeZaloOAs.value.find(oa => oa.id === item.channel_id)
+  if (channel) {
+    whitelistForm.value.selectedOA = channel.external_id
+  } else if (!whitelistForm.value.selectedOA && activeZaloOAs.value.length > 0) {
     whitelistForm.value.selectedOA = activeZaloOAs.value[0].external_id
   }
   qrDialog.value = true

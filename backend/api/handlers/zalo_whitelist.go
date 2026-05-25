@@ -13,22 +13,24 @@ import (
 )
 
 type ZaloWhitelistResponse struct {
-	ID          string    `json:"id"`
-	TenantID    string    `json:"tenant_id"`
-	ZaloUserID  string    `json:"zalo_user_id"`
-	Name        string    `json:"name"`
-	Avatar      string    `json:"avatar"`
-	VerifyToken string    `json:"verify_token"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string          `json:"id"`
+	TenantID    string          `json:"tenant_id"`
+	ChannelID   string          `json:"channel_id"`
+	ZaloUserID  string          `json:"zalo_user_id"`
+	Name        string          `json:"name"`
+	Avatar      string          `json:"avatar"`
+	VerifyToken string          `json:"verify_token"`
+	Status      string          `json:"status"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	Channel     *models.Channel `json:"channel,omitempty"`
 }
 
 func ListZaloWhitelist(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
 	var list []models.ZaloWhitelist
-	if err := db.DB.Where("tenant_id = ?", tenantID).Order("created_at DESC").Find(&list).Error; err != nil {
+	if err := db.DB.Preload("Channel").Where("tenant_id = ?", tenantID).Order("created_at DESC").Find(&list).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_fetch_whitelist"})
 		return
 	}
@@ -38,6 +40,7 @@ func ListZaloWhitelist(c *gin.Context) {
 		results[i] = ZaloWhitelistResponse{
 			ID:          item.ID,
 			TenantID:    item.TenantID,
+			ChannelID:   item.ChannelID,
 			ZaloUserID:  item.ZaloUserID,
 			Name:        item.Name,
 			Avatar:      item.Avatar,
@@ -45,6 +48,7 @@ func ListZaloWhitelist(c *gin.Context) {
 			Status:      item.Status,
 			CreatedAt:   item.CreatedAt,
 			UpdatedAt:   item.UpdatedAt,
+			Channel:     item.Channel,
 		}
 	}
 
@@ -57,15 +61,16 @@ func AddZaloWhitelist(c *gin.Context) {
 	var req struct {
 		ZaloUserID string `json:"zalo_user_id" binding:"required"`
 		Name       string `json:"name" binding:"required"`
+		ChannelID  string `json:"channel_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
 		return
 	}
 
-	// Check if already whitelisted (active) for this tenant
+	// Check if already whitelisted (active) for this tenant and channel
 	var existing models.ZaloWhitelist
-	if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", tenantID, req.ZaloUserID, "active").First(&existing).Error; err == nil {
+	if err := db.DB.Where("tenant_id = ? AND channel_id = ? AND zalo_user_id = ? AND status = ?", tenantID, req.ChannelID, req.ZaloUserID, "active").First(&existing).Error; err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "user_already_whitelisted"})
 		return
 	}
@@ -74,6 +79,7 @@ func AddZaloWhitelist(c *gin.Context) {
 	item := models.ZaloWhitelist{
 		ID:         uuid.New().String(),
 		TenantID:   tenantID,
+		ChannelID:  req.ChannelID,
 		ZaloUserID: req.ZaloUserID,
 		Name:       req.Name,
 		Status:     "active",
@@ -89,6 +95,7 @@ func AddZaloWhitelist(c *gin.Context) {
 	c.JSON(http.StatusCreated, ZaloWhitelistResponse{
 		ID:         item.ID,
 		TenantID:   item.TenantID,
+		ChannelID:  item.ChannelID,
 		ZaloUserID: item.ZaloUserID,
 		Name:       item.Name,
 		Status:     item.Status,
@@ -100,7 +107,8 @@ func InviteZaloWhitelist(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
 	var req struct {
-		Name string `json:"name" binding:"required"`
+		Name      string `json:"name" binding:"required"`
+		ChannelID string `json:"channel_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -114,6 +122,7 @@ func InviteZaloWhitelist(c *gin.Context) {
 	item := models.ZaloWhitelist{
 		ID:          uuid.New().String(),
 		TenantID:    tenantID,
+		ChannelID:   req.ChannelID,
 		Name:        req.Name,
 		VerifyToken: token,
 		Status:      "pending",
@@ -129,6 +138,7 @@ func InviteZaloWhitelist(c *gin.Context) {
 	c.JSON(http.StatusCreated, ZaloWhitelistResponse{
 		ID:          item.ID,
 		TenantID:    item.TenantID,
+		ChannelID:   item.ChannelID,
 		Name:        item.Name,
 		VerifyToken: item.VerifyToken,
 		Status:      item.Status,
