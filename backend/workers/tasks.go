@@ -465,22 +465,24 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// Determine which Flow ID to use
 		flowIDToUse := meta.LangflowPublicFlowID
-		if isWhitelisted {
+		// Only route to the private flow if the user is whitelisted AND we are NOT in a GMF group chat context
+		if isWhitelisted && matchedGroup.ID == "" {
 			flowIDToUse = meta.LangflowFlowID
 			log.Printf("[worker] Routing whitelisted internal staff %s to RAG Agent Flow (%s)", payload.Sender.ID, flowIDToUse)
 		} else {
 			if flowIDToUse == "" {
 				flowIDToUse = meta.LangflowFlowID
 			}
-			log.Printf("[worker] Routing customer %s (code: %s) to Public Flow (%s)", payload.Sender.ID, customerCode, flowIDToUse)
+			log.Printf("[worker] Routing user/customer %s (code: %s) to Public/Group Flow (%s)", payload.Sender.ID, customerCode, flowIDToUse)
 		}
 
 		// Resolve permission context and sign JWT token
 		agentType := "public"
-		if isWhitelisted {
+		// Only set agentType to "private" if the user is whitelisted AND we are NOT in a GMF group chat context
+		if isWhitelisted && matchedGroup.ID == "" {
 			agentType = "private"
 		}
-		permCtx := engine.ResolvePermissions(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType)
+		permCtx := engine.ResolvePermissionsWithGroup(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType, matchedGroup.ID)
 
 		// Intercept Zalo OA interactive button clicks
 		// A. "Xem theo màu" button click

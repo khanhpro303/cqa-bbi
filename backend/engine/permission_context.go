@@ -53,7 +53,9 @@ type permissionClaims struct {
 // ResolvePermissions loads all CRM groups a customer belongs to and their
 // ERPEndpoint configs. For private agents, returns an empty groups list
 // (private = full access, enforced at gateway level).
-func ResolvePermissions(tenantID, zaloUserID, customerCode, agentType string) GroupPermissionContext {
+// ResolvePermissionsWithGroup loads CRM group permissions. If a specific groupID is provided,
+// it resolves permissions exclusively for that group. Otherwise, it resolves based on agentType.
+func ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, groupID string) GroupPermissionContext {
 	ctx := GroupPermissionContext{
 		TenantID:     tenantID,
 		ZaloUserID:   zaloUserID,
@@ -61,7 +63,45 @@ func ResolvePermissions(tenantID, zaloUserID, customerCode, agentType string) Gr
 		AgentType:    agentType,
 	}
 
-	// Private agents load their permissions configured for the "private_bot" group
+	// 1. If a specific group context is provided, resolve permissions only for this group.
+	if groupID != "" {
+		var groups []models.CRMGroup
+		if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, tenantID).Find(&groups).Error; err != nil || len(groups) == 0 {
+			return ctx
+		}
+
+		var endpoints []models.ERPEndpoint
+		db.DB.Where("tenant_id = ? AND group_id = ?", tenantID, groupID).Find(&endpoints)
+
+		var resources []ResourcePermission
+		for _, ep := range endpoints {
+			var productGroups []string
+			if ep.ProductGroups != "" {
+				for _, g := range strings.Split(ep.ProductGroups, ",") {
+					if t := strings.TrimSpace(g); t != "" {
+						productGroups = append(productGroups, strings.ToLower(t))
+					}
+				}
+			}
+			resources = append(resources, ResourcePermission{
+				Resource:      ep.Resource,
+				IsEnabled:     ep.IsEnabled,
+				ScopeType:     ep.ScopeType,
+				ProductGroups: productGroups,
+			})
+		}
+
+		ctx.Groups = []GroupPermission{
+			{
+				GroupID:   groups[0].ID,
+				GroupName: groups[0].Name,
+				Resources: resources,
+			},
+		}
+		return ctx
+	}
+
+	// 2. Private agents load their permissions configured for the "private_bot" group
 	if agentType == "private" {
 		var endpoints []models.ERPEndpoint
 		db.DB.Where("tenant_id = ? AND group_id = ?", tenantID, "private_bot").Find(&endpoints)
@@ -98,14 +138,13 @@ func ResolvePermissions(tenantID, zaloUserID, customerCode, agentType string) Gr
 		return ctx
 	}
 
-	// 1. Find approved ZaloCustomer
+	// 3. Fallback to normal customer (public agent) resolution
 	var customer models.ZaloCustomer
 	if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?",
 		tenantID, zaloUserID, "approved").First(&customer).Error; err != nil {
 		return ctx
 	}
 
-	// 2. Find all group IDs the customer belongs to
 	var groupLinks []models.CRMGroupCustomer
 	if err := db.DB.Where("zalo_customer_id = ?", customer.ID).Find(&groupLinks).Error; err != nil || len(groupLinks) == 0 {
 		return ctx
@@ -116,7 +155,6 @@ func ResolvePermissions(tenantID, zaloUserID, customerCode, agentType string) Gr
 		groupIDs[i] = link.GroupID
 	}
 
-	// 3. Load CRM group names
 	var groups []models.CRMGroup
 	db.DB.Where("id IN (?)", groupIDs).Find(&groups)
 	groupNameMap := make(map[string]string)
@@ -124,11 +162,9 @@ func ResolvePermissions(tenantID, zaloUserID, customerCode, agentType string) Gr
 		groupNameMap[g.ID] = g.Name
 	}
 
-	// 4. Load ERPEndpoints for all groups
 	var endpoints []models.ERPEndpoint
 	db.DB.Where("tenant_id = ? AND group_id IN (?)", tenantID, groupIDs).Find(&endpoints)
 
-	// 5. Build per-group permission map
 	groupEndpointMap := make(map[string][]ResourcePermission)
 	for _, ep := range endpoints {
 		var productGroups []string
@@ -149,7 +185,6 @@ func ResolvePermissions(tenantID, zaloUserID, customerCode, agentType string) Gr
 		groupEndpointMap[ep.GroupID] = append(groupEndpointMap[ep.GroupID], rp)
 	}
 
-	// 6. Assemble final GroupPermission list
 	for _, gid := range groupIDs {
 		gp := GroupPermission{
 			GroupID:   gid,
@@ -160,6 +195,13 @@ func ResolvePermissions(tenantID, zaloUserID, customerCode, agentType string) Gr
 	}
 
 	return ctx
+}
+
+// ResolvePermissions loads all CRM groups a customer belongs to and their
+// ERPEndpoint configs. For private agents, returns an empty groups list
+// (private = full access, enforced at gateway level).
+func ResolvePermissions(tenantID, zaloUserID, customerCode, agentType string) GroupPermissionContext {
+	return ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, "")
 }
 
 // ---------------------------------------------------------------------------

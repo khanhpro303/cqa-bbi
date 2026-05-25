@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"os"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/vietbui/chat-quality-agent/db"
+	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
 func TestSignAndVerifyPermissionToken(t *testing.T) {
@@ -207,5 +210,58 @@ func TestIsResourceAllowed(t *testing.T) {
 
 	if len(products) != 2 {
 		t.Errorf("expected 2 product groups, got %d", len(products))
+	}
+}
+
+func TestResolvePermissionsWithGroup(t *testing.T) {
+	dsn := os.Getenv("TEST_DB_DSN")
+	if dsn == "" {
+		dsn = "cqa:cqa_password@tcp(127.0.0.1:3306)/cqa?charset=utf8mb4&parseTime=True&loc=UTC"
+	}
+
+	if err := db.Connect(dsn, false); err != nil {
+		t.Skip("Skipping TestResolvePermissionsWithGroup: database not available")
+		return
+	}
+	defer db.Close()
+
+	tenantID := "testperm-" + pkg.NewUUID()[:8]
+	groupID := "grp-" + pkg.NewUUID()[:8]
+
+	// 1. Seed tenant and group
+	db.DB.Exec(`INSERT INTO tenants (id, name, slug, settings, created_at, updated_at) VALUES (?, ?, ?, '{}', NOW(), NOW())`,
+		tenantID, "Test Tenant", "test-"+tenantID)
+	defer db.DB.Exec("DELETE FROM tenants WHERE id = ?", tenantID)
+
+	db.DB.Exec(`INSERT INTO crm_groups (id, tenant_id, name, description, customer_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
+		groupID, tenantID, "GMF Test Group", "Description", "CUST-GMF")
+	defer db.DB.Exec("DELETE FROM crm_groups WHERE tenant_id = ?", tenantID)
+
+	// 2. Seed ERPEndpoint for this group
+	db.DB.Exec(`INSERT INTO erp_endpoints (id, tenant_id, group_id, resource, is_enabled, scope_type, product_groups, created_at, updated_at) VALUES (?, ?, ?, 'products', true, 'own', 'bò mỹ', NOW(), NOW())`,
+		pkg.NewUUID(), tenantID, groupID, groupID)
+	defer db.DB.Exec("DELETE FROM erp_endpoints WHERE tenant_id = ?", tenantID)
+
+	// 3. Resolve permissions passing the groupID context
+	ctx := ResolvePermissionsWithGroup(tenantID, "some-zalo-user", "CUST-GMF", "public", groupID)
+
+	if ctx.TenantID != tenantID {
+		t.Errorf("expected tenant ID %s, got %s", tenantID, ctx.TenantID)
+	}
+
+	if len(ctx.Groups) != 1 {
+		t.Fatalf("expected exactly 1 group in context, got %d", len(ctx.Groups))
+	}
+
+	if ctx.Groups[0].GroupID != groupID {
+		t.Errorf("expected group ID %s, got %s", groupID, ctx.Groups[0].GroupID)
+	}
+
+	if len(ctx.Groups[0].Resources) != 1 || ctx.Groups[0].Resources[0].Resource != "products" {
+		t.Errorf("expected products resource permission")
+	}
+
+	if ctx.Groups[0].Resources[0].ScopeType != "own" || len(ctx.Groups[0].Resources[0].ProductGroups) != 1 || ctx.Groups[0].Resources[0].ProductGroups[0] != "bò mỹ" {
+		t.Errorf("unexpected product resource details: %+v", ctx.Groups[0].Resources[0])
 	}
 }
