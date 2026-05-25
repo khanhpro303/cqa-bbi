@@ -88,20 +88,58 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		var matchedChannel *models.Channel
 		var zaloCreds channels.ZaloOACredentials
 
-		for _, ch := range allChannels {
-			credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
-			if err != nil {
-				continue
-			}
-			var creds channels.ZaloOACredentials
-			if err := json.Unmarshal(credBytes, &creds); err != nil {
-				continue
-			}
-
-			if creds.OAId == payload.Recipient.ID || creds.AppID == payload.AppID {
-				matchedChannel = &ch
+		// First pass: try to match by exact OA ID (Recipient ID) using ExternalID field in DB
+		for i, ch := range allChannels {
+			if ch.ExternalID != "" && ch.ExternalID == payload.Recipient.ID {
+				credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
+				if err != nil {
+					continue
+				}
+				var creds channels.ZaloOACredentials
+				if err := json.Unmarshal(credBytes, &creds); err != nil {
+					continue
+				}
+				matchedChannel = &allChannels[i]
 				zaloCreds = creds
 				break
+			}
+		}
+
+		// Second pass: fallback to decrypted OA ID match (if ExternalID in DB was empty)
+		if matchedChannel == nil {
+			for i, ch := range allChannels {
+				credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
+				if err != nil {
+					continue
+				}
+				var creds channels.ZaloOACredentials
+				if err := json.Unmarshal(credBytes, &creds); err != nil {
+					continue
+				}
+				if creds.OAId != "" && creds.OAId == payload.Recipient.ID {
+					matchedChannel = &allChannels[i]
+					zaloCreds = creds
+					break
+				}
+			}
+		}
+
+		// Third pass: last-resort fallback to AppID if no exact OA ID matches
+		if matchedChannel == nil {
+			for i, ch := range allChannels {
+				credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
+				if err != nil {
+					continue
+				}
+				var creds channels.ZaloOACredentials
+				if err := json.Unmarshal(credBytes, &creds); err != nil {
+					continue
+				}
+				if creds.AppID != "" && creds.AppID == payload.AppID {
+					matchedChannel = &allChannels[i]
+					zaloCreds = creds
+					break
+				}
 			}
 		}
 
