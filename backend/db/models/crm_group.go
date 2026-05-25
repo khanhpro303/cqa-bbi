@@ -7,14 +7,16 @@ type CRMGroup struct {
 	TenantID    string         `gorm:"type:char(36);not null;index" json:"tenant_id"`
 	Name        string         `gorm:"type:varchar(255);not null" json:"name"`
 	Description string         `gorm:"type:text" json:"description"`
-	ZaloGroupID   string       `gorm:"type:varchar(255)" json:"zalo_group_id,omitempty"`
-	ZaloGroupLink string       `gorm:"type:text" json:"zalo_group_link,omitempty"`
-	ZaloAssetID   string       `gorm:"type:varchar(255)" json:"zalo_asset_id,omitempty"`
-	CreatedAt   time.Time      `gorm:"not null" json:"created_at"`
-	UpdatedAt   time.Time      `gorm:"not null" json:"updated_at"`
+	ZaloGroupID   string         `gorm:"type:varchar(255)" json:"zalo_group_id,omitempty"`
+	ZaloGroupLink string         `gorm:"type:text" json:"zalo_group_link,omitempty"`
+	ZaloAssetID   string         `gorm:"type:varchar(255)" json:"zalo_asset_id,omitempty"`
+	ChannelID     string         `gorm:"type:char(36);index" json:"channel_id,omitempty"`
+	CreatedAt     time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt     time.Time      `gorm:"not null" json:"updated_at"`
 
-	Employees   []User         `gorm:"many2many:crm_group_employees;joinForeignKey:GroupID;joinReferences:UserID" json:"employees,omitempty"`
-	Customers   []ZaloCustomer `gorm:"many2many:crm_group_customers;joinForeignKey:GroupID;joinReferences:ZaloCustomerID" json:"customers,omitempty"`
+	Employees []User         `gorm:"many2many:crm_group_employees;joinForeignKey:GroupID;joinReferences:UserID" json:"employees,omitempty"`
+	Customers []ZaloCustomer `gorm:"many2many:crm_group_customers;joinForeignKey:GroupID;joinReferences:ZaloCustomerID" json:"customers,omitempty"`
+	Channel   *Channel       `gorm:"foreignKey:ChannelID" json:"channel,omitempty"`
 }
 
 func (CRMGroup) TableName() string {

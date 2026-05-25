@@ -25,7 +25,7 @@ func ListCRMGroups(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
 	var groups []models.CRMGroup
-	if err := db.DB.Preload("Employees").Preload("Customers").Where("tenant_id = ?", tenantID).Find(&groups).Error; err != nil {
+	if err := db.DB.Preload("Employees").Preload("Customers").Preload("Channel").Where("tenant_id = ?", tenantID).Find(&groups).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_list_groups"})
 		return
 	}
@@ -40,6 +40,7 @@ func CreateCRMGroup(c *gin.Context) {
 		Name        string `json:"name" binding:"required"`
 		Description string `json:"description"`
 		AssetID     string `json:"asset_id"`
+		ChannelID   string `json:"channel_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -48,7 +49,13 @@ func CreateCRMGroup(c *gin.Context) {
 
 	// 1. Fetch active Zalo OA channel
 	var channel models.Channel
-	if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err != nil {
+	var err error
+	if req.ChannelID != "" {
+		err = db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", req.ChannelID, tenantID, "zalo_oa", true).First(&channel).Error
+	} else {
+		err = db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error
+	}
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "zalo_oa_not_configured", "details": "Vui lòng kết nối Zalo OA hoạt động trước khi tạo nhóm chat GMF."})
 		return
 	}
@@ -135,6 +142,7 @@ func CreateCRMGroup(c *gin.Context) {
 	group := models.CRMGroup{
 		ID:            uuid.New().String(),
 		TenantID:      tenantID,
+		ChannelID:     channel.ID,
 		Name:          req.Name,
 		Description:   req.Description,
 		ZaloGroupID:   zGroupID,
@@ -161,7 +169,7 @@ func CreateCRMGroup(c *gin.Context) {
 	tx.Commit()
 
 	// Preload associations for response
-	db.DB.Preload("Employees").Preload("Customers").First(&group, "id = ?", group.ID)
+	db.DB.Preload("Employees").Preload("Customers").Preload("Channel").First(&group, "id = ?", group.ID)
 
 	c.JSON(http.StatusCreated, group)
 }
@@ -210,7 +218,13 @@ func DeleteCRMGroup(c *gin.Context) {
 	// 1. Disband on Zalo GMF if linked
 	if group.ZaloGroupID != "" {
 		var channel models.Channel
-		if db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error == nil {
+		var err error
+		if group.ChannelID != "" {
+			err = db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", group.ChannelID, tenantID, "zalo_oa", true).First(&channel).Error
+		} else {
+			err = db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error
+		}
+		if err == nil {
 			cfg, _ := config.Load()
 			if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
 				var zaloCreds channels.ZaloOACredentials
@@ -307,7 +321,13 @@ func AddGroupMembers(c *gin.Context) {
 
 		if len(zaloUserIDs) > 0 {
 			var channel models.Channel
-			if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err == nil {
+			var err error
+			if group.ChannelID != "" {
+				err = db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", group.ChannelID, tenantID, "zalo_oa", true).First(&channel).Error
+			} else {
+				err = db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error
+			}
+			if err == nil {
 				cfg, _ := config.Load()
 				if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
 					var zaloCreds channels.ZaloOACredentials
@@ -395,7 +415,13 @@ func RemoveGroupMembers(c *gin.Context) {
 
 		if len(zaloUserIDs) > 0 {
 			var channel models.Channel
-			if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err == nil {
+			var err error
+			if group.ChannelID != "" {
+				err = db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", group.ChannelID, tenantID, "zalo_oa", true).First(&channel).Error
+			} else {
+				err = db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error
+			}
+			if err == nil {
 				cfg, _ := config.Load()
 				if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
 					var zaloCreds channels.ZaloOACredentials
@@ -535,37 +561,41 @@ func ApproveZaloCustomer(c *gin.Context) {
 
 	// Invite customer to the selected Zalo GMF groups if they have a linked Zalo account
 	if customer.ZaloUserID != "" && len(req.GroupIDs) > 0 {
-		var channel models.Channel
-		if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err == nil {
-			cfg, _ := config.Load()
-			if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
-				var zaloCreds channels.ZaloOACredentials
-				if err := json.Unmarshal(credBytes, &zaloCreds); err == nil {
-					adapter := channels.NewZaloOAAdapter(zaloCreds)
-					adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-						zaloCreds.AccessToken = newAccess
-						zaloCreds.RefreshToken = newRefresh
-						credsMap := map[string]interface{}{
-							"app_id":        zaloCreds.AppID,
-							"app_secret":    zaloCreds.AppSecret,
-							"access_token":  newAccess,
-							"refresh_token": newRefresh,
-							"oa_id":         zaloCreds.OAId,
-						}
-						newCredJSON, _ := json.Marshal(credsMap)
-						encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-						db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-					})
-
-					for _, groupID := range req.GroupIDs {
-						var grp models.CRMGroup
-						if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&grp).Error; err == nil {
-							if grp.ZaloGroupID != "" {
-								if inviteErr := adapter.InviteGMFGroupMembers(c.Request.Context(), grp.ZaloGroupID, []string{customer.ZaloUserID}); inviteErr != nil {
-									log.Printf("[crm] failed to invite customer %s to Zalo GMF group %s (%s): %v", customer.ID, grp.Name, grp.ZaloGroupID, inviteErr)
-								} else {
-									log.Printf("[crm] successfully invited customer %s to Zalo GMF group %s (%s)", customer.ID, grp.Name, grp.ZaloGroupID)
+		for _, groupID := range req.GroupIDs {
+			var grp models.CRMGroup
+			if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&grp).Error; err == nil && grp.ZaloGroupID != "" {
+				var channel models.Channel
+				var err error
+				if grp.ChannelID != "" {
+					err = db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", grp.ChannelID, tenantID, "zalo_oa", true).First(&channel).Error
+				} else {
+					err = db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error
+				}
+				if err == nil {
+					cfg, _ := config.Load()
+					if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
+						var zaloCreds channels.ZaloOACredentials
+						if err := json.Unmarshal(credBytes, &zaloCreds); err == nil {
+							adapter := channels.NewZaloOAAdapter(zaloCreds)
+							adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+								zaloCreds.AccessToken = newAccess
+								zaloCreds.RefreshToken = newRefresh
+								credsMap := map[string]interface{}{
+									"app_id":        zaloCreds.AppID,
+									"app_secret":    zaloCreds.AppSecret,
+									"access_token":  newAccess,
+									"refresh_token": newRefresh,
+									"oa_id":         zaloCreds.OAId,
 								}
+								newCredJSON, _ := json.Marshal(credsMap)
+								encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+								db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
+							})
+
+							if inviteErr := adapter.InviteGMFGroupMembers(c.Request.Context(), grp.ZaloGroupID, []string{customer.ZaloUserID}); inviteErr != nil {
+								log.Printf("[crm] failed to invite customer %s to Zalo GMF group %s (%s): %v", customer.ID, grp.Name, grp.ZaloGroupID, inviteErr)
+							} else {
+								log.Printf("[crm] successfully invited customer %s to Zalo GMF group %s (%s)", customer.ID, grp.Name, grp.ZaloGroupID)
 							}
 						}
 					}
@@ -631,9 +661,16 @@ func crmGenerateVerifyToken() string {
 
 func ListGMFPackages(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
+	channelID := c.Query("channel_id")
 
 	var channel models.Channel
-	if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err != nil {
+	var err error
+	if channelID != "" {
+		err = db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", channelID, tenantID, "zalo_oa", true).First(&channel).Error
+	} else {
+		err = db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error
+	}
+	if err != nil {
 		c.JSON(http.StatusOK, []interface{}{}) // Return empty if no Zalo OA
 		return
 	}
@@ -723,7 +760,13 @@ func InviteGMFGroupCustomer(c *gin.Context) {
 
 	// 3. Send message via Zalo OA
 	var channel models.Channel
-	if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err != nil {
+	var err error
+	if group.ChannelID != "" {
+		err = db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", group.ChannelID, tenantID, "zalo_oa", true).First(&channel).Error
+	} else {
+		err = db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error
+	}
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "zalo_oa_channel_not_found"})
 		return
 	}

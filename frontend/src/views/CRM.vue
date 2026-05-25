@@ -52,10 +52,13 @@
               <tr v-for="g in groups" :key="g.id">
                 <td>
                   <div class="font-weight-bold text-primary">{{ g.name }}</div>
-                  <div v-if="g.zalo_group_id" class="d-flex align-center mt-1">
-                    <v-chip size="x-small" color="success" class="font-weight-bold" variant="flat">
+                  <div class="d-flex align-center mt-1 flex-wrap ga-1">
+                    <v-chip v-if="g.zalo_group_id" size="x-small" color="success" class="font-weight-bold" variant="flat">
                       <v-icon start size="10">mdi-message-text-outline</v-icon>
                       Đã liên kết Zalo GMF
+                    </v-chip>
+                    <v-chip v-if="g.channel" size="x-small" color="blue-grey" class="font-weight-bold" variant="outlined">
+                      OA: {{ g.channel.name }}
                     </v-chip>
                   </div>
                 </td>
@@ -239,6 +242,19 @@
             <v-text-field v-model="groupForm.name" label="Tên nhóm *" :rules="[v => !!v || 'Tên nhóm là bắt buộc']" class="mb-3" />
             <v-textarea v-model="groupForm.description" label="Mô tả nhóm" class="mb-3" rows="3" />
             
+            <!-- Zalo OA Account Selector (only for creating new group) -->
+            <v-select
+              v-if="!isEditGroup"
+              v-model="groupForm.channel_id"
+              :items="zaloOAChannels"
+              item-title="name"
+              item-value="id"
+              label="Tài khoản Zalo OA *"
+              :rules="[v => !!v || 'Tài khoản Zalo OA là bắt buộc']"
+              class="mb-3"
+              @update:model-value="onChannelSelected"
+            />
+
             <!-- GMF Package Selector (only for creating new group) -->
             <v-select
               v-if="!isEditGroup"
@@ -679,7 +695,7 @@ const loadingGroups = ref(false)
 const groupDialog = ref(false)
 const savingGroup = ref(false)
 const isEditGroup = ref(false)
-const groupForm = ref({ id: '', name: '', description: '', asset_id: '' })
+const groupForm = ref({ id: '', name: '', description: '', asset_id: '', channel_id: '' })
 const groupFormRef = ref<any>(null)
 
 // GMF Packages State
@@ -725,6 +741,10 @@ const activeZaloOA = computed(() => {
   return channelStore.channels.find((c: any) => c.channel_type === 'zalo_oa' && c.is_active)
 })
 
+const zaloOAChannels = computed(() => {
+  return channelStore.channels.filter((c: any) => c.channel_type === 'zalo_oa' && c.is_active)
+})
+
 const approvedCustomers = computed(() => {
   return customers.value.filter(c => c.status === 'approved')
 })
@@ -761,7 +781,11 @@ onMounted(async () => {
   await fetchGroups()
   await fetchCustomers()
   await fetchCustomerCodes()
-  await fetchGmfPackages()
+  if (zaloOAChannels.value.length > 0) {
+    await fetchGmfPackages(zaloOAChannels.value[0].id)
+  } else {
+    await fetchGmfPackages()
+  }
 })
 
 onUnmounted(() => {
@@ -807,16 +831,27 @@ async function fetchCustomerCodes() {
   }
 }
 
-async function fetchGmfPackages() {
+async function fetchGmfPackages(channelId?: string) {
   loadingPackages.value = true
   try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/crm/gmf-packages`)
+    const url = channelId 
+      ? `/tenants/${tenantId.value}/crm/gmf-packages?channel_id=${channelId}`
+      : `/tenants/${tenantId.value}/crm/gmf-packages`
+    const { data } = await api.get(url)
     gmfPackages.value = (data || []).map((pkg: any) => ({
       ...pkg,
       displayName: `${pkg.asset_type} (${pkg.used_group}/${pkg.total_group} nhóm)`
     }))
+    // Auto select first package with available quota if not set yet
+    if (!isEditGroup.value && !groupForm.value.asset_id && data && data.length > 0) {
+      const available = data.find((pkg: any) => pkg.used_group < pkg.total_group)
+      if (available) {
+        groupForm.value.asset_id = available.asset_id
+      }
+    }
   } catch (err) {
     console.error('Failed to fetch GMF packages', err)
+    gmfPackages.value = []
   } finally {
     loadingPackages.value = false
   }
@@ -841,14 +876,29 @@ async function inviteCustomerToZaloGroup(customerId: string) {
 // Group Actions
 function openCreateGroupDialog() {
   isEditGroup.value = false
-  groupForm.value = { id: '', name: '', description: '', asset_id: '' }
-  fetchGmfPackages()
+  const firstOA = zaloOAChannels.value[0]
+  const defaultChannelId = firstOA ? firstOA.id : ''
+  groupForm.value = { id: '', name: '', description: '', asset_id: '', channel_id: defaultChannelId }
+  if (defaultChannelId) {
+    fetchGmfPackages(defaultChannelId)
+  } else {
+    gmfPackages.value = []
+  }
   groupDialog.value = true
+}
+
+function onChannelSelected(channelId: string) {
+  groupForm.value.asset_id = '' // Reset asset_id
+  if (channelId) {
+    fetchGmfPackages(channelId)
+  } else {
+    gmfPackages.value = []
+  }
 }
 
 function openEditGroupDialog(g: any) {
   isEditGroup.value = true
-  groupForm.value = { id: g.id, name: g.name, description: g.description, asset_id: g.zalo_asset_id || '' }
+  groupForm.value = { id: g.id, name: g.name, description: g.description, asset_id: g.zalo_asset_id || '', channel_id: g.channel_id || '' }
   groupDialog.value = true
 }
 
@@ -868,7 +918,8 @@ async function saveGroup() {
       await api.post(`/tenants/${tenantId.value}/crm/groups`, {
         name: groupForm.value.name,
         description: groupForm.value.description,
-        asset_id: groupForm.value.asset_id
+        asset_id: groupForm.value.asset_id,
+        channel_id: groupForm.value.channel_id
       })
       showSnack('Đã tạo nhóm mới thành công', 'success')
     }
