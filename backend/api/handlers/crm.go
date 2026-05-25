@@ -1091,9 +1091,12 @@ func ListGroupMembers(c *gin.Context) {
 
 	// Parse query params for pagination
 	offsetStr := c.DefaultQuery("offset", "0")
-	countStr := c.DefaultQuery("count", "100")
+	countStr := c.DefaultQuery("count", "50")
 	offset, _ := strconv.Atoi(offsetStr)
 	count, _ := strconv.Atoi(countStr)
+	if count > 50 {
+		count = 50
+	}
 
 	// 3. Fetch members from Zalo GMF
 	zaloMembers, err := adapter.GetGMFGroupMembers(c.Request.Context(), group.ZaloGroupID, offset, count)
@@ -1240,9 +1243,12 @@ func ListGroupPendingInvites(c *gin.Context) {
 
 	// Parse query params for pagination
 	offsetStr := c.DefaultQuery("offset", "0")
-	countStr := c.DefaultQuery("count", "100")
+	countStr := c.DefaultQuery("count", "50")
 	offset, _ := strconv.Atoi(offsetStr)
 	count, _ := strconv.Atoi(countStr)
+	if count > 50 {
+		count = 50
+	}
 
 	// Fetch pending invites
 	pendingInvites, err := adapter.GetGMFGroupPendingInvites(c.Request.Context(), group.ZaloGroupID, offset, count)
