@@ -118,7 +118,7 @@ func (z *ZaloOAAdapter) doRequest(ctx context.Context, method, apiURL string, pa
 		z.mu.Lock()
 		token := z.creds.AccessToken
 		z.mu.Unlock()
-		req.Header.Set("access_token", token)
+		req.Header["access_token"] = []string{token}
 
 		resp, err := z.client.Do(req)
 		if err != nil {
@@ -440,7 +440,7 @@ func (z *ZaloOAAdapter) doRequestJSON(ctx context.Context, method, apiURL string
 		z.mu.Lock()
 		token := z.creds.AccessToken
 		z.mu.Unlock()
-		req.Header.Set("access_token", token)
+		req.Header["access_token"] = []string{token}
 
 		resp, err := z.client.Do(req)
 		if err != nil {
@@ -811,7 +811,7 @@ func (z *ZaloOAAdapter) doRequestQueryParams(ctx context.Context, method, apiURL
 		z.mu.Lock()
 		token := z.creds.AccessToken
 		z.mu.Unlock()
-		req.Header.Set("access_token", token)
+		req.Header["access_token"] = []string{token}
 
 		resp, err := z.client.Do(req)
 		if err != nil {

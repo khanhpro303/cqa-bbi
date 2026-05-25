@@ -1330,8 +1330,9 @@ async function fetchLiveMembers(groupId: string) {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups/${groupId}/members`)
     liveEmployees.value = data.employees || []
     liveCustomers.value = data.customers || []
-  } catch (err) {
-    showSnack('Không thể tải danh sách thành viên live từ Zalo', 'error')
+  } catch (err: any) {
+    const errMsg = err.response?.data?.details || err.response?.data?.error || 'Không thể tải danh sách thành viên live từ Zalo'
+    showSnack(errMsg, 'error')
     liveEmployees.value = []
     liveCustomers.value = []
   } finally {
@@ -1357,8 +1358,9 @@ async function fetchPendingInvites(groupId: string) {
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups/${groupId}/pending-invites`)
     pendingInvites.value = data || []
-  } catch (err) {
-    showSnack('Không thể tải danh sách chờ duyệt từ Zalo', 'error')
+  } catch (err: any) {
+    const errMsg = err.response?.data?.details || err.response?.data?.error || 'Không thể tải danh sách chờ duyệt từ Zalo'
+    showSnack(errMsg, 'error')
     pendingInvites.value = []
   } finally {
     loadingPendingInvites.value = false
