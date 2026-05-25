@@ -220,8 +220,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/crm/groups", middleware.RequireRole("owner", "admin"), handlers.CreateCRMGroup)
 			tenant.PUT("/crm/groups/:id", middleware.RequireRole("owner", "admin"), handlers.UpdateCRMGroup)
 			tenant.DELETE("/crm/groups/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteCRMGroup)
+			tenant.GET("/crm/groups/:id/members", handlers.ListGroupMembers)
 			tenant.POST("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.AddGroupMembers)
 			tenant.DELETE("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.RemoveGroupMembers)
+			tenant.GET("/crm/groups/:id/pending-invites", handlers.ListGroupPendingInvites)
+			tenant.POST("/crm/groups/:id/accept-invite", middleware.RequireRole("owner", "admin"), handlers.AcceptGroupPendingInvite)
+			tenant.POST("/crm/groups/:id/reject-invite", middleware.RequireRole("owner", "admin"), handlers.RejectGroupPendingInvite)
 			tenant.POST("/crm/groups/:id/invite-customer", middleware.RequireRole("owner", "admin"), handlers.InviteGMFGroupCustomer)
 			tenant.GET("/crm/groups/:id/erp/endpoints", handlers.ListGroupERPEndpoints)
 			tenant.PUT("/crm/groups/:id/erp/endpoints", middleware.RequireRole("owner", "admin"), handlers.SaveGroupERPEndpoints)
@@ -231,6 +235,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/crm/customers/invite", middleware.RequireRole("owner", "admin"), handlers.InviteZaloCustomer)
 			tenant.POST("/crm/customers/:id/approve", middleware.RequireRole("owner", "admin"), handlers.ApproveZaloCustomer)
 			tenant.DELETE("/crm/customers/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteZaloCustomer)
+
+			tenant.GET("/crm/cloudify-customers", handlers.ListCloudifyCustomers(cfg))
+			tenant.POST("/crm/cloudify-customers/assign-phone", middleware.RequireRole("owner", "admin"), handlers.AssignCloudifyCustomerPhone(cfg))
 
 			tenant.GET("/crm/customer-profiles", handlers.ListCustomerCodes(cfg))
 			tenant.GET("/crm/gmf-packages", handlers.ListGMFPackages)

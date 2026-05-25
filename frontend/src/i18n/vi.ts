@@ -496,6 +496,7 @@ export default {
   nav_crm: 'CRM Khách hàng',
   crm_groups: 'Nhóm CRM',
   crm_customers: 'Khách hàng Zalo',
+  crm_cloudify_customers: 'Khách hàng Cloudify',
   crm_approvals: 'Phê duyệt khách hàng',
   crm_customer_code: 'Mã khách hàng',
   crm_group_perms_title: 'Phân quyền Agent & Sơ đồ tương tác dữ liệu live:',

@@ -776,3 +776,156 @@ func (z *ZaloOAAdapter) RemoveGMFGroupMembers(ctx context.Context, groupID strin
 	_, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/removemembers", payload)
 	return err
 }
+
+type GMFGroupMember struct {
+	OAID   string `json:"oa_id,omitempty"`
+	UserID string `json:"user_id,omitempty"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar"`
+}
+
+type GMFGroupMembersData struct {
+	Offset      int              `json:"offset"`
+	Count       int              `json:"count"`
+	Total       int              `json:"total"`
+	MemberCount int              `json:"member_count"`
+	Members     []GMFGroupMember `json:"members"`
+}
+
+// doRequestQueryParams makes an authenticated GET request with standard query parameters.
+func (z *ZaloOAAdapter) doRequestQueryParams(ctx context.Context, method, apiURL string, params map[string]string) (map[string]interface{}, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, method, apiURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create zalo api request: %w", err)
+		}
+
+		if params != nil {
+			q := req.URL.Query()
+			for k, v := range params {
+				q.Set(k, v)
+			}
+			req.URL.RawQuery = q.Encode()
+		}
+
+		z.mu.Lock()
+		token := z.creds.AccessToken
+		z.mu.Unlock()
+		req.Header.Set("access_token", token)
+
+		resp, err := z.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("zalo api request failed: %w", err)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("zalo api read body failed: %w", err)
+		}
+
+		log.Printf("[zalo] GET API %s: status=%d len=%d", apiURL, resp.StatusCode, len(body))
+
+		var result map[string]interface{}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("zalo api decode failed: %w", err)
+		}
+
+		// Check for token expired error (error=-216)
+		if errCode, ok := result["error"].(float64); ok && errCode == -216 && attempt == 0 {
+			z.mu.Lock()
+			currentToken := z.creds.AccessToken
+			z.mu.Unlock()
+
+			if currentToken == token {
+				if refreshErr := z.refreshToken(ctx); refreshErr != nil {
+					return nil, fmt.Errorf("token refresh failed: %w", refreshErr)
+				}
+			}
+			continue
+		}
+
+		if errCode, ok := result["error"].(float64); ok && errCode != 0 {
+			msg, _ := result["message"].(string)
+			return nil, fmt.Errorf("zalo api error %v: %s", errCode, msg)
+		}
+
+		return result, nil
+	}
+	return nil, fmt.Errorf("zalo api failed after retry")
+}
+
+// GetGMFGroupMembers fetches the list of members in a GMF group chat.
+func (z *ZaloOAAdapter) GetGMFGroupMembers(ctx context.Context, groupID string, offset, count int) ([]GMFGroupMember, error) {
+	params := map[string]string{
+		"group_id": groupID,
+		"offset":   strconv.Itoa(offset),
+		"count":    strconv.Itoa(count),
+	}
+
+	result, err := z.doRequestQueryParams(ctx, "GET", "https://openapi.zalo.me/v3.0/oa/group/listmember", params)
+	if err != nil {
+		return nil, err
+	}
+
+	dataBytes, err := json.Marshal(result["data"])
+	if err != nil {
+		return nil, fmt.Errorf("marshal data: %w", err)
+	}
+
+	var data GMFGroupMembersData
+	if err := json.Unmarshal(dataBytes, &data); err != nil {
+		return nil, fmt.Errorf("unmarshal data: %w", err)
+	}
+
+	return data.Members, nil
+}
+
+// GetGMFGroupPendingInvites fetches the list of pending invites in a GMF group chat.
+func (z *ZaloOAAdapter) GetGMFGroupPendingInvites(ctx context.Context, groupID string, offset, count int) ([]GMFGroupMember, error) {
+	params := map[string]string{
+		"group_id": groupID,
+		"offset":   strconv.Itoa(offset),
+		"count":    strconv.Itoa(count),
+	}
+
+	result, err := z.doRequestQueryParams(ctx, "GET", "https://openapi.zalo.me/v3.0/oa/group/listpendinginvite", params)
+	if err != nil {
+		return nil, err
+	}
+
+	dataBytes, err := json.Marshal(result["data"])
+	if err != nil {
+		return nil, fmt.Errorf("marshal data: %w", err)
+	}
+
+	var data GMFGroupMembersData
+	if err := json.Unmarshal(dataBytes, &data); err != nil {
+		return nil, fmt.Errorf("unmarshal data: %w", err)
+	}
+
+	return data.Members, nil
+}
+
+// AcceptGMFGroupPendingInvites accepts pending invites to a GMF group chat.
+func (z *ZaloOAAdapter) AcceptGMFGroupPendingInvites(ctx context.Context, groupID string, memberUserIDs []string) error {
+	payload := map[string]interface{}{
+		"group_id":        groupID,
+		"member_user_ids": memberUserIDs,
+	}
+
+	_, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/acceptpendinginvite", payload)
+	return err
+}
+
+// RejectGMFGroupPendingInvites rejects pending invites to a GMF group chat.
+func (z *ZaloOAAdapter) RejectGMFGroupPendingInvites(ctx context.Context, groupID string, memberUserIDs []string) error {
+	payload := map[string]interface{}{
+		"group_id":        groupID,
+		"member_user_ids": memberUserIDs,
+	}
+
+	_, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/rejectpendinginvite", payload)
+	return err
+}
+

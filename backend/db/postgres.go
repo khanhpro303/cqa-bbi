@@ -54,3 +54,63 @@ func GetCustomerCodes(postgresURL string) ([]string, error) {
 
 	return codes, nil
 }
+
+type CloudifyCustomerProfile struct {
+	CustomerCode string `json:"customer_code"`
+	Name         string `json:"name"`
+	Address      string `json:"address"`
+	Region       string `json:"region"`
+	PhoneNumber  string `json:"phone_number"`
+}
+
+// GetCloudifyCustomerProfiles connects to the external PostgreSQL database, queries customer profiles, and returns them.
+func GetCloudifyCustomerProfiles(postgresURL string) ([]CloudifyCustomerProfile, error) {
+	if postgresURL == "" {
+		return nil, fmt.Errorf("postgres url is empty")
+	}
+
+	// Auto-append sslmode=disable if not already present
+	if !strings.Contains(postgresURL, "sslmode=") {
+		if strings.Contains(postgresURL, "?") {
+			postgresURL += "&sslmode=disable"
+		} else {
+			postgresURL += "?sslmode=disable"
+		}
+	}
+
+	db, err := sql.Open("postgres", postgresURL)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres connection: %w", err)
+	}
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+
+	rows, err := db.Query(`
+		SELECT ma_khach_hang, ten_khach_hang, COALESCE(dia_chi, ''), COALESCE(region, ''), COALESCE(dien_thoai, '') 
+		FROM cloudify.cloudify_customers 
+		WHERE ma_khach_hang IS NOT NULL AND ma_khach_hang != '' 
+		ORDER BY ma_khach_hang ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query cloudify customer profiles: %w", err)
+	}
+	defer rows.Close()
+
+	var profiles []CloudifyCustomerProfile
+	for rows.Next() {
+		var p CloudifyCustomerProfile
+		if err := rows.Scan(&p.CustomerCode, &p.Name, &p.Address, &p.Region, &p.PhoneNumber); err == nil {
+			profiles = append(profiles, p)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
+	}
+
+	return profiles, nil
+}
+

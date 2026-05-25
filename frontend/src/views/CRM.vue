@@ -23,6 +23,10 @@
         <v-icon start>mdi-account-check</v-icon>
         {{ $t('crm_customers') }}
       </v-tab>
+      <v-tab value="cloudify_customers">
+        <v-icon start>mdi-database-outline</v-icon>
+        {{ $t('crm_cloudify_customers') }}
+      </v-tab>
       <v-tab value="approvals">
         <v-icon start>mdi-account-clock</v-icon>
         {{ $t('crm_approvals') }}
@@ -143,6 +147,91 @@
           </v-table>
         </v-card>
       </v-window-item>
+
+      <!-- TAB 2.5: CLOUDIFY CUSTOMERS -->
+      <v-window-item value="cloudify_customers" class="pt-2">
+        <v-card :loading="loadingCloudifyCustomers">
+          <v-card-title class="d-flex align-center py-3 px-4">
+            <v-text-field
+              v-model="cloudifySearch"
+              prepend-inner-icon="mdi-magnify"
+              label="Tìm kiếm khách hàng..."
+              single-line
+              flat
+              hide-details
+              variant="outlined"
+              density="compact"
+              style="max-width: 320px;"
+            />
+            <v-spacer />
+            <v-btn color="teal" prepend-icon="mdi-refresh" variant="tonal" size="small" @click="fetchCloudifyCustomers">
+              Lấy lại dữ liệu
+            </v-btn>
+          </v-card-title>
+          <v-table density="comfortable">
+            <thead>
+              <tr>
+                <th>Mã Khách Hàng</th>
+                <th>Tên Khách Hàng</th>
+                <th>Địa chỉ</th>
+                <th>Miền</th>
+                <th>SĐT Cloudify</th>
+                <th>SĐT liên kết (CQA)</th>
+                <th>Trạng thái Zalo</th>
+                <th>Mã Verify / QR</th>
+                <th>Hành động</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in filteredCloudifyCustomers" :key="c.customer_code">
+                <td>
+                  <v-chip color="success" size="small" variant="flat" class="font-weight-black">
+                    {{ c.customer_code }}
+                  </v-chip>
+                </td>
+                <td class="font-weight-bold">{{ c.name }}</td>
+                <td class="text-body-2 text-grey-darken-1">{{ c.address || '—' }}</td>
+                <td>
+                  <v-chip v-if="c.region" size="x-small" color="blue-grey" variant="outlined">{{ c.region }}</v-chip>
+                  <span v-else>—</span>
+                </td>
+                <td>{{ c.cloudify_phone || '—' }}</td>
+                <td class="font-weight-bold text-teal">{{ c.cqa_phone || '—' }}</td>
+                <td>
+                  <v-chip v-if="c.zalo_user_id" color="success" size="x-small" class="font-weight-bold" variant="flat">
+                    Đã liên kết
+                  </v-chip>
+                  <v-chip v-else-if="c.cqa_phone" color="warning" size="x-small" class="font-weight-bold" variant="outlined">
+                    Chờ quét QR
+                  </v-chip>
+                  <v-chip v-else color="grey-lighten-1" size="x-small" variant="flat">
+                    Chưa thiết lập
+                  </v-chip>
+                </td>
+                <td>
+                  <div v-if="c.verify_token" class="d-flex align-center ga-1">
+                    <code class="text-caption bg-teal-lighten-5 text-teal px-1 rounded font-weight-bold">
+                      verify {{ c.verify_token }}
+                    </code>
+                    <v-btn icon="mdi-qrcode" size="x-small" color="teal" variant="text" @click="showCloudifyQR(c)" title="Xem mã QR kích hoạt" />
+                  </div>
+                  <span v-else>—</span>
+                </td>
+                <td>
+                  <v-btn icon="mdi-cellphone-link" size="small" color="teal" variant="text" @click="openAssignPhoneDialog(c)" title="Gán số điện thoại thủ công" />
+                </td>
+              </tr>
+              <tr v-if="filteredCloudifyCustomers.length === 0 && !loadingCloudifyCustomers">
+                <td colspan="9" class="text-center py-8 text-grey text-body-2">
+                  <v-icon size="40" color="grey-lighten-1" class="mb-2">mdi-account-search-outline</v-icon>
+                  <div>Không tìm thấy khách hàng nào.</div>
+                </td>
+              </tr>
+            </tbody>
+          </v-table>
+        </v-card>
+      </v-window-item>
+
 
       <!-- TAB 3: CUSTOMER APPROVALS -->
       <v-window-item value="approvals" class="pt-2">
@@ -290,7 +379,8 @@
         <v-card-text class="pt-0">
           <v-tabs v-model="memberTab" color="teal" class="mb-4">
             <v-tab value="employees">Nhân viên phụ trách ({{ activeGroup?.employees?.length || 0 }})</v-tab>
-            <v-tab value="customers">Khách hàng thuộc nhóm ({{ activeGroup?.customers?.length || 0 }})</v-tab>
+            <v-tab value="customers">Khách hàng thuộc nhóm ({{ loadingLiveMembers ? '...' : liveCustomers.length }})</v-tab>
+            <v-tab value="pending">Chờ duyệt tham gia ({{ loadingPendingInvites ? '...' : pendingInvites.length }})</v-tab>
           </v-tabs>
 
           <v-window v-model="memberTab">
@@ -349,8 +439,14 @@
                 <v-btn color="teal" height="48" :disabled="!selectedCustomerToAdd" @click="addGroupCustomer">Thêm</v-btn>
               </div>
 
-              <v-list density="compact" max-height="300" class="overflow-y-auto border rounded">
-                <v-list-item v-for="cust in activeGroup?.customers" :key="cust.id">
+              <!-- Loading spinner -->
+              <div v-if="loadingLiveMembers" class="text-center py-6">
+                <v-progress-circular indeterminate color="teal" />
+                <div class="text-caption text-grey mt-2">Đang tải thành viên từ Zalo...</div>
+              </div>
+
+              <v-list v-else density="compact" max-height="300" class="overflow-y-auto border rounded">
+                <v-list-item v-for="cust in liveCustomers" :key="cust.zalo_user_id">
                   <template #prepend>
                     <v-avatar size="24" class="mr-2">
                       <v-img v-if="cust.avatar" :src="cust.avatar" />
@@ -359,7 +455,8 @@
                   </template>
                   <v-list-item-title class="font-weight-bold">
                     {{ cust.name }} 
-                    <v-chip size="x-small" color="success" class="ml-2">{{ cust.customer_code }}</v-chip>
+                    <v-chip v-if="cust.customer_code" size="x-small" color="success" class="ml-2">{{ cust.customer_code }}</v-chip>
+                    <v-chip v-else size="x-small" color="warning" class="ml-2">Chưa đồng bộ CRM</v-chip>
                   </v-list-item-title>
                   <v-list-item-subtitle>Zalo ID: {{ cust.zalo_user_id }}</v-list-item-subtitle>
                   <template #append>
@@ -371,15 +468,70 @@
                       color="teal"
                       class="mr-2"
                       @click="inviteCustomerToZaloGroup(cust.id)"
+                      :disabled="!cust.id"
                       title="Gửi tin nhắn mời vào nhóm Zalo"
                     />
-                    <v-btn icon="mdi-close" size="small" variant="text" color="error" @click="removeGroupCustomer(cust.id)" />
+                    <v-btn icon="mdi-close" size="small" variant="text" color="error" @click="removeGroupCustomer(cust.id, cust.zalo_user_id)" />
                   </template>
                 </v-list-item>
-                <div v-if="!activeGroup?.customers?.length" class="text-center py-6 text-grey text-caption">
+                <div v-if="!liveCustomers.length" class="text-center py-6 text-grey text-caption">
                   Chưa có khách hàng nào trong nhóm.
                 </div>
               </v-list>
+            </v-window-item>
+
+            <!-- Sub-tab: Chờ duyệt tham gia -->
+            <v-window-item value="pending">
+              <!-- Loading spinner -->
+              <div v-if="loadingPendingInvites" class="text-center py-6">
+                <v-progress-circular indeterminate color="warning" />
+                <div class="text-caption text-grey mt-2">Đang tải danh sách chờ duyệt từ Zalo...</div>
+              </div>
+
+              <div v-else>
+                <v-list density="compact" max-height="300" class="overflow-y-auto border rounded">
+                  <v-list-item v-for="invitee in pendingInvites" :key="invitee.user_id">
+                    <template #prepend>
+                      <v-avatar size="24" class="mr-2" color="amber-lighten-4">
+                        <v-icon color="amber-darken-2" size="16">mdi-account-clock</v-icon>
+                      </v-avatar>
+                    </template>
+                    <v-list-item-title class="font-weight-bold text-warning-darken-2">
+                      {{ invitee.name }}
+                    </v-list-item-title>
+                    <v-list-item-subtitle>Zalo ID: {{ invitee.user_id }}</v-list-item-subtitle>
+                    <template #append>
+                      <v-btn
+                        color="success"
+                        size="small"
+                        variant="flat"
+                        class="text-none font-weight-bold mr-2 px-2"
+                        prepend-icon="mdi-check"
+                        :loading="processingInvite === invitee.user_id + '_accept'"
+                        :disabled="!!processingInvite"
+                        @click="acceptGroupInvite(invitee.user_id)"
+                      >
+                        Đồng ý
+                      </v-btn>
+                      <v-btn
+                        color="error"
+                        size="small"
+                        variant="flat"
+                        class="text-none font-weight-bold px-2"
+                        prepend-icon="mdi-close"
+                        :loading="processingInvite === invitee.user_id + '_reject'"
+                        :disabled="!!processingInvite"
+                        @click="rejectGroupInvite(invitee.user_id)"
+                      >
+                        Từ chối
+                      </v-btn>
+                    </template>
+                  </v-list-item>
+                  <div v-if="!pendingInvites.length" class="text-center py-6 text-grey text-caption">
+                    Không có yêu cầu tham gia nào đang chờ duyệt.
+                  </div>
+                </v-list>
+              </div>
             </v-window-item>
           </v-window>
         </v-card-text>
@@ -458,6 +610,36 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Dialog 4.5: Gán SĐT thủ công -->
+    <v-dialog v-model="assignPhoneDialog" max-width="480">
+      <v-card class="pa-4">
+        <v-card-title class="font-weight-bold pb-2">Gán số điện thoại khách hàng</v-card-title>
+        <v-card-text>
+          <div class="bg-grey-lighten-4 pa-3 rounded mb-4">
+            <div class="text-caption text-grey">Khách hàng:</div>
+            <div class="font-weight-bold text-primary">{{ assignForm.name }} ({{ assignForm.customer_code }})</div>
+          </div>
+          <v-form ref="assignFormRef">
+            <v-text-field
+              v-model="assignForm.phone_number"
+              label="Số điện thoại liên kết (CQA) *"
+              hint="Ví dụ: 0987654321"
+              persistent-hint
+              :rules="[v => !!v || 'Vui lòng nhập số điện thoại', v => /^[0-9]{9,11}$/.test(v) || 'Số điện thoại không hợp lệ']"
+              variant="outlined"
+              density="comfortable"
+            />
+          </v-form>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="assignPhoneDialog = false">Hủy</v-btn>
+          <v-btn color="teal" :loading="assigningPhone" @click="assignCustomerPhone">Xác nhận</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
 
     <!-- Dialog 5: QR Code hiển thị mã verify cho khách hàng -->
     <v-dialog v-model="qrDialog" max-width="460">
@@ -713,6 +895,12 @@ const activeGroup = ref<any>(null)
 const membersDialog = ref(false)
 const selectedEmployeeToAdd = ref<any>(null)
 const selectedCustomerToAdd = ref<any>(null)
+const liveEmployees = ref<any[]>([])
+const liveCustomers = ref<any[]>([])
+const loadingLiveMembers = ref(false)
+const pendingInvites = ref<any[]>([])
+const loadingPendingInvites = ref(false)
+const processingInvite = ref<string | null>(null)
 
 // Zalo Customers State
 const customers = ref<any[]>([])
@@ -721,6 +909,16 @@ const inviteDialog = ref(false)
 const creatingInvite = ref(false)
 const inviteForm = ref({ name: '', phone_number: '' })
 const inviteFormRef = ref<any>(null)
+
+// Cloudify Customers State
+const cloudifyCustomers = ref<any[]>([])
+const loadingCloudifyCustomers = ref(false)
+const cloudifySearch = ref('')
+const assignPhoneDialog = ref(false)
+const assigningPhone = ref(false)
+const assignForm = ref({ customer_code: '', name: '', phone_number: '' })
+const assignFormRef = ref<any>(null)
+
 
 // QR Dialog
 const activeInvite = ref<any>(null)
@@ -774,8 +972,21 @@ const availableEmployees = computed(() => {
 
 const availableCustomers = computed(() => {
   if (!activeGroup.value || !customers.value) return []
-  const existingIds = new Set(activeGroup.value.customers?.map((c: any) => c.id) || [])
-  return approvedCustomers.value.filter(c => !existingIds.has(c.id))
+  const existingZaloUserIds = new Set(liveCustomers.value.map(c => c.zalo_user_id).filter(id => !!id))
+  return approvedCustomers.value.filter(c => !existingZaloUserIds.has(c.zalo_user_id))
+})
+
+const filteredCloudifyCustomers = computed(() => {
+  if (!cloudifySearch.value) return cloudifyCustomers.value
+  const query = cloudifySearch.value.toLowerCase()
+  return cloudifyCustomers.value.filter(c => 
+    c.customer_code.toLowerCase().includes(query) ||
+    c.name.toLowerCase().includes(query) ||
+    (c.address && c.address.toLowerCase().includes(query)) ||
+    (c.region && c.region.toLowerCase().includes(query)) ||
+    (c.cloudify_phone && c.cloudify_phone.includes(query)) ||
+    (c.cqa_phone && c.cqa_phone.includes(query))
+  )
 })
 
 onMounted(async () => {
@@ -785,6 +996,7 @@ onMounted(async () => {
   await fetchGroups()
   await fetchCustomers()
   await fetchCustomerCodes()
+  await fetchCloudifyCustomers()
   if (zaloOAChannels.value.length > 0) {
     await fetchGmfPackages(zaloOAChannels.value[0].id)
   } else {
@@ -834,6 +1046,56 @@ async function fetchCustomerCodes() {
     loadingCodes.value = false
   }
 }
+
+// Load Cloudify Customers from Backend
+async function fetchCloudifyCustomers() {
+  loadingCloudifyCustomers.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/cloudify-customers`)
+    cloudifyCustomers.value = data || []
+  } catch (err) {
+    showSnack('Không thể tải danh sách khách hàng Cloudify', 'error')
+  } finally {
+    loadingCloudifyCustomers.value = false
+  }
+}
+
+function openAssignPhoneDialog(c: any) {
+  assignForm.value = {
+    customer_code: c.customer_code,
+    name: c.name,
+    phone_number: c.cqa_phone || c.cloudify_phone || ''
+  }
+  assignPhoneDialog.value = true
+}
+
+async function assignCustomerPhone() {
+  if (!assignFormRef.value) return
+  const { valid } = await assignFormRef.value.validate()
+  if (!valid) return
+
+  assigningPhone.value = true
+  try {
+    await api.post(`/tenants/${tenantId.value}/crm/cloudify-customers/assign-phone`, assignForm.value)
+    showSnack('Gán số điện thoại khách hàng thành công', 'success')
+    assignPhoneDialog.value = false
+    await fetchCloudifyCustomers()
+    await fetchCustomers()
+  } catch (err: any) {
+    showSnack(err.response?.data?.error || 'Lỗi khi gán số điện thoại', 'error')
+  } finally {
+    assigningPhone.value = false
+  }
+}
+
+function showCloudifyQR(c: any) {
+  activeInvite.value = {
+    name: c.name,
+    verify_token: c.verify_token
+  }
+  qrDialog.value = true
+}
+
 
 async function fetchGmfPackages(channelId?: string) {
   loadingPackages.value = true
@@ -948,12 +1210,79 @@ async function deleteGroup(id: string) {
 }
 
 // Manage Group Members (GMF)
+async function fetchLiveMembers(groupId: string) {
+  loadingLiveMembers.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups/${groupId}/members`)
+    liveEmployees.value = data.employees || []
+    liveCustomers.value = data.customers || []
+  } catch (err) {
+    showSnack('Không thể tải danh sách thành viên live từ Zalo', 'error')
+    liveEmployees.value = []
+    liveCustomers.value = []
+  } finally {
+    loadingLiveMembers.value = false
+  }
+}
+
 function openManageMembersDialog(g: any) {
   activeGroup.value = g
   selectedEmployeeToAdd.value = null
   selectedCustomerToAdd.value = null
   memberTab.value = 'employees'
+  liveEmployees.value = []
+  liveCustomers.value = []
+  pendingInvites.value = []
   membersDialog.value = true
+  fetchLiveMembers(g.id)
+  fetchPendingInvites(g.id)
+}
+
+async function fetchPendingInvites(groupId: string) {
+  loadingPendingInvites.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups/${groupId}/pending-invites`)
+    pendingInvites.value = data || []
+  } catch (err) {
+    showSnack('Không thể tải danh sách chờ duyệt từ Zalo', 'error')
+    pendingInvites.value = []
+  } finally {
+    loadingPendingInvites.value = false
+  }
+}
+
+async function acceptGroupInvite(zaloUserID: string) {
+  if (!activeGroup.value) return
+  processingInvite.value = zaloUserID + '_accept'
+  try {
+    await api.post(`/tenants/${tenantId.value}/crm/groups/${activeGroup.value.id}/accept-invite`, {
+      member_user_ids: [zaloUserID]
+    })
+    showSnack('Đã đồng ý yêu cầu tham gia', 'success')
+    await fetchPendingInvites(activeGroup.value.id)
+    await fetchLiveMembers(activeGroup.value.id)
+    await fetchGroups()
+  } catch (err: any) {
+    showSnack(err.response?.data?.details || 'Lỗi khi phê duyệt yêu cầu', 'error')
+  } finally {
+    processingInvite.value = null
+  }
+}
+
+async function rejectGroupInvite(zaloUserID: string) {
+  if (!activeGroup.value) return
+  processingInvite.value = zaloUserID + '_reject'
+  try {
+    await api.post(`/tenants/${tenantId.value}/crm/groups/${activeGroup.value.id}/reject-invite`, {
+      member_user_ids: [zaloUserID]
+    })
+    showSnack('Đã từ chối yêu cầu tham gia', 'success')
+    await fetchPendingInvites(activeGroup.value.id)
+  } catch (err: any) {
+    showSnack(err.response?.data?.details || 'Lỗi khi từ chối yêu cầu', 'error')
+  } finally {
+    processingInvite.value = null
+  }
 }
 
 async function addGroupEmployee() {
@@ -969,6 +1298,7 @@ async function addGroupEmployee() {
     selectedEmployeeToAdd.value = null
     showSnack('Đã thêm nhân viên vào nhóm', 'success')
     await fetchGroups() // reload values
+    await fetchLiveMembers(activeGroup.value.id)
   } catch (err) {
     showSnack('Lỗi thêm nhân viên', 'error')
   }
@@ -982,6 +1312,7 @@ async function removeGroupEmployee(empID: string) {
     activeGroup.value.employees = activeGroup.value.employees.filter((e: any) => e.user_id !== empID)
     showSnack('Đã gỡ nhân viên khỏi nhóm', 'success')
     await fetchGroups()
+    await fetchLiveMembers(activeGroup.value.id)
   } catch (err) {
     showSnack('Lỗi khi gỡ nhân viên', 'error')
   }
@@ -998,19 +1329,31 @@ async function addGroupCustomer() {
     selectedCustomerToAdd.value = null
     showSnack('Đã thêm khách hàng vào nhóm', 'success')
     await fetchGroups()
+    await fetchLiveMembers(activeGroup.value.id)
   } catch (err) {
     showSnack('Lỗi thêm khách hàng', 'error')
   }
 }
 
-async function removeGroupCustomer(custID: string) {
+async function removeGroupCustomer(custID: string, zaloUserID?: string) {
   try {
+    const payload: any = {}
+    if (custID) {
+      payload.customer_ids = [custID]
+    } else if (zaloUserID) {
+      payload.zalo_user_ids = [zaloUserID]
+    } else {
+      return
+    }
     await api.delete(`/tenants/${tenantId.value}/crm/groups/${activeGroup.value.id}/members`, {
-      data: { customer_ids: [custID] }
+      data: payload
     })
-    activeGroup.value.customers = activeGroup.value.customers.filter((c: any) => c.id !== custID)
+    if (custID) {
+      activeGroup.value.customers = activeGroup.value.customers.filter((c: any) => c.id !== custID)
+    }
     showSnack('Đã gỡ khách hàng khỏi nhóm', 'success')
     await fetchGroups()
+    await fetchLiveMembers(activeGroup.value.id)
   } catch (err) {
     showSnack('Lỗi khi gỡ khách hàng', 'error')
   }

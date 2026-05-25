@@ -284,7 +284,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				} else {
 					// Not found in whitelist staff. Try ZaloCustomer!
 					var customerRec models.ZaloCustomer
-					if err := db.DB.Where("tenant_id = ? AND verify_token = ? AND status = ?", matchedChannel.TenantID, token, "pending_verify").First(&customerRec).Error; err == nil {
+					if err := db.DB.Where("tenant_id = ? AND verify_token = ?", matchedChannel.TenantID, token).First(&customerRec).Error; err == nil {
 						avatarURL := ""
 						if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
 							avatarURL = profile.Avatar
@@ -297,13 +297,37 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 						if avatarURL != "" {
 							customerRec.Avatar = avatarURL
 						}
-						customerRec.Status = "pending_approval"
+						
+						statusWas := customerRec.Status
+						if customerRec.Status == "pending_verify" {
+							customerRec.Status = "pending_approval"
+						}
 						customerRec.UpdatedAt = time.Now()
 
 						if err := db.DB.Save(&customerRec).Error; err == nil {
-							successMsg := "Xác thực thành công! Yêu cầu liên kết tài khoản của bạn đã được gửi tới Ban quản trị để phê duyệt."
-							_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
-							log.Printf("[worker] successfully received customer auth request from Zalo user %s for tenant %s", payload.Sender.ID, matchedChannel.TenantID)
+							if customerRec.Status == "approved" {
+								successMsg := "Xác thực thành công! Tài khoản Zalo của bạn đã được liên kết với hệ thống CRM."
+								_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
+
+								// Auto-invite customer to Zalo GMF group chats they are already pre-added to locally
+								var groupLinks []models.CRMGroupCustomer
+								if err := db.DB.Where("zalo_customer_id = ?", customerRec.ID).Find(&groupLinks).Error; err == nil {
+									for _, link := range groupLinks {
+										var grp models.CRMGroup
+										if err := db.DB.First(&grp, "id = ?", link.GroupID).Error; err == nil && grp.ZaloGroupID != "" {
+											if inviteErr := adapter.InviteGMFGroupMembers(ctx, grp.ZaloGroupID, []string{customerRec.ZaloUserID}); inviteErr != nil {
+												log.Printf("[worker] failed to auto-invite customer %s to Zalo GMF group %s: %v", customerRec.ID, grp.Name, inviteErr)
+											} else {
+												log.Printf("[worker] successfully auto-invited customer %s to Zalo GMF group %s", customerRec.ID, grp.Name)
+											}
+										}
+									}
+								}
+							} else {
+								successMsg := "Xác thực thành công! Yêu cầu liên kết tài khoản của bạn đã được gửi tới Ban quản trị để phê duyệt."
+								_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
+							}
+							log.Printf("[worker] successfully processed customer verification (token: %s, previous status: %s, current status: %s) for Zalo user %s", token, statusWas, customerRec.Status, payload.Sender.ID)
 							return nil
 						}
 					}
