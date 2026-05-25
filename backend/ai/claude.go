@@ -21,12 +21,21 @@ func NewClaudeProvider(apiKey, model string, maxTokens int, baseURL string) *Cla
 	if model == "" {
 		model = "claude-sonnet-4-6"
 	}
+	mappedModel := model
+	switch model {
+	case "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-sonnet-4-5-20250929":
+		mappedModel = "claude-3-5-sonnet-latest"
+	case "claude-haiku-4-5", "claude-haiku-4-5-20251001":
+		mappedModel = "claude-3-5-haiku-latest"
+	case "claude-opus-4", "claude-opus-4-6":
+		mappedModel = "claude-3-opus-latest"
+	}
 	if maxTokens <= 0 {
 		maxTokens = 16384
 	}
 	return &ClaudeProvider{
 		apiKey:    apiKey,
-		model:     model,
+		model:     mappedModel,
 		maxTokens: maxTokens,
 		baseURL:   baseURL,
 	}

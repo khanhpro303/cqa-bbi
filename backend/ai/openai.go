@@ -22,9 +22,16 @@ func NewOpenAIProvider(apiKey, model, baseURL string) *OpenAIProvider {
 	if model == "" {
 		model = "gpt-5.4-mini"
 	}
+	mappedModel := model
+	switch model {
+	case "gpt-5.4-mini", "gpt-5-mini", "gpt-5-nano":
+		mappedModel = "gpt-4o-mini"
+	case "gpt-5", "gpt-5.3-codex", "gpt-5.3-chat-latest":
+		mappedModel = "gpt-4o"
+	}
 	return &OpenAIProvider{
 		apiKey:  apiKey,
-		model:   model,
+		model:   mappedModel,
 		baseURL: strings.TrimRight(baseURL, "/"),
 	}
 }

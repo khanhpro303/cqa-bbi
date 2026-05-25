@@ -380,12 +380,9 @@ func TestAIKey(c *gin.Context) {
 		Model    string `json:"model"`
 		BaseURL  string `json:"base_url"`
 	}
-	body, _ := io.ReadAll(c.Request.Body)
-	if len(strings.TrimSpace(string(body))) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
-			return
-		}
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
+		return
 	}
 
 	// Get provider
