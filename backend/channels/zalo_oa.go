@@ -138,8 +138,14 @@ func (z *ZaloOAAdapter) doRequest(ctx context.Context, method, apiURL string, pa
 
 		// Check for token expired error (error=-216)
 		if errCode, ok := result["error"].(float64); ok && errCode == -216 && attempt == 0 {
-			if refreshErr := z.refreshToken(ctx); refreshErr != nil {
-				return nil, fmt.Errorf("token refresh failed: %w", refreshErr)
+			z.mu.Lock()
+			currentToken := z.creds.AccessToken
+			z.mu.Unlock()
+
+			if currentToken == token {
+				if refreshErr := z.refreshToken(ctx); refreshErr != nil {
+					return nil, fmt.Errorf("token refresh failed: %w", refreshErr)
+				}
 			}
 			continue
 		}
@@ -454,8 +460,14 @@ func (z *ZaloOAAdapter) doRequestJSON(ctx context.Context, method, apiURL string
 
 		// Check for token expired error (error=-216)
 		if errCode, ok := result["error"].(float64); ok && errCode == -216 && attempt == 0 {
-			if refreshErr := z.refreshToken(ctx); refreshErr != nil {
-				return nil, fmt.Errorf("token refresh failed: %w", refreshErr)
+			z.mu.Lock()
+			currentToken := z.creds.AccessToken
+			z.mu.Unlock()
+
+			if currentToken == token {
+				if refreshErr := z.refreshToken(ctx); refreshErr != nil {
+					return nil, fmt.Errorf("token refresh failed: %w", refreshErr)
+				}
 			}
 			continue
 		}
@@ -480,50 +492,96 @@ type GMFAssetInfo struct {
 
 // GetGMFQuota retrieves the available GMF assets of the OA
 func (z *ZaloOAAdapter) GetGMFQuota(ctx context.Context) ([]GMFAssetInfo, error) {
-	payload := map[string]interface{}{
-		"quota_owner": "OA",
-	}
-	result, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/quota/group", payload)
-	if err != nil {
-		return nil, err
-	}
+	productTypes := []string{"gmf10", "gmf50", "gmf100", "gmf1000"}
+	quotaTypes := []string{"sub_quota", "purchase_quota"}
 
-	data, ok := result["data"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid quota response structure: missing data object")
-	}
-
-	assetsRaw, ok := data["assets"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid quota response structure: missing assets list")
-	}
-
+	var mu sync.Mutex
 	var assets []GMFAssetInfo
-	for _, aRaw := range assetsRaw {
-		m, ok := aRaw.(map[string]interface{})
-		if !ok {
-			continue
+	var wg sync.WaitGroup
+
+	var succeededCount int
+	var lastErr error
+
+	for _, pt := range productTypes {
+		for _, qt := range quotaTypes {
+			wg.Add(1)
+			go func(prodType, quotaType string) {
+				defer wg.Done()
+
+				payload := map[string]interface{}{
+					"quota_owner":  "OA",
+					"product_type": prodType,
+					"quota_type":   quotaType,
+				}
+
+				result, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/quota/group", payload)
+				if err != nil {
+					mu.Lock()
+					lastErr = err
+					mu.Unlock()
+					return
+				}
+
+				data, ok := result["data"].(map[string]interface{})
+				if !ok {
+					return
+				}
+
+				assetsRaw, ok := data["assets"].([]interface{})
+				if !ok {
+					return
+				}
+
+				var localAssets []GMFAssetInfo
+				for _, aRaw := range assetsRaw {
+					m, ok := aRaw.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					var asset GMFAssetInfo
+					if id, ok := m["asset_id"].(string); ok {
+						asset.AssetID = id
+					}
+					if aType, ok := m["asset_type"].(string); ok {
+						asset.AssetType = aType
+					}
+					if total, ok := m["total_group"].(float64); ok {
+						asset.TotalGroup = int(total)
+					}
+					if used, ok := m["used_group"].(float64); ok {
+						asset.UsedGroup = int(used)
+					}
+					if vt, ok := m["valid_through"].(float64); ok {
+						asset.ValidThrough = int64(vt)
+					}
+					localAssets = append(localAssets, asset)
+				}
+
+				mu.Lock()
+				succeededCount++
+				assets = append(assets, localAssets...)
+				mu.Unlock()
+			}(pt, qt)
 		}
-		var asset GMFAssetInfo
-		if id, ok := m["asset_id"].(string); ok {
-			asset.AssetID = id
-		}
-		if aType, ok := m["asset_type"].(string); ok {
-			asset.AssetType = aType
-		}
-		if total, ok := m["total_group"].(float64); ok {
-			asset.TotalGroup = int(total)
-		}
-		if used, ok := m["used_group"].(float64); ok {
-			asset.UsedGroup = int(used)
-		}
-		if vt, ok := m["valid_through"].(float64); ok {
-			asset.ValidThrough = int64(vt)
-		}
-		assets = append(assets, asset)
 	}
 
-	return assets, nil
+	wg.Wait()
+
+	if succeededCount == 0 && lastErr != nil {
+		return nil, fmt.Errorf("failed to fetch GMF quota from Zalo API: %w", lastErr)
+	}
+
+	// Deduplicate assets by asset_id
+	seen := make(map[string]bool)
+	var uniqueAssets []GMFAssetInfo
+	for _, asset := range assets {
+		if !seen[asset.AssetID] {
+			seen[asset.AssetID] = true
+			uniqueAssets = append(uniqueAssets, asset)
+		}
+	}
+
+	return uniqueAssets, nil
 }
 
 // CreateGMFGroup calls the creategroupwithoa API
