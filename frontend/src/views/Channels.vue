@@ -212,41 +212,43 @@
           <v-tab value="chatbot" v-if="editChannelType === 'zalo_oa'">{{ $t('chatbot_session') }}</v-tab>
         </v-tabs>
 
-        <v-window v-model="editTab">
-          <v-window-item value="general" class="pt-3">
-            <v-text-field v-model="editForm.name" :label="$t('channel_name')" class="mb-3" />
-            <v-switch v-model="editForm.is_active" :label="$t('active')" color="primary" density="compact" class="mb-3" />
-            <template v-if="editChannelType !== 'personal_zalo_import'">
-              <v-select
-                v-model="editForm.sync_interval"
-                :items="syncIntervalOptions"
-                :label="$t('sync_interval')"
-                density="compact"
-                class="mb-3"
-                :hint="$t('sync_interval_hint')"
-                persistent-hint
-              />
-              <v-alert v-if="editForm.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
-                {{ $t('sync_interval_warning_fb_zalo') }}
-              </v-alert>
-              <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" color="primary" density="compact" :hint="$t('sync_files_hint_short')" persistent-hint />
-            </template>
-          </v-window-item>
-          
-          <v-window-item value="chatbot" class="pt-3">
-            <div class="text-subtitle-2 mb-2">{{ $t('session_config') }}</div>
-            <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
-            <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
-            <v-text-field v-model="editForm.session_welcome_message" :label="$t('session_welcome')" :hint="$t('session_welcome_hint')" persistent-hint density="compact" class="mb-3" />
-            <v-text-field v-model="editForm.session_goodbye_message" :label="$t('session_goodbye')" :hint="$t('session_goodbye_hint')" persistent-hint density="compact" class="mb-3" />
-            <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
-            <v-divider class="my-4" />
-            <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
-            <v-text-field v-model="editForm.langflow_api_url" label="Langflow API URL" density="compact" class="mb-3" />
-            <v-text-field v-model="editForm.langflow_api_key" label="Langflow API Key" type="password" density="compact" class="mb-3" />
-            <v-text-field v-model="editForm.langflow_flow_id" label="Langflow Flow ID" density="compact" class="mb-3" />
-          </v-window-item>
-        </v-window>
+        <div style="max-height: 60vh; overflow-y: auto;" class="px-1">
+          <v-window v-model="editTab">
+            <v-window-item value="general" class="pt-3">
+              <v-text-field v-model="editForm.name" :label="$t('channel_name')" class="mb-3" />
+              <v-switch v-model="editForm.is_active" :label="$t('active')" color="primary" density="compact" class="mb-3" />
+              <template v-if="editChannelType !== 'personal_zalo_import'">
+                <v-select
+                  v-model="editForm.sync_interval"
+                  :items="syncIntervalOptions"
+                  :label="$t('sync_interval')"
+                  density="compact"
+                  class="mb-3"
+                  :hint="$t('sync_interval_hint')"
+                  persistent-hint
+                />
+                <v-alert v-if="editForm.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
+                  {{ $t('sync_interval_warning_fb_zalo') }}
+                </v-alert>
+                <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" color="primary" density="compact" :hint="$t('sync_files_hint_short')" persistent-hint />
+              </template>
+            </v-window-item>
+            
+            <v-window-item value="chatbot" class="pt-3">
+              <div class="text-subtitle-2 mb-2">{{ $t('session_config') }}</div>
+              <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
+              <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
+              <v-text-field v-model="editForm.session_welcome_message" :label="$t('session_welcome')" :hint="$t('session_welcome_hint')" persistent-hint density="compact" class="mb-3" />
+              <v-text-field v-model="editForm.session_goodbye_message" :label="$t('session_goodbye')" :hint="$t('session_goodbye_hint')" persistent-hint density="compact" class="mb-3" />
+              <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
+              <v-divider class="my-4" />
+              <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
+              <v-text-field v-model="editForm.langflow_api_url" label="Langflow API URL" density="compact" class="mb-3" />
+              <v-text-field v-model="editForm.langflow_api_key" label="Langflow API Key" type="password" density="compact" class="mb-3" />
+              <v-text-field v-model="editForm.langflow_flow_id" label="Langflow Flow ID" density="compact" class="mb-3" />
+            </v-window-item>
+          </v-window>
+        </div>
         
         <v-card-actions class="mt-4 px-0">
           <v-spacer />

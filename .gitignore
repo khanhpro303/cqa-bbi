@@ -46,3 +46,8 @@ THAM-KHAO-MCP/
 
 # GitNexus
 .gitnexus/
+.omx/
+
+# Agent IDE/runner configs
+.agents/
+.playwright-mcp/

@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -493,7 +495,7 @@ type GMFAssetInfo struct {
 // GetGMFQuota retrieves the available GMF assets of the OA
 func (z *ZaloOAAdapter) GetGMFQuota(ctx context.Context) ([]GMFAssetInfo, error) {
 	productTypes := []string{"gmf10", "gmf50", "gmf100", "gmf1000"}
-	quotaTypes := []string{"sub_quota", "purchase_quota"}
+	quotaTypes := []string{"sub_quota", "purchase_quota", "reward_quota"}
 
 	var mu sync.Mutex
 	var assets []GMFAssetInfo
@@ -522,39 +524,12 @@ func (z *ZaloOAAdapter) GetGMFQuota(ctx context.Context) ([]GMFAssetInfo, error)
 					return
 				}
 
-				data, ok := result["data"].(map[string]interface{})
-				if !ok {
+				localAssets, parseErr := parseGMFQuotaAssets(result)
+				if parseErr != nil {
+					mu.Lock()
+					lastErr = parseErr
+					mu.Unlock()
 					return
-				}
-
-				assetsRaw, ok := data["assets"].([]interface{})
-				if !ok {
-					return
-				}
-
-				var localAssets []GMFAssetInfo
-				for _, aRaw := range assetsRaw {
-					m, ok := aRaw.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					var asset GMFAssetInfo
-					if id, ok := m["asset_id"].(string); ok {
-						asset.AssetID = id
-					}
-					if aType, ok := m["asset_type"].(string); ok {
-						asset.AssetType = aType
-					}
-					if total, ok := m["total_group"].(float64); ok {
-						asset.TotalGroup = int(total)
-					}
-					if used, ok := m["used_group"].(float64); ok {
-						asset.UsedGroup = int(used)
-					}
-					if vt, ok := m["valid_through"].(float64); ok {
-						asset.ValidThrough = int64(vt)
-					}
-					localAssets = append(localAssets, asset)
 				}
 
 				mu.Lock()
@@ -575,13 +550,130 @@ func (z *ZaloOAAdapter) GetGMFQuota(ctx context.Context) ([]GMFAssetInfo, error)
 	seen := make(map[string]bool)
 	var uniqueAssets []GMFAssetInfo
 	for _, asset := range assets {
-		if !seen[asset.AssetID] {
+		if asset.AssetID != "" && !seen[asset.AssetID] {
 			seen[asset.AssetID] = true
 			uniqueAssets = append(uniqueAssets, asset)
 		}
 	}
 
 	return uniqueAssets, nil
+}
+
+func parseGMFQuotaAssets(result map[string]interface{}) ([]GMFAssetInfo, error) {
+	data, ok := result["data"]
+	if !ok {
+		return nil, fmt.Errorf("invalid GMF quota response: missing data")
+	}
+
+	assetsRaw, ok := data.([]interface{})
+	if !ok {
+		if dataMap, isMap := data.(map[string]interface{}); isMap {
+			assetsRaw, ok = dataMap["assets"].([]interface{})
+		}
+	}
+	if !ok {
+		return nil, fmt.Errorf("invalid GMF quota response: data is %T", data)
+	}
+
+	assets := make([]GMFAssetInfo, 0, len(assetsRaw))
+	for _, raw := range assetsRaw {
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		asset, ok := parseGMFQuotaAsset(m)
+		if ok {
+			assets = append(assets, asset)
+		}
+	}
+	return assets, nil
+}
+
+func parseGMFQuotaAsset(m map[string]interface{}) (GMFAssetInfo, bool) {
+	assetID, _ := m["asset_id"].(string)
+	if assetID == "" {
+		return GMFAssetInfo{}, false
+	}
+
+	productType, _ := m["product_type"].(string)
+	quotaType, _ := m["quota_type"].(string)
+	assetType, _ := m["asset_type"].(string)
+	if assetType == "" {
+		assetType = strings.ToUpper(productType)
+		if assetType != "" && quotaType != "" {
+			assetType = fmt.Sprintf("%s - %s", assetType, quotaType)
+		}
+	}
+
+	status, _ := m["status"].(string)
+	usedID, _ := m["used_id"].(string)
+	usedGroup := 0
+	if strings.EqualFold(status, "used") || usedID != "" {
+		usedGroup = 1
+	}
+
+	asset := GMFAssetInfo{
+		AssetID:      assetID,
+		AssetType:    assetType,
+		TotalGroup:   1,
+		UsedGroup:    usedGroup,
+		ValidThrough: parseGMFValidThrough(m["valid_through"]),
+	}
+	if total, ok := parseGMFInt(m["total_group"]); ok {
+		asset.TotalGroup = total
+	}
+	if used, ok := parseGMFInt(m["used_group"]); ok {
+		asset.UsedGroup = used
+	}
+	return asset, true
+}
+
+func parseGMFInt(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		n, err := v.Int64()
+		return int(n), err == nil
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func parseGMFValidThrough(value interface{}) int64 {
+	switch v := value.(type) {
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case json.Number:
+		n, err := v.Int64()
+		if err == nil {
+			return n
+		}
+	case string:
+		raw := strings.TrimSpace(v)
+		if raw == "" {
+			return 0
+		}
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return n
+		}
+		for _, layout := range []string{"02/01/2006", "2006-01-02", time.RFC3339} {
+			parsed, err := time.ParseInLocation(layout, raw, time.UTC)
+			if err == nil {
+				return parsed.UnixMilli()
+			}
+		}
+	}
+	return 0
 }
 
 // CreateGMFGroup calls the creategroupwithoa API
@@ -644,6 +736,3 @@ func (z *ZaloOAAdapter) RemoveGMFGroupMembers(ctx context.Context, groupID strin
 	_, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/removemembers", payload)
 	return err
 }
-
-
-
