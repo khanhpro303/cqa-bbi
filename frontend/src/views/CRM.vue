@@ -352,11 +352,11 @@
 
     <!-- Dialog 1: Tạo/Sửa nhóm -->
     <v-dialog v-model="groupDialog" max-width="500">
-      <v-card class="pa-4">
-        <v-card-title class="font-weight-bold">
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 font-weight-bold">
           {{ isEditGroup ? 'Cập nhật nhóm CRM' : 'Tạo nhóm CRM mới' }}
         </v-card-title>
-        <v-card-text>
+        <v-card-text class="px-6 py-2">
           <v-form ref="groupFormRef">
             <v-text-field v-model="groupForm.name" label="Tên nhóm *" :rules="[v => !!v || 'Tên nhóm là bắt buộc']" class="mb-3" />
             <v-textarea v-model="groupForm.description" label="Mô tả nhóm" class="mb-3" rows="3" />
@@ -404,7 +404,7 @@
             />
           </v-form>
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn variant="text" @click="groupDialog = false">Hủy</v-btn>
           <v-btn color="primary" :loading="savingGroup" @click="saveGroup">Lưu lại</v-btn>
@@ -414,13 +414,13 @@
 
     <!-- Dialog 2: Quản lý thành viên nhóm (GMF) -->
     <v-dialog v-model="membersDialog" max-width="650">
-      <v-card class="pa-4">
-        <v-card-title class="font-weight-bold d-flex align-center pb-2">
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 font-weight-bold d-flex align-center">
           <v-icon start color="primary">mdi-account-multiple-plus</v-icon>
           Thành viên nhóm: <span class="text-primary ml-1">{{ activeGroup?.name }}</span>
         </v-card-title>
         
-        <v-card-text class="pt-0">
+        <v-card-text class="px-6 py-2">
           <v-tabs v-model="memberTab" color="teal" class="mb-4">
             <v-tab value="employees">Nhân viên phụ trách ({{ activeGroup?.employees?.length || 0 }})</v-tab>
             <v-tab value="customers">Khách hàng thuộc nhóm ({{ loadingLiveMembers ? '...' : liveCustomers.length }})</v-tab>
@@ -505,15 +505,15 @@
                   <v-list-item-subtitle>Zalo ID: {{ cust.zalo_user_id }}</v-list-item-subtitle>
                   <template #append>
                     <v-btn
-                      v-if="activeGroup?.zalo_group_link"
-                      icon="mdi-send"
-                      size="small"
-                      variant="text"
-                      color="teal"
-                      class="mr-2"
-                      @click="inviteCustomerToZaloGroup(cust.id)"
-                      :disabled="!cust.id"
-                      title="Gửi tin nhắn mời vào nhóm Zalo"
+                       v-if="activeGroup?.zalo_group_link"
+                       icon="mdi-send"
+                       size="small"
+                       variant="text"
+                       color="teal"
+                       class="mr-2"
+                       @click="inviteCustomerToZaloGroup(cust.id)"
+                       :disabled="!cust.id"
+                       title="Gửi tin nhắn mời vào nhóm Zalo"
                     />
                     <v-btn icon="mdi-close" size="small" variant="text" color="error" @click="removeGroupCustomer(cust.id, cust.zalo_user_id)" />
                   </template>
@@ -579,7 +579,7 @@
             </v-window-item>
           </v-window>
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn color="teal" @click="membersDialog = false">Đóng</v-btn>
         </v-card-actions>
@@ -588,9 +588,9 @@
 
     <!-- Dialog 3: Tạo mã kích hoạt khách mới -->
     <v-dialog v-model="inviteDialog" max-width="450">
-      <v-card class="pa-4">
-        <v-card-title class="font-weight-bold">Tạo mã kích hoạt khách hàng</v-card-title>
-        <v-card-text>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 font-weight-bold">Tạo mã kích hoạt khách hàng</v-card-title>
+        <v-card-text class="px-6 py-2">
           <v-form ref="inviteFormRef">
             <v-text-field v-model="inviteForm.name" label="Tên khách hàng gợi nhớ *" :rules="[v => !!v || 'Bắt buộc nhập']" class="mb-3" />
             <v-text-field v-model="inviteForm.phone_number" label="Số điện thoại liên kết" hint="Ví dụ: 0987654321" persistent-hint class="mb-3" />
@@ -610,7 +610,7 @@
             />
           </v-form>
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn variant="text" @click="inviteDialog = false">Hủy</v-btn>
           <v-btn color="teal" :loading="creatingInvite" @click="createInvite">Tạo mã liên kết</v-btn>
@@ -620,9 +620,9 @@
 
     <!-- Dialog 4: Duyệt & Gán mã khách hàng -->
     <v-dialog v-model="approveDialog" max-width="480">
-      <v-card class="pa-4">
-        <v-card-title class="font-weight-bold pb-2">Phê duyệt & Phân mã khách hàng</v-card-title>
-        <v-card-text>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 font-weight-bold">Phê duyệt & Phân mã khách hàng</v-card-title>
+        <v-card-text class="px-6 py-2">
           <div class="d-flex align-center bg-grey-lighten-4 pa-3 rounded mb-4">
             <v-avatar size="40" class="mr-3">
               <v-img v-if="customerToApprove?.avatar" :src="customerToApprove.avatar" />
@@ -661,7 +661,7 @@
             />
           </v-form>
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn variant="text" @click="approveDialog = false">Hủy</v-btn>
           <v-btn color="success" :loading="approvingCustomer" @click="approveCustomer">Xác nhận duyệt</v-btn>
@@ -671,9 +671,9 @@
 
     <!-- Dialog 4.5: Gán SĐT thủ công -->
     <v-dialog v-model="assignPhoneDialog" max-width="480">
-      <v-card class="pa-4">
-        <v-card-title class="font-weight-bold pb-2">Gán số điện thoại khách hàng</v-card-title>
-        <v-card-text>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 font-weight-bold">Gán số điện thoại khách hàng</v-card-title>
+        <v-card-text class="px-6 py-2">
           <div class="bg-grey-lighten-4 pa-3 rounded mb-4">
             <div class="text-caption text-grey">Khách hàng:</div>
             <div class="font-weight-bold text-primary">{{ assignForm.name }} ({{ assignForm.customer_code }})</div>
@@ -690,7 +690,7 @@
             />
           </v-form>
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn variant="text" @click="assignPhoneDialog = false">Hủy</v-btn>
           <v-btn color="teal" :loading="assigningPhone" @click="assignCustomerPhone">Xác nhận</v-btn>
@@ -701,9 +701,9 @@
 
     <!-- Dialog 5: QR Code hiển thị mã verify cho khách hàng -->
     <v-dialog v-model="qrDialog" max-width="460">
-      <v-card class="pa-6 text-center">
-        <v-card-title class="font-weight-bold text-h6 justify-center">QR kích hoạt khách hàng</v-card-title>
-        <v-card-text>
+      <v-card class="text-center">
+        <v-card-title class="px-6 pt-6 pb-2 font-weight-bold text-h6 justify-center">QR kích hoạt khách hàng</v-card-title>
+        <v-card-text class="px-6 py-2">
           <div class="text-body-1 font-weight-bold mb-1 text-teal">{{ activeInvite?.name }}</div>
           <div class="text-caption text-grey-darken-1 mb-4">
             Khách hàng quét mã QR dưới đây bằng app Zalo để nhắn tin cú pháp kích hoạt.
@@ -755,7 +755,7 @@
             </ol>
           </div>
         </v-card-text>
-        <v-card-actions class="justify-center">
+        <v-card-actions class="px-6 pb-6 pt-2 justify-center">
           <v-btn color="teal" variant="elevated" class="px-6" @click="qrDialog = false; fetchCustomers()">Hoàn tất</v-btn>
         </v-card-actions>
       </v-card>
@@ -763,9 +763,9 @@
 
     <!-- Dialog 6: QR Code hiển thị link nhóm GMF -->
     <v-dialog v-model="groupQrDialog" max-width="450">
-      <v-card class="pa-6 text-center">
-        <v-card-title class="font-weight-bold text-h6 justify-center">QR Nhóm Chat Zalo</v-card-title>
-        <v-card-text>
+      <v-card class="text-center">
+        <v-card-title class="px-6 pt-6 pb-2 font-weight-bold text-h6 justify-center">QR Nhóm Chat Zalo</v-card-title>
+        <v-card-text class="px-6 py-2">
           <div class="text-body-1 font-weight-bold mb-1 text-success">{{ activeGroupQR?.name }}</div>
           <div class="text-caption text-grey-darken-1 mb-4">
             Quét mã QR dưới đây bằng ứng dụng Zalo để tham gia nhóm chat hỗ trợ.
@@ -790,7 +790,7 @@
             </a>
           </v-card>
         </v-card-text>
-        <v-card-actions class="justify-center">
+        <v-card-actions class="px-6 pb-6 pt-2 justify-center">
           <v-btn color="success" variant="elevated" class="px-6" @click="groupQrDialog = false">Đóng</v-btn>
         </v-card-actions>
       </v-card>
@@ -798,66 +798,68 @@
 
     <!-- Dialog 7: Phân quyền Endpoint & Sơ đồ tương tác dữ liệu live -->
     <v-dialog v-model="permsDialog" max-width="960">
-      <v-card class="pa-4">
-        <v-card-title class="font-weight-bold d-flex align-center pb-2">
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 font-weight-bold d-flex align-center">
           <v-icon start color="indigo">mdi-shield-lock-outline</v-icon>
           {{ $t('crm_group_perms_title') }} <span class="text-indigo ml-1">{{ activeGroupForPerms?.name }}</span>
         </v-card-title>
 
-        <v-card-text>
-          <v-row>
+        <v-card-text class="px-6 py-2">
+          <v-row class="align-stretch">
             <!-- Left: Table of endpoints -->
-            <v-col cols="12" md="6">
+            <v-col cols="12" md="6" class="d-flex flex-column">
               <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_endpoints_title') }}</div>
-              <v-card variant="outlined" class="rounded-lg scopes-card pa-1">
-                <v-table density="compact">
-                  <thead>
-                    <tr>
-                      <th style="width:36%">{{ $t('erp_endpoint_resource') }}</th>
-                      <th style="width:14%" class="text-center">{{ $t('erp_endpoint_enabled') }}</th>
-                      <th style="width:26%">{{ $t('erp_endpoint_scope') }}</th>
-                      <th style="width:24%">{{ $t('erp_endpoint_groups') }}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="ep in groupEndpoints" :key="ep.resource">
-                      <td class="text-caption font-weight-bold">{{ resourceLabel(ep.resource) }}</td>
-                      <td class="text-center">
-                        <v-switch
-                          v-model="ep.is_enabled"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          @change="quickToggleGroupEndpoint(ep)"
-                        />
-                      </td>
-                      <td>
-                        <v-select
-                          v-model="ep.scope_type"
-                          :items="scopeOptions"
-                          density="compact"
-                          variant="plain"
-                          hide-details
-                          :disabled="!ep.is_enabled"
-                          style="font-size:0.75rem"
-                        />
-                      </td>
-                      <td>
-                        <v-text-field
-                          v-if="ep.resource === 'products' || ep.resource === 'inventory'"
-                          v-model="ep.product_groups"
-                          density="compact"
-                          variant="plain"
-                          hide-details
-                          :disabled="!ep.is_enabled"
-                          placeholder="e.g. Nguyên Đầu"
-                          style="font-size:0.75rem"
-                        />
-                        <span v-else class="text-caption text-grey">—</span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </v-table>
+              <v-card variant="outlined" class="rounded-lg scopes-card pa-1 flex-grow-1 d-flex flex-column justify-space-between">
+                <div>
+                  <v-table density="compact">
+                    <thead>
+                      <tr>
+                        <th style="width:36%">{{ $t('erp_endpoint_resource') }}</th>
+                        <th style="width:14%" class="text-center">{{ $t('erp_endpoint_enabled') }}</th>
+                        <th style="width:26%">{{ $t('erp_endpoint_scope') }}</th>
+                        <th style="width:24%">{{ $t('erp_endpoint_groups') }}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="ep in groupEndpoints" :key="ep.resource">
+                        <td class="text-caption font-weight-bold">{{ resourceLabel(ep.resource) }}</td>
+                        <td class="text-center">
+                          <v-switch
+                            v-model="ep.is_enabled"
+                            color="primary"
+                            density="compact"
+                            hide-details
+                            @change="quickToggleGroupEndpoint(ep)"
+                          />
+                        </td>
+                        <td>
+                          <v-select
+                            v-model="ep.scope_type"
+                            :items="scopeOptions"
+                            density="compact"
+                            variant="plain"
+                            hide-details
+                            :disabled="!ep.is_enabled"
+                            style="font-size:0.75rem"
+                          />
+                        </td>
+                        <td>
+                          <v-text-field
+                            v-if="ep.resource === 'products' || ep.resource === 'inventory'"
+                            v-model="ep.product_groups"
+                            density="compact"
+                            variant="plain"
+                            hide-details
+                            :disabled="!ep.is_enabled"
+                            placeholder="e.g. Nguyên Đầu"
+                            style="font-size:0.75rem"
+                          />
+                          <span v-else class="text-caption text-grey">—</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </v-table>
+                </div>
                 <div class="pa-3 d-flex align-center ga-2">
                   <v-btn size="small" color="primary" variant="tonal" :loading="savingGroupEndpoints" @click="saveGroupEndpoints">
                     <v-icon start size="small">mdi-content-save</v-icon>
@@ -869,9 +871,9 @@
             </v-col>
 
             <!-- Right: Sơ đồ tương tác dữ liệu Live -->
-            <v-col cols="12" md="6">
+            <v-col cols="12" md="6" class="d-flex flex-column">
               <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('crm_live_flow_title') }}</div>
-              <div class="erp-visual-graph pa-6 rounded-lg d-flex flex-column justify-space-between align-center border h-100" style="min-height: 250px;">
+              <div class="erp-visual-graph pa-6 rounded-lg d-flex flex-column justify-center align-center border flex-grow-1" style="min-height: 250px;">
                 <div class="d-flex flex-row justify-space-between align-center w-100 my-auto">
                   <!-- Node Left: CRM Group -->
                   <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '130px', borderColor: '#3f51b5' }">
@@ -919,7 +921,7 @@
           </v-row>
         </v-card-text>
 
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn color="indigo" variant="elevated" @click="permsDialog = false">{{ $t('mcp_close') }}</v-btn>
         </v-card-actions>

@@ -89,86 +89,88 @@
 
     <!-- Connect Channel Dialog -->
     <v-dialog v-model="showDialog" max-width="560">
-      <v-card class="pa-6">
-        <v-card-title>{{ $t('connect_channel') }}</v-card-title>
-        <v-select
-          v-model="newChannel.channel_type"
-          :label="$t('channel_type')"
-          :items="[
-            { title: $t('channel_zalo'), value: 'zalo_oa' },
-            { title: $t('channel_facebook'), value: 'facebook' },
-            { title: $t('channel_personal_zalo'), value: 'personal_zalo_import' },
-          ]"
-          class="mb-3"
-        />
-        <v-text-field v-model="newChannel.name" :label="$t('channel_name')" class="mb-3" />
-
-        <!-- Zalo OA -->
-        <template v-if="newChannel.channel_type === 'zalo_oa'">
-          <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://khanhpro303.github.io/cqa-bbi/usage/channels.html#zalo-oa" target="_blank" class="mb-3">
-            {{ $t('zalo_app_id_guide') }}
-          </v-btn>
-          <v-text-field v-model="newChannel.creds.app_id" :label="$t('zalo_app_id')" density="compact" class="mb-2" :hint="$t('zalo_app_id_hint')" persistent-hint />
-          <v-text-field v-model="newChannel.creds.app_secret" :label="$t('zalo_app_secret')" type="password" density="compact" class="mb-2" />
-          <div class="text-caption text-grey-darken-1 mb-2">
-            <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
-            {{ $t('zalo_oa_selection_note') }}
-          </div>
-        </template>
-
-        <!-- Facebook -->
-        <template v-else-if="newChannel.channel_type === 'facebook'">
-          <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://khanhpro303.github.io/cqa-bbi/usage/facebook.html" target="_blank" class="mb-3">
-            {{ $t('fb_guide') }}
-          </v-btn>
-          <v-text-field v-model="newChannel.creds.page_id" :label="$t('fb_page_id')" density="compact" class="mb-2" hint="Page ID từ Cài đặt trang Facebook" persistent-hint />
-          <v-text-field v-model="newChannel.creds.access_token" :label="$t('fb_access_token')" density="compact" class="mb-2" hint="Page Access Token (nên dùng long-lived token)" persistent-hint />
-        </template>
-        <template v-else>
-          <v-alert type="info" variant="tonal" class="mb-3">
-            {{ $t('personal_zalo_note') }}
-          </v-alert>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2">{{ $t('connect_channel') }}</v-card-title>
+        <v-card-text class="px-6 py-2">
           <v-select
-            v-model="newChannel.sync_scope"
+            v-model="newChannel.channel_type"
+            :label="$t('channel_type')"
             :items="[
-              { title: $t('sync_scope_all'), value: 'all' },
-              { title: $t('sync_scope_direct'), value: 'direct' },
-              { title: $t('sync_scope_group'), value: 'group' },
+              { title: $t('channel_zalo'), value: 'zalo_oa' },
+              { title: $t('channel_facebook'), value: 'facebook' },
+              { title: $t('channel_personal_zalo'), value: 'personal_zalo_import' },
             ]"
-            :label="$t('sync_scope')"
-            density="compact"
             class="mb-3"
-            :hint="$t('sync_scope_hint')"
-            persistent-hint
           />
-        </template>
+          <v-text-field v-model="newChannel.name" :label="$t('channel_name')" class="mb-3" />
 
-        <!-- Sync settings -->
-        <template v-if="newChannel.channel_type !== 'personal_zalo_import'">
-          <v-divider class="my-3" />
-          <v-select
-            v-model="newChannel.sync_interval"
-            :items="syncIntervalOptions"
-            :label="$t('sync_interval')"
-            density="compact"
-            class="mb-3"
-            :hint="$t('sync_interval_hint')"
-            persistent-hint
-          />
-          <v-alert v-if="newChannel.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
-            {{ $t('sync_interval_warning') }}
-          </v-alert>
-          <v-switch
-            v-model="newChannel.sync_files"
-            :label="$t('sync_files')"
-            :hint="$t('sync_files_hint')"
-            persistent-hint
-            density="compact"
-            color="primary"
-          />
-        </template>
+          <!-- Zalo OA -->
+          <template v-if="newChannel.channel_type === 'zalo_oa'">
+            <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://khanhpro303.github.io/cqa-bbi/usage/channels.html#zalo-oa" target="_blank" class="mb-3">
+              {{ $t('zalo_app_id_guide') }}
+            </v-btn>
+            <v-text-field v-model="newChannel.creds.app_id" :label="$t('zalo_app_id')" density="compact" class="mb-2" :hint="$t('zalo_app_id_hint')" persistent-hint />
+            <v-text-field v-model="newChannel.creds.app_secret" :label="$t('zalo_app_secret')" type="password" density="compact" class="mb-2" />
+            <div class="text-caption text-grey-darken-1 mb-2">
+              <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
+              {{ $t('zalo_oa_selection_note') }}
+            </div>
+          </template>
 
-        <v-card-actions class="mt-4 px-0">
+          <!-- Facebook -->
+          <template v-else-if="newChannel.channel_type === 'facebook'">
+            <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://khanhpro303.github.io/cqa-bbi/usage/facebook.html" target="_blank" class="mb-3">
+              {{ $t('fb_guide') }}
+            </v-btn>
+            <v-text-field v-model="newChannel.creds.page_id" :label="$t('fb_page_id')" density="compact" class="mb-2" hint="Page ID từ Cài đặt trang Facebook" persistent-hint />
+            <v-text-field v-model="newChannel.creds.access_token" :label="$t('fb_access_token')" density="compact" class="mb-2" hint="Page Access Token (nên dùng long-lived token)" persistent-hint />
+          </template>
+          <template v-else>
+            <v-alert type="info" variant="tonal" class="mb-3">
+              {{ $t('personal_zalo_note') }}
+            </v-alert>
+            <v-select
+              v-model="newChannel.sync_scope"
+              :items="[
+                { title: $t('sync_scope_all'), value: 'all' },
+                { title: $t('sync_scope_direct'), value: 'direct' },
+                { title: $t('sync_scope_group'), value: 'group' },
+              ]"
+              :label="$t('sync_scope')"
+              density="compact"
+              class="mb-3"
+              :hint="$t('sync_scope_hint')"
+              persistent-hint
+            />
+          </template>
+
+          <!-- Sync settings -->
+          <template v-if="newChannel.channel_type !== 'personal_zalo_import'">
+            <v-divider class="my-3" />
+            <v-select
+              v-model="newChannel.sync_interval"
+              :items="syncIntervalOptions"
+              :label="$t('sync_interval')"
+              density="compact"
+              class="mb-3"
+              :hint="$t('sync_interval_hint')"
+              persistent-hint
+            />
+            <v-alert v-if="newChannel.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
+              {{ $t('sync_interval_warning') }}
+            </v-alert>
+            <v-switch
+              v-model="newChannel.sync_files"
+              :label="$t('sync_files')"
+              :hint="$t('sync_files_hint')"
+              persistent-hint
+              density="compact"
+              color="primary"
+            />
+          </template>
+        </v-card-text>
+
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn variant="text" @click="showDialog = false">{{ $t('cancel') }}</v-btn>
           <v-btn
@@ -204,53 +206,55 @@
 
     <!-- Edit Channel Dialog -->
     <v-dialog v-model="editDialog" max-width="600">
-      <v-card class="pa-6">
-        <v-card-title>{{ $t('edit_channel') }}</v-card-title>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2">{{ $t('edit_channel') }}</v-card-title>
         
-        <v-tabs v-model="editTab" color="primary" class="mb-4">
-          <v-tab value="general">{{ $t('general_settings') }}</v-tab>
-          <v-tab value="chatbot" v-if="editChannelType === 'zalo_oa'">{{ $t('chatbot_session') }}</v-tab>
-        </v-tabs>
+        <v-card-text class="px-6 py-2">
+          <v-tabs v-model="editTab" color="primary" class="mb-4">
+            <v-tab value="general">{{ $t('general_settings') }}</v-tab>
+            <v-tab value="chatbot" v-if="editChannelType === 'zalo_oa'">{{ $t('chatbot_session') }}</v-tab>
+          </v-tabs>
 
-        <div style="max-height: 60vh; overflow-y: auto;" class="px-1">
-          <v-window v-model="editTab">
-            <v-window-item value="general" class="pt-3">
-              <v-text-field v-model="editForm.name" :label="$t('channel_name')" class="mb-3" />
-              <v-switch v-model="editForm.is_active" :label="$t('active')" color="primary" density="compact" class="mb-3" />
-              <template v-if="editChannelType !== 'personal_zalo_import'">
-                <v-select
-                  v-model="editForm.sync_interval"
-                  :items="syncIntervalOptions"
-                  :label="$t('sync_interval')"
-                  density="compact"
-                  class="mb-3"
-                  :hint="$t('sync_interval_hint')"
-                  persistent-hint
-                />
-                <v-alert v-if="editForm.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
-                  {{ $t('sync_interval_warning_fb_zalo') }}
-                </v-alert>
-                <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" color="primary" density="compact" :hint="$t('sync_files_hint_short')" persistent-hint />
-              </template>
-            </v-window-item>
-            
-            <v-window-item value="chatbot" class="pt-3">
-              <div class="text-subtitle-2 mb-2">{{ $t('session_config') }}</div>
-              <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
-              <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
-              <v-text-field v-model="editForm.session_welcome_message" :label="$t('session_welcome')" :hint="$t('session_welcome_hint')" persistent-hint density="compact" class="mb-3" />
-              <v-text-field v-model="editForm.session_goodbye_message" :label="$t('session_goodbye')" :hint="$t('session_goodbye_hint')" persistent-hint density="compact" class="mb-3" />
-              <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
-              <v-divider class="my-4" />
-              <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
-              <v-text-field v-model="editForm.langflow_api_url" label="Langflow API URL" density="compact" class="mb-3" />
-              <v-text-field v-model="editForm.langflow_api_key" label="Langflow API Key" type="password" density="compact" class="mb-3" />
-              <v-text-field v-model="editForm.langflow_flow_id" label="Langflow Flow ID" density="compact" class="mb-3" />
-            </v-window-item>
-          </v-window>
-        </div>
+          <div style="max-height: 60vh; overflow-y: auto;" class="px-1">
+            <v-window v-model="editTab">
+              <v-window-item value="general" class="pt-3">
+                <v-text-field v-model="editForm.name" :label="$t('channel_name')" class="mb-3" />
+                <v-switch v-model="editForm.is_active" :label="$t('active')" color="primary" density="compact" class="mb-3" />
+                <template v-if="editChannelType !== 'personal_zalo_import'">
+                  <v-select
+                    v-model="editForm.sync_interval"
+                    :items="syncIntervalOptions"
+                    :label="$t('sync_interval')"
+                    density="compact"
+                    class="mb-3"
+                    :hint="$t('sync_interval_hint')"
+                    persistent-hint
+                  />
+                  <v-alert v-if="editForm.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
+                    {{ $t('sync_interval_warning_fb_zalo') }}
+                  </v-alert>
+                  <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" color="primary" density="compact" :hint="$t('sync_files_hint_short')" persistent-hint />
+                </template>
+              </v-window-item>
+              
+              <v-window-item value="chatbot" class="pt-3">
+                <div class="text-subtitle-2 mb-2">{{ $t('session_config') }}</div>
+                <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
+                <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
+                <v-text-field v-model="editForm.session_welcome_message" :label="$t('session_welcome')" :hint="$t('session_welcome_hint')" persistent-hint density="compact" class="mb-3" />
+                <v-text-field v-model="editForm.session_goodbye_message" :label="$t('session_goodbye')" :hint="$t('session_goodbye_hint')" persistent-hint density="compact" class="mb-3" />
+                <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
+                <v-divider class="my-4" />
+                <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
+                <v-text-field v-model="editForm.langflow_api_url" label="Langflow API URL" density="compact" class="mb-3" />
+                <v-text-field v-model="editForm.langflow_api_key" label="Langflow API Key" type="password" density="compact" class="mb-3" />
+                <v-text-field v-model="editForm.langflow_flow_id" label="Langflow Flow ID" density="compact" class="mb-3" />
+              </v-window-item>
+            </v-window>
+          </div>
+        </v-card-text>
         
-        <v-card-actions class="mt-4 px-0">
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn variant="text" @click="editDialog = false">{{ $t('cancel') }}</v-btn>
           <v-btn color="primary" :loading="savingEdit" @click="saveEdit">{{ $t('save_settings') }}</v-btn>

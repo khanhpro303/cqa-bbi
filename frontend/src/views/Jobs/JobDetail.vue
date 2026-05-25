@@ -729,12 +729,12 @@
 
     <!-- Clear results dialog -->
     <v-dialog v-model="clearResultsDialog" max-width="450">
-      <v-card class="pa-6">
-        <v-card-title class="text-error">Xóa tất cả kết quả</v-card-title>
-        <v-card-text>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 text-error font-weight-bold">Xóa tất cả kết quả</v-card-title>
+        <v-card-text class="px-6 py-2">
           Xóa toàn bộ kết quả đánh giá và chi phí AI. Lịch sử chạy vẫn được giữ lại. Hành động không thể hoàn tác.
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn @click="clearResultsDialog = false">{{ $t('cancel') }}</v-btn>
           <v-btn color="error" :loading="clearingResults" @click="clearResults">{{ $t('delete') }}</v-btn>
@@ -745,7 +745,7 @@
     <!-- Detail dialog (table view row click) -->
     <v-dialog v-model="detailDialog" max-width="1000" scrollable>
       <v-card v-if="dialogGroup">
-        <v-card-title class="d-flex align-center pa-4">
+        <v-card-title class="px-6 pt-6 pb-2 d-flex align-center font-weight-bold">
           <v-chip size="small" :color="dialogGroup.verdict === 'PASS' ? 'success' : dialogGroup.verdict === 'SKIP' ? 'grey' : 'error'" variant="tonal" class="mr-3">
             {{ dialogGroup.verdict === 'PASS' ? 'Đạt' : dialogGroup.verdict === 'SKIP' ? 'Bỏ qua' : 'Không đạt' }}
           </v-chip>
@@ -756,8 +756,8 @@
           </v-chip>
         </v-card-title>
         <v-divider />
-        <v-card-text class="pa-4">
-          <v-row>
+        <v-card-text class="px-6 py-2">
+          <v-row class="mt-1">
             <v-col cols="12" md="7">
               <div class="d-flex align-center mb-2">
                 <div class="text-caption text-grey font-weight-bold">
@@ -837,7 +837,7 @@
             </v-col>
           </v-row>
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn @click="detailDialog = false">Đóng</v-btn>
         </v-card-actions>
@@ -846,15 +846,15 @@
 
     <!-- AI not configured dialog -->
     <v-dialog v-model="aiNotConfiguredDialog" max-width="450">
-      <v-card class="pa-6">
-        <v-card-title>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 font-weight-bold d-flex align-center">
           <v-icon start color="warning">mdi-alert</v-icon>
           Chưa cấu hình AI Provider
         </v-card-title>
-        <v-card-text>
+        <v-card-text class="px-6 py-2">
           Bạn cần cấu hình API key của AI Provider (Claude, Gemini hoặc OpenAI) trước khi chạy tác vụ phân tích.
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn variant="text" @click="aiNotConfiguredDialog = false">Đóng</v-btn>
           <v-btn color="primary" variant="flat" :to="`/${tenantId}/settings`" @click="aiNotConfiguredDialog = false">
@@ -867,12 +867,12 @@
 
     <!-- Clear runs dialog -->
     <v-dialog v-model="clearRunsDialog" max-width="450">
-      <v-card class="pa-6">
-        <v-card-title class="text-error">Xóa lịch sử chạy</v-card-title>
-        <v-card-text>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 text-error font-weight-bold">Xóa lịch sử chạy</v-card-title>
+        <v-card-text class="px-6 py-2">
           Xóa toàn bộ lịch sử chạy, kết quả đánh giá và chi phí AI của công việc này. Hành động không thể hoàn tác.
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn @click="clearRunsDialog = false">{{ $t('cancel') }}</v-btn>
           <v-btn color="error" :loading="clearingRuns" @click="clearRuns">{{ $t('delete') }}</v-btn>
@@ -882,12 +882,12 @@
 
     <!-- Clear ERP cache dialog -->
     <v-dialog v-model="clearERPCacheDialog" max-width="450">
-      <v-card class="pa-6">
-        <v-card-title class="text-error">Xóa cache sản phẩm ERP</v-card-title>
-        <v-card-text>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 text-error font-weight-bold">Xóa cache sản phẩm ERP</v-card-title>
+        <v-card-text class="px-6 py-2">
           Hành động này sẽ xóa toàn bộ dữ liệu danh mục sản phẩm đã cache trong Astra DB. Bạn sẽ cần chạy lại công việc này để đồng bộ lại dữ liệu từ ERP.
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn @click="clearERPCacheDialog = false">Hủy</v-btn>
           <v-btn color="error" :loading="erpCacheClearing" @click="clearERPCache">Xóa cache</v-btn>

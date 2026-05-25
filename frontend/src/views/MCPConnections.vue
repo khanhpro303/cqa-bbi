@@ -50,48 +50,50 @@
 
     <!-- Create Dialog -->
     <v-dialog v-model="createDialog" max-width="560">
-      <v-card class="pa-6">
-        <v-card-title>{{ $t('create_connection') }}</v-card-title>
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2">{{ $t('create_connection') }}</v-card-title>
+        
+        <v-card-text class="px-6 py-2">
+          <v-text-field v-model="newName" :label="$t('name')" class="mt-1" :hint="$t('mcp_name_hint')" persistent-hint />
 
-        <v-text-field v-model="newName" :label="$t('name')" class="mt-4" :hint="$t('mcp_name_hint')" persistent-hint />
+          <v-combobox
+            v-model="newRedirectURIs"
+            :label="$t('mcp_redirect_uris')"
+            multiple
+            chips
+            closable-chips
+            class="mt-4"
+            :hint="$t('mcp_redirect_uris_hint')"
+            persistent-hint
+          />
 
-        <v-combobox
-          v-model="newRedirectURIs"
-          :label="$t('mcp_redirect_uris')"
-          multiple
-          chips
-          closable-chips
-          class="mt-4"
-          :hint="$t('mcp_redirect_uris_hint')"
-          persistent-hint
-        />
+          <v-select
+            v-model="newScopes"
+            :items="scopeOptions"
+            :label="$t('scopes')"
+            multiple
+            chips
+            class="mt-4"
+            :hint="$t('mcp_scopes_hint')"
+            persistent-hint
+          />
 
-        <v-select
-          v-model="newScopes"
-          :items="scopeOptions"
-          :label="$t('scopes')"
-          multiple
-          chips
-          class="mt-4"
-          :hint="$t('mcp_scopes_hint')"
-          persistent-hint
-        />
+          <div v-if="generatedSecret" class="bg-grey-lighten-4 pa-4 rounded mt-4">
+            <div class="text-caption text-grey mb-1">{{ $t('client_id') }}</div>
+            <div class="font-mono text-body-2 mb-3">{{ generatedClientId }}</div>
+            <div class="text-caption text-grey mb-1">{{ $t('client_secret') }}</div>
+            <div class="font-mono text-body-2 text-error mb-2">{{ generatedSecret }}</div>
+            <v-alert type="warning" variant="tonal" density="compact">
+              {{ $t('mcp_secret_warning') }}
+            </v-alert>
+            <v-btn variant="outlined" size="small" class="mt-2" @click="copySecret">
+              <v-icon start size="small">mdi-content-copy</v-icon>
+              {{ $t('mcp_copy_secret') }}
+            </v-btn>
+          </div>
+        </v-card-text>
 
-        <div v-if="generatedSecret" class="bg-grey-lighten-4 pa-4 rounded mt-4">
-          <div class="text-caption text-grey mb-1">{{ $t('client_id') }}</div>
-          <div class="font-mono text-body-2 mb-3">{{ generatedClientId }}</div>
-          <div class="text-caption text-grey mb-1">{{ $t('client_secret') }}</div>
-          <div class="font-mono text-body-2 text-error mb-2">{{ generatedSecret }}</div>
-          <v-alert type="warning" variant="tonal" density="compact">
-            {{ $t('mcp_secret_warning') }}
-          </v-alert>
-          <v-btn variant="outlined" size="small" class="mt-2" @click="copySecret">
-            <v-icon start size="small">mdi-content-copy</v-icon>
-            {{ $t('mcp_copy_secret') }}
-          </v-btn>
-        </div>
-
-        <v-card-actions class="px-0 mt-4">
+        <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
           <v-btn variant="text" @click="closeDialog">{{ generatedSecret ? $t('mcp_close') : $t('cancel') }}</v-btn>
           <v-btn v-if="!generatedSecret" color="primary" :loading="creating" :disabled="!newName" @click="generateClient">{{ $t('create') }}</v-btn>
