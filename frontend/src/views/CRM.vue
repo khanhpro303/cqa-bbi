@@ -50,7 +50,7 @@
             </thead>
             <tbody>
               <tr v-for="g in groups" :key="g.id">
-                <td>
+                <td class="py-3">
                   <div class="font-weight-bold text-primary">{{ g.name }}</div>
                   <div class="d-flex align-center mt-1 flex-wrap ga-1">
                     <v-chip v-if="g.zalo_group_id" size="x-small" color="success" class="font-weight-bold" variant="flat">
@@ -62,8 +62,8 @@
                     </v-chip>
                   </div>
                 </td>
-                <td class="text-body-2 text-grey-darken-1">{{ g.description || '—' }}</td>
-                <td>
+                <td class="text-body-2 text-grey-darken-1 py-3">{{ g.description || '—' }}</td>
+                <td class="py-3">
                   <v-chip size="small" color="blue" variant="tonal" class="mr-2">
                     <v-icon start size="14">mdi-badge-account-outline</v-icon>
                     {{ g.employees ? g.employees.length : 0 }} Nhân viên
@@ -73,8 +73,8 @@
                     {{ g.customers ? g.customers.length : 0 }} Khách hàng
                   </v-chip>
                 </td>
-                <td class="text-caption">{{ new Date(g.created_at).toLocaleDateString() }}</td>
-                <td>
+                <td class="text-caption py-3">{{ new Date(g.created_at).toLocaleDateString() }}</td>
+                <td class="py-3">
                   <v-btn v-if="g.zalo_group_link" icon="mdi-qrcode" size="small" variant="text" color="success" @click="showGroupQR(g)" title="QR / Link nhóm Zalo" />
                   <v-btn icon="mdi-account-cog" size="small" variant="text" color="teal" @click="openManageMembersDialog(g)" title="Quản lý thành viên" />
                   <v-btn icon="mdi-shield-lock-outline" size="small" variant="text" color="indigo" @click="openGroupPermissionsDialog(g)" title="Phân quyền Endpoint & Sơ đồ live" />
@@ -296,19 +296,21 @@
           <v-window v-model="memberTab">
             <!-- Sub-tab: Nhân viên -->
             <v-window-item value="employees">
+              <div class="text-caption font-weight-bold mb-2 text-grey-darken-2">Chọn nhân viên thêm vào nhóm:</div>
               <div class="d-flex align-center ga-2 mb-4">
                 <v-autocomplete
                   v-model="selectedEmployeeToAdd"
                   :items="availableEmployees"
                   item-title="name"
                   item-value="user_id"
-                  label="Chọn nhân viên thêm vào nhóm"
-                  density="compact"
+                  placeholder="Tìm và chọn nhân viên..."
+                  density="comfortable"
                   variant="outlined"
                   hide-details
                   return-object
+                  class="flex-grow-1"
                 />
-                <v-btn color="teal" :disabled="!selectedEmployeeToAdd" @click="addGroupEmployee">Thêm</v-btn>
+                <v-btn color="teal" height="48" :disabled="!selectedEmployeeToAdd" @click="addGroupEmployee">Thêm</v-btn>
               </div>
 
               <v-list density="compact" max-height="300" class="overflow-y-auto border rounded">
@@ -330,19 +332,21 @@
 
             <!-- Sub-tab: Khách hàng -->
             <v-window-item value="customers">
+              <div class="text-caption font-weight-bold mb-2 text-grey-darken-2">Chọn khách hàng thêm vào nhóm:</div>
               <div class="d-flex align-center ga-2 mb-4">
                 <v-autocomplete
                   v-model="selectedCustomerToAdd"
                   :items="availableCustomers"
                   item-title="name"
                   item-value="id"
-                  label="Chọn khách hàng thêm vào nhóm"
-                  density="compact"
+                  placeholder="Tìm và chọn khách hàng..."
+                  density="comfortable"
                   variant="outlined"
                   hide-details
                   return-object
+                  class="flex-grow-1"
                 />
-                <v-btn color="teal" :disabled="!selectedCustomerToAdd" @click="addGroupCustomer">Thêm</v-btn>
+                <v-btn color="teal" height="48" :disabled="!selectedCustomerToAdd" @click="addGroupCustomer">Thêm</v-btn>
               </div>
 
               <v-list density="compact" max-height="300" class="overflow-y-auto border rounded">
