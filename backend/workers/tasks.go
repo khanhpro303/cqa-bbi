@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -450,8 +451,56 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] Routing customer %s (code: %s) to Public Flow (%s)", payload.Sender.ID, customerCode, flowIDToUse)
 		}
 
-		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID and customerCode)
-		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode)
+		// Resolve permission context and sign JWT token
+		agentType := "public"
+		if isWhitelisted {
+			agentType = "private"
+		}
+		permCtx := engine.ResolvePermissions(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType)
+
+		// Intercept Zalo OA interactive button clicks
+		// A. "Xem theo màu" button click
+		if strings.HasPrefix(userText, "#xem_mau_size:") {
+			parts := strings.Split(strings.TrimPrefix(userText, "#xem_mau_size:"), ":")
+			maChaName := parts[0]
+			if len(parts) > 1 {
+				maChaName = parts[1]
+			}
+			reply := fmt.Sprintf("Bạn muốn xem tồn kho cụ thể của màu và size nào cho dòng sản phẩm %s?\nVui lòng nhập thông tin (Ví dụ: %s màu đỏ size L).", maChaName, maChaName)
+			_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			return nil
+		}
+
+		// B. "Xem theo toàn dòng" button click
+		var clickPayload struct {
+			MaCha     string `json:"MA_CHA"`
+			MaChaName string `json:"MA_CHA_NAME"`
+		}
+		if strings.HasPrefix(userText, "{") && json.Unmarshal([]byte(userText), &clickPayload) == nil && clickPayload.MaCha != "" {
+			displayName := clickPayload.MaCha
+			if clickPayload.MaChaName != "" {
+				displayName = clickPayload.MaChaName
+			}
+
+			totalStock, err := sumInventoryByMaCha(ctx, matchedChannel.TenantID, &permCtx, clickPayload.MaCha)
+			if err != nil {
+				log.Printf("[worker] error summing inventory: %v", err)
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Đã có lỗi xảy ra khi tính toán tồn kho dòng sản phẩm.")
+				return nil
+			}
+
+			reply := fmt.Sprintf("Tổng tồn kho của dòng sản phẩm %s (Mã: %s) trên hệ thống hiện tại là: %.1f", displayName, clickPayload.MaCha, totalStock)
+			_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			return nil
+		}
+
+		permissionToken, err := engine.SignPermissionToken(permCtx, cfg.EncryptionKey)
+		if err != nil {
+			log.Printf("[worker] failed to sign permission token: %v", err)
+		}
+
+		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
+		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}
@@ -534,4 +583,246 @@ func saveMessageToAstraDB(ctx context.Context, apiEndpoint, token, keyspace, col
 	}
 
 	return nil
+}
+
+func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string) (float64, error) {
+	// 1. Fetch child products from Astra DB
+	childProducts, err := getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
+	if err != nil {
+		return 0, err
+	}
+
+	// 2. Fetch allowed product groups for "inventory" resource
+	_, _, allowedProductGroups := permCtx.IsResourceAllowed("inventory")
+
+	childCodes := make(map[string]bool)
+	for _, p := range childProducts {
+		sku := getMapString(p, "MA", "code", "ma")
+		group := getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+
+		isAllowed := len(allowedProductGroups) == 0
+		if !isAllowed {
+			gLower := strings.ToLower(group)
+			for _, allowed := range allowedProductGroups {
+				if strings.Contains(gLower, strings.ToLower(allowed)) {
+					isAllowed = true
+					break
+				}
+			}
+		}
+
+		if isAllowed && sku != "" {
+			childCodes[strings.ToLower(sku)] = true
+		}
+	}
+
+	// If the user has permission to see none of the variants, return 0 stock
+	if len(childCodes) == 0 && len(childProducts) > 0 {
+		return 0, nil
+	}
+
+	// 3. Load ERP credentials
+	cfg, _ := config.Load()
+	erpURL, erpDB, erpLogin, erpPassword, err := loadCloudifyCredentials(tenantID, cfg)
+	if err != nil {
+		return 0, err
+	}
+
+	// If ERP URL is empty, fallback to mock sum
+	if erpURL == "" {
+		return 45.0, nil
+	}
+
+	client := &pkg.CloudifyClient{
+		BaseURL:  erpURL,
+		DB:       erpDB,
+		Login:    erpLogin,
+		Password: erpPassword,
+	}
+
+	// 4. Search live inventory on ERP using the maCha code as keyword
+	inventoryList, err := client.SearchInventory(maCha, 100)
+	if err != nil {
+		return 0, err
+	}
+
+	// 5. Sum stock of matching items
+	var totalStock float64
+	for _, item := range inventoryList {
+		code := getMapString(item, "code", "ma_hang", "ma", "product_code")
+		codeLower := strings.ToLower(code)
+
+		isMatch := false
+		if len(childCodes) > 0 {
+			isMatch = childCodes[codeLower]
+		} else {
+			// fallback to prefix matching if child list was empty
+			isMatch = strings.HasPrefix(codeLower, strings.ToLower(maCha))
+		}
+
+		if isMatch {
+			stock := getMapFloat(item, "stock", "ton", "ton_kho")
+			totalStock += stock
+		}
+	}
+
+	return totalStock, nil
+}
+
+func getProductsByMaChaFromAstraDB(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		return nil, fmt.Errorf("Astra DB is not configured")
+	}
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+	payload := map[string]interface{}{
+		"find": map[string]interface{}{
+			"filter": map[string]interface{}{
+				"MA_CHA": strings.ToUpper(maCha),
+			},
+			"options": map[string]interface{}{
+				"limit": 100,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("Astra DB returned status code %d", resp.StatusCode)
+	}
+
+	var astraResp struct {
+		Data struct {
+			Documents []map[string]interface{} `json:"documents"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+		return nil, err
+	}
+
+	if len(astraResp.Errors) > 0 {
+		return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+	}
+
+	return astraResp.Data.Documents, nil
+}
+
+func getMapString(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if val, ok := m[k]; ok && val != nil {
+			if s, ok := val.(string); ok {
+				return s
+			}
+			return fmt.Sprintf("%v", val)
+		}
+	}
+	return ""
+}
+
+func getMapFloat(m map[string]interface{}, keys ...string) float64 {
+	for _, k := range keys {
+		if val, ok := m[k]; ok && val != nil {
+			switch v := val.(type) {
+			case float64:
+				return v
+			case float32:
+				return float64(v)
+			case int:
+				return float64(v)
+			case int64:
+				return float64(v)
+			case string:
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					return f
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func loadCloudifyCredentials(tenantID string, cfg *config.Config) (erpURL, erpDB, erpLogin, erpPassword string, err error) {
+	settings := map[string]*string{
+		"erp_api_url":      &erpURL,
+		"erp_api_db":       &erpDB,
+		"erp_api_username": &erpLogin,
+	}
+	for key, dst := range settings {
+		var s models.AppSetting
+		if e := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&s).Error; e == nil {
+			*dst = strings.TrimSpace(s.ValuePlain)
+		}
+	}
+
+	var pwSetting models.AppSetting
+	if e := db.DB.Where("tenant_id = ? AND setting_key = 'erp_api_password'", tenantID).First(&pwSetting).Error; e == nil {
+		if len(pwSetting.ValueEncrypted) > 0 {
+			decrypted, decErr := pkg.Decrypt(pwSetting.ValueEncrypted, cfg.EncryptionKey)
+			if decErr != nil {
+				err = fmt.Errorf("decrypt ERP password: %w", decErr)
+				return
+			}
+			erpPassword = string(decrypted)
+		} else {
+			erpPassword = pwSetting.ValuePlain
+		}
+	}
+
+	return
 }

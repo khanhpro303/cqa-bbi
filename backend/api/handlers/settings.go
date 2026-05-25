@@ -76,8 +76,13 @@ func GetSettings(c *gin.Context) {
 	var tenant models.Tenant
 	db.DB.First(&tenant, "id = ?", tenantID)
 
+	// Load private bot endpoints
+	var privateEndpoints []models.ERPEndpoint
+	db.DB.Where("tenant_id = ? AND group_id = ?", tenantID, "private_bot").Find(&privateEndpoints)
+
 	c.JSON(http.StatusOK, gin.H{
-		"settings": result,
+		"settings":          result,
+		"private_endpoints": privateEndpoints,
 		"tenant": gin.H{
 			"name":     tenant.Name,
 			"timezone": getSettingValue(settings, "timezone", "Asia/Ho_Chi_Minh"),

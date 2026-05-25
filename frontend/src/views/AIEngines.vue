@@ -254,6 +254,111 @@
               />
             </v-col>
           </v-row>
+
+          <v-divider class="my-6"></v-divider>
+
+          <!-- Part 2: Global Method Permissions -->
+          <div class="text-subtitle-2 font-weight-bold mb-3 d-flex align-center" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-3'">
+            <v-icon start size="small" color="primary" class="mr-2">mdi-api</v-icon>
+            Cấu hình HTTP Method cho Endpoint (Global dùng chung)
+          </div>
+          
+          <v-card variant="outlined" class="rounded-lg mb-6 pa-1" :bg-color="isDark ? '#2a2a2a' : 'white'">
+            <v-table density="compact">
+              <thead>
+                <tr>
+                  <th style="width: 50%;">Tài nguyên Endpoint</th>
+                  <th style="width: 25%;" class="text-center">Cho phép GET</th>
+                  <th style="width: 25%;" class="text-center">Cho phép POST</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(methods, resource) in globalMethodPermissions" :key="resource">
+                  <td class="text-caption font-weight-bold py-2">{{ resourceLabels[resource] || resource }}</td>
+                  <td class="text-center">
+                    <v-checkbox
+                      v-model="methods.get"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      class="d-inline-flex"
+                    />
+                  </td>
+                  <td class="text-center">
+                    <v-checkbox
+                      v-model="methods.post"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      class="d-inline-flex"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+          </v-card>
+
+          <v-divider class="my-6"></v-divider>
+
+          <!-- Part 3: Private Bot Permissions -->
+          <div class="text-subtitle-2 font-weight-bold mb-3 d-flex align-center" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-3'">
+            <v-icon start size="small" color="indigo" class="mr-2">mdi-robot-outline</v-icon>
+            Phân quyền Endpoint cho Private Chatbot (Nhân viên nội bộ)
+          </div>
+
+          <v-card variant="outlined" class="rounded-lg pa-1" :bg-color="isDark ? '#2a2a2a' : 'white'">
+            <v-table density="compact">
+              <thead>
+                <tr>
+                  <th style="width: 30%;">Tài nguyên</th>
+                  <th style="width: 15%;" class="text-center">Cho phép truy cập</th>
+                  <th style="width: 25%;">Phạm vi dữ liệu</th>
+                  <th style="width: 30%;">Bộ lọc nhóm sản phẩm (VTHH)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="ep in privateEndpoints" :key="ep.resource">
+                  <td class="text-caption font-weight-bold py-2">{{ resourceLabels[ep.resource] || ep.resource }}</td>
+                  <td class="text-center">
+                    <v-switch
+                      v-model="ep.is_enabled"
+                      color="indigo"
+                      density="compact"
+                      hide-details
+                      class="d-inline-flex"
+                    />
+                  </td>
+                  <td>
+                    <v-select
+                      v-model="ep.scope_type"
+                      :items="scopeOptions"
+                      density="compact"
+                      variant="plain"
+                      hide-details
+                      :disabled="!ep.is_enabled"
+                      style="font-size: 0.75rem;"
+                    />
+                  </td>
+                  <td>
+                    <v-select
+                      v-if="ep.resource === 'products' || ep.resource === 'inventory'"
+                      v-model="ep.product_groups_arr"
+                      :items="listTenNhomVthh"
+                      multiple
+                      chips
+                      density="compact"
+                      variant="plain"
+                      hide-details
+                      :disabled="!ep.is_enabled"
+                      placeholder="Chọn nhóm..."
+                      style="font-size: 0.75rem;"
+                    />
+                    <span v-else class="text-caption text-grey-darken-1">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+          </v-card>
         </div>
       </v-expand-transition>
 
@@ -319,6 +424,38 @@ const astradb = reactive({
   productCollection: '',
 })
 
+const listTenNhomVthh = ref<string[]>([])
+
+const resourceLabels: Record<string, string> = {
+  products: '🛍 Sản phẩm',
+  inventory: '📦 Tồn kho',
+  orders: '📋 Đơn hàng',
+  customers: '👥 Khách hàng',
+  debt: '💰 Công nợ',
+}
+
+const scopeOptions = [
+  { title: 'Tất cả', value: 'all' },
+  { title: 'Của họ (OWN)', value: 'own' },
+  { title: 'Phân công (ASSIGNED)', value: 'assigned' },
+]
+
+const globalMethodPermissions = ref<Record<string, { get: boolean; post: boolean }>>({
+  products: { get: true, post: true },
+  inventory: { get: true, post: true },
+  orders: { get: true, post: true },
+  customers: { get: true, post: true },
+  debt: { get: true, post: true },
+})
+
+const privateEndpoints = ref<any[]>([
+  { resource: 'products', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
+  { resource: 'inventory', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
+  { resource: 'orders', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
+  { resource: 'customers', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
+  { resource: 'debt', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
+])
+
 const gatewayUrl = computed(() => {
   return `${window.location.origin}/api/v1/tenants/${tenantId.value}/erp/query`
 })
@@ -358,6 +495,36 @@ async function loadSettings() {
     astradb.collection = settings.astradb_collection || ''
     if (settings.astradb_token) {
       astradb.token = settings.astradb_token
+    }
+
+    if (settings.erp_global_method_permissions) {
+      try {
+        const parsed = JSON.parse(settings.erp_global_method_permissions)
+        globalMethodPermissions.value = {
+          ...globalMethodPermissions.value,
+          ...parsed
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    if (data.private_endpoints && data.private_endpoints.length > 0) {
+      privateEndpoints.value = privateEndpoints.value.map(ep => {
+        const dbEp = data.private_endpoints.find((d: any) => d.resource === ep.resource)
+        if (dbEp) {
+          const groupsArr = dbEp.product_groups 
+            ? dbEp.product_groups.split(',').map((g: string) => g.trim()).filter((g: string) => g)
+            : []
+          return {
+            ...ep,
+            is_enabled: dbEp.is_enabled,
+            scope_type: dbEp.scope_type || 'all',
+            product_groups_arr: groupsArr
+          }
+        }
+        return ep
+      })
     }
   } catch {
     // Ignore
@@ -408,9 +575,27 @@ async function testConnection() {
   }
 }
 
+async function fetchListTenNhomVthh() {
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/list-ten-nhom-vthh`)
+    listTenNhomVthh.value = data || []
+  } catch (err: any) {
+    // Ignore
+  }
+}
+
 async function saveERP() {
   savingERP.value = true
   try {
+    const privateEndpointsPayload = privateEndpoints.value.map(ep => {
+      return {
+        resource: ep.resource,
+        is_enabled: ep.is_enabled,
+        scope_type: ep.scope_type || 'all',
+        product_groups: ep.product_groups_arr ? ep.product_groups_arr.join(',') : '',
+      }
+    })
+
     await api.put(`/tenants/${tenantId.value}/settings/erp`, {
       url: erp.url,
       db: erp.dbName,
@@ -424,6 +609,9 @@ async function saveERP() {
       private_active: 'true',
       private_scopes: '',
       private_product_groups: '',
+
+      global_method_permissions: globalMethodPermissions.value,
+      private_endpoints: privateEndpointsPayload
     })
     showSnack(t('success'), 'success')
   } catch (err: any) {
@@ -465,7 +653,10 @@ function showSnack(text: string, color: string) {
   snackbar.value = true
 }
 
-onMounted(loadSettings)
+onMounted(async () => {
+  await loadSettings()
+  await fetchListTenNhomVthh()
+})
 </script>
 
 <style scoped>

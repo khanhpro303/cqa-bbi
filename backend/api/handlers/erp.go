@@ -13,11 +13,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
 )
 
 // ---------------------------------------------------------------------------
@@ -67,11 +70,12 @@ func ERPQuery(c *gin.Context) {
 
 	// ── 3. Parse request parameters ───────────────────────────────────────
 	var req struct {
-		Resource   string `json:"resource" form:"resource" binding:"required"` // products|inventory|orders|customers|debt
-		Search     string `json:"search" form:"search"`
-		Limit      int    `json:"limit" form:"limit"`
-		PartnerID  string `json:"partner_id" form:"partner_id"`    // filter orders/debt by customer Cloudify ID
-		ZaloUserID string `json:"zalo_user_id" form:"zalo_user_id"` // reserved for future user-level scoping
+		Resource        string `json:"resource" form:"resource" binding:"required"` // products|inventory|orders|customers|debt
+		Search          string `json:"search" form:"search"`
+		Limit           int    `json:"limit" form:"limit"`
+		PartnerID       string `json:"partner_id" form:"partner_id"`    // filter orders/debt by customer Cloudify ID
+		ZaloUserID      string `json:"zalo_user_id" form:"zalo_user_id"` // reserved for user-level scoping
+		PermissionToken string `json:"permission_token" form:"permission_token"`
 	}
 
 	if c.Request.Method == "POST" {
@@ -94,54 +98,96 @@ func ERPQuery(c *gin.Context) {
 	}
 
 	// ── 4. Scope / permission check ───────────────────────────────────────
-	if !isResourcePermitted(tenantID, agentType, req.Resource, req.ZaloUserID) {
+	var permCtx *engine.GroupPermissionContext
+	var err error
+
+	permissionToken := c.GetHeader("X-Permission-Token")
+	if permissionToken == "" {
+		permissionToken = req.PermissionToken
+	}
+
+	cfg, _ := config.Load()
+
+	if permissionToken != "" {
+		permCtx, err = engine.VerifyPermissionToken(permissionToken, cfg.EncryptionKey)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":   "forbidden_token",
+				"message": fmt.Sprintf("Token phân quyền không hợp lệ hoặc đã hết hạn: %v", err),
+			})
+			return
+		}
+	} else {
+		// Fallback: build permission context on-the-fly using DB configuration (legacy/direct calls compatibility)
+		resolved := engine.ResolvePermissions(tenantID, req.ZaloUserID, "", agentType)
+		permCtx = &resolved
+	}
+
+	// ── 4.5. Global HTTP Method Validation ──────────────────────────────────
+	methodAllowed := true
+	var globalPermsSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; err == nil && globalPermsSetting.ValuePlain != "" {
+		var globalPerms map[string]map[string]bool
+		if json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms) == nil {
+			if resPerms, ok := globalPerms[req.Resource]; ok {
+				reqMethod := strings.ToLower(c.Request.Method) // "get" or "post"
+				if allowed, ok := resPerms[reqMethod]; ok {
+					methodAllowed = allowed
+				} else {
+					methodAllowed = false // method not explicitly enabled
+				}
+			}
+		}
+	}
+	if !methodAllowed {
 		c.JSON(http.StatusForbidden, gin.H{
-			"error":   "forbidden_scope",
-			"message": fmt.Sprintf("Quyền truy cập tài nguyên '%s' bị từ chối cho Agent hoặc khách hàng hiện tại.", req.Resource),
+			"error":   "forbidden_method",
+			"message": fmt.Sprintf("HTTP Method %s không được cho phép đối với tài nguyên '%s' trên hệ thống ERP Gateway.", c.Request.Method, req.Resource),
 		})
 		return
 	}
 
-	// ── 5. Load Cloudify credentials ──────────────────────────────────────
-	cfg, _ := config.Load()
-	erpURL, erpDB, erpLogin, erpPassword, credErr := loadCloudifyCredentials(tenantID, cfg)
+	// Enforce permitted resources & scope
+	allowed, scopeType, productGroups := permCtx.IsResourceAllowed(req.Resource)
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "forbidden_scope",
+			"message": fmt.Sprintf("Quyền truy cập tài nguyên '%s' bị từ chối cho Agent hoặc khách hàng hiện tại.", req.Resource),
+		})
+		writeAuditLog(tenantID, permCtx, req.Resource, "none", productGroups, req.Search, http.StatusForbidden, 0, c.ClientIP())
+		return
+	}
 
+	// ── 5. Apply Rate Limiting per-group ──────────────────────────────────
+	if permCtx.AgentType != "private" && len(permCtx.Groups) > 0 {
+		var exceededGroup string
+		for _, grp := range permCtx.Groups {
+			exceeded, err := checkAndIncrementRateLimit(tenantID, grp.GroupID, grp.GroupName)
+			if err != nil {
+				log.Printf("[erp_query] error checking rate limit: %v", err)
+			}
+			if exceeded {
+				exceededGroup = grp.GroupName
+				break
+			}
+		}
+		if exceededGroup != "" {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error":   "rate_limit_exceeded",
+				"message": fmt.Sprintf("Nhóm '%s' đã vượt quá giới hạn lượt truy cập ERP trong ngày.", exceededGroup),
+			})
+			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusTooManyRequests, 0, c.ClientIP())
+			return
+		}
+	}
+
+	// ── 6. Load Cloudify credentials ──────────────────────────────────────
+	erpURL, erpDB, erpLogin, erpPassword, credErr := loadCloudifyCredentials(tenantID, cfg)
 	if credErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "credential_error", "message": credErr.Error()})
 		return
 	}
 
-	// ── 6. If no credentials → fallback mock (dev only) ──────────────────
-	if erpURL == "" || erpLogin == "" || erpPassword == "" {
-		// Load allowed product groups for mock filtering
-		var allowedGroups []string
-		if agentType == "private" {
-			allowedGroups = []string{}
-		} else {
-			allowedGroups = loadAllowedGroupsForCustomer(tenantID, req.ZaloUserID, req.Resource)
-		}
-		respondWithMockData(c, req.Resource, req.Search, req.Limit, allowedGroups)
-		return
-	}
-
-	// ── 7. Check if resource is products and attempt cached search in Astra DB ──
-	if req.Resource == "products" {
-		cachedData, err := searchProductsFromAstraDB(c.Request.Context(), tenantID, req.Search, req.Limit)
-		if err != nil {
-			log.Printf("[erp_query] Astra DB cache search error: %v. Falling back to live Cloudify ERP.", err)
-		} else if cachedData != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"status":   "success",
-				"data":     cachedData,
-				"source":   "astradb_cache",
-				"resource": req.Resource,
-				"count":    len(cachedData),
-			})
-			return
-		}
-	}
-
-	// ── 8. Execute live Cloudify call ─────────────────────────────────────
 	client := &pkg.CloudifyClient{
 		BaseURL:  erpURL,
 		DB:       erpDB,
@@ -149,7 +195,87 @@ func ERPQuery(c *gin.Context) {
 		Password: erpPassword,
 	}
 
-	respondWithLiveData(c, client, req.Resource, req.Search, req.PartnerID, req.Limit)
+	// ── 7. Apply Scope Type Filters ───────────────────────────────────────
+	partnerFilterID := req.PartnerID
+
+	if permCtx.AgentType != "private" {
+		if scopeType == "own" {
+			ownPartnerID, err := resolveOwnPartnerID(client, permCtx.CustomerCode, erpURL == "")
+			if err != nil {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":   "forbidden_scope",
+					"message": fmt.Sprintf("Không thể xác thực mã khách hàng trên ERP: %v", err),
+				})
+				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusForbidden, 0, c.ClientIP())
+				return
+			}
+			partnerFilterID = ownPartnerID
+		} else if scopeType == "assigned" {
+			var groupIDs []string
+			for _, grp := range permCtx.Groups {
+				groupIDs = append(groupIDs, grp.GroupID)
+			}
+			allowedCodes, err := resolveGroupCustomerCodes(tenantID, groupIDs)
+			if err != nil {
+				log.Printf("[erp_query] error resolving group customer codes: %v", err)
+			}
+
+			if req.Resource == "orders" || req.Resource == "debt" {
+				if partnerFilterID == "" {
+					c.JSON(http.StatusForbidden, gin.H{
+						"error":   "forbidden_scope",
+						"message": "Scope 'assigned' yêu cầu truyền partner_id cụ thể của khách hàng trong nhóm.",
+					})
+					writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusForbidden, 0, c.ClientIP())
+					return
+				}
+				ok, err := isPartnerInAllowedCodes(client, partnerFilterID, allowedCodes, erpURL == "")
+				if err != nil || !ok {
+					c.JSON(http.StatusForbidden, gin.H{
+						"error":   "forbidden_scope",
+						"message": "Bạn không có quyền truy cập dữ liệu của khách hàng này (ngoài nhóm được phân công).",
+					})
+					writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusForbidden, 0, c.ClientIP())
+					return
+				}
+			}
+		}
+	}
+
+	// ── 8. If no credentials → fallback mock (dev only) ──────────────────
+	if erpURL == "" || erpLogin == "" || erpPassword == "" {
+		var allowedGroups []string
+		if permCtx.AgentType == "private" {
+			allowedGroups = []string{}
+		} else {
+			allowedGroups = productGroups
+		}
+		respondWithMockDataV2(c, req.Resource, req.Search, req.Limit, allowedGroups, scopeType, permCtx.CustomerCode, tenantID, permCtx.Groups)
+		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, 0, c.ClientIP())
+		return
+	}
+
+	// ── 9. Check if resource is products and attempt cached search in Astra DB ──
+	if req.Resource == "products" {
+		cachedData, err := searchProductsFromAstraDB(c.Request.Context(), tenantID, req.Search, req.Limit)
+		if err != nil {
+			log.Printf("[erp_query] Astra DB cache search error: %v. Falling back to live Cloudify ERP.", err)
+		} else if cachedData != nil {
+			filteredCached := filterProductsByGroups(cachedData, productGroups)
+			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(filteredCached), c.ClientIP())
+			c.JSON(http.StatusOK, gin.H{
+				"status":   "success",
+				"data":     filteredCached,
+				"source":   "astradb_cache",
+				"resource": req.Resource,
+				"count":    len(filteredCached),
+			})
+			return
+		}
+	}
+
+	// ── 10. Execute live Cloudify call with filters ───────────────────────
+	respondWithLiveDataV2(c, client, req.Resource, req.Search, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx)
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +745,17 @@ func SaveERPSettings(c *gin.Context) {
 		PrivateActive        string `json:"private_active" binding:"required,oneof=true false"`
 		PrivateScopes        string `json:"private_scopes"`
 		PrivateProductGroups string `json:"private_product_groups"`
+
+		// New: Global HTTP Method permissions per resource
+		GlobalMethodPermissions map[string]map[string]bool `json:"global_method_permissions"`
+
+		// New: Private bot endpoint permissions
+		PrivateEndpoints []struct {
+			Resource      string `json:"resource"`
+			IsEnabled     bool   `json:"is_enabled"`
+			ScopeType     string `json:"scope_type"`
+			ProductGroups string `json:"product_groups"`
+		} `json:"private_endpoints"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -678,6 +815,47 @@ func SaveERPSettings(c *gin.Context) {
 	upsertSetting(tenantID, "erp_private_active", req.PrivateActive, nil)
 	upsertSetting(tenantID, "erp_private_scopes", req.PrivateScopes, nil)
 	upsertSetting(tenantID, "erp_private_product_groups", req.PrivateProductGroups, nil)
+
+	// ── Global method permissions ─────────────────────────────────────────
+	if req.GlobalMethodPermissions != nil {
+		bytes, err := json.Marshal(req.GlobalMethodPermissions)
+		if err == nil {
+			upsertSetting(tenantID, "erp_global_method_permissions", string(bytes), nil)
+		}
+	}
+
+	// ── Private bot endpoints ─────────────────────────────────────────────
+	for _, ep := range req.PrivateEndpoints {
+		var existing models.ERPEndpoint
+		result := db.DB.Where("tenant_id = ? AND group_id = ? AND resource = ?",
+			tenantID, "private_bot", ep.Resource).First(&existing)
+
+		scopeType := ep.ScopeType
+		if scopeType == "" {
+			scopeType = "all"
+		}
+
+		if result.Error == nil {
+			db.DB.Model(&existing).Updates(map[string]interface{}{
+				"is_enabled":     ep.IsEnabled,
+				"scope_type":     scopeType,
+				"product_groups": ep.ProductGroups,
+				"updated_at":     time.Now(),
+			})
+		} else {
+			db.DB.Create(&models.ERPEndpoint{
+				ID:            pkg.NewUUID(),
+				TenantID:      tenantID,
+				GroupID:       "private_bot",
+				Resource:      ep.Resource,
+				IsEnabled:     ep.IsEnabled,
+				ScopeType:     scopeType,
+				ProductGroups: ep.ProductGroups,
+				CreatedAt:     time.Now(),
+				UpdatedAt:     time.Now(),
+			})
+		}
+	}
 
 	// ── Backward-compat global active flag ────────────────────────────────
 	overallActive := "false"
@@ -895,4 +1073,585 @@ func respondWithMockData(c *gin.Context, resource, search string, limit int, all
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown_resource"})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Rate Limiting & Scope Enforcement & Audit Logs
+// ---------------------------------------------------------------------------
+
+func checkAndIncrementRateLimit(tenantID, groupID, groupName string) (bool, error) {
+	dateKey := time.Now().Format("2006-01-02")
+	var rateLimit models.ERPGroupRateLimit
+
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		err := tx.Where("tenant_id = ? AND group_id = ? AND date_key = ?", tenantID, groupID, dateKey).
+			First(&rateLimit).Error
+
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				rateLimit = models.ERPGroupRateLimit{
+					ID:        uuid.New().String(),
+					TenantID:  tenantID,
+					GroupID:   groupID,
+					DateKey:   dateKey,
+					CallCount: 1,
+					DayLimit:  500,
+					UpdatedAt: time.Now(),
+				}
+				return tx.Create(&rateLimit).Error
+			}
+			return err
+		}
+
+		if rateLimit.CallCount >= rateLimit.DayLimit {
+			return fmt.Errorf("rate limit exceeded")
+		}
+
+		rateLimit.CallCount++
+		rateLimit.UpdatedAt = time.Now()
+		return tx.Save(&rateLimit).Error
+	})
+
+	if err != nil {
+		if err.Error() == "rate limit exceeded" {
+			return true, nil
+		}
+		return false, err
+	}
+
+	return false, nil
+}
+
+func resolveOwnPartnerID(client *pkg.CloudifyClient, customerCode string, isMock bool) (string, error) {
+	if isMock {
+		return "mock_partner_id", nil
+	}
+	if customerCode == "" {
+		return "", fmt.Errorf("customer code is empty")
+	}
+
+	partners, err := client.SearchPartners(customerCode, 5)
+	if err != nil {
+		return "", fmt.Errorf("failed to search partners on ERP: %w", err)
+	}
+
+	for _, p := range partners {
+		maVal := getMapString(p, "MA", "code", "ma")
+		if strings.EqualFold(maVal, customerCode) {
+			idVal := getMapString(p, "ID", "id")
+			if idVal != "" {
+				return idVal, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("customer code %s not found on Cloudify ERP", customerCode)
+}
+
+func resolveGroupCustomerCodes(tenantID string, groupIDs []string) ([]string, error) {
+	if len(groupIDs) == 0 {
+		return []string{}, nil
+	}
+	var codes []string
+	err := db.DB.Table("zalo_customers").
+		Joins("join crm_group_customers on crm_group_customers.zalo_customer_id = zalo_customers.id").
+		Where("crm_group_customers.group_id IN (?) AND zalo_customers.tenant_id = ? AND zalo_customers.status = ?", groupIDs, tenantID, "approved").
+		Pluck("zalo_customers.customer_code", &codes).Error
+	return codes, err
+}
+
+func isPartnerInAllowedCodes(client *pkg.CloudifyClient, partnerID string, allowedCodes []string, isMock bool) (bool, error) {
+	if isMock {
+		return true, nil
+	}
+	if len(allowedCodes) == 0 {
+		return false, nil
+	}
+
+	partners, err := client.SearchPartners("", 100)
+	if err != nil {
+		return false, err
+	}
+
+	for _, p := range partners {
+		idVal := getMapString(p, "ID", "id")
+		if idVal == partnerID {
+			maVal := getMapString(p, "MA", "code", "ma")
+			for _, code := range allowedCodes {
+				if strings.EqualFold(maVal, code) {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+	}
+
+	return false, nil
+}
+
+func writeAuditLog(tenantID string, permCtx *engine.GroupPermissionContext, resource, scopeApplied string, productFilter []string, searchQuery string, status int, count int, ipAddress string) {
+	var groupIDs []string
+	for _, g := range permCtx.Groups {
+		groupIDs = append(groupIDs, g.GroupID)
+	}
+
+	logRec := models.ERPAuditLog{
+		ID:             uuid.New().String(),
+		TenantID:       tenantID,
+		AgentType:      permCtx.AgentType,
+		ZaloUserID:     permCtx.ZaloUserID,
+		CustomerCode:   permCtx.CustomerCode,
+		GroupIDs:       strings.Join(groupIDs, ","),
+		Resource:       resource,
+		ScopeApplied:   scopeApplied,
+		ProductFilter:  strings.Join(productFilter, ","),
+		SearchQuery:    searchQuery,
+		ResponseStatus: status,
+		ResponseCount:  count,
+		IPAddress:      ipAddress,
+		CreatedAt:      time.Now(),
+	}
+
+	if err := db.DB.Create(&logRec).Error; err != nil {
+		log.Printf("[audit_log] failed to write ERP audit log: %v", err)
+	}
+}
+
+func filterProductsByGroups(products []map[string]interface{}, allowedGroups []string) []map[string]interface{} {
+	if len(allowedGroups) == 0 {
+		return products
+	}
+	var filtered []map[string]interface{}
+	for _, p := range products {
+		groupVal := getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name", "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+		groupLower := strings.ToLower(groupVal)
+
+		matched := false
+		for _, allowed := range allowedGroups {
+			if strings.Contains(groupLower, strings.ToLower(allowed)) {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
+}
+
+func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource, search, partnerID string, limit int, productGroups []string, scopeType string, tenantID string, permCtx *engine.GroupPermissionContext) {
+	var (
+		data []map[string]interface{}
+		err  error
+	)
+
+	switch resource {
+	case "products":
+		data, err = client.SearchProducts(search, limit)
+	case "inventory":
+		maCha, maChaName, isMaCha := detectMaChaFromSearch(c.Request.Context(), tenantID, search)
+		if isMaCha {
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "success",
+				"is_ma_cha":   true,
+				"ma_cha":      maCha,
+				"ma_cha_name": maChaName,
+				"message":     fmt.Sprintf("Dòng sản phẩm %s (%s) có nhiều phân loại màu sắc/kích thước.", maChaName, maCha),
+			})
+			return
+		}
+		data, err = client.SearchInventory(search, limit)
+	case "orders":
+		data, err = client.SearchSaleDocuments(partnerID, search, limit)
+	case "customers":
+		data, err = client.SearchPartners(search, limit)
+	case "debt":
+		data, err = client.SearchPartnerLedger(partnerID, search, limit)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown_resource"})
+		writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadRequest, 0, c.ClientIP())
+		return
+	}
+
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":   "erp_upstream_error",
+			"message": fmt.Sprintf("Không thể lấy dữ liệu từ Cloudify ERP: %s", err.Error()),
+		})
+		writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadGateway, 0, c.ClientIP())
+		return
+	}
+
+	if data == nil {
+		data = []map[string]interface{}{}
+	}
+
+	if resource == "products" || resource == "inventory" {
+		if resource == "inventory" {
+			for i, p := range data {
+				sku := getMapString(p, "code", "ma_hang", "ma", "product_code")
+				group := getProductGroupFromAstra(c.Request.Context(), tenantID, sku)
+				data[i]["list_ten_nhom_vthh"] = group
+			}
+		}
+		data = filterProductsByGroups(data, productGroups)
+	}
+
+	if resource == "customers" && permCtx.AgentType != "private" && scopeType == "assigned" {
+		var groupIDs []string
+		for _, grp := range permCtx.Groups {
+			groupIDs = append(groupIDs, grp.GroupID)
+		}
+		allowedCodes, _ := resolveGroupCustomerCodes(tenantID, groupIDs)
+
+		var filteredCustomers []map[string]interface{}
+		for _, cust := range data {
+			codeVal := getMapString(cust, "MA", "code", "ma")
+			codeLower := strings.ToLower(codeVal)
+
+			matched := false
+			for _, ac := range allowedCodes {
+				if strings.ToLower(ac) == codeLower {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				filteredCustomers = append(filteredCustomers, cust)
+			}
+		}
+		data = filteredCustomers
+	}
+
+	writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusOK, len(data), c.ClientIP())
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":   "success",
+		"data":     data,
+		"source":   "cloudify_live",
+		"resource": resource,
+		"count":    len(data),
+	})
+}
+
+func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, allowedGroups []string, scopeType string, customerCode string, tenantID string, groups []engine.GroupPermission) {
+	searchLower := strings.ToLower(search)
+
+	isGroupAllowed := func(groupName string) bool {
+		if len(allowedGroups) == 0 {
+			return true
+		}
+		gLower := strings.ToLower(groupName)
+		for _, allowed := range allowedGroups {
+			if strings.Contains(gLower, allowed) || strings.Contains(allowed, gLower) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var allowedCodes []string
+	if scopeType == "assigned" {
+		var groupIDs []string
+		for _, grp := range groups {
+			groupIDs = append(groupIDs, grp.GroupID)
+		}
+		allowedCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
+	}
+
+	switch resource {
+	case "products":
+		allProducts := []gin.H{
+			{"code": "SP001", "name": "Nguyên Đầu Bò Mỹ", "group": "Nguyên Đầu", "price": 280000, "unit": "kg"},
+			{"code": "SP002", "name": "Nguyên Đầu Heo Tươi", "group": "Nguyên Đầu", "price": 140000, "unit": "kg"},
+			{"code": "SP003", "name": "Nửa Đầu Bò Úc", "group": "Nửa Đầu", "price": 165000, "unit": "kg"},
+			{"code": "SP004", "name": "Nửa Đầu Heo Đông Lạnh", "group": "Nửa Đầu", "price": 85000, "unit": "kg"},
+			{"code": "SP005", "name": "Ba Chỉ Bò Cuộn", "group": "Thịt Bò", "price": 199000, "unit": "khay"},
+			{"code": "SP006", "name": "Sườn Non Heo", "group": "Thịt Heo", "price": 160000, "unit": "kg"},
+		}
+		var filtered []gin.H
+		for _, p := range allProducts {
+			name := strings.ToLower(p["name"].(string))
+			code := strings.ToLower(p["code"].(string))
+			if search != "" && !strings.Contains(name, searchLower) && !strings.Contains(code, searchLower) {
+				continue
+			}
+			if !isGroupAllowed(p["group"].(string)) {
+				continue
+			}
+			filtered = append(filtered, p)
+			if len(filtered) >= limit {
+				break
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
+
+	case "inventory":
+		allInventory := []gin.H{
+			{"code": "SP001", "name": "Nguyên Đầu Bò Mỹ", "group": "Nguyên Đầu", "stock": 45.5, "unit": "kg", "warehouse": "Kho Lạnh Quận 7"},
+			{"code": "SP002", "name": "Nguyên Đầu Heo Tươi", "group": "Nguyên Đầu", "stock": 120.0, "unit": "kg", "warehouse": "Kho Lạnh Quận 7"},
+			{"code": "SP003", "name": "Nửa Đầu Bò Úc", "group": "Nửa Đầu", "stock": 12.0, "unit": "kg", "warehouse": "Kho Lạnh Bình Tân"},
+			{"code": "SP005", "name": "Ba Chỉ Bò Cuộn", "group": "Thịt Bò", "stock": 350.0, "unit": "khay", "warehouse": "Kho Lạnh Quận 7"},
+		}
+		var filtered []gin.H
+		for _, item := range allInventory {
+			name := strings.ToLower(item["name"].(string))
+			code := strings.ToLower(item["code"].(string))
+			if search != "" && !strings.Contains(name, searchLower) && !strings.Contains(code, searchLower) {
+				continue
+			}
+			if !isGroupAllowed(item["group"].(string)) {
+				continue
+			}
+			filtered = append(filtered, item)
+			if len(filtered) >= limit {
+				break
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
+
+	case "orders":
+		allOrders := []gin.H{
+			{"order_id": "ORD-2026-001", "customer_name": "Nguyễn Văn A", "customer_code": "CUST-001", "status": "Đang giao hàng", "total": 560000},
+			{"order_id": "ORD-2026-002", "customer_name": "Trần Thị B", "customer_code": "CUST-002", "status": "Đã hoàn thành", "total": 700000},
+		}
+		var filtered []gin.H
+		for _, o := range allOrders {
+			id := strings.ToLower(o["order_id"].(string))
+			cust := strings.ToLower(o["customer_name"].(string))
+			code := strings.ToLower(o["customer_code"].(string))
+
+			if scopeType == "own" && !strings.EqualFold(code, customerCode) {
+				continue
+			}
+			if scopeType == "assigned" {
+				matched := false
+				for _, ac := range allowedCodes {
+					if strings.EqualFold(ac, code) {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+
+			if search != "" && !strings.Contains(id, searchLower) && !strings.Contains(cust, searchLower) {
+				continue
+			}
+			filtered = append(filtered, o)
+			if len(filtered) >= limit {
+				break
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
+
+	case "customers":
+		allCustomers := []gin.H{
+			{"customer_id": "CUST-001", "name": "Nguyễn Văn A", "customer_code": "CUST-001", "phone": "0901234567", "tier": "Gold"},
+			{"customer_id": "CUST-002", "name": "Trần Thị B", "customer_code": "CUST-002", "phone": "0987654321", "tier": "Platinum"},
+		}
+		var filtered []gin.H
+		for _, cust := range allCustomers {
+			name := strings.ToLower(cust["name"].(string))
+			phone := cust["phone"].(string)
+			code := strings.ToLower(cust["customer_code"].(string))
+
+			if scopeType == "own" && !strings.EqualFold(code, customerCode) {
+				continue
+			}
+			if scopeType == "assigned" {
+				matched := false
+				for _, ac := range allowedCodes {
+					if strings.EqualFold(ac, code) {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+
+			if search != "" && !strings.Contains(name, searchLower) && !strings.Contains(phone, searchLower) {
+				continue
+			}
+			filtered = append(filtered, cust)
+			if len(filtered) >= limit {
+				break
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
+
+	case "debt":
+		c.JSON(http.StatusOK, gin.H{
+			"status": "success",
+			"data":   []gin.H{},
+			"source": "mock_erp",
+			"count":  0,
+			"note":   "Dữ liệu công nợ chỉ khả dụng khi kết nối ERP thực",
+		})
+
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown_resource"})
+	}
+}
+
+func getProductGroupFromAstra(ctx context.Context, tenantID, sku string) string {
+	if sku == "" {
+		return ""
+	}
+	products, err := searchProductsFromAstraDB(ctx, tenantID, sku, 5)
+	if err != nil || len(products) == 0 {
+		return ""
+	}
+
+	for _, p := range products {
+		maVal := getMapString(p, "MA", "code", "ma")
+		if strings.EqualFold(maVal, sku) {
+			return getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+		}
+	}
+
+	return getMapString(products[0], "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+}
+
+func getProductsByMaChaFromAstraDB(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		return nil, fmt.Errorf("Astra DB is not configured")
+	}
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+	payload := map[string]interface{}{
+		"find": map[string]interface{}{
+			"filter": map[string]interface{}{
+				"MA_CHA": strings.ToUpper(maCha),
+			},
+			"options": map[string]interface{}{
+				"limit": 100,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("Astra DB returned status code %d", resp.StatusCode)
+	}
+
+	var astraResp struct {
+		Data struct {
+			Documents []map[string]interface{} `json:"documents"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+		return nil, err
+	}
+
+	if len(astraResp.Errors) > 0 {
+		return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+	}
+
+	return astraResp.Data.Documents, nil
+}
+
+func detectMaChaFromSearch(ctx context.Context, tenantID, search string) (string, string, bool) {
+	if search == "" {
+		return "", "", false
+	}
+
+	// 1. Search products from Astra DB using the user's search query (fuzzy search)
+	matchedProducts, err := searchProductsFromAstraDB(ctx, tenantID, search, 50)
+	if err != nil || len(matchedProducts) == 0 {
+		return "", "", false
+	}
+
+	// 2. Group the matched products by MA_CHA
+	maChaCounts := make(map[string]int)
+	for _, p := range matchedProducts {
+		maCha := getMapString(p, "MA_CHA", "ma_cha")
+		if maCha != "" {
+			maChaCounts[maCha]++
+		}
+	}
+
+	// Find the dominant MA_CHA
+	var dominantMaCha string
+	maxCount := 0
+	for maCha, count := range maChaCounts {
+		if count > maxCount {
+			maxCount = count
+			dominantMaCha = maCha
+		}
+	}
+
+	// 3. If the dominant MA_CHA has multiple variants in the search results (> 1)
+	if maxCount > 1 && dominantMaCha != "" {
+		// Confirm it has multiple variants by fetching them
+		allVariants, errVal := getProductsByMaChaFromAstraDB(ctx, tenantID, dominantMaCha)
+		if errVal == nil && len(allVariants) > 1 {
+			// Found the parent product! Return actual parent code (dominantMaCha)
+			// and user's query as friendly name (search)
+			return dominantMaCha, search, true
+		}
+	}
+
+	return "", "", false
 }

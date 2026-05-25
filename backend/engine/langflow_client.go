@@ -158,8 +158,8 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 	return text, nil
 }
 
-// RunFlowWithCustomer allows passing specific API URL, Key, Flow ID, and Customer Code.
-func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode string) (string, error) {
+// RunFlowWithCustomer allows passing specific API URL, Key, Flow ID, Customer Code, and Permission Token.
+func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken string) (string, error) {
 	if apiURL == "" || flowID == "" {
 		return "", fmt.Errorf("langflow integration is not configured")
 	}
@@ -168,6 +168,10 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 
 	tweaks := map[string]interface{}{
 		"session_id": sessionID,
+	}
+
+	if permissionToken != "" {
+		tweaks["permission_token"] = permissionToken
 	}
 
 	customComponentTweaks := map[string]interface{}{}

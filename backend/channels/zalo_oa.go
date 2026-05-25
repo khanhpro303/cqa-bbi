@@ -363,13 +363,32 @@ func (z *ZaloOAAdapter) HealthCheck(ctx context.Context) error {
 }
 
 func (z *ZaloOAAdapter) SendMessage(ctx context.Context, conversationID string, content string) error {
-	payload := map[string]interface{}{
-		"recipient": map[string]interface{}{
-			"user_id": conversationID,
-		},
-		"message": map[string]interface{}{
-			"text": content,
-		},
+	var payload map[string]interface{}
+	trimmedContent := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmedContent, "{") && strings.HasSuffix(trimmedContent, "}") {
+		if err := json.Unmarshal([]byte(trimmedContent), &payload); err != nil {
+			payload = nil
+		}
+	}
+
+	if payload == nil {
+		payload = map[string]interface{}{
+			"recipient": map[string]interface{}{
+				"user_id": conversationID,
+			},
+			"message": map[string]interface{}{
+				"text": content,
+			},
+		}
+	} else {
+		// Ensure recipient user_id matches conversationID
+		if recipient, ok := payload["recipient"].(map[string]interface{}); ok {
+			recipient["user_id"] = conversationID
+		} else {
+			payload["recipient"] = map[string]interface{}{
+				"user_id": conversationID,
+			}
+		}
 	}
 
 	result, err := z.doRequest(ctx, "POST", zaloAPIBaseV3+"/message/cs", payload)
