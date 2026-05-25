@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -1462,16 +1464,12 @@ func GetListTenNhomVthh(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	var s models.AppSetting
 	err := db.DB.Where("tenant_id = ? AND setting_key = 'list_ten_nhom_vthh'", tenantID).First(&s).Error
-	if err != nil || s.ValuePlain == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "product_cache_not_synced",
-			"message": "Danh mục sản phẩm chưa được đồng bộ. Vui lòng chạy Job đồng bộ danh mục sản phẩm trước.",
-		})
-		return
-	}
-
-	var groups []string
-	if err := json.Unmarshal([]byte(s.ValuePlain), &groups); err != nil {
+	if err == nil && s.ValuePlain != "" {
+		var groups []string
+		if err := json.Unmarshal([]byte(s.ValuePlain), &groups); err == nil {
+			c.JSON(http.StatusOK, groups)
+			return
+		}
 		// Fallback split by comma if not valid JSON
 		parts := strings.Split(s.ValuePlain, ",")
 		var cleanedParts []string
@@ -1485,13 +1483,178 @@ func GetListTenNhomVthh(c *gin.Context) {
 			c.JSON(http.StatusOK, cleanedParts)
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "product_cache_not_synced",
-			"message": "Không thể phân giải danh sách nhóm sản phẩm.",
-		})
+	}
+
+	// Dynamic fallback: query unique groups directly from Astra DB product cache
+	uniqueGroups, err := fetchUniqueGroupsFromAstraDB(c.Request.Context(), tenantID)
+	if err == nil && len(uniqueGroups) > 0 {
+		// Save to app_settings cache for faster future lookups
+		groupJSON, errMarshal := json.Marshal(uniqueGroups)
+		if errMarshal == nil {
+			var setting models.AppSetting
+			errFind := db.DB.Where("tenant_id = ? AND setting_key = 'list_ten_nhom_vthh'", tenantID).First(&setting).Error
+			if errFind == nil {
+				db.DB.Model(&setting).Updates(map[string]interface{}{
+					"value_plain": string(groupJSON),
+					"updated_at":  time.Now(),
+				})
+			} else {
+				db.DB.Create(&models.AppSetting{
+					ID:         pkg.NewUUID(),
+					TenantID:   tenantID,
+					SettingKey: "list_ten_nhom_vthh",
+					ValuePlain: string(groupJSON),
+					CreatedAt:  time.Now(),
+					UpdatedAt:  time.Now(),
+				})
+			}
+		}
+
+		c.JSON(http.StatusOK, uniqueGroups)
 		return
 	}
 
-	c.JSON(http.StatusOK, groups)
+	c.JSON(http.StatusBadRequest, gin.H{
+		"error":   "product_cache_not_synced",
+		"message": "Danh mục sản phẩm chưa được đồng bộ. Vui lòng chạy Job đồng bộ danh mục sản phẩm trước.",
+	})
+}
+
+// fetchUniqueGroupsFromAstraDB queries unique product groups cached in Astra DB.
+func fetchUniqueGroupsFromAstraDB(ctx context.Context, tenantID string) ([]string, error) {
+	// 1. Load Astra DB credentials
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+
+	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+
+	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		return nil, fmt.Errorf("Astra DB is not configured")
+	}
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+
+	// Fetch up to 10000 documents with only LIST_TEN_NHOM_VTHH projected to keep response size minimal
+	payload := map[string]interface{}{
+		"find": map[string]interface{}{
+			"projection": map[string]interface{}{
+				"LIST_TEN_NHOM_VTHH": 1,
+			},
+			"options": map[string]interface{}{
+				"limit": 10000,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute HTTP post: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("HTTP status %d", resp.StatusCode)
+	}
+
+	var astraResp struct {
+		Data struct {
+			Documents []map[string]interface{} `json:"documents"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	if len(astraResp.Errors) > 0 {
+		return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+	}
+
+	groupMap := make(map[string]bool)
+	var uniqueGroups []string
+
+	for _, doc := range astraResp.Data.Documents {
+		val, ok := doc["LIST_TEN_NHOM_VTHH"]
+		if !ok || val == nil {
+			val, ok = doc["list_ten_nhom_vthh"]
+		}
+		if ok && val != nil {
+			var listTenNhomVthh string
+			switch v := val.(type) {
+			case string:
+				listTenNhomVthh = v
+			case []interface{}:
+				if len(v) > 1 {
+					if s, ok := v[1].(string); ok {
+						listTenNhomVthh = s
+					}
+				} else if len(v) > 0 {
+					listTenNhomVthh = fmt.Sprintf("%v", v[0])
+				}
+			default:
+				listTenNhomVthh = fmt.Sprintf("%v", val)
+			}
+
+			if listTenNhomVthh != "" {
+				parts := strings.Split(listTenNhomVthh, ",")
+				for _, part := range parts {
+					trimmed := strings.TrimSpace(part)
+					if trimmed != "" && !groupMap[trimmed] {
+						groupMap[trimmed] = true
+						uniqueGroups = append(uniqueGroups, trimmed)
+					}
+				}
+			}
+		}
+	}
+
+	return uniqueGroups, nil
 }
 
