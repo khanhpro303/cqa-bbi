@@ -164,7 +164,14 @@
               style="max-width: 320px;"
             />
             <v-spacer />
-            <v-btn color="teal" prepend-icon="mdi-refresh" variant="tonal" size="small" @click="fetchCloudifyCustomers">
+            <v-btn
+              color="teal"
+              prepend-icon="mdi-refresh"
+              variant="tonal"
+              size="small"
+              class="text-none font-weight-medium"
+              @click="fetchCloudifyCustomers"
+            >
               Lấy lại dữ liệu
             </v-btn>
           </v-card-title>
@@ -183,7 +190,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="c in filteredCloudifyCustomers" :key="c.customer_code">
+              <tr v-for="c in paginatedCloudifyCustomers" :key="c.customer_code">
                 <td>
                   <div class="text-truncate" style="max-width: 85px;" :title="c.customer_code">
                     <v-chip color="success" size="small" variant="flat" class="font-weight-black text-truncate" style="max-width: 100%;">
@@ -235,6 +242,20 @@
               </tr>
             </tbody>
           </v-table>
+          <v-divider />
+          <div class="d-flex align-center justify-space-between py-2 px-4 flex-wrap ga-2">
+            <div class="text-caption text-grey">
+              Hiển thị {{ paginatedCloudifyCustomers.length }} / {{ filteredCloudifyCustomers.length }} khách hàng
+            </div>
+            <v-pagination
+              v-model="cloudifyPage"
+              :length="cloudifyPageCount"
+              :total-visible="5"
+              density="compact"
+              size="small"
+              active-color="teal"
+            />
+          </div>
         </v-card>
       </v-window-item>
 
@@ -879,7 +900,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useUserStore } from '../stores/users'
@@ -934,6 +955,8 @@ const inviteFormRef = ref<any>(null)
 const cloudifyCustomers = ref<any[]>([])
 const loadingCloudifyCustomers = ref(false)
 const cloudifySearch = ref('')
+const cloudifyPage = ref(1)
+const cloudifyPerPage = ref(10)
 const assignPhoneDialog = ref(false)
 const assigningPhone = ref(false)
 const assignForm = ref({ customer_code: '', name: '', phone_number: '' })
@@ -1010,6 +1033,20 @@ const filteredCloudifyCustomers = computed(() => {
   )
 })
 
+const cloudifyPageCount = computed(() => {
+  return Math.ceil(filteredCloudifyCustomers.value.length / cloudifyPerPage.value)
+})
+
+const paginatedCloudifyCustomers = computed(() => {
+  const start = (cloudifyPage.value - 1) * cloudifyPerPage.value
+  const end = start + cloudifyPerPage.value
+  return filteredCloudifyCustomers.value.slice(start, end)
+})
+
+watch(cloudifySearch, () => {
+  cloudifyPage.value = 1
+})
+
 onMounted(async () => {
   window.addEventListener('crm-data-updated', fetchCustomers)
   await userStore.fetchUsers(tenantId.value)
@@ -1071,6 +1108,7 @@ async function fetchCustomerCodes() {
 // Load Cloudify Customers from Backend
 async function fetchCloudifyCustomers() {
   loadingCloudifyCustomers.value = true
+  cloudifyPage.value = 1
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/cloudify-customers`)
     cloudifyCustomers.value = data || []
