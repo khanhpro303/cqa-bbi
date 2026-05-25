@@ -1454,3 +1454,44 @@ func RejectGroupPendingInvite(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "invite_rejected"})
 }
+
+// GetListTenNhomVthh - GET /crm/list-ten-nhom-vthh
+// Returns the list of unique product groups from the product cache.
+// Returns HTTP 400 Bad Request with error: "product_cache_not_synced" if cache not found.
+func GetListTenNhomVthh(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	var s models.AppSetting
+	err := db.DB.Where("tenant_id = ? AND setting_key = 'list_ten_nhom_vthh'", tenantID).First(&s).Error
+	if err != nil || s.ValuePlain == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "product_cache_not_synced",
+			"message": "Danh mục sản phẩm chưa được đồng bộ. Vui lòng chạy Job đồng bộ danh mục sản phẩm trước.",
+		})
+		return
+	}
+
+	var groups []string
+	if err := json.Unmarshal([]byte(s.ValuePlain), &groups); err != nil {
+		// Fallback split by comma if not valid JSON
+		parts := strings.Split(s.ValuePlain, ",")
+		var cleanedParts []string
+		for _, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				cleanedParts = append(cleanedParts, trimmed)
+			}
+		}
+		if len(cleanedParts) > 0 {
+			c.JSON(http.StatusOK, cleanedParts)
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "product_cache_not_synced",
+			"message": "Không thể phân giải danh sách nhóm sản phẩm.",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, groups)
+}
+

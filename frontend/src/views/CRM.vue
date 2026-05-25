@@ -844,14 +844,17 @@
                           />
                         </td>
                         <td>
-                          <v-text-field
+                          <v-select
                             v-if="ep.resource === 'products' || ep.resource === 'inventory'"
-                            v-model="ep.product_groups"
+                            v-model="ep.product_groups_arr"
+                            :items="listTenNhomVthh"
+                            multiple
+                            chips
                             density="compact"
                             variant="plain"
                             hide-details
                             :disabled="!ep.is_enabled"
-                            placeholder="e.g. Nguyên Đầu"
+                            placeholder="Chọn nhóm..."
                             style="font-size:0.75rem"
                           />
                           <span v-else class="text-caption text-grey">—</span>
@@ -963,6 +966,9 @@ const gmfPackages = ref<any[]>([])
 const loadingPackages = ref(false)
 const groupQrDialog = ref(false)
 const activeGroupQR = ref<any>(null)
+
+// Product Groups list
+const listTenNhomVthh = ref<string[]>([])
 
 // Group Members management (GMF)
 const activeGroup = ref<any>(null)
@@ -1091,6 +1097,7 @@ onMounted(async () => {
   await fetchCustomers()
   await fetchCustomerCodes()
   await fetchCloudifyCustomers()
+  await fetchListTenNhomVthh()
   if (zaloOAChannels.value.length > 0) {
     await fetchGmfPackages(zaloOAChannels.value[0].id)
   } else {
@@ -1579,11 +1586,29 @@ async function openGroupPermissionsDialog(g: any) {
   await loadGroupEndpoints(g.id)
 }
 
+async function fetchListTenNhomVthh() {
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/list-ten-nhom-vthh`)
+    listTenNhomVthh.value = data || []
+  } catch (err: any) {
+    const errMsg = err.response?.data?.message || 'Không thể tải danh sách nhóm sản phẩm'
+    showSnack(errMsg, 'error')
+  }
+}
+
 async function loadGroupEndpoints(groupId: string) {
   loadingGroupEndpoints.value = true
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups/${groupId}/erp/endpoints`)
-    groupEndpoints.value = data.endpoints || []
+    groupEndpoints.value = (data.endpoints || []).map((ep: any) => {
+      const groupsArr = ep.product_groups 
+        ? ep.product_groups.split(',').map((g: string) => g.trim()).filter((g: string) => g)
+        : []
+      return {
+        ...ep,
+        product_groups_arr: groupsArr
+      }
+    })
   } catch (err) {
     showSnack(t('crm_load_perms_error'), 'error')
   } finally {
@@ -1594,8 +1619,16 @@ async function loadGroupEndpoints(groupId: string) {
 async function saveGroupEndpoints() {
   savingGroupEndpoints.value = true
   try {
+    const payload = groupEndpoints.value.map((ep: any) => {
+      const epCopy = { ...ep }
+      if (epCopy.product_groups_arr) {
+        epCopy.product_groups = epCopy.product_groups_arr.join(',')
+        delete epCopy.product_groups_arr
+      }
+      return epCopy
+    })
     await api.put(`/tenants/${tenantId.value}/crm/groups/${activeGroupForPerms.value.id}/erp/endpoints`, {
-      endpoints: groupEndpoints.value
+      endpoints: payload
     })
     showSnack(t('crm_save_perms_success'), 'success')
   } catch (err: any) {
@@ -1606,6 +1639,9 @@ async function saveGroupEndpoints() {
 }
 
 async function quickToggleGroupEndpoint(ep: any) {
+  if (ep.is_enabled) {
+    ep.scope_type = 'own'
+  }
   try {
     await api.post(`/tenants/${tenantId.value}/crm/groups/${activeGroupForPerms.value.id}/erp/endpoints/toggle`, {
       resource: ep.resource,
@@ -1627,7 +1663,11 @@ function hasAnyGroupEndpointEnabled(): boolean {
 
 function getGroupProductGroups(resource: string): string {
   const ep = groupEndpoints.value.find(e => e.resource === resource)
-  return ep ? ep.product_groups : ''
+  if (!ep) return ''
+  if (ep.product_groups_arr) {
+    return ep.product_groups_arr.join(', ')
+  }
+  return ep.product_groups || ''
 }
 </script>
 

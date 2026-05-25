@@ -256,6 +256,49 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		cachedProducts = append(cachedProducts, doc)
 	}
 
+	// Extract unique product groups and save to app_settings table
+	var uniqueGroups []string
+	groupMap := make(map[string]bool)
+	for _, p := range allProducts {
+		listTenNhomVthh := getStringVal(p, "LIST_TEN_NHOM_VTHH")
+		if listTenNhomVthh == "" {
+			listTenNhomVthh = getStringVal(p, "list_ten_nhom_vthh")
+		}
+		if listTenNhomVthh != "" {
+			parts := strings.Split(listTenNhomVthh, ",")
+			for _, part := range parts {
+				trimmed := strings.TrimSpace(part)
+				if trimmed != "" && !groupMap[trimmed] {
+					groupMap[trimmed] = true
+					uniqueGroups = append(uniqueGroups, trimmed)
+				}
+			}
+		}
+	}
+
+	if len(uniqueGroups) > 0 {
+		groupJSON, err := json.Marshal(uniqueGroups)
+		if err == nil {
+			var s models.AppSetting
+			errFind := db.DB.Where("tenant_id = ? AND setting_key = 'list_ten_nhom_vthh'", job.TenantID).First(&s).Error
+			if errFind == nil {
+				db.DB.Model(&s).Updates(map[string]interface{}{
+					"value_plain": string(groupJSON),
+					"updated_at":  time.Now(),
+				})
+			} else {
+				db.DB.Create(&models.AppSetting{
+					ID:         pkg.NewUUID(),
+					TenantID:   job.TenantID,
+					SettingKey: "list_ten_nhom_vthh",
+					ValuePlain: string(groupJSON),
+					CreatedAt:  time.Now(),
+					UpdatedAt:  time.Now(),
+				})
+			}
+		}
+	}
+
 	// 5. Connect to Astra DB and cache the data
 	apiEndpoint := a.cfg.AstraDBAPIEndpoint
 	token := a.cfg.AstraDBToken

@@ -46,7 +46,7 @@ func ListGroupERPEndpoints(c *gin.Context) {
 				GroupID:   groupID,
 				Resource:  resource,
 				IsEnabled: false,
-				ScopeType: "all",
+				ScopeType: "own",
 			})
 		}
 	}
@@ -158,19 +158,27 @@ func ToggleGroupERPEndpoint(c *gin.Context) {
 		tenantID, groupID, req.Resource).First(&existing)
 
 	if result.Error == nil {
-		db.DB.Model(&existing).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"is_enabled": req.IsEnabled,
 			"updated_at": time.Now(),
-		})
+		}
+		if req.IsEnabled {
+			updates["scope_type"] = "own"
+		}
+		db.DB.Model(&existing).Updates(updates)
 	} else {
 		// Row doesn't exist yet — create it
+		scopeType := "all"
+		if req.IsEnabled {
+			scopeType = "own"
+		}
 		db.DB.Create(&models.ERPEndpoint{
 			ID:        pkg.NewUUID(),
 			TenantID:  tenantID,
 			GroupID:   groupID,
 			Resource:  req.Resource,
 			IsEnabled: req.IsEnabled,
-			ScopeType: "all",
+			ScopeType: scopeType,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		})

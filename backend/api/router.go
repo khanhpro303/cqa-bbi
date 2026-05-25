@@ -241,6 +241,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 			tenant.GET("/crm/customer-profiles", handlers.ListCustomerCodes(cfg))
 			tenant.GET("/crm/gmf-packages", handlers.ListGMFPackages)
+			tenant.GET("/crm/list-ten-nhom-vthh", handlers.GetListTenNhomVthh)
 
 			// Job all results + export
 			tenant.GET("/jobs/:jobId/results", middleware.RequirePermission("jobs", "r"), handlers.ListAllJobResults)
