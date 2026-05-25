@@ -472,4 +472,114 @@ func (c *CloudifyClient) doRESTPost(endpoint string, params map[string]string, s
 	return nil, resp.StatusCode, fmt.Errorf("unexpected Cloudify response format: %s", preview)
 }
 
+// SearchCustomEndpointWithBody queries a custom endpoint under /rest_api/private/ with a JSON body
+func (c *CloudifyClient) SearchCustomEndpointWithBody(endpoint string, body interface{}) ([]map[string]interface{}, error) {
+	return c.restSearchPostWithBody(endpoint, body)
+}
 
+func (c *CloudifyClient) restSearchPostWithBody(endpoint string, body interface{}) ([]map[string]interface{}, error) {
+	session, err := c.getSession()
+	if err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+
+	data, statusCode, err := c.doRESTPostWithBody(endpoint, body, session)
+	if err != nil {
+		return nil, err
+	}
+
+	// Session expired → invalidate cache and retry once
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		c.InvalidateSession()
+		session, err = c.getSession()
+		if err != nil {
+			return nil, fmt.Errorf("re-authenticate after session expiry: %w", err)
+		}
+		data, _, err = c.doRESTPostWithBody(endpoint, body, session)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return data, nil
+}
+
+func (c *CloudifyClient) doRESTPostWithBody(endpoint string, body interface{}, session string) ([]map[string]interface{}, int, error) {
+	baseURL := strings.TrimRight(c.BaseURL, "/")
+	apiURL := fmt.Sprintf("%s/rest_api/private/%s", baseURL, endpoint)
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("marshal body: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, 0, fmt.Errorf("create request: %w", err)
+	}
+
+	q := req.URL.Query()
+	if c.DB != "" {
+		q.Set("db", c.DB)
+	}
+	if session != "" {
+		sessionID := strings.TrimPrefix(session, "session_id=")
+		q.Set("session_id", sessionID)
+	}
+	req.URL.RawQuery = q.Encode()
+
+	req.Header.Set("Cookie", session)
+	req.Header.Set("Content-Type", "application/json")
+
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("Cloudify API request to %s failed: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, resp.StatusCode, nil
+	}
+
+	respBodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("read response body: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		preview := string(respBodyBytes)
+		if len(preview) > 300 {
+			preview = preview[:300]
+		}
+		return nil, resp.StatusCode, fmt.Errorf("Cloudify returned HTTP %d: %s", resp.StatusCode, preview)
+	}
+
+	var result []map[string]interface{}
+	if err := json.Unmarshal(respBodyBytes, &result); err == nil {
+		return result, resp.StatusCode, nil
+	}
+
+	var wrapped struct {
+		Data    []map[string]interface{} `json:"data"`
+		Result  []map[string]interface{} `json:"result"`
+		Records []map[string]interface{} `json:"records"`
+	}
+	if err := json.Unmarshal(respBodyBytes, &wrapped); err == nil {
+		if wrapped.Data != nil {
+			return wrapped.Data, resp.StatusCode, nil
+		}
+		if wrapped.Result != nil {
+			return wrapped.Result, resp.StatusCode, nil
+		}
+		if wrapped.Records != nil {
+			return wrapped.Records, resp.StatusCode, nil
+		}
+	}
+
+	preview := string(respBodyBytes)
+	if len(preview) > 200 {
+		preview = preview[:200]
+	}
+	return nil, resp.StatusCode, fmt.Errorf("unexpected Cloudify response format: %s", preview)
+}

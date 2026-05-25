@@ -1517,7 +1517,156 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	case "customers":
 		data, err = client.SearchPartners(search, limit)
 	case "debt":
-		data, err = client.SearchPartnerLedger(partnerID, search, limit)
+		if isGenericDebtSearch(search) {
+			promptMsg := gin.H{
+				"recipient": gin.H{
+					"user_id": permCtx.ZaloUserID,
+				},
+				"message": gin.H{
+					"text": "Bạn muốn xem đối chiếu công nợ trong khoảng thời gian nào dưới đây?",
+					"attachment": gin.H{
+						"type": "template",
+						"payload": gin.H{
+							"buttons": []gin.H{
+								{
+									"title":   "Tháng này",
+									"type":    "oa.query.show",
+									"payload": "công nợ tháng này",
+								},
+								{
+									"title":   "Tháng trước",
+									"type":    "oa.query.show",
+									"payload": "công nợ tháng trước",
+								},
+								{
+									"title":   "Quý này",
+									"type":    "oa.query.show",
+									"payload": "công nợ quý này",
+								},
+							},
+						},
+					},
+				},
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status":            "success",
+				"is_debt_prompt":    true,
+				"zalo_rich_message": promptMsg,
+			})
+			return
+		}
+
+		var targetCustomerCodes []string
+		if scopeType == "own" {
+			if permCtx.CustomerCode != "" {
+				targetCustomerCodes = []string{permCtx.CustomerCode}
+			}
+		} else {
+			if partnerID != "" {
+				code, errCode := resolveCustomerCodeFromPartnerID(client, partnerID)
+				if errCode == nil && code != "" {
+					targetCustomerCodes = []string{code}
+				}
+			} else if search != "" {
+				_, _, isPeriod := parseDebtPeriodFromSearch(search)
+				if !isPeriod {
+					partners, errPartners := client.SearchPartners(search, 5)
+					if errPartners == nil {
+						for _, p := range partners {
+							maVal := getMapString(p, "MA", "code", "ma")
+							if maVal != "" {
+								targetCustomerCodes = append(targetCustomerCodes, maVal)
+							}
+						}
+					}
+				}
+			}
+
+			if len(targetCustomerCodes) == 0 && scopeType == "assigned" {
+				var groupIDs []string
+				for _, grp := range permCtx.Groups {
+					groupIDs = append(groupIDs, grp.GroupID)
+				}
+				targetCustomerCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
+			}
+		}
+
+		tuNgay, denNgay, _ := parseDebtPeriodFromSearch(search)
+		if tuNgay == "" || denNgay == "" {
+			tuNgay, denNgay, _ = parseDebtPeriodFromSearch("công nợ tháng này")
+		}
+
+		branchName := "BBI NỘI BỘ"
+		var branchSetting models.AppSetting
+		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_branch_name'", tenantID).First(&branchSetting).Error; errSetting == nil && branchSetting.ValuePlain != "" {
+			branchName = branchSetting.ValuePlain
+		}
+
+		debtEndpoint := "partner_ledger/search"
+		usePost := false
+		var globalPermsSetting models.AppSetting
+		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
+			type EndpointConfig struct {
+				Get  bool   `json:"get"`
+				Post bool   `json:"post"`
+				Path string `json:"path"`
+			}
+			var globalPerms map[string]EndpointConfig
+			if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
+				if debtConfig, exists := globalPerms["debt"]; exists {
+					usePost = debtConfig.Post
+					if debtConfig.Path != "" && debtConfig.Path != "debt" {
+						path := debtConfig.Path
+						path = strings.TrimPrefix(path, "/")
+						path = strings.TrimPrefix(path, "rest_api/private/")
+						path = strings.TrimPrefix(path, "/")
+						debtEndpoint = path
+					}
+				}
+			}
+		}
+
+		dsKhachHang := strings.Join(targetCustomerCodes, ",")
+
+		if usePost {
+			bodyPayload := map[string]interface{}{
+				"CHI_NHANH":                           branchName,
+				"TU_NGAY":                             tuNgay,
+				"DEN_NGAY":                            denNgay,
+				"BAO_GOM_SO_LIEU_CHI_NHANH_PHU_THUOC": true,
+				"DS_KHACH_HANG":                       dsKhachHang,
+			}
+			data, err = client.SearchCustomEndpointWithBody(debtEndpoint, bodyPayload)
+		} else {
+			params := map[string]string{
+				"CHI_NHANH":                           branchName,
+				"TU_NGAY":                             tuNgay,
+				"DEN_NGAY":                            denNgay,
+				"BAO_GOM_SO_LIEU_CHI_NHANH_PHU_THUOC": "true",
+				"DS_KHACH_HANG":                       dsKhachHang,
+			}
+			data, err = client.SearchCustomEndpoint(debtEndpoint, params)
+		}
+
+		if err == nil && data != nil {
+			var mappedData []map[string]interface{}
+			for _, item := range data {
+				noDuCuoiKy := getMapFloat(item, "NO_SO_DU_CUOI_KY", "no_so_du_cuoi_ky", "NO_SAU", "no_sau")
+				mappedItem := map[string]interface{}{
+					"MA_KHACH_HANG":    getMapString(item, "MA_KHACH_HANG", "ma_khach_hang", "MA_KH", "ma_kh"),
+					"TEN_KHACH_HANG":   getMapString(item, "TEN_KHACH_HANG", "ten_khach_hang", "TEN_KH", "ten_kh"),
+					"NO_SO_DU_CUOI_KY": noDuCuoiKy,
+					"no_so_du_cuoi_ky": noDuCuoiKy,
+				}
+				for k, v := range item {
+					if k != "MA_KHACH_HANG" && k != "TEN_KHACH_HANG" && k != "NO_SO_DU_CUOI_KY" && k != "no_so_du_cuoi_ky" {
+						mappedItem[k] = v
+					}
+				}
+				mappedData = append(mappedData, mappedItem)
+			}
+			data = mappedData
+		}
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown_resource"})
 		writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadRequest, 0, c.ClientIP())
@@ -1791,12 +1940,84 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
 
 	case "debt":
+		tuNgay, denNgay, _ := parseDebtPeriodFromSearch(search)
+		if tuNgay == "" || denNgay == "" {
+			tuNgay, denNgay, _ = parseDebtPeriodFromSearch("công nợ tháng này")
+		}
+
+		mockData := []map[string]interface{}{
+			{
+				"MA_KHACH_HANG":             "BBI - Đoàn Lâm Khải",
+				"TEN_KHACH_HANG":            "BBI - Đoàn Lâm Khải",
+				"TAI_KHOAN_CONG_NO":         "131",
+				"NO_SO_DU_DAU_KY":           1050000.0,
+				"CO_SO_DU_DAU_KY":           0.0,
+				"NO_SO_PHAT_SINH":           0.0,
+				"CO_SO_PHAT_SINH":           0.0,
+				"NO_SO_DU_CUOI_KY":          1050000.0,
+				"CO_SO_DU_CUOI_KY":          0.0,
+				"NO_TRUOC":                  1050000.0,
+				"NO_TRONG":                  0.0,
+				"NO_SAU":                    1050000.0,
+				"tu_ngay":                   tuNgay,
+				"den_ngay":                  denNgay,
+				"NO_SO_DU_DAU_KY_QUY_DOI":   1050000.0,
+				"CO_SO_DU_DAU_KY_QUY_DOI":   0.0,
+				"NO_SO_QUY_DOI":             0.0,
+				"CO_SO_QUY_DOI":             0.0,
+				"NO_SO_DU_CUOI_KY_QUY_DOI":  1050000.0,
+				"CO_SO_DU_CUOI_KY_QUY_DOI":  0.0,
+				"NO_SO_DU_DAU_KY_NGUYEN_TE": 1050000.0,
+				"CO_SO_DU_DAU_KY_NGUYEN_TE": 0.0,
+				"NO_SO_PHAT_SINH_NGUYEN_TE": 0.0,
+				"CO_SO_PHAT_SINH_NGUYEN_TE": 0.0,
+				"NO_SO_DU_CUOI_KY_NGUYEN_TE": 1050000.0,
+				"CO_SO_DU_CUOI_KY_NGUYEN_TE": 0.0,
+			},
+			{
+				"MA_KHACH_HANG":             "BBI - Nguyễn Đăng Khoa",
+				"TEN_KHACH_HANG":            "BBI - Nguyễn Đăng Khoa",
+				"TAI_KHOAN_CONG_NO":         "131",
+				"NO_SO_DU_DAU_KY":           630000.0,
+				"CO_SO_DU_DAU_KY":           0.0,
+				"NO_SO_PHAT_SINH":           0.0,
+				"CO_SO_PHAT_SINH":           0.0,
+				"NO_SO_DU_CUOI_KY":          630000.0,
+				"CO_SO_DU_CUOI_KY":          0.0,
+				"NO_TRUOC":                  630000.0,
+				"NO_TRONG":                  0.0,
+				"NO_SAU":                    630000.0,
+				"tu_ngay":                   tuNgay,
+				"den_ngay":                  denNgay,
+				"NO_SO_DU_DAU_KY_QUY_DOI":   630000.0,
+				"CO_SO_DU_DAU_KY_QUY_DOI":   0.0,
+				"NO_SO_QUY_DOI":             0.0,
+				"CO_SO_QUY_DOI":             0.0,
+				"NO_SO_DU_CUOI_KY_QUY_DOI":  630000.0,
+				"CO_SO_DU_CUOI_KY_QUY_DOI":  0.0,
+				"NO_SO_DU_DAU_KY_NGUYEN_TE": 630000.0,
+				"CO_SO_DU_DAU_KY_NGUYEN_TE": 0.0,
+				"NO_SO_PHAT_SINH_NGUYEN_TE": 0.0,
+				"CO_SO_PHAT_SINH_NGUYEN_TE": 0.0,
+				"NO_SO_DU_CUOI_KY_NGUYEN_TE": 630000.0,
+				"CO_SO_DU_CUOI_KY_NGUYEN_TE": 0.0,
+			},
+		}
+
+		var filtered []map[string]interface{}
+		for _, item := range mockData {
+			itemCustCode := item["MA_KHACH_HANG"].(string)
+			if scopeType == "own" && !strings.Contains(strings.ToLower(itemCustCode), strings.ToLower(customerCode)) {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+
 		c.JSON(http.StatusOK, gin.H{
-			"status": "success",
-			"data":   []gin.H{},
-			"source": "mock_erp",
-			"count":  0,
-			"note":   "Dữ liệu công nợ chỉ khả dụng khi kết nối ERP thực",
+			"status":   "success",
+			"data":     filtered,
+			"source":   "mock_erp",
+			"count":    len(filtered),
 		})
 
 	default:
@@ -2019,4 +2240,65 @@ func parseOrderDate(item map[string]interface{}) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+func isGenericDebtSearch(search string) bool {
+	s := strings.ToLower(strings.TrimSpace(search))
+	if s == "" || s == "công nợ" || s == "cong no" || s == "xem công nợ" || s == "xem cong no" || s == "check công nợ" || s == "check cong no" || s == "tra cứu công nợ" || s == "tra cuu cong no" || s == "đối chiếu công nợ" || s == "doi chieu cong no" || s == "nợ" || s == "no" {
+		return true
+	}
+	return false
+}
+
+func parseDebtPeriodFromSearch(search string) (tuNgay, denNgay string, ok bool) {
+	s := strings.ToLower(search)
+	now := time.Now()
+
+	if strings.Contains(s, "tháng này") || strings.Contains(s, "thang nay") {
+		tuNgay = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+		denNgay = now.Format("2006-01-02")
+		return tuNgay, denNgay, true
+	}
+	if strings.Contains(s, "tháng trước") || strings.Contains(s, "thang truoc") {
+		firstOfThisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		lastMonth := firstOfThisMonth.AddDate(0, -1, 0)
+		tuNgay = time.Date(lastMonth.Year(), lastMonth.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+		denNgay = firstOfThisMonth.AddDate(0, 0, -1).Format("2006-01-02")
+		return tuNgay, denNgay, true
+	}
+	if strings.Contains(s, "quý này") || strings.Contains(s, "quy nay") {
+		currentMonth := int(now.Month())
+		startMonth := ((currentMonth - 1) / 3) * 3 + 1
+		tuNgay = time.Date(now.Year(), time.Month(startMonth), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+		denNgay = now.Format("2006-01-02")
+		return tuNgay, denNgay, true
+	}
+
+	return "", "", false
+}
+
+func resolveCustomerCodeFromPartnerID(client *pkg.CloudifyClient, partnerID string) (string, error) {
+	if partnerID == "" {
+		return "", fmt.Errorf("partner ID is empty")
+	}
+	partners, err := client.SearchPartners(partnerID, 5)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range partners {
+		idVal := getMapString(p, "ID", "id")
+		if idVal == partnerID {
+			maVal := getMapString(p, "MA", "code", "ma")
+			if maVal != "" {
+				return maVal, nil
+			}
+		}
+	}
+	if len(partners) > 0 {
+		maVal := getMapString(partners[0], "MA", "code", "ma")
+		if maVal != "" {
+			return maVal, nil
+		}
+	}
+	return "", fmt.Errorf("partner %s not found on ERP", partnerID)
 }
