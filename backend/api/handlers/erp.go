@@ -123,26 +123,64 @@ func ERPQuery(c *gin.Context) {
 		permCtx = &resolved
 	}
 
-	// ── 4.5. Global HTTP Method Validation ──────────────────────────────────
+	// ── 4.5. Global HTTP Method & Custom Endpoint Path Validation ──────────────────
 	methodAllowed := true
 	var globalPermsSetting models.AppSetting
 	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; err == nil && globalPermsSetting.ValuePlain != "" {
-		var globalPerms map[string]map[string]bool
+		type EndpointConfig struct {
+			Get  bool   `json:"get"`
+			Post bool   `json:"post"`
+			Path string `json:"path"`
+		}
+		var globalPerms map[string]EndpointConfig
 		if json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms) == nil {
-			if resPerms, ok := globalPerms[req.Resource]; ok {
-				reqMethod := strings.ToLower(c.Request.Method) // "get" or "post"
-				if allowed, ok := resPerms[reqMethod]; ok {
-					methodAllowed = allowed
-				} else {
-					methodAllowed = false // method not explicitly enabled
+			matchedSystemResource := ""
+			var matchedPerms EndpointConfig
+			
+			// Find system resource key matching req.Resource by looking at custom paths
+			for sysRes, config := range globalPerms {
+				path := config.Path
+				if path == "" {
+					path = sysRes
 				}
+				if strings.EqualFold(path, req.Resource) {
+					matchedSystemResource = sysRes
+					matchedPerms = config
+					break
+				}
+			}
+			
+			// If not matched dynamically, check if it matches the default resource keys
+			if matchedSystemResource == "" {
+				for sysRes, config := range globalPerms {
+					if strings.EqualFold(sysRes, req.Resource) {
+						matchedSystemResource = sysRes
+						matchedPerms = config
+						break
+					}
+				}
+			}
+
+			if matchedSystemResource != "" {
+				// Re-route internally to system expected resource
+				req.Resource = matchedSystemResource
+				reqMethod := strings.ToLower(c.Request.Method) // "get" or "post"
+				if reqMethod == "get" {
+					methodAllowed = matchedPerms.Get
+				} else if reqMethod == "post" {
+					methodAllowed = matchedPerms.Post
+				} else {
+					methodAllowed = false
+				}
+			} else {
+				methodAllowed = false
 			}
 		}
 	}
 	if !methodAllowed {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden_method",
-			"message": fmt.Sprintf("HTTP Method %s không được cho phép đối với tài nguyên '%s' trên hệ thống ERP Gateway.", c.Request.Method, req.Resource),
+			"message": fmt.Sprintf("Yêu cầu không hợp lệ hoặc HTTP Method %s không được cho phép đối với tài nguyên '%s' trên hệ thống ERP Gateway.", c.Request.Method, req.Resource),
 		})
 		return
 	}
@@ -747,7 +785,11 @@ func SaveERPSettings(c *gin.Context) {
 		PrivateProductGroups string `json:"private_product_groups"`
 
 		// New: Global HTTP Method permissions per resource
-		GlobalMethodPermissions map[string]map[string]bool `json:"global_method_permissions"`
+		GlobalMethodPermissions map[string]struct {
+			Get  bool   `json:"get"`
+			Post bool   `json:"post"`
+			Path string `json:"path"`
+		} `json:"global_method_permissions"`
 
 		// New: Private bot endpoint permissions
 		PrivateEndpoints []struct {

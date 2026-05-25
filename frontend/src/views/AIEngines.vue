@@ -267,14 +267,25 @@
             <v-table density="compact">
               <thead>
                 <tr>
-                  <th style="width: 50%;">Tài nguyên Endpoint</th>
-                  <th style="width: 25%;" class="text-center">Cho phép GET</th>
-                  <th style="width: 25%;" class="text-center">Cho phép POST</th>
+                  <th style="width: 30%;">Tài nguyên Endpoint</th>
+                  <th style="width: 30%;">Tên Endpoint / Path</th>
+                  <th style="width: 20%;" class="text-center">Cho phép GET</th>
+                  <th style="width: 20%;" class="text-center">Cho phép POST</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(methods, resource) in globalMethodPermissions" :key="resource">
                   <td class="text-caption font-weight-bold py-2">{{ resourceLabels[resource] || resource }}</td>
+                  <td>
+                    <v-text-field
+                      v-model="methods.path"
+                      density="compact"
+                      variant="plain"
+                      hide-details
+                      placeholder="e.g. products"
+                      style="font-size: 0.75rem;"
+                    />
+                  </td>
                   <td class="text-center">
                     <v-checkbox
                       v-model="methods.get"
@@ -440,12 +451,12 @@ const scopeOptions = [
   { title: 'Phân công (ASSIGNED)', value: 'assigned' },
 ]
 
-const globalMethodPermissions = ref<Record<string, { get: boolean; post: boolean }>>({
-  products: { get: true, post: true },
-  inventory: { get: true, post: true },
-  orders: { get: true, post: true },
-  customers: { get: true, post: true },
-  debt: { get: true, post: true },
+const globalMethodPermissions = ref<Record<string, { get: boolean; post: boolean; path: string }>>({
+  products: { get: true, post: true, path: 'products' },
+  inventory: { get: true, post: true, path: 'inventory' },
+  orders: { get: true, post: true, path: 'orders' },
+  customers: { get: true, post: true, path: 'customers' },
+  debt: { get: true, post: true, path: 'debt' },
 })
 
 const privateEndpoints = ref<any[]>([
@@ -500,6 +511,12 @@ async function loadSettings() {
     if (settings.erp_global_method_permissions) {
       try {
         const parsed = JSON.parse(settings.erp_global_method_permissions)
+        // Ensure path fallback if not saved in old settings format
+        for (const key in parsed) {
+          if (parsed[key] && !parsed[key].path) {
+            parsed[key].path = key
+          }
+        }
         globalMethodPermissions.value = {
           ...globalMethodPermissions.value,
           ...parsed
