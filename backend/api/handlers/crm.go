@@ -542,6 +542,51 @@ func ListZaloCustomers(c *gin.Context) {
 		return
 	}
 
+	// Try to sync Zalo profile details (avatar, correct name) for active customers if missing or placeholder
+	var channel models.Channel
+	if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err == nil {
+		cfg, _ := config.Load()
+		if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
+			var zaloCreds channels.ZaloOACredentials
+			if json.Unmarshal(credBytes, &zaloCreds) == nil {
+				adapter := channels.NewZaloOAAdapter(zaloCreds)
+				adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+					zaloCreds.AccessToken = newAccess
+					zaloCreds.RefreshToken = newRefresh
+					credsMap := map[string]interface{}{
+						"app_id":        zaloCreds.AppID,
+						"app_secret":    zaloCreds.AppSecret,
+						"access_token":  newAccess,
+						"refresh_token": newRefresh,
+						"oa_id":         zaloCreds.OAId,
+					}
+					newCredJSON, _ := json.Marshal(credsMap)
+					encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+					db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
+				})
+
+				for i := range customers {
+					if customers[i].ZaloUserID != "" && (customers[i].Avatar == "" || customers[i].Name == "Marketing") {
+						if profile, err := adapter.FetchUserProfile(c.Request.Context(), customers[i].ZaloUserID); err == nil {
+							updatedFields := map[string]interface{}{}
+							if profile.Avatar != "" && customers[i].Avatar != profile.Avatar {
+								customers[i].Avatar = profile.Avatar
+								updatedFields["avatar"] = profile.Avatar
+							}
+							if profile.DisplayName != "" && customers[i].Name != profile.DisplayName {
+								customers[i].Name = profile.DisplayName
+								updatedFields["name"] = profile.DisplayName
+							}
+							if len(updatedFields) > 0 {
+								db.DB.Model(&customers[i]).Updates(updatedFields)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, customers)
 }
 

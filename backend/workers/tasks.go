@@ -288,7 +288,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 						avatarURL := ""
 						if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
 							avatarURL = profile.Avatar
-							if customerRec.Name == "" {
+							if profile.DisplayName != "" {
 								customerRec.Name = profile.DisplayName
 							}
 						}

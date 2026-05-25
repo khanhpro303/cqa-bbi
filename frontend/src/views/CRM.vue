@@ -109,7 +109,7 @@
                 <th>Ảnh</th>
                 <th>Tên Zalo</th>
                 <th>SĐT liên kết</th>
-                <th>Mã Khách Hàng (Postgres)</th>
+                <th>Mã KH</th>
                 <th>Zalo User ID</th>
                 <th>Ngày liên kết</th>
                 <th>Hành động</th>

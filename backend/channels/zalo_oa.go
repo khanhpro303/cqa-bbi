@@ -393,7 +393,7 @@ type ZaloUserProfile struct {
 }
 
 func (z *ZaloOAAdapter) FetchUserProfile(ctx context.Context, userID string) (*ZaloUserProfile, error) {
-	result, err := z.doRequest(ctx, "GET", zaloAPIBaseV2+"/getprofile", map[string]interface{}{
+	result, err := z.doRequest(ctx, "GET", zaloAPIBaseV3+"/user/detail", map[string]interface{}{
 		"user_id": userID,
 	})
 	if err != nil {
