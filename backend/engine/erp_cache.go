@@ -66,7 +66,11 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		var globalPerms map[string]EndpointConfig
 		if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
 			if prodConfig, exists := globalPerms["products"]; exists && prodConfig.Path != "" && prodConfig.Path != "products" {
-				endpointPath = prodConfig.Path
+				path := prodConfig.Path
+				path = strings.TrimPrefix(path, "/")
+				path = strings.TrimPrefix(path, "rest_api/private/")
+				path = strings.TrimPrefix(path, "/")
+				endpointPath = path
 			}
 		}
 	}
