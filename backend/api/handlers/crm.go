@@ -164,17 +164,6 @@ func CreateCRMGroup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_create_group"})
 		return
 	}
-
-	// Link initial customer if any
-	for _, mID := range initialMembers {
-		var cust models.ZaloCustomer
-		if tx.Where("tenant_id = ? AND zalo_user_id = ?", tenantID, mID).First(&cust).Error == nil {
-			tx.Create(&models.CRMGroupCustomer{GroupID: group.ID, ZaloCustomerID: cust.ID})
-			if group.CustomerCode != "" {
-				tx.Model(&cust).Update("customer_code", group.CustomerCode)
-			}
-		}
-	}
 	tx.Commit()
 
 	// Preload associations for response
