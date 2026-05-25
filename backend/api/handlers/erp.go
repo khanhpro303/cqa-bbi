@@ -1515,7 +1515,78 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			data, err = client.SearchCustomEndpoint(ordersEndpoint, params)
 		}
 	case "customers":
-		data, err = client.SearchPartners(search, limit)
+		if scopeType == "own" {
+			// 1. Get customer code from permission context
+			customerCode := permCtx.CustomerCode
+			if customerCode == "" && permCtx.ZaloUserID != "" {
+				// Query zalo_customers for customerCode
+				var customerRec models.ZaloCustomer
+				if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", tenantID, permCtx.ZaloUserID, "approved").First(&customerRec).Error; err == nil {
+					customerCode = customerRec.CustomerCode
+				}
+			}
+
+			if customerCode != "" {
+				cfg, _ := config.Load()
+				// 2. Query Postgres database to get ten_khach_hang
+				tenKhachHang, errName := db.GetCloudifyCustomerNameByCode(cfg.PostgresURL, customerCode)
+				if errName == nil && tenKhachHang != "" {
+					// 3. Make API call with JSON body: {"name": tenKhachHang, "limit": 1000}
+					apiPayload := map[string]interface{}{
+						"name":  tenKhachHang,
+						"limit": 1000,
+					}
+
+					customPath := "partner/search"
+					var globalPermsSetting models.AppSetting
+					if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
+						type EndpointConfig struct {
+							Get  bool   `json:"get"`
+							Post bool   `json:"post"`
+							Path string `json:"path"`
+						}
+						var globalPerms map[string]EndpointConfig
+						if json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms) == nil {
+							if config, exists := globalPerms["customers"]; exists && config.Path != "" {
+								customPath = strings.TrimPrefix(config.Path, "/")
+								customPath = strings.TrimPrefix(customPath, "rest_api/private/")
+								customPath = strings.TrimPrefix(customPath, "/")
+							}
+						}
+					}
+
+					apiData, errCall := client.SearchCustomEndpointWithBody(customPath, apiPayload)
+					if errCall == nil {
+						// 4. Process response and return only: dia_chi, dien_thoai, create_date
+						var filteredData []map[string]interface{}
+						for _, item := range apiData {
+							maVal := getMapString(item, "MA", "ma", "name", "code")
+							if strings.EqualFold(maVal, customerCode) {
+								record := map[string]interface{}{
+									"dia_chi":     getMapString(item, "DIA_CHI", "dia_chi", "address"),
+									"dien_thoai":  getMapString(item, "DIEN_THOAI", "dien_thoai", "phone"),
+									"create_date": getMapString(item, "create_date", "CREATE_DATE"),
+								}
+								filteredData = append(filteredData, record)
+							}
+						}
+						data = filteredData
+					} else {
+						err = errCall
+					}
+				} else {
+					if errName != nil {
+						err = fmt.Errorf("failed to fetch cloudify customer name from DB: %w", errName)
+					} else {
+						err = fmt.Errorf("cloudify customer name is empty for code %s", customerCode)
+					}
+				}
+			} else {
+				err = fmt.Errorf("customer code is empty or unverified")
+			}
+		} else {
+			data, err = client.SearchPartners(search, limit)
+		}
 	case "debt":
 		if isGenericDebtSearch(search) {
 			promptMsg := gin.H{
@@ -1913,9 +1984,19 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 			phone := cust["phone"].(string)
 			code := strings.ToLower(cust["customer_code"].(string))
 
-			if scopeType == "own" && !strings.EqualFold(code, customerCode) {
-				continue
+			if scopeType == "own" {
+				if !strings.EqualFold(code, customerCode) {
+					continue
+				}
+				record := gin.H{
+					"dia_chi":     "MM18 Trường sơn, P.15, Q10, TP HCM",
+					"dien_thoai":  phone,
+					"create_date": "2024-05-15 08:30:00",
+				}
+				filtered = append(filtered, record)
+				break
 			}
+
 			if scopeType == "assigned" {
 				matched := false
 				for _, ac := range allowedCodes {

@@ -13,6 +13,8 @@ personal-zalo-gateway/dist/
 
 # Go
 backend/cqa-server
+backend/chat-quality-agent
+
 
 # IDE
 .vscode/

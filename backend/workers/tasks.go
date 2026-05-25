@@ -382,7 +382,29 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		sessionKey := fmt.Sprintf("zalo_session:%s:%s", matchedChannel.ID, payload.Sender.ID)
-		
+		if matchedGroup.ID != "" {
+			sessionKey = fmt.Sprintf("zalo_session:%s:group:%s", matchedChannel.ID, matchedGroup.ZaloGroupID)
+		}
+
+		// Concurrency control: Sequential processing per sessionKey using Redis lock
+		if db.RedisClient != nil {
+			lockKey := sessionKey + ":lock"
+			acquired := false
+			// Try to acquire lock every 250ms for up to 30 seconds
+			for i := 0; i < 120; i++ {
+				locked, err := db.RedisClient.SetNX(ctx, lockKey, "1", 45*time.Second).Result()
+				if err == nil && locked {
+					acquired = true
+					break
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+			if !acquired {
+				return fmt.Errorf("timeout waiting for session lock for key %s", sessionKey)
+			}
+			defer db.RedisClient.Del(ctx, lockKey)
+		}
+
 		// Check session
 		var activeSessionID string
 		if db.RedisClient != nil {
@@ -403,17 +425,30 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				}
 			}
 			if isTriggered {
+				// If the user triggers it, but is unverified, send them the verification DM!
+				if !isWhitelisted && !isCustomer {
+					verifyInstructions := "Tài khoản của bạn chưa được xác thực trên hệ thống CRM. Vui lòng nhắn tin theo cú pháp `verify <mã_xác_thực>` được cung cấp bởi nhân viên để đăng ký sử dụng Bot."
+					_ = adapter.SendMessage(ctx, payload.Sender.ID, verifyInstructions)
+					log.Printf("[worker] blocking unverified Zalo user %s for tenant %s (triggered bot)", payload.Sender.ID, matchedChannel.TenantID)
+					return nil
+				}
+
 				// Open session and generate unique session ID
 				newSessionID := uuid.New().String()
 				if db.RedisClient != nil {
 					db.RedisClient.Set(ctx, sessionKey, newSessionID, time.Duration(meta.SessionTimeout)*time.Minute)
 				}
 				// Send welcome message
-				err := adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionWelcomeMessage)
+				var err error
+				if matchedGroup.ID != "" {
+					err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionWelcomeMessage)
+				} else {
+					err = adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionWelcomeMessage)
+				}
 				if err != nil {
 					log.Printf("[worker] failed to send welcome message: %v", err)
 				}
-				log.Printf("[worker] opened new session %s for user %s", newSessionID, payload.Sender.ID)
+				log.Printf("[worker] opened new session %s for key %s", newSessionID, sessionKey)
 				return nil
 			}
 			// Ignore message
@@ -434,11 +469,16 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if db.RedisClient != nil {
 				db.RedisClient.Del(ctx, sessionKey)
 			}
-			err := adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionGoodbyeMessage)
+			var err error
+			if matchedGroup.ID != "" {
+				err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionGoodbyeMessage)
+			} else {
+				err = adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionGoodbyeMessage)
+			}
 			if err != nil {
 				log.Printf("[worker] failed to send end session message: %v", err)
 			}
-			log.Printf("[worker] closed session for user %s", payload.Sender.ID)
+			log.Printf("[worker] closed session for key %s", sessionKey)
 			return nil
 		}
 
@@ -456,10 +496,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}()
 
 		// Unverified public user block:
+		// If session is already active, auto-ignore unverified users instead of sending DM instructions
 		if !isWhitelisted && !isCustomer {
-			verifyInstructions := "Tài khoản của bạn chưa được xác thực trên hệ thống CRM. Vui lòng nhắn tin theo cú pháp `verify <mã_xác_thực>` được cung cấp bởi nhân viên để đăng ký sử dụng Bot."
-			_ = adapter.SendMessage(ctx, payload.Sender.ID, verifyInstructions)
-			log.Printf("[worker] blocking unverified Zalo user %s for tenant %s", payload.Sender.ID, matchedChannel.TenantID)
+			log.Printf("[worker] auto-ignoring unverified Zalo user %s in active session %s for tenant %s", payload.Sender.ID, activeSessionID, matchedChannel.TenantID)
 			return nil
 		}
 
@@ -493,7 +532,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				maChaName = parts[1]
 			}
 			reply := fmt.Sprintf("Bạn muốn xem tồn kho cụ thể của màu và size nào cho dòng sản phẩm %s?\nVui lòng nhập thông tin (Ví dụ: %s màu đỏ size L).", maChaName, maChaName)
-			_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			var err error
+			if matchedGroup.ID != "" {
+				err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+			} else {
+				err = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			}
+			_ = err
 			return nil
 		}
 
@@ -511,12 +556,24 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			totalStock, err := sumInventoryByMaCha(ctx, matchedChannel.TenantID, &permCtx, clickPayload.MaCha)
 			if err != nil {
 				log.Printf("[worker] error summing inventory: %v", err)
-				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Đã có lỗi xảy ra khi tính toán tồn kho dòng sản phẩm.")
+				var sendErr error
+				if matchedGroup.ID != "" {
+					sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, "Đã có lỗi xảy ra khi tính toán tồn kho dòng sản phẩm.")
+				} else {
+					sendErr = adapter.SendMessage(ctx, payload.Sender.ID, "Đã có lỗi xảy ra khi tính toán tồn kho dòng sản phẩm.")
+				}
+				_ = sendErr
 				return nil
 			}
 
 			reply := fmt.Sprintf("Tổng tồn kho của dòng sản phẩm %s (Mã: %s) trên hệ thống hiện tại là: %.1f", displayName, clickPayload.MaCha, totalStock)
-			_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			var sendErr error
+			if matchedGroup.ID != "" {
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+			} else {
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			}
+			_ = sendErr
 			return nil
 		}
 
@@ -545,9 +602,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}()
 
 		// 3. Send message back to Zalo
-		err = adapter.SendMessage(ctx, payload.Sender.ID, replyText)
-		if err != nil {
-			return fmt.Errorf("failed to send reply to Zalo: %w", err)
+		var sendErr error
+		if matchedGroup.ID != "" {
+			sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, replyText)
+		} else {
+			sendErr = adapter.SendMessage(ctx, payload.Sender.ID, replyText)
+		}
+		if sendErr != nil {
+			return fmt.Errorf("failed to send reply to Zalo: %w", sendErr)
 		}
 
 		log.Printf("[worker] successfully replied to user %s via Langflow", payload.Sender.ID)

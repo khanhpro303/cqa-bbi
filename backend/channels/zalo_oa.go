@@ -796,6 +796,51 @@ func (z *ZaloOAAdapter) RemoveGMFGroupMembers(ctx context.Context, groupID strin
 	return err
 }
 
+// SendGroupMessage sends a text or custom JSON message to a GMF group chat
+func (z *ZaloOAAdapter) SendGroupMessage(ctx context.Context, groupID string, content string) error {
+	var payload map[string]interface{}
+	trimmedContent := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmedContent, "{") && strings.HasSuffix(trimmedContent, "}") {
+		if err := json.Unmarshal([]byte(trimmedContent), &payload); err != nil {
+			payload = nil
+		}
+	}
+
+	if payload == nil {
+		payload = map[string]interface{}{
+			"recipient": map[string]interface{}{
+				"group_id": groupID,
+			},
+			"message": map[string]interface{}{
+				"text": content,
+			},
+		}
+	} else {
+		// Ensure recipient group_id matches groupID
+		if recipient, ok := payload["recipient"].(map[string]interface{}); ok {
+			recipient["group_id"] = groupID
+		} else {
+			payload["recipient"] = map[string]interface{}{
+				"group_id": groupID,
+			}
+		}
+	}
+
+	result, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/message", payload)
+	if err != nil {
+		return fmt.Errorf("zalo send group message failed: %w", err)
+	}
+
+	// Zalo API returns error code in "error" field
+	if errCode, ok := result["error"].(float64); ok && errCode != 0 {
+		msg, _ := result["message"].(string)
+		return fmt.Errorf("zalo send group message api error %v: %s", errCode, msg)
+	}
+
+	return nil
+}
+
+
 type GMFGroupMember struct {
 	OAID   string `json:"oa_id,omitempty"`
 	UserID string `json:"user_id,omitempty"`

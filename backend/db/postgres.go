@@ -114,3 +114,42 @@ func GetCloudifyCustomerProfiles(postgresURL string) ([]CloudifyCustomerProfile,
 	return profiles, nil
 }
 
+// GetCloudifyCustomerNameByCode connects to the external PostgreSQL database, queries the customer name for a given code, and returns it.
+func GetCloudifyCustomerNameByCode(postgresURL string, customerCode string) (string, error) {
+	if postgresURL == "" {
+		return "", fmt.Errorf("postgres url is empty")
+	}
+
+	// Auto-append sslmode=disable if not already present
+	if !strings.Contains(postgresURL, "sslmode=") {
+		if strings.Contains(postgresURL, "?") {
+			postgresURL += "&sslmode=disable"
+		} else {
+			postgresURL += "?sslmode=disable"
+		}
+	}
+
+	db, err := sql.Open("postgres", postgresURL)
+	if err != nil {
+		return "", fmt.Errorf("open postgres connection: %w", err)
+	}
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		return "", fmt.Errorf("ping postgres: %w", err)
+	}
+
+	var name string
+	err = db.QueryRow(`
+		SELECT ten_khach_hang 
+		FROM cloudify.cloudify_customers 
+		WHERE ma_khach_hang = $1 
+		LIMIT 1
+	`, customerCode).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("query customer name by code: %w", err)
+	}
+
+	return name, nil
+}
+
