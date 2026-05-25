@@ -109,23 +109,17 @@ func CreateCRMGroup(c *gin.Context) {
 		}
 	}
 
-	// 3. Find at least one Zalo User ID as initial member
+	// 3. Find at least one Zalo User ID as initial member (must be an active staff member since Zalo GMF requires at least one OA Admin)
 	var initialMembers []string
 	var activeStaff models.ZaloWhitelist
 	if err := db.DB.Where("tenant_id = ? AND status = ?", tenantID, "active").First(&activeStaff).Error; err == nil && activeStaff.ZaloUserID != "" {
 		initialMembers = append(initialMembers, activeStaff.ZaloUserID)
 	}
-	if len(initialMembers) == 0 {
-		var approvedCust models.ZaloCustomer
-		if err := db.DB.Where("tenant_id = ? AND status = ?", tenantID, "approved").First(&approvedCust).Error; err == nil && approvedCust.ZaloUserID != "" {
-			initialMembers = append(initialMembers, approvedCust.ZaloUserID)
-		}
-	}
 
 	if len(initialMembers) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "zalo_member_required",
-			"details": "Để tạo nhóm GMF trên Zalo, cần ít nhất 1 nhân viên hoặc khách hàng đã liên kết Zalo trong hệ thống.",
+			"details": "Để tạo nhóm GMF trên Zalo, cần ít nhất 1 nhân viên đã liên kết Zalo trong hệ thống (nhân viên này cần có quyền Quản trị viên/Biên tập viên của OA).",
 		})
 		return
 	}
