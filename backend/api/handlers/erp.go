@@ -1580,115 +1580,125 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 		if search != "" {
 			matchedProducts, errSearch := searchProductsByWebNameAstraDBNonVectorized(c.Request.Context(), tenantID, search)
-			if errSearch == nil && len(matchedProducts) > 1 {
-				maChaCounts := make(map[string]int)
-				for _, p := range matchedProducts {
-					maChaVal := getMapString(p, "MA_CHA", "ma_cha")
-					maVal := getMapString(p, "MA", "ma_hang", "ma")
-					if maChaVal != "" {
-						maChaCounts[maChaVal]++
-					} else if maVal != "" {
-						maChaCounts[maVal]++
-					}
-				}
-
-				if len(maChaCounts) > 0 {
-					var buttons []gin.H
-					buttons = append(buttons, gin.H{
-						"title":   "📦 Xem theo dòng sản phẩm",
-						"type":    "oa.query.hide",
-						"payload": "#choose_flow_type:dongsp:" + search,
-					})
-					buttons = append(buttons, gin.H{
-						"title":   "🔍 Xem theo mã SKU cụ thể",
-						"type":    "oa.query.hide",
-						"payload": "#choose_flow_type:skucuthe:" + search,
-					})
-
-					promptMsg := gin.H{
-						"recipient": gin.H{
-							"user_id": permCtx.ZaloUserID,
-						},
-						"message": gin.H{
-							"text": fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search),
-							"attachment": gin.H{
-								"type": "template",
-								"payload": gin.H{
-									"buttons": buttons,
-								},
-							},
-						},
-					}
-
-					// Send rich message directly to Zalo from backend
-					var activeChannel *models.Channel
-					var allChannels []models.Channel
-					if errChan := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&allChannels).Error; errChan == nil && len(allChannels) > 0 {
-						activeChannel = &allChannels[0]
-					}
-
-					if activeChannel != nil {
-						cfg, _ := config.Load()
-						credBytes, errDec := pkg.Decrypt(activeChannel.CredentialsEncrypted, cfg.EncryptionKey)
-						if errDec == nil {
-							var zaloCreds channels.ZaloOACredentials
-							if errCreds := json.Unmarshal(credBytes, &zaloCreds); errCreds == nil {
-								adapter := channels.NewZaloOAAdapter(zaloCreds)
-								adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-									var ch models.Channel
-									if db.DB.First(&ch, "id = ?", activeChannel.ID).Error == nil {
-										credsMap := map[string]interface{}{
-											"app_id":        zaloCreds.AppID,
-											"app_secret":    zaloCreds.AppSecret,
-											"access_token":  newAccess,
-											"refresh_token": newRefresh,
-											"oa_id":         zaloCreds.OAId,
-										}
-										newCredJSON, _ := json.Marshal(credsMap)
-										encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-										db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
-									}
-								})
-
-								promptMsgJSON, _ := json.Marshal(promptMsg)
-								
-								var matchedGroup models.CRMGroup
-								hasGroup := false
-								if len(permCtx.Groups) > 0 {
-									for _, gp := range permCtx.Groups {
-										if gp.GroupID != "private_bot" {
-											if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
-												hasGroup = true
-												break
-											}
-										}
-									}
-								}
-
-								var sendErr error
-								if hasGroup {
-									sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, string(promptMsgJSON))
-								} else {
-									sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, string(promptMsgJSON))
-								}
-								
-								if sendErr != nil {
-									log.Printf("[inventory_query] failed to send Zalo Rich Message directly: %v", sendErr)
-								} else {
-									log.Printf("[inventory_query] successfully sent Zalo Rich Message directly to %s", permCtx.ZaloUserID)
-								}
-							}
+			if errSearch != nil {
+				log.Printf("[inventory_query] Astra DB search error for tenant=%s search=%s: %v", tenantID, search, errSearch)
+			} else {
+				log.Printf("[inventory_query] Astra DB search for tenant=%s search=%s returned %d products", tenantID, search, len(matchedProducts))
+				if len(matchedProducts) > 1 {
+					maChaCounts := make(map[string]int)
+					for _, p := range matchedProducts {
+						maChaVal := getMapString(p, "MA_CHA", "ma_cha")
+						maVal := getMapString(p, "MA", "ma_hang", "ma")
+						if maChaVal != "" {
+							maChaCounts[maChaVal]++
+						} else if maVal != "" {
+							maChaCounts[maVal]++
 						}
 					}
 
-					c.JSON(http.StatusOK, gin.H{
-						"status":            "success",
-						"is_inventory_rich":  true,
-						"data":              []map[string]interface{}{},
-						"message":           "zalo_rich_message_sent_directly",
-						"count":             0,
-					})
-					return
+					if len(maChaCounts) > 0 {
+						var buttons []gin.H
+						buttons = append(buttons, gin.H{
+							"title":   "📦 Xem theo dòng sản phẩm",
+							"type":    "oa.query.hide",
+							"payload": "#choose_flow_type:dongsp:" + search,
+						})
+						buttons = append(buttons, gin.H{
+							"title":   "🔍 Xem theo mã SKU cụ thể",
+							"type":    "oa.query.hide",
+							"payload": "#choose_flow_type:skucuthe:" + search,
+						})
+
+						promptMsg := gin.H{
+							"recipient": gin.H{
+								"user_id": permCtx.ZaloUserID,
+							},
+							"message": gin.H{
+								"text": fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search),
+								"attachment": gin.H{
+									"type": "template",
+									"payload": gin.H{
+										"buttons": buttons,
+									},
+								},
+							},
+						}
+
+						// Send rich message directly to Zalo from backend
+						var activeChannel *models.Channel
+						var allChannels []models.Channel
+						if errChan := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&allChannels).Error; errChan == nil && len(allChannels) > 0 {
+							activeChannel = &allChannels[0]
+						}
+
+						if activeChannel != nil {
+							cfg, _ := config.Load()
+							credBytes, errDec := pkg.Decrypt(activeChannel.CredentialsEncrypted, cfg.EncryptionKey)
+							if errDec == nil {
+								var zaloCreds channels.ZaloOACredentials
+								if errCreds := json.Unmarshal(credBytes, &zaloCreds); errCreds == nil {
+									adapter := channels.NewZaloOAAdapter(zaloCreds)
+									adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+										var ch models.Channel
+										if db.DB.First(&ch, "id = ?", activeChannel.ID).Error == nil {
+											credsMap := map[string]interface{}{
+												"app_id":        zaloCreds.AppID,
+												"app_secret":    zaloCreds.AppSecret,
+												"access_token":  newAccess,
+												"refresh_token": newRefresh,
+												"oa_id":         zaloCreds.OAId,
+											}
+											newCredJSON, _ := json.Marshal(credsMap)
+											encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+											db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
+										}
+									})
+
+									promptMsgJSON, _ := json.Marshal(promptMsg)
+									
+									var matchedGroup models.CRMGroup
+									hasGroup := false
+									if len(permCtx.Groups) > 0 {
+										for _, gp := range permCtx.Groups {
+											if gp.GroupID != "private_bot" {
+												if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
+													hasGroup = true
+													break
+												}
+											}
+										}
+									}
+
+									var sendErr error
+									if hasGroup {
+										sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, string(promptMsgJSON))
+									} else {
+										sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, string(promptMsgJSON))
+									}
+									
+									if sendErr != nil {
+										log.Printf("[inventory_query] failed to send Zalo Rich Message directly: %v", sendErr)
+									} else {
+										log.Printf("[inventory_query] successfully sent Zalo Rich Message directly to %s", permCtx.ZaloUserID)
+									}
+								}
+							}
+						}
+
+						c.JSON(http.StatusOK, gin.H{
+							"status":            "success",
+							"is_inventory_rich":  true,
+							"data":              []map[string]interface{}{},
+							"message":           "zalo_rich_message_sent_directly",
+							"count":             0,
+						})
+						return
+					}
+				} else if len(matchedProducts) == 1 {
+					skuVal := getMapString(matchedProducts[0], "MA", "ma_hang", "ma")
+					if skuVal != "" {
+						search = skuVal
+					}
 				}
 			}
 		}
@@ -1791,6 +1801,15 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					params["MA_HANG"] = search
 				}
 				data, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
+			}
+
+			if err != nil {
+				errMsg := err.Error()
+				if strings.Contains(errMsg, "HTTP 400") && (strings.Contains(errMsg, "Không tìm thấy hàng") || strings.Contains(errMsg, "Không tìm thấy")) {
+					log.Printf("[inventory_query] overriding Cloudify 400 'product not found' error to success empty list for search: %s", search)
+					err = nil
+					data = []map[string]interface{}{}
+				}
 			}
 
 			// Normalize stock keys in response for custom inventory endpoints
