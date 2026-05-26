@@ -1426,6 +1426,22 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						data[i]["TON_KHO"] = stockVal
 						data[i]["stock"] = stockVal
 					}
+					// Inject standard product keys for compatibility
+					sku := getMapString(item, "MA_HANG", "ma_hang", "MA", "ma", "code", "product_code")
+					if sku != "" {
+						data[i]["MA"] = sku
+						data[i]["ma"] = sku
+						data[i]["code"] = sku
+						data[i]["ma_hang"] = sku
+						data[i]["product_code"] = sku
+					}
+					name := getMapString(item, "TEN_HANG", "ten_hang", "TEN", "ten", "name")
+					if name != "" {
+						data[i]["TEN"] = name
+						data[i]["ten"] = name
+						data[i]["name"] = name
+						data[i]["ten_hang"] = name
+					}
 				}
 			}
 		}
@@ -1802,7 +1818,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	if resource == "products" || resource == "inventory" {
 		if resource == "inventory" {
 			for i, p := range data {
-				sku := getMapString(p, "code", "ma_hang", "ma", "product_code")
+				sku := getMapString(p, "code", "ma_hang", "ma", "product_code", "MA_HANG", "MA")
 				group := getProductGroupFromAstra(c.Request.Context(), tenantID, sku)
 				data[i]["list_ten_nhom_vthh"] = group
 			}
