@@ -176,6 +176,10 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 
 	customComponentTweaks := map[string]interface{}{}
 
+	if permissionToken != "" {
+		customComponentTweaks["permission_token"] = permissionToken
+	}
+
 	if zaloUserID != "" {
 		tweaks["zalo_user_id"] = zaloUserID
 		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{

@@ -238,16 +238,18 @@ func ERPQuery(c *gin.Context) {
 
 	if permCtx.AgentType != "private" {
 		if scopeType == "own" {
-			ownPartnerID, err := resolveOwnPartnerID(client, permCtx.CustomerCode, erpURL == "")
-			if err != nil {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":   "forbidden_scope",
-					"message": fmt.Sprintf("Không thể xác thực mã khách hàng trên ERP: %v", err),
-				})
-				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusForbidden, 0, c.ClientIP())
-				return
+			if req.Resource == "orders" || req.Resource == "debt" {
+				ownPartnerID, err := resolveOwnPartnerID(client, permCtx.CustomerCode, erpURL == "")
+				if err != nil {
+					c.JSON(http.StatusForbidden, gin.H{
+						"error":   "forbidden_scope",
+						"message": fmt.Sprintf("Không thể xác thực mã khách hàng trên ERP: %v", err),
+					})
+					writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusForbidden, 0, c.ClientIP())
+					return
+				}
+				partnerFilterID = ownPartnerID
 			}
-			partnerFilterID = ownPartnerID
 		} else if scopeType == "assigned" {
 			var groupIDs []string
 			for _, grp := range permCtx.Groups {
