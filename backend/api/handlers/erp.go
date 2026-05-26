@@ -1277,6 +1277,17 @@ func filterProductsByGroups(products []map[string]interface{}, allowedGroups []s
 				break
 			}
 		}
+		if !matched {
+			// Fallback: check if the product name contains the allowed group name (e.g., "Mũ Bảo Hiểm")
+			nameVal := getMapString(p, "TEN_HANG", "ten_hang", "TEN", "ten", "name")
+			nameLower := strings.ToLower(nameVal)
+			for _, allowed := range allowedGroups {
+				if strings.Contains(nameLower, strings.ToLower(allowed)) {
+					matched = true
+					break
+				}
+			}
+		}
 		if matched {
 			filtered = append(filtered, p)
 		}
@@ -2164,10 +2175,108 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 	}
 }
 
+func getProductBySkuFromAstraDB(ctx context.Context, tenantID, sku string) (map[string]interface{}, error) {
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		return nil, fmt.Errorf("Astra DB is not configured")
+	}
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+	payload := map[string]interface{}{
+		"findOne": map[string]interface{}{
+			"filter": map[string]interface{}{
+				"MA": sku,
+			},
+		},
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("Astra DB HTTP status %d", resp.StatusCode)
+	}
+
+	var astraResp struct {
+		Data struct {
+			Document map[string]interface{} `json:"document"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+		return nil, err
+	}
+
+	if len(astraResp.Errors) > 0 {
+		return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+	}
+
+	return astraResp.Data.Document, nil
+}
+
 func getProductGroupFromAstra(ctx context.Context, tenantID, sku string) string {
 	if sku == "" {
 		return ""
 	}
+
+	// Try exact match first
+	doc, err := getProductBySkuFromAstraDB(ctx, tenantID, sku)
+	if err == nil && doc != nil {
+		return getMapString(doc, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+	}
+
+	// Fallback to searching
 	products, err := searchProductsFromAstraDB(ctx, tenantID, sku, 5)
 	if err != nil || len(products) == 0 {
 		return ""
