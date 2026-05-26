@@ -1,7 +1,11 @@
 package handlers
 
 import (
+	"bytes"
+	"io"
+	"log"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
@@ -20,6 +24,20 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 	}
 
 	return func(c *gin.Context) {
+		// Log raw body for debugging group chats
+		bodyBytes, err := io.ReadAll(c.Request.Body)
+		if err == nil {
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			
+			// Append to webhook_debug.log in the workspace root
+			f, fileErr := os.OpenFile("/Users/kariendoan/Downloads/cqa-bbi/webhook_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if fileErr == nil {
+				_, _ = f.WriteString(string(bodyBytes) + "\n---\n")
+				f.Close()
+			}
+			log.Printf("[debug-webhook] raw payload: %s", string(bodyBytes))
+		}
+
 		var payload workers.ZaloWebhookPayload
 		if err := c.ShouldBindJSON(&payload); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
