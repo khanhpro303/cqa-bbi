@@ -140,7 +140,7 @@ func ERPQuery(c *gin.Context) {
 		if json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms) == nil {
 			matchedSystemResource := ""
 			var matchedPerms EndpointConfig
-			
+
 			// Find system resource key matching req.Resource by looking at custom paths
 			for sysRes, config := range globalPerms {
 				path := config.Path
@@ -153,7 +153,7 @@ func ERPQuery(c *gin.Context) {
 					break
 				}
 			}
-			
+
 			// If not matched dynamically, check if it matches the default resource keys
 			if matchedSystemResource == "" {
 				for sysRes, config := range globalPerms {
@@ -225,6 +225,30 @@ func ERPQuery(c *gin.Context) {
 
 	// ── 6. Products are served from local cache only ──────────────────────
 	if req.Resource == "products" {
+		if strings.TrimSpace(req.Search) != "" {
+			parentMatches, err := searchProductParentMatchesFromAstraDB(c.Request.Context(), tenantID, req.Search, productGroups)
+			if err != nil {
+				log.Printf("[erp_query] product parent match search error: %v", err)
+			} else if len(parentMatches) > 1 {
+				sent := sendProductRichMessage(c, tenantID, req.Search, productParentMatchCounts(parentMatches), permCtx)
+				if sent {
+					c.JSON(http.StatusOK, gin.H{
+						"status":          "success",
+						"is_product_rich": true,
+						"data": []map[string]interface{}{
+							{
+								"message": fmt.Sprintf("Đã gửi danh sách lựa chọn dòng sản phẩm cho từ khóa '%s' trực tiếp qua Zalo cho người dùng. Hãy hướng dẫn người dùng chọn dòng sản phẩm trên Zalo.", req.Search),
+							},
+						},
+						"message": "zalo_rich_message_sent_directly",
+						"count":   1,
+					})
+					return
+				}
+				log.Printf("[erp_query] product rich message fallback to JSON for search=%q parent_matches=%d", req.Search, len(parentMatches))
+			}
+		}
+
 		cachedData, err := searchProductsFromAstraDB(c.Request.Context(), tenantID, req.Search, req.Limit)
 		if err != nil {
 			log.Printf("[erp_query] product cache search error: %v", err)
@@ -243,38 +267,6 @@ func ERPQuery(c *gin.Context) {
 		filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
 			return getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
 		})
-
-		// Group by parent code check
-		if req.Search != "" && len(filteredCached) > 0 {
-			maChaCounts := make(map[string]int)
-			for _, p := range filteredCached {
-				maChaVal := getMapString(p, "MA_CHA", "ma_cha")
-				maVal := getMapString(p, "MA", "ma_hang", "ma")
-				if maChaVal != "" {
-					maChaCounts[maChaVal]++
-				} else if maVal != "" {
-					maChaCounts[maVal]++
-				}
-			}
-
-			if len(maChaCounts) > 1 {
-				sent := sendProductRichMessage(c, tenantID, req.Search, maChaCounts, permCtx)
-				if sent {
-					c.JSON(http.StatusOK, gin.H{
-						"status":          "success",
-						"is_product_rich":  true,
-						"data":            []map[string]interface{}{
-							{
-								"message": fmt.Sprintf("Đã gửi danh sách lựa chọn dòng sản phẩm cho từ khóa '%s' trực tiếp qua Zalo cho người dùng. Hãy hướng dẫn người dùng chọn dòng sản phẩm trên Zalo.", req.Search),
-							},
-						},
-						"message":         "zalo_rich_message_sent_directly",
-						"count":           1,
-					})
-					return
-				}
-			}
-		}
 
 		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(filteredCached), c.ClientIP())
 		c.JSON(http.StatusOK, gin.H{
@@ -620,6 +612,87 @@ func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, lim
 	}
 
 	return results, nil
+}
+
+type productParentMatch struct {
+	code  string
+	count int
+}
+
+func searchProductParentMatchesFromAstraDB(ctx context.Context, tenantID, search string, allowedGroups []string) ([]productParentMatch, error) {
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return nil, nil
+	}
+
+	var products []models.CachedProduct
+	likePattern := "%" + search + "%"
+	err := db.DB.WithContext(ctx).
+		Select("ma", "ten_dong_bo_web", "ten", "nhan_hieu_name", "list_ten_nhom_vthh", "ma_cha").
+		Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
+		Find(&products).Error
+	if err != nil {
+		return nil, fmt.Errorf("local MySQL cache parent match query failed: %w", err)
+	}
+
+	candidates := make([]map[string]interface{}, 0, len(products))
+	for _, p := range products {
+		candidates = append(candidates, map[string]interface{}{
+			"MA":                 p.MA,
+			"ma":                 p.MA,
+			"code":               p.MA,
+			"ma_hang":            p.MA,
+			"TEN_DONG_BO_WEB":    p.TEN_DONG_BO_WEB,
+			"TEN":                p.TEN,
+			"ten":                p.TEN,
+			"ten_hang":           p.TEN,
+			"NHAN_HIEU_NAME":     p.NHAN_HIEU_NAME,
+			"LIST_TEN_NHOM_VTHH": p.LIST_TEN_NHOM_VTHH,
+			"MA_CHA":             p.MA_CHA,
+			"ma_cha":             p.MA_CHA,
+		})
+	}
+
+	return rankProductParentMatches(candidates, allowedGroups), nil
+}
+
+func rankProductParentMatches(products []map[string]interface{}, allowedGroups []string) []productParentMatch {
+	filteredProducts := filterProductsByGroups(products, allowedGroups)
+	counts := make(map[string]int)
+
+	for _, product := range filteredProducts {
+		parentCode := strings.TrimSpace(getMapString(product, "MA_CHA", "ma_cha"))
+		if parentCode == "" {
+			parentCode = strings.TrimSpace(getMapString(product, "MA", "ma_hang", "ma", "code"))
+		}
+		if parentCode != "" {
+			counts[parentCode]++
+		}
+	}
+
+	matches := make([]productParentMatch, 0, len(counts))
+	for code, count := range counts {
+		matches = append(matches, productParentMatch{code: code, count: count})
+	}
+	sortProductParentMatches(matches)
+	return matches
+}
+
+func productParentMatchCounts(matches []productParentMatch) map[string]int {
+	counts := make(map[string]int, len(matches))
+	for _, match := range matches {
+		counts[match.code] = match.count
+	}
+	return counts
+}
+
+func sortProductParentMatches(matches []productParentMatch) {
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].count == matches[j].count {
+			return matches[i].code < matches[j].code
+		}
+		return matches[i].count > matches[j].count
+	})
 }
 
 // searchProductsFromAstraDBWithFilter — queries the cached product collection in the local MySQL database with a parent code filter.
@@ -1475,7 +1548,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					if childSKU == "" {
 						continue
 					}
-					
+
 					var skuInventory []map[string]interface{}
 					var errQuery error
 					if usePostMethod {
@@ -1503,13 +1576,13 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						log.Printf("[inventory_query_filtered] error querying stock for SKU %s: %v", childSKU, errQuery)
 						continue
 					}
-					
+
 					var skuStock float64
 					for _, invItem := range skuInventory {
 						stockVal := getMapFloat(invItem, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
 						skuStock += stockVal
 					}
-					
+
 					record := map[string]interface{}{
 						"MA":                 childSKU,
 						"ma":                 childSKU,
@@ -1621,7 +1694,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 									})
 
 									promptMsgJSON, _ := json.Marshal(promptMsg)
-									
+
 									var matchedGroup models.CRMGroup
 									hasGroup := false
 									if len(permCtx.Groups) > 0 {
@@ -1641,7 +1714,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 									} else {
 										sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, string(promptMsgJSON))
 									}
-									
+
 									if sendErr != nil {
 										log.Printf("[inventory_query] failed to send Zalo Rich Message directly: %v", sendErr)
 									} else {
@@ -1677,7 +1750,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				err = fmt.Errorf("failed to fetch variants from cache: %w", errVal)
 			} else if len(childProducts) > 0 {
 				childProducts = filterProductsByGroups(childProducts, productGroups)
-				
+
 				// Sum stocks for each child variant
 				var variantData []map[string]interface{}
 				for _, child := range childProducts {
@@ -1685,7 +1758,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					if childSKU == "" {
 						continue
 					}
-					
+
 					var skuInventory []map[string]interface{}
 					var errQuery error
 					if usePostMethod {
@@ -1713,13 +1786,13 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						log.Printf("[inventory_query] error querying stock for SKU %s: %v", childSKU, errQuery)
 						continue
 					}
-					
+
 					var skuStock float64
 					for _, invItem := range skuInventory {
 						stockVal := getMapFloat(invItem, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
 						skuStock += stockVal
 					}
-					
+
 					record := map[string]interface{}{
 						"MA":                 childSKU,
 						"ma":                 childSKU,
@@ -3028,17 +3101,11 @@ func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, 
 }
 
 func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts map[string]int, permCtx *engine.GroupPermissionContext) bool {
-	type maChaCount struct {
-		code  string
-		count int
-	}
-	var sortedMaChas []maChaCount
+	var sortedMaChas []productParentMatch
 	for k, v := range maChaCounts {
-		sortedMaChas = append(sortedMaChas, maChaCount{code: k, count: v})
+		sortedMaChas = append(sortedMaChas, productParentMatch{code: k, count: v})
 	}
-	sort.Slice(sortedMaChas, func(i, j int) bool {
-		return sortedMaChas[i].count > sortedMaChas[j].count
-	})
+	sortProductParentMatches(sortedMaChas)
 
 	var buttons []gin.H
 	for i, mc := range sortedMaChas {
@@ -3058,18 +3125,25 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 		activeChannel = &allChannels[0]
 	}
 
-	if activeChannel == nil || permCtx.ZaloUserID == "" {
+	if activeChannel == nil {
+		log.Printf("[erp_query] cannot send Zalo Rich Message for products: no active zalo_oa channel")
+		return false
+	}
+	if permCtx.ZaloUserID == "" {
+		log.Printf("[erp_query] cannot send Zalo Rich Message for products: missing zalo user id")
 		return false
 	}
 
 	cfg, _ := config.Load()
 	credBytes, errDec := pkg.Decrypt(activeChannel.CredentialsEncrypted, cfg.EncryptionKey)
 	if errDec != nil {
+		log.Printf("[erp_query] cannot send Zalo Rich Message for products: decrypt credentials failed: %v", errDec)
 		return false
 	}
 
 	var zaloCreds channels.ZaloOACredentials
 	if errCreds := json.Unmarshal(credBytes, &zaloCreds); errCreds != nil {
+		log.Printf("[erp_query] cannot send Zalo Rich Message for products: invalid credentials json: %v", errCreds)
 		return false
 	}
 

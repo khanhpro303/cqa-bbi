@@ -110,6 +110,85 @@ func TestEnrichProductsWithPriceRangesUsesVariantsByMaCha(t *testing.T) {
 	}
 }
 
+func TestRankProductParentMatchesSortsByVariantCountAndFiltersByGroup(t *testing.T) {
+	products := []map[string]interface{}{}
+	products = appendProductParentMatchVariants(products, "SP000", 6, "Sample")
+	products = appendProductParentMatchVariants(products, "SP200", 5, "Nguyên Đầu")
+	products = appendProductParentMatchVariants(products, "SP300", 5, "Nguyên Đầu")
+	products = appendProductParentMatchVariants(products, "SP100", 3, "Nguyên Đầu")
+	products = appendProductParentMatchVariants(products, "SP400", 2, "Nguyên Đầu")
+
+	matches := rankProductParentMatches(products, []string{"Nguyên Đầu"})
+
+	wantCodes := []string{"SP200", "SP300", "SP100"}
+	if len(matches) < len(wantCodes) {
+		t.Fatalf("expected at least %d matches, got %d: %#v", len(wantCodes), len(matches), matches)
+	}
+	for i, want := range wantCodes {
+		if matches[i].code != want {
+			t.Fatalf("match[%d].code = %q; want %q; matches=%#v", i, matches[i].code, want, matches)
+		}
+	}
+	for _, match := range matches {
+		if match.code == "SP000" {
+			t.Fatalf("sample product group should be filtered out: %#v", matches)
+		}
+	}
+
+	counts := productParentMatchCounts(matches[:3])
+	if counts["SP200"] != 5 || counts["SP300"] != 5 || counts["SP100"] != 3 {
+		t.Fatalf("unexpected top match counts: %#v", counts)
+	}
+}
+
+func TestRankProductParentMatchesFallsBackToMAWhenMaChaMissing(t *testing.T) {
+	products := []map[string]interface{}{
+		{"MA": "SKU-ONLY", "MA_CHA": "", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
+		{"MA": "SKU-ONLY", "MA_CHA": "", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
+	}
+
+	matches := rankProductParentMatches(products, []string{"Nguyên Đầu"})
+
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 fallback match, got %d: %#v", len(matches), matches)
+	}
+	if matches[0].code != "SKU-ONLY" || matches[0].count != 2 {
+		t.Fatalf("unexpected fallback match: %#v", matches[0])
+	}
+}
+
+func TestRankProductParentMatchesUsesFullCandidatesBeyondResponseLimit(t *testing.T) {
+	fullCandidates := []map[string]interface{}{}
+	fullCandidates = appendProductParentMatchVariants(fullCandidates, "SP100", 3, "Nguyên Đầu")
+	fullCandidates = appendProductParentMatchVariants(fullCandidates, "SP200", 2, "Nguyên Đầu")
+	limitedResponse := fullCandidates[:1]
+
+	limitedMatches := rankProductParentMatches(limitedResponse, []string{"Nguyên Đầu"})
+	fullMatches := rankProductParentMatches(fullCandidates, []string{"Nguyên Đầu"})
+
+	if len(limitedMatches) != 1 {
+		t.Fatalf("expected limited response to see only 1 parent, got %d: %#v", len(limitedMatches), limitedMatches)
+	}
+	if len(fullMatches) != 2 {
+		t.Fatalf("expected full candidates to see multiple parents, got %d: %#v", len(fullMatches), fullMatches)
+	}
+	if fullMatches[0].code != "SP100" || fullMatches[0].count != 3 {
+		t.Fatalf("unexpected top full match: %#v", fullMatches[0])
+	}
+}
+
+func appendProductParentMatchVariants(products []map[string]interface{}, maCha string, count int, group string) []map[string]interface{} {
+	for i := 0; i < count; i++ {
+		products = append(products, map[string]interface{}{
+			"MA":                 maCha + "-SKU",
+			"MA_CHA":             maCha,
+			"TEN":                "Product " + maCha,
+			"LIST_TEN_NHOM_VTHH": group,
+		})
+	}
+	return products
+}
+
 func TestFilterProductsByGroupsUsesProductGroupBeforeBrand(t *testing.T) {
 	products := []map[string]interface{}{
 		{
