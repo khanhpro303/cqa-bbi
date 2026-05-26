@@ -39,6 +39,14 @@ func Connect(dsn string, isProduction bool) error {
 }
 
 func AutoMigrate() error {
+	// Drop old crm_group_employees table if it still has the deprecated 'user_id' column
+	if DB.Migrator().HasTable("crm_group_employees") && DB.Migrator().HasColumn("crm_group_employees", "user_id") {
+		log.Println("[db] dropping deprecated table crm_group_employees to rebuild with zalo_whitelist_id")
+		if err := DB.Migrator().DropTable("crm_group_employees"); err != nil {
+			log.Printf("[db] failed to drop table crm_group_employees: %v", err)
+		}
+	}
+
 	err := DB.AutoMigrate(
 		&models.User{},
 		&models.Tenant{},
