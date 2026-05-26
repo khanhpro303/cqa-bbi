@@ -11,15 +11,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"sort"
+	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
-	"github.com/vietbui/chat-quality-agent/ai"
 )
 
 const (
@@ -633,6 +635,216 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		permCtx := engine.ResolvePermissionsWithGroup(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType, matchedGroup.ID)
 
 		// Intercept Zalo OA interactive button clicks
+		// A. Choose Flow Type: dongsp or skucuthe
+		if strings.HasPrefix(userText, "#choose_flow_type:dongsp:") {
+			keyword := strings.TrimPrefix(userText, "#choose_flow_type:dongsp:")
+			matchedProducts, errSearch := searchProductsByWebNameAstraDBNonVectorized(ctx, matchedChannel.TenantID, keyword)
+			if errSearch != nil || len(matchedProducts) == 0 {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy dòng sản phẩm nào khớp với từ khóa '%s'.", keyword))
+				return nil
+			}
+
+			// Group the matched products by MA_CHA
+			maChaCounts := make(map[string]int)
+			for _, p := range matchedProducts {
+				maChaVal := getMapString(p, "MA_CHA", "ma_cha")
+				maVal := getMapString(p, "MA", "ma_hang", "ma")
+				if maChaVal != "" {
+					maChaCounts[maChaVal]++
+				} else if maVal != "" {
+					maChaCounts[maVal]++
+				}
+			}
+
+			type maChaCount struct {
+				code  string
+				count int
+			}
+			var sortedMaChas []maChaCount
+			for k, v := range maChaCounts {
+				sortedMaChas = append(sortedMaChas, maChaCount{code: k, count: v})
+			}
+			sort.Slice(sortedMaChas, func(i, j int) bool {
+				return sortedMaChas[i].count > sortedMaChas[j].count
+			})
+
+			var buttons []gin.H
+			for i, mc := range sortedMaChas {
+				if i >= 3 {
+					break
+				}
+				buttons = append(buttons, gin.H{
+					"title":   fmt.Sprintf("Dòng %s", mc.code),
+					"type":    "oa.query.hide",
+					"payload": "#show_macha_options:" + mc.code,
+				})
+			}
+
+			promptMsg := gin.H{
+				"recipient": gin.H{
+					"user_id": payload.Sender.ID,
+				},
+				"message": gin.H{
+					"text": fmt.Sprintf("Tôi tìm thấy các dòng sản phẩm khớp với '%s'. Bạn muốn kiểm tra tồn kho dòng nào?", keyword),
+					"attachment": gin.H{
+						"type": "template",
+						"payload": gin.H{
+							"buttons": buttons,
+						},
+					},
+				},
+			}
+			promptMsgJSON, _ := json.Marshal(promptMsg)
+
+			var sendErr error
+			if matchedGroup.ZaloGroupID != "" {
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, string(promptMsgJSON))
+			} else {
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, string(promptMsgJSON))
+			}
+			_ = sendErr
+			return nil
+		}
+
+		if strings.HasPrefix(userText, "#choose_flow_type:skucuthe:") {
+			keyword := strings.TrimPrefix(userText, "#choose_flow_type:skucuthe:")
+			reply := fmt.Sprintf("Bạn muốn xem tồn kho cụ thể của màu và size nào cho dòng sản phẩm %s?\nVui lòng nhập thông tin (Ví dụ: %s màu đỏ size L).", keyword, keyword)
+			var sendErr error
+			if matchedGroup.ZaloGroupID != "" {
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+			} else {
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			}
+			_ = sendErr
+			return nil
+		}
+
+		// 1. Parent Code Options Selection (#show_macha_options:<MA_CHA>)
+		if strings.HasPrefix(userText, "#show_macha_options:") {
+			maCha := strings.TrimPrefix(userText, "#show_macha_options:")
+			// Fetch variants
+			childProducts, err := getProductsByMaChaFromAstraDB(ctx, matchedChannel.TenantID, maCha)
+			if err != nil || len(childProducts) == 0 {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Không tìm thấy thông tin chi tiết của dòng sản phẩm.")
+				return nil
+			}
+
+			// Extract unique web sync names
+			webNamesMap := make(map[string]bool)
+			var webNames []string
+			for _, p := range childProducts {
+				wName := getMapString(p, "TEN_DONG_BO_WEB", "ten_dong_bo_web")
+				if wName != "" && !webNamesMap[wName] {
+					webNamesMap[wName] = true
+					webNames = append(webNames, wName)
+				}
+			}
+
+			if len(webNames) == 0 {
+				// No web names found, perform direct realtime inventory lookup for this MA_CHA
+				stock, details, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, maCha, "")
+				if err != nil {
+					_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi truy vấn tồn kho dòng sản phẩm.")
+					return nil
+				}
+				reply := fmt.Sprintf("Tổng tồn kho dòng %s: %.1f\n\nChi tiết:\n%s", maCha, stock, strings.Join(details, "\n"))
+				if matchedGroup.ZaloGroupID != "" {
+					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+				} else {
+					_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+				}
+				return nil
+			}
+
+			// Limit to top 3 web name options
+			if len(webNames) > 3 {
+				webNames = webNames[:3]
+			}
+
+			if len(webNames) == 1 {
+				// Only 1 option, run stock lookup immediately
+				stock, details, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, maCha, webNames[0])
+				if err != nil {
+					_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi truy vấn tồn kho sản phẩm.")
+					return nil
+				}
+				reply := fmt.Sprintf("Tổng tồn kho của %s: %.1f\n\nChi tiết:\n%s", webNames[0], stock, strings.Join(details, "\n"))
+				if matchedGroup.ZaloGroupID != "" {
+					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+				} else {
+					_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+				}
+				return nil
+			}
+
+			// Construct Zalo rich message with buttons (oa.query.hide)
+			var buttons []gin.H
+			for _, wName := range webNames {
+				btnPayload := map[string]string{
+					"MA_CHA":   maCha,
+					"WEB_NAME": wName,
+				}
+				btnPayloadJSON, _ := json.Marshal(btnPayload)
+				buttons = append(buttons, gin.H{
+					"title":   wName,
+					"type":    "oa.query.hide",
+					"payload": "#check_stock_webname:" + string(btnPayloadJSON),
+				})
+			}
+
+			promptMsg := gin.H{
+				"recipient": gin.H{
+					"user_id": payload.Sender.ID,
+				},
+				"message": gin.H{
+					"text": fmt.Sprintf("Dòng sản phẩm '%s' có các tùy chọn đồng bộ sau. Vui lòng chọn một tùy chọn để kiểm tra tồn kho:", maCha),
+					"attachment": gin.H{
+						"type": "template",
+						"payload": gin.H{
+							"buttons": buttons,
+						},
+					},
+				},
+			}
+			promptMsgJSON, _ := json.Marshal(promptMsg)
+
+			var sendErr error
+			if matchedGroup.ZaloGroupID != "" {
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, string(promptMsgJSON))
+			} else {
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, string(promptMsgJSON))
+			}
+			_ = sendErr
+			return nil
+		}
+
+		// 2. Web Synchronized Name Selection (#check_stock_webname:<JSON>)
+		if strings.HasPrefix(userText, "#check_stock_webname:") {
+			payloadStr := strings.TrimPrefix(userText, "#check_stock_webname:")
+			var parsed struct {
+				MaCha   string `json:"MA_CHA"`
+				WebName string `json:"WEB_NAME"`
+			}
+			if err := json.Unmarshal([]byte(payloadStr), &parsed); err != nil {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Dữ liệu yêu cầu không hợp lệ.")
+				return nil
+			}
+
+			stock, details, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, parsed.MaCha, parsed.WebName)
+			if err != nil {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi tính toán tồn kho sản phẩm.")
+				return nil
+			}
+
+			reply := fmt.Sprintf("Tổng tồn kho thực tế của '%s' (Mã cha: %s) là: %.1f\n\nChi tiết:\n%s", parsed.WebName, parsed.MaCha, stock, strings.Join(details, "\n"))
+			if matchedGroup.ZaloGroupID != "" {
+				_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+			} else {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			}
+			return nil
+		}
+
 		// A. "Xem theo màu" button click
 		if strings.HasPrefix(userText, "#xem_mau_size:") {
 			parts := strings.Split(strings.TrimPrefix(userText, "#xem_mau_size:"), ":")
@@ -685,6 +897,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			_ = sendErr
 			return nil
 		}
+
 
 		permissionToken, err := engine.SignPermissionToken(permCtx, cfg.EncryptionKey)
 		if err != nil {
@@ -1177,5 +1390,402 @@ func parseAttachmentText(atts []ZaloWebhookAttachment) string {
 		}
 	}
 	return sb.String()
+}
+
+// extractInventoryQueryKeyword uses LLM to identify if the message is asking for stock, and extracts the keyword.
+func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string) (bool, string, error) {
+	provider := "claude"
+	var providerSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_provider'", tenantID).First(&providerSetting).Error; err == nil && providerSetting.ValuePlain != "" {
+		provider = providerSetting.ValuePlain
+	}
+
+	var setting models.AppSetting
+	keyFound := false
+	for _, key := range ai.ProviderAPIKeySettingKeys(provider) {
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&setting).Error; err == nil {
+			keyFound = true
+			break
+		}
+	}
+
+	cfg, _ := config.Load()
+	apiKey := ""
+	if keyFound {
+		if setting.ValueEncrypted != nil && len(setting.ValueEncrypted) > 0 {
+			decrypted, err := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
+			if err != nil {
+				return false, "", fmt.Errorf("failed to decrypt API key: %w", err)
+			}
+			apiKey = string(decrypted)
+		} else {
+			apiKey = setting.ValuePlain
+		}
+	}
+
+	if apiKey == "" {
+		if provider == "openai" {
+			apiKey = cfg.LangflowAPIKey
+		}
+	}
+
+	if apiKey == "" {
+		return false, "", nil
+	}
+
+	model := "claude-haiku-4-5"
+	if provider == "gemini" {
+		model = "gemini-2.0-flash"
+	} else if provider == "openai" {
+		model = "gpt-5-mini"
+	}
+	var modelSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_model'", tenantID).First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
+		model = modelSetting.ValuePlain
+	}
+
+	var baseURL string
+	var baseURLSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_base_url'", tenantID).First(&baseURLSetting).Error; err == nil {
+		baseURL = baseURLSetting.ValuePlain
+	}
+
+	var aiClient ai.AIProvider
+	switch provider {
+	case "claude":
+		aiClient = ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL)
+	case "gemini":
+		aiClient = ai.NewGeminiProvider(apiKey, model, baseURL)
+	case "openai":
+		aiClient = ai.NewOpenAIProvider(apiKey, model, baseURL)
+	default:
+		return false, "", fmt.Errorf("unsupported AI provider: %s", provider)
+	}
+
+	systemPrompt := `Bạn là trợ lý trích xuất từ khóa sản phẩm thông minh của doanh nghiệp BBI.
+Nhiệm vụ của bạn là phân tích tin nhắn của khách hàng và thực hiện:
+1. Xác định xem khách hàng có đang hỏi về tồn kho, còn hàng, hết hàng của một dòng sản phẩm nào đó hay không.
+2. Trích xuất từ khóa sản phẩm chính xác (ví dụ: "FF800", "FF600", "áo thun trơn",...). Chỉ trích xuất từ khóa ngắn gọn, đại diện cho mã/tên sản phẩm được nhắc đến trong câu hỏi tồn kho.
+
+Định dạng trả về duy nhất là một đối tượng JSON:
+{
+  "is_inventory_query": true | false,
+  "keyword": "từ khóa sản phẩm hoặc rỗng"
+}
+CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`
+
+	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	resp, err := aiClient.AnalyzeChat(testCtx, systemPrompt, message)
+	if err != nil {
+		return false, "", err
+	}
+
+	content := strings.TrimSpace(resp.Content)
+	if strings.HasPrefix(content, "```") {
+		if idx := strings.Index(content, "\n"); idx != -1 {
+			content = content[idx+1:]
+		}
+		if idx := strings.LastIndex(content, "```"); idx != -1 {
+			content = content[:idx]
+		}
+		content = strings.TrimSpace(content)
+	}
+
+	var parsed struct {
+		IsInventoryQuery bool   `json:"is_inventory_query"`
+		Keyword          string `json:"keyword"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return false, "", nil
+	}
+
+	return parsed.IsInventoryQuery, parsed.Keyword, nil
+}
+
+// searchProductsByWebNameAstraDBNonVectorized finds products in Astra DB with filter on TEN_DONG_BO_WEB column
+func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		return nil, fmt.Errorf("Astra DB is not configured")
+	}
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+	payload := map[string]interface{}{
+		"find": map[string]interface{}{
+			"filter": map[string]interface{}{
+				"TEN_DONG_BO_WEB": map[string]interface{}{
+					"$regex": "(?i)" + keyword,
+				},
+			},
+			"options": map[string]interface{}{
+				"limit": 100,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("Astra DB returned status code %d", resp.StatusCode)
+	}
+
+	var astraResp struct {
+		Data struct {
+			Documents []map[string]interface{} `json:"documents"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+		return nil, err
+	}
+
+	if len(astraResp.Errors) > 0 {
+		return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+	}
+
+	return astraResp.Data.Documents, nil
+}
+
+// sumInventoryByMaChaAndWebName aggregates realtime inventory by MA_CHA and optionally WEB_NAME
+func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string, webName string) (float64, []string, error) {
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		return 0, nil, fmt.Errorf("Astra DB is not configured")
+	}
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+	
+	filter := map[string]interface{}{
+		"MA_CHA": strings.ToUpper(maCha),
+	}
+	if webName != "" {
+		filter["TEN_DONG_BO_WEB"] = webName
+	}
+	
+	payload := map[string]interface{}{
+		"find": map[string]interface{}{
+			"filter": filter,
+			"options": map[string]interface{}{
+				"limit": 100,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return 0, nil, fmt.Errorf("Astra DB returned status code %d", resp.StatusCode)
+	}
+
+	var astraResp struct {
+		Data struct {
+			Documents []map[string]interface{} `json:"documents"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+		return 0, nil, err
+	}
+
+	if len(astraResp.Errors) > 0 {
+		return 0, nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+	}
+
+	childProducts := astraResp.Data.Documents
+
+	// 2. Fetch allowed product groups for "inventory" resource
+	_, _, allowedProductGroups := permCtx.IsResourceAllowed("inventory")
+
+	childCodes := make(map[string]bool)
+	skuToName := make(map[string]string)
+	for _, p := range childProducts {
+		sku := getMapString(p, "MA", "code", "ma")
+		group := getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+		name := getMapString(p, "TEN", "ten_hang", "ten")
+
+		isAllowed := len(allowedProductGroups) == 0
+		if !isAllowed {
+			gLower := strings.ToLower(group)
+			for _, allowed := range allowedProductGroups {
+				if strings.Contains(gLower, strings.ToLower(allowed)) {
+					isAllowed = true
+					break
+				}
+			}
+		}
+
+		if isAllowed && sku != "" {
+			skuLower := strings.ToLower(sku)
+			childCodes[skuLower] = true
+			if name != "" {
+				skuToName[skuLower] = name
+			} else {
+				skuToName[skuLower] = sku
+			}
+		}
+	}
+
+	if len(childCodes) == 0 && len(childProducts) > 0 {
+		return 0, nil, nil
+	}
+
+	// 3. Load ERP credentials
+	erpURL, erpDB, erpLogin, erpPassword, err := loadCloudifyCredentials(tenantID, cfg)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	if erpURL == "" {
+		return 45.0, []string{"[Mock Variant] FF800-Mock: 45.0"}, nil
+	}
+
+	client := &pkg.CloudifyClient{
+		BaseURL:  erpURL,
+		DB:       erpDB,
+		Login:    erpLogin,
+		Password: erpPassword,
+	}
+
+	// 4. Search live inventory on ERP using the maCha code as keyword
+	inventoryList, err := client.SearchInventory(maCha, 100)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	// 5. Sum stock of matching items
+	var totalStock float64
+	var details []string
+	for _, item := range inventoryList {
+		code := getMapString(item, "code", "ma_hang", "ma", "product_code")
+		codeLower := strings.ToLower(code)
+
+		isMatch := false
+		if len(childCodes) > 0 {
+			isMatch = childCodes[codeLower]
+		} else {
+			isMatch = strings.HasPrefix(codeLower, strings.ToLower(maCha))
+		}
+
+		if isMatch {
+			stock := getMapFloat(item, "stock", "ton", "ton_kho")
+			totalStock += stock
+			
+			displayName := skuToName[codeLower]
+			if displayName == "" {
+				displayName = code
+			}
+			details = append(details, fmt.Sprintf("- %s: %.1f", displayName, stock))
+		}
+	}
+
+	return totalStock, details, nil
 }
 

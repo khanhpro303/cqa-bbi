@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
+	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -76,6 +77,7 @@ func ERPQuery(c *gin.Context) {
 		PartnerID       string `json:"partner_id" form:"partner_id"`    // filter orders/debt by customer Cloudify ID
 		ZaloUserID      string `json:"zalo_user_id" form:"zalo_user_id"` // reserved for user-level scoping
 		PermissionToken string `json:"permission_token" form:"permission_token"`
+		ParentCode      string `json:"parent_code" form:"parent_code"`
 	}
 
 	if c.Request.Method == "POST" {
@@ -315,7 +317,7 @@ func ERPQuery(c *gin.Context) {
 	}
 
 	// ── 10. Execute live Cloudify call with filters ───────────────────────
-	respondWithLiveDataV2(c, client, req.Resource, req.Search, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx)
+	respondWithLiveDataV2(c, client, req.Resource, req.Search, req.ParentCode, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx)
 }
 
 // ---------------------------------------------------------------------------
@@ -625,6 +627,175 @@ func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, lim
 		// No search string, do plain find query
 		payload := map[string]interface{}{
 			"find": map[string]interface{}{
+				"options": map[string]interface{}{
+					"limit": limit,
+				},
+			},
+		}
+		documents, err = executeAstraQuery(payload)
+		if err != nil {
+			return nil, fmt.Errorf("plain query failed: %w", err)
+		}
+	}
+
+	// 3. Map returned documents to compatibility output format
+	mappedResults := make([]map[string]interface{}, 0, len(documents))
+	for _, doc := range documents {
+		mappedResults = append(mappedResults, mapCachedProductToAPIResponse(doc))
+	}
+
+	return mappedResults, nil
+}
+
+// searchProductsFromAstraDBWithFilter — queries the cached product collection in Astra DB.
+// Performs vector search ($vectorize) combined with a regex filter on MA_CHA (parent code).
+// Fallback to text search if vector query fails.
+func searchProductsFromAstraDBWithFilter(ctx context.Context, tenantID, search, parentCode string, limit int) ([]map[string]interface{}, error) {
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+
+	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+
+	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		return nil, nil
+	}
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+
+	executeAstraQuery := func(payload interface{}) ([]map[string]interface{}, error) {
+		bodyBytes, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal payload: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Token", token)
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("execute HTTP post: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			return nil, fmt.Errorf("HTTP status %d", resp.StatusCode)
+		}
+
+		var astraResp struct {
+			Data struct {
+				Documents []map[string]interface{} `json:"documents"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+
+		if len(astraResp.Errors) > 0 {
+			return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+		}
+
+		return astraResp.Data.Documents, nil
+	}
+
+	var documents []map[string]interface{}
+	var err error
+
+	parentRegex := "(?i)" + parentCode
+
+	// A. Try Vector Search first if search query is provided
+	if search != "" {
+		payload := map[string]interface{}{
+			"find": map[string]interface{}{
+				"sort": map[string]interface{}{
+					"$vectorize": search,
+				},
+				"filter": map[string]interface{}{
+					"MA_CHA": map[string]interface{}{
+						"$regex": parentRegex,
+					},
+				},
+				"options": map[string]interface{}{
+					"limit": limit,
+				},
+			},
+		}
+		documents, err = executeAstraQuery(payload)
+		if err != nil {
+			log.Printf("[erp_search_filtered] Astra DB vector search failed for query '%s' with filter MA_CHA '%s': %v. Trying text fallback...", search, parentCode, err)
+			// B. Fallback to regex text search combined with parent filter
+			regexPattern := "(?i)" + search
+			payloadFallback := map[string]interface{}{
+				"find": map[string]interface{}{
+					"filter": map[string]interface{}{
+						"$and": []map[string]interface{}{
+							{"MA_CHA": map[string]interface{}{"$regex": parentRegex}},
+							{"$or": []map[string]interface{}{
+								{"TEN": map[string]interface{}{"$regex": regexPattern}},
+								{"MA": map[string]interface{}{"$regex": regexPattern}},
+								{"TEN_DONG_BO_WEB": map[string]interface{}{"$regex": regexPattern}},
+								{"LIST_TEN_NHOM_VTHH": map[string]interface{}{"$regex": regexPattern}},
+							}},
+						},
+					},
+					"options": map[string]interface{}{
+						"limit": limit,
+					},
+				},
+			}
+			documents, err = executeAstraQuery(payloadFallback)
+			if err != nil {
+				return nil, fmt.Errorf("text fallback search failed: %w", err)
+			}
+		}
+	} else {
+		// No search string, do plain find query with parent filter
+		payload := map[string]interface{}{
+			"find": map[string]interface{}{
+				"filter": map[string]interface{}{
+					"MA_CHA": map[string]interface{}{
+						"$regex": parentRegex,
+					},
+				},
 				"options": map[string]interface{}{
 					"limit": limit,
 				},
@@ -1295,7 +1466,7 @@ func filterProductsByGroups(products []map[string]interface{}, allowedGroups []s
 	return filtered
 }
 
-func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource, search, partnerID string, limit int, productGroups []string, scopeType string, tenantID string, permCtx *engine.GroupPermissionContext) {
+func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource, search, parentCode, partnerID string, limit int, productGroups []string, scopeType string, tenantID string, permCtx *engine.GroupPermissionContext) {
 	var (
 		data []map[string]interface{}
 		err  error
@@ -1324,6 +1495,200 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					path = strings.TrimPrefix(path, "/")
 					inventoryEndpoint = path
 					usePostMethod = invConfig.Post
+				}
+			}
+		}
+
+		if parentCode != "" && search != "" {
+			matchedProducts, errSearch := searchProductsFromAstraDBWithFilter(c.Request.Context(), tenantID, search, parentCode, 20)
+			if errSearch == nil && len(matchedProducts) > 0 {
+				matchedProducts = filterProductsByGroups(matchedProducts, productGroups)
+				var variantData []map[string]interface{}
+				for _, child := range matchedProducts {
+					childSKU := getMapString(child, "MA", "ma", "ma_hang")
+					if childSKU == "" {
+						continue
+					}
+					
+					var skuInventory []map[string]interface{}
+					var errQuery error
+					if usePostMethod {
+						bodyPayload := map[string]interface{}{
+							"limit": 100,
+						}
+						if inventoryEndpoint == "inventory_receipt/search" {
+							bodyPayload["keyword"] = childSKU
+						} else {
+							bodyPayload["MA_HANG"] = childSKU
+						}
+						skuInventory, errQuery = client.SearchCustomEndpointWithBody(inventoryEndpoint, bodyPayload)
+					} else {
+						params := map[string]string{
+							"limit": "100",
+						}
+						if inventoryEndpoint == "inventory_receipt/search" {
+							params["keyword"] = childSKU
+						} else {
+							params["MA_HANG"] = childSKU
+						}
+						skuInventory, errQuery = client.SearchCustomEndpoint(inventoryEndpoint, params)
+					}
+					if errQuery != nil {
+						log.Printf("[inventory_query_filtered] error querying stock for SKU %s: %v", childSKU, errQuery)
+						continue
+					}
+					
+					var skuStock float64
+					for _, invItem := range skuInventory {
+						stockVal := getMapFloat(invItem, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
+						skuStock += stockVal
+					}
+					
+					record := map[string]interface{}{
+						"MA":                 childSKU,
+						"ma":                 childSKU,
+						"code":               childSKU,
+						"ma_hang":            childSKU,
+						"product_code":       childSKU,
+						"TEN":                getMapString(child, "TEN", "ten", "ten_hang"),
+						"ten":                getMapString(child, "TEN", "ten", "ten_hang"),
+						"TEN_DONG_BO_WEB":    getMapString(child, "TEN_DONG_BO_WEB", "ten_dong_bo_web"),
+						"TON_KHO":            skuStock,
+						"ton_kho":            skuStock,
+						"MA_CHA":             parentCode,
+						"ma_cha":             parentCode,
+						"THUOC_TINH_1":       getMapString(child, "THUOC_TINH_1", "thuoc_tinh_1"),
+						"THUOC_TINH_2":       getMapString(child, "THUOC_TINH_2", "thuoc_tinh_2"),
+						"DON_GIA_BAN":        getMapFloat(child, "DON_GIA_BAN", "don_gia_ban"),
+						"LINK_ANH":           getMapString(child, "LINK_ANH", "link_anh"),
+						"DVT":                getMapString(child, "DVT", "dvt"),
+						"LIST_TEN_NHOM_VTHH": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
+						"list_ten_nhom_vthh": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
+					}
+					variantData = append(variantData, record)
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"status":   "success",
+					"data":     variantData,
+					"source":   "cloudify_live_filtered",
+					"resource": resource,
+					"count":    len(variantData),
+				})
+				return
+			}
+		}
+
+		if search != "" {
+			matchedProducts, errSearch := searchProductsByWebNameAstraDBNonVectorized(c.Request.Context(), tenantID, search)
+			if errSearch == nil && len(matchedProducts) > 1 {
+				maChaCounts := make(map[string]int)
+				for _, p := range matchedProducts {
+					maChaVal := getMapString(p, "MA_CHA", "ma_cha")
+					maVal := getMapString(p, "MA", "ma_hang", "ma")
+					if maChaVal != "" {
+						maChaCounts[maChaVal]++
+					} else if maVal != "" {
+						maChaCounts[maVal]++
+					}
+				}
+
+				if len(maChaCounts) > 0 {
+					var buttons []gin.H
+					buttons = append(buttons, gin.H{
+						"title":   "📦 Xem theo dòng sản phẩm",
+						"type":    "oa.query.hide",
+						"payload": "#choose_flow_type:dongsp:" + search,
+					})
+					buttons = append(buttons, gin.H{
+						"title":   "🔍 Xem theo mã SKU cụ thể",
+						"type":    "oa.query.hide",
+						"payload": "#choose_flow_type:skucuthe:" + search,
+					})
+
+					promptMsg := gin.H{
+						"recipient": gin.H{
+							"user_id": permCtx.ZaloUserID,
+						},
+						"message": gin.H{
+							"text": fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search),
+							"attachment": gin.H{
+								"type": "template",
+								"payload": gin.H{
+									"buttons": buttons,
+								},
+							},
+						},
+					}
+
+					// Send rich message directly to Zalo from backend
+					var activeChannel *models.Channel
+					var allChannels []models.Channel
+					if errChan := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&allChannels).Error; errChan == nil && len(allChannels) > 0 {
+						activeChannel = &allChannels[0]
+					}
+
+					if activeChannel != nil {
+						cfg, _ := config.Load()
+						credBytes, errDec := pkg.Decrypt(activeChannel.CredentialsEncrypted, cfg.EncryptionKey)
+						if errDec == nil {
+							var zaloCreds channels.ZaloOACredentials
+							if errCreds := json.Unmarshal(credBytes, &zaloCreds); errCreds == nil {
+								adapter := channels.NewZaloOAAdapter(zaloCreds)
+								adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+									var ch models.Channel
+									if db.DB.First(&ch, "id = ?", activeChannel.ID).Error == nil {
+										credsMap := map[string]interface{}{
+											"app_id":        zaloCreds.AppID,
+											"app_secret":    zaloCreds.AppSecret,
+											"access_token":  newAccess,
+											"refresh_token": newRefresh,
+											"oa_id":         zaloCreds.OAId,
+										}
+										newCredJSON, _ := json.Marshal(credsMap)
+										encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+										db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
+									}
+								})
+
+								promptMsgJSON, _ := json.Marshal(promptMsg)
+								
+								var matchedGroup models.CRMGroup
+								hasGroup := false
+								if len(permCtx.Groups) > 0 {
+									for _, gp := range permCtx.Groups {
+										if gp.GroupID != "private_bot" {
+											if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
+												hasGroup = true
+												break
+											}
+										}
+									}
+								}
+
+								var sendErr error
+								if hasGroup {
+									sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, string(promptMsgJSON))
+								} else {
+									sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, string(promptMsgJSON))
+								}
+								
+								if sendErr != nil {
+									log.Printf("[inventory_query] failed to send Zalo Rich Message directly: %v", sendErr)
+								} else {
+									log.Printf("[inventory_query] successfully sent Zalo Rich Message directly to %s", permCtx.ZaloUserID)
+								}
+							}
+						}
+					}
+
+					c.JSON(http.StatusOK, gin.H{
+						"status":            "success",
+						"is_inventory_rich":  true,
+						"data":              []map[string]interface{}{},
+						"message":           "zalo_rich_message_sent_directly",
+						"count":             0,
+					})
+					return
 				}
 			}
 		}
@@ -2549,4 +2914,100 @@ func resolveCustomerCodeFromPartnerID(client *pkg.CloudifyClient, partnerID stri
 		}
 	}
 	return "", fmt.Errorf("partner %s not found on ERP", partnerID)
+}
+
+func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+	keyspace := "cache_product"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+	collection := "erp_product_bbi"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		return nil, fmt.Errorf("Astra DB is not configured")
+	}
+
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+	payload := map[string]interface{}{
+		"find": map[string]interface{}{
+			"filter": map[string]interface{}{
+				"TEN_DONG_BO_WEB": map[string]interface{}{
+					"$regex": "(?i)" + keyword,
+				},
+			},
+			"options": map[string]interface{}{
+				"limit": 100,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("Astra DB returned status code %d", resp.StatusCode)
+	}
+
+	var astraResp struct {
+		Data struct {
+			Documents []map[string]interface{} `json:"documents"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+		return nil, err
+	}
+
+	if len(astraResp.Errors) > 0 {
+		return nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
+	}
+
+	return astraResp.Data.Documents, nil
 }
