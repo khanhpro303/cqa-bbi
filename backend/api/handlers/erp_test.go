@@ -5,6 +5,61 @@ import (
 	"time"
 )
 
+func TestFilterProductsByGroupsUsesProductGroupBeforeBrand(t *testing.T) {
+	products := []map[string]interface{}{
+		{
+			"MA":                 "SP001710",
+			"TEN":                "Mũ Bảo Hiểm Fullface BULLDOG Torii - Solid Matt Black - M",
+			"TEN_DONG_BO_WEB":    "Bulldog TORII",
+			"NHAN_HIEU_NAME":     "BULLDOG",
+			"LIST_TEN_NHOM_VTHH": "Nguyên Đầu",
+			"DON_GIA_BAN":        1500000.0,
+		},
+		{
+			"MA":                 "SP001710_DK",
+			"TEN":                "Mũ Bảo Hiểm Fullface BULLDOG Torii - Solid Matt Black - M",
+			"TEN_DONG_BO_WEB":    "Bulldog TORII",
+			"NHAN_HIEU_NAME":     "",
+			"LIST_TEN_NHOM_VTHH": "Nguyên Đầu",
+			"DON_GIA_BAN":        0.0,
+		},
+		{
+			"MA":                 "SAMPLE0219",
+			"TEN":                "Sample Mũ Bảo Hiểm Fullface BULLDOG Torii II",
+			"TEN_DONG_BO_WEB":    "SAMPLE",
+			"NHAN_HIEU_NAME":     "BULLDOG",
+			"LIST_TEN_NHOM_VTHH": "Sample",
+			"DON_GIA_BAN":        0.0,
+		},
+	}
+
+	filtered := filterProductsByGroups(products, []string{"Nguyên Đầu"})
+
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2 TORII products in allowed group, got %d: %#v", len(filtered), filtered)
+	}
+
+	if filtered[0]["MA"] != "SP001710" {
+		t.Errorf("expected first product SP001710, got %#v", filtered[0]["MA"])
+	}
+	if filtered[1]["MA"] != "SP001710_DK" {
+		t.Errorf("expected second product SP001710_DK, got %#v", filtered[1]["MA"])
+	}
+}
+
+func TestFilterProductsByGroupsAllowsAllWhenNoGroupsConfigured(t *testing.T) {
+	products := []map[string]interface{}{
+		{"MA": "SP001710", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
+		{"MA": "SAMPLE0219", "LIST_TEN_NHOM_VTHH": "Sample"},
+	}
+
+	filtered := filterProductsByGroups(products, nil)
+
+	if len(filtered) != len(products) {
+		t.Fatalf("expected all products to pass without group restrictions, got %d", len(filtered))
+	}
+}
+
 func TestIsGenericDebtSearch(t *testing.T) {
 	tests := []struct {
 		search   string

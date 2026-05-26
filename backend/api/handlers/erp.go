@@ -1275,32 +1275,50 @@ func filterProductsByGroups(products []map[string]interface{}, allowedGroups []s
 	}
 	var filtered []map[string]interface{}
 	for _, p := range products {
-		groupVal := getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name", "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
-		groupLower := strings.ToLower(groupVal)
-
-		matched := false
-		for _, allowed := range allowedGroups {
-			if strings.Contains(groupLower, strings.ToLower(allowed)) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			// Fallback: check if the product name contains the allowed group name (e.g., "Mũ Bảo Hiểm")
-			nameVal := getMapString(p, "TEN_HANG", "ten_hang", "TEN", "ten", "name")
-			nameLower := strings.ToLower(nameVal)
-			for _, allowed := range allowedGroups {
-				if strings.Contains(nameLower, strings.ToLower(allowed)) {
-					matched = true
-					break
-				}
-			}
-		}
-		if matched {
+		if productMatchesAllowedGroups(p, allowedGroups) {
 			filtered = append(filtered, p)
 		}
 	}
 	return filtered
+}
+
+func productMatchesAllowedGroups(product map[string]interface{}, allowedGroups []string) bool {
+	valuesToCheck := []string{
+		getFirstNonEmptyMapString(product, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group"),
+		getFirstNonEmptyMapString(product, "TEN_HANG", "ten_hang", "TEN", "ten", "name"),
+		getFirstNonEmptyMapString(product, "NHAN_HIEU_NAME", "nhan_hieu_name"),
+	}
+
+	for _, value := range valuesToCheck {
+		valueLower := strings.ToLower(value)
+		for _, allowed := range allowedGroups {
+			allowedLower := strings.ToLower(strings.TrimSpace(allowed))
+			if allowedLower != "" && strings.Contains(valueLower, allowedLower) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func getFirstNonEmptyMapString(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		val, ok := m[k]
+		if !ok || val == nil {
+			continue
+		}
+		if s, ok := val.(string); ok {
+			if strings.TrimSpace(s) != "" {
+				return s
+			}
+			continue
+		}
+		s := fmt.Sprintf("%v", val)
+		if strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource, search, parentCode, partnerID string, limit int, productGroups []string, scopeType string, tenantID string, permCtx *engine.GroupPermissionContext) {
@@ -3105,5 +3123,4 @@ func sanitizeSearchQuery(search string) string {
 	}
 	return search
 }
-
 
