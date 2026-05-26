@@ -850,14 +850,31 @@
                             v-model="ep.product_groups_arr"
                             :items="listTenNhomVthh"
                             multiple
-                            chips
                             density="compact"
                             variant="plain"
                             hide-details
                             :disabled="!ep.is_enabled || !isOwnerOrAdmin"
                             placeholder="Chọn nhóm..."
-                            style="font-size:0.75rem"
-                          />
+                            style="font-size:0.75rem; min-width: 90px;"
+                          >
+                            <template #selection="{ index }">
+                              <span
+                                v-if="index === 0"
+                                class="text-truncate"
+                                :title="ep.product_groups_arr.join(', ')"
+                                style="max-width: 100%; display: inline-block;"
+                              >
+                                <v-chip
+                                  size="x-small"
+                                  color="indigo-lighten-1"
+                                  variant="flat"
+                                  class="ma-0 font-weight-bold"
+                                >
+                                  {{ ep.product_groups_arr.length > 1 ? `(${ep.product_groups_arr.length})` : ep.product_groups_arr[0] }}
+                                </v-chip>
+                              </span>
+                            </template>
+                          </v-select>
                           <span v-else class="text-caption text-grey">—</span>
                         </td>
                       </tr>
@@ -915,8 +932,11 @@
                   <div class="graph-node graph-node-card pa-3 text-center rounded-xl elevation-2 border-2" :style="{ width: '120px', borderColor: hasAnyGroupEndpointEnabled() ? '#ff9800' : '#9e9e9e' }">
                     <v-icon :color="hasAnyGroupEndpointEnabled() ? 'warning' : 'grey'" size="small" class="mb-1">mdi-server-network</v-icon>
                     <div class="text-caption font-weight-bold" :class="{ 'text-grey': !hasAnyGroupEndpointEnabled() }">Cloudify ERP</div>
-                    <div class="text-grey text-caption text-truncate" style="font-size: 0.6rem !important; max-width: 100px;" v-if="isGroupEndpointEnabled('inventory') && getGroupProductGroups('inventory')">
-                      Filter: {{ getGroupProductGroups('inventory') }}
+                    <div class="text-grey text-caption text-truncate" style="font-size: 0.6rem !important; max-width: 100px;" v-if="isGroupEndpointEnabled('products') && getGroupProductGroups('products')" :title="`Sản phẩm: ${getGroupProductGroups('products')}`">
+                      Lọc SP: {{ getGroupProductGroups('products') }}
+                    </div>
+                    <div class="text-grey text-caption text-truncate" style="font-size: 0.6rem !important; max-width: 100px;" v-if="isGroupEndpointEnabled('inventory') && getGroupProductGroups('inventory')" :title="`Tồn kho: ${getGroupProductGroups('inventory')}`">
+                      Lọc Kho: {{ getGroupProductGroups('inventory') }}
                     </div>
                   </div>
                 </div>
