@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -305,6 +306,35 @@ func ERPQuery(c *gin.Context) {
 			log.Printf("[erp_query] Astra DB cache search error: %v. Falling back to live Cloudify ERP.", err)
 		} else if cachedData != nil {
 			filteredCached := filterProductsByGroups(cachedData, productGroups)
+
+			// Group by parent code check
+			if req.Search != "" && len(filteredCached) > 0 {
+				maChaCounts := make(map[string]int)
+				for _, p := range filteredCached {
+					maChaVal := getMapString(p, "MA_CHA", "ma_cha")
+					maVal := getMapString(p, "MA", "ma_hang", "ma")
+					if maChaVal != "" {
+						maChaCounts[maChaVal]++
+					} else if maVal != "" {
+						maChaCounts[maVal]++
+					}
+				}
+
+				if len(maChaCounts) > 1 {
+					sent := sendProductRichMessage(c, tenantID, req.Search, maChaCounts, permCtx)
+					if sent {
+						c.JSON(http.StatusOK, gin.H{
+							"status":          "success",
+							"is_product_rich":  true,
+							"data":            []map[string]interface{}{},
+							"message":         "zalo_rich_message_sent_directly",
+							"count":           0,
+						})
+						return
+					}
+				}
+			}
+
 			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(filteredCached), c.ClientIP())
 			c.JSON(http.StatusOK, gin.H{
 				"status":   "success",
@@ -490,36 +520,60 @@ func loadAllowedGroupsForCustomer(tenantID, zaloUserID, resource string) []strin
 	return groups
 }
 
-// ---------------------------------------------------------------------------
+func isFullName(search string) bool {
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return false
+	}
+	return strings.Contains(search, " ")
+}
+
 // searchProductsFromAstraDB — queries the cached product collection in Astra DB.
 // Uses vector search ($vectorize) if query is non-empty, with a text-regex search fallback.
 // Returns (nil, nil) if Astra DB is not configured, allowing live fallback.
 // ---------------------------------------------------------------------------
 func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, limit int) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	likePattern := "%" + search + "%"
-	err := db.DB.WithContext(ctx).
-		Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
-		Limit(limit).
-		Find(&products).Error
-	if err != nil {
-		return nil, fmt.Errorf("local MySQL cache query failed: %w", err)
-	}
+	var err error
 
-	// Fallback to LLM fuzzy matching if SQL LIKE returned no results
-	if len(products) == 0 && search != "" {
+	// 1. If it's a full name, attempt LLM fuzzy matching immediately
+	if isFullName(search) {
 		matchedMaCha, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search)
-		if llmErr != nil {
-			log.Printf("[handler] LLM fuzzy matching failed for keyword '%s': %v", search, llmErr)
-		} else if matchedMaCha != "" {
-			log.Printf("[handler] LLM fuzzy matched keyword '%s' to ma_cha '%s'", search, matchedMaCha)
-			// Query again using the matched parent product code
+		if llmErr == nil && matchedMaCha != "" {
+			log.Printf("[handler] Direct LLM fuzzy matched full name '%s' to ma_cha '%s'", search, matchedMaCha)
 			err = db.DB.WithContext(ctx).
 				Where("tenant_id = ? AND ma_cha = ?", tenantID, matchedMaCha).
 				Limit(limit).
 				Find(&products).Error
-			if err != nil {
-				return nil, fmt.Errorf("local MySQL cache query (LLM fallback) failed: %w", err)
+		}
+	}
+
+	// 2. If not a full name or fuzzy matched returned no products, run standard SQL LIKE search
+	if len(products) == 0 {
+		likePattern := "%" + search + "%"
+		err = db.DB.WithContext(ctx).
+			Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
+			Limit(limit).
+			Find(&products).Error
+		if err != nil {
+			return nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+		}
+
+		// Fallback to LLM fuzzy matching if SQL LIKE returned no results
+		if len(products) == 0 && search != "" {
+			matchedMaCha, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search)
+			if llmErr != nil {
+				log.Printf("[handler] LLM fuzzy matching failed for keyword '%s': %v", search, llmErr)
+			} else if matchedMaCha != "" {
+				log.Printf("[handler] LLM fuzzy matched keyword '%s' to ma_cha '%s'", search, matchedMaCha)
+				// Query again using the matched parent product code
+				err = db.DB.WithContext(ctx).
+					Where("tenant_id = ? AND ma_cha = ?", tenantID, matchedMaCha).
+					Limit(limit).
+					Find(&products).Error
+				if err != nil {
+					return nil, fmt.Errorf("local MySQL cache query (LLM fallback) failed: %w", err)
+				}
 			}
 		}
 	}
@@ -592,8 +646,6 @@ func searchProductsFromAstraDBWithFilter(ctx context.Context, tenantID, search, 
 	return results, nil
 }
 
-// mapCachedProductToAPIResponse maps a cached product document to include aliases
-// for backward compatibility with chatbot prompts/HTTP Request Nodes.
 func mapCachedProductToAPIResponse(p map[string]interface{}) map[string]interface{} {
 	res := make(map[string]interface{})
 	for k, v := range p {
@@ -606,6 +658,10 @@ func mapCachedProductToAPIResponse(p map[string]interface{}) map[string]interfac
 	webNameVal := getMapString(p, "TEN_DONG_BO_WEB", "ten_dong_bo_web")
 	dvtVal := getMapString(p, "DVT", "dvt_chinh_id", "dvt")
 	priceVal := getMapFloat(p, "DON_GIA_BAN", "don_gia_ban", "price")
+	weightVal := getMapFloat(p, "WEIGHT", "weight", "khoi_luong", "trong_luong")
+	if weightVal == 0 {
+		weightVal = 1.0 // default/fallback weight
+	}
 
 	// Inject old keys to maintain backward compatibility
 	res["ma_hang"] = maVal
@@ -613,6 +669,7 @@ func mapCachedProductToAPIResponse(p map[string]interface{}) map[string]interfac
 	res["ten_dong_bo_web"] = webNameVal
 	res["dvt_chinh_id"] = dvtVal
 	res["don_gia_ban"] = priceVal
+	res["weight"] = weightVal
 	res["list_ten_nhom_vthh"] = getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh")
 
 	res["code"] = maVal
@@ -1251,6 +1308,35 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	switch resource {
 	case "products":
 		data, err = client.SearchProducts(search, limit)
+		if err == nil && data != nil {
+			filtered := filterProductsByGroups(data, productGroups)
+			if search != "" && len(filtered) > 0 {
+				maChaCounts := make(map[string]int)
+				for _, p := range filtered {
+					maChaVal := getMapString(p, "MA_CHA", "ma_cha")
+					maVal := getMapString(p, "MA", "ma_hang", "ma")
+					if maChaVal != "" {
+						maChaCounts[maChaVal]++
+					} else if maVal != "" {
+						maChaCounts[maVal]++
+					}
+				}
+
+				if len(maChaCounts) > 1 {
+					sent := sendProductRichMessage(c, tenantID, search, maChaCounts, permCtx)
+					if sent {
+						c.JSON(http.StatusOK, gin.H{
+							"status":          "success",
+							"is_product_rich":  true,
+							"data":            []map[string]interface{}{},
+							"message":         "zalo_rich_message_sent_directly",
+							"count":           0,
+						})
+						return
+					}
+				}
+			}
+		}
 	case "inventory":
 		// Load custom inventory endpoint config
 		inventoryEndpoint := "inventory_receipt/search"
@@ -2837,6 +2923,114 @@ func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, 
 		})
 	}
 	return results, nil
+}
+
+func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts map[string]int, permCtx *engine.GroupPermissionContext) bool {
+	type maChaCount struct {
+		code  string
+		count int
+	}
+	var sortedMaChas []maChaCount
+	for k, v := range maChaCounts {
+		sortedMaChas = append(sortedMaChas, maChaCount{code: k, count: v})
+	}
+	sort.Slice(sortedMaChas, func(i, j int) bool {
+		return sortedMaChas[i].count > sortedMaChas[j].count
+	})
+
+	var buttons []gin.H
+	for i, mc := range sortedMaChas {
+		if i >= 3 {
+			break
+		}
+		buttons = append(buttons, gin.H{
+			"title":   mc.code,
+			"type":    "oa.query.show",
+			"payload": mc.code,
+		})
+	}
+
+	var activeChannel *models.Channel
+	var allChannels []models.Channel
+	if errChan := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&allChannels).Error; errChan == nil && len(allChannels) > 0 {
+		activeChannel = &allChannels[0]
+	}
+
+	if activeChannel == nil || permCtx.ZaloUserID == "" {
+		return false
+	}
+
+	cfg, _ := config.Load()
+	credBytes, errDec := pkg.Decrypt(activeChannel.CredentialsEncrypted, cfg.EncryptionKey)
+	if errDec != nil {
+		return false
+	}
+
+	var zaloCreds channels.ZaloOACredentials
+	if errCreds := json.Unmarshal(credBytes, &zaloCreds); errCreds != nil {
+		return false
+	}
+
+	adapter := channels.NewZaloOAAdapter(zaloCreds)
+	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+		var ch models.Channel
+		if db.DB.First(&ch, "id = ?", activeChannel.ID).Error == nil {
+			credsMap := map[string]interface{}{
+				"app_id":        zaloCreds.AppID,
+				"app_secret":    zaloCreds.AppSecret,
+				"access_token":  newAccess,
+				"refresh_token": newRefresh,
+				"oa_id":         zaloCreds.OAId,
+			}
+			newCredJSON, _ := json.Marshal(credsMap)
+			encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+			db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
+		}
+	})
+
+	promptMsg := gin.H{
+		"recipient": gin.H{
+			"user_id": permCtx.ZaloUserID,
+		},
+		"message": gin.H{
+			"text": fmt.Sprintf("Tôi tìm thấy nhiều sản phẩm khớp với '%s'. Bạn muốn hỏi về dòng sản phẩm nào?", search),
+			"attachment": gin.H{
+				"type": "template",
+				"payload": gin.H{
+					"buttons": buttons,
+				},
+			},
+		},
+	}
+	promptMsgJSON, _ := json.Marshal(promptMsg)
+
+	var matchedGroup models.CRMGroup
+	hasGroup := false
+	if len(permCtx.Groups) > 0 {
+		for _, gp := range permCtx.Groups {
+			if gp.GroupID != "private_bot" {
+				if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
+					hasGroup = true
+					break
+				}
+			}
+		}
+	}
+
+	var sendErr error
+	if hasGroup {
+		sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, string(promptMsgJSON))
+	} else {
+		sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, string(promptMsgJSON))
+	}
+
+	if sendErr != nil {
+		log.Printf("[erp_query] failed to send Zalo Rich Message for products: %v", sendErr)
+		return false
+	}
+
+	log.Printf("[erp_query] successfully sent Zalo Rich Message for products to %s", permCtx.ZaloUserID)
+	return true
 }
 
 
