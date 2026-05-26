@@ -1473,6 +1473,8 @@ func productMatchesAllowedGroups(product map[string]interface{}, allowedGroups [
 		getFirstNonEmptyMapString(product, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group"),
 		getFirstNonEmptyMapString(product, "TEN_HANG", "ten_hang", "TEN", "ten", "name"),
 		getFirstNonEmptyMapString(product, "NHAN_HIEU_NAME", "nhan_hieu_name"),
+		getFirstNonEmptyMapString(product, "MA", "ma", "ma_hang", "code"),
+		getFirstNonEmptyMapString(product, "MA_CHA", "ma_cha"),
 	}
 
 	for _, value := range valuesToCheck {

@@ -231,6 +231,55 @@ func TestFilterProductsByGroupsUsesProductGroupBeforeBrand(t *testing.T) {
 	}
 }
 
+func TestProductMatchesAllowedGroupsAcrossAllFields(t *testing.T) {
+	tests := []struct {
+		name          string
+		product       map[string]interface{}
+		allowedGroups []string
+		want          bool
+	}{
+		{
+			name: "matches by MA prefix",
+			product: map[string]interface{}{
+				"MA":  "SP458484-RED-M",
+				"TEN": "Random product name",
+			},
+			allowedGroups: []string{"SP458484"},
+			want:          true,
+		},
+		{
+			name: "matches by MA_CHA prefix",
+			product: map[string]interface{}{
+				"MA":     "FF901-001",
+				"MA_CHA": "SP458484",
+				"TEN":    "Random",
+			},
+			allowedGroups: []string{"SP4584"},
+			want:          true,
+		},
+		{
+			name: "no match across all five fields",
+			product: map[string]interface{}{
+				"MA":             "ABC123",
+				"MA_CHA":         "XYZ999",
+				"TEN":            "Foo",
+				"NHAN_HIEU_NAME": "Bar",
+			},
+			allowedGroups: []string{"helmet"},
+			want:          false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := productMatchesAllowedGroups(tc.product, tc.allowedGroups)
+			if got != tc.want {
+				t.Errorf("productMatchesAllowedGroups() = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFilterProductsByGroupsAllowsAllWhenNoGroupsConfigured(t *testing.T) {
 	products := []map[string]interface{}{
 		{"MA": "SP001710", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
