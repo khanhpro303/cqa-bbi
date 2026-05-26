@@ -308,9 +308,9 @@ func AddGroupMembers(c *gin.Context) {
 	// Add employees
 	for _, empID := range req.EmployeeIDs {
 		var count int64
-		tx.Model(&models.CRMGroupEmployee{}).Where("group_id = ? AND user_id = ?", groupID, empID).Count(&count)
+		tx.Model(&models.CRMGroupEmployee{}).Where("group_id = ? AND zalo_whitelist_id = ?", groupID, empID).Count(&count)
 		if count == 0 {
-			if err := tx.Create(&models.CRMGroupEmployee{GroupID: groupID, UserID: empID}).Error; err != nil {
+			if err := tx.Create(&models.CRMGroupEmployee{GroupID: groupID, ZaloWhitelistID: empID}).Error; err != nil {
 				tx.Rollback()
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_add_employee_to_group"})
 				return
@@ -488,7 +488,7 @@ func RemoveGroupMembers(c *gin.Context) {
 	tx := db.DB.Begin()
 	// Remove employees
 	if len(req.EmployeeIDs) > 0 {
-		if err := tx.Where("group_id = ? AND user_id IN ?", groupID, req.EmployeeIDs).Delete(&models.CRMGroupEmployee{}).Error; err != nil {
+		if err := tx.Where("group_id = ? AND zalo_whitelist_id IN ?", groupID, req.EmployeeIDs).Delete(&models.CRMGroupEmployee{}).Error; err != nil {
 			tx.Rollback()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_remove_employees"})
 			return

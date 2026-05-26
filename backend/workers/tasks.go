@@ -435,8 +435,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// Verify membership
 			isMember := false
 			if isWhitelisted {
-				// Whitelisted internal staff are always allowed
-				isMember = true
+				// Verify if the whitelisted staff is assigned to this group in crm_group_employees
+				var count int64
+				db.DB.Model(&models.CRMGroupEmployee{}).Where("group_id = ? AND zalo_whitelist_id = ?", matchedGroup.ID, whitelistRec.ID).Count(&count)
+				if count > 0 {
+					isMember = true
+				}
 			} else if isCustomer {
 				var count int64
 				db.DB.Model(&models.CRMGroupCustomer{}).Where("group_id = ? AND zalo_customer_id = ?", matchedGroup.ID, customerRec.ID).Count(&count)

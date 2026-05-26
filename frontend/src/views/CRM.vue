@@ -436,7 +436,7 @@
                   v-model="selectedEmployeeToAdd"
                   :items="availableEmployees"
                   item-title="name"
-                  item-value="user_id"
+                  item-value="id"
                   placeholder="Tìm và chọn nhân viên..."
                   density="comfortable"
                   variant="outlined"
@@ -453,9 +453,9 @@
                     <v-icon color="primary">mdi-account-tie</v-icon>
                   </template>
                   <v-list-item-title class="font-weight-bold">{{ emp.name }}</v-list-item-title>
-                  <v-list-item-subtitle>{{ emp.email }}</v-list-item-subtitle>
+                  <v-list-item-subtitle>Zalo ID: {{ emp.zalo_user_id }}</v-list-item-subtitle>
                   <template #append>
-                    <v-btn icon="mdi-close" size="small" variant="text" color="error" @click="removeGroupEmployee(emp.user_id)" />
+                    <v-btn icon="mdi-close" size="small" variant="text" color="error" @click="removeGroupEmployee(emp.id)" />
                   </template>
                 </v-list-item>
                 <div v-if="!activeGroup?.employees?.length" class="text-center py-6 text-grey text-caption">
@@ -1054,10 +1054,20 @@ const pendingApprovalCount = computed(() => {
 })
 
 // Available members to add to active group
+const whitelistStaff = ref<any[]>([])
+async function fetchWhitelistStaff() {
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/zalo-whitelist`)
+    whitelistStaff.value = data || []
+  } catch (err) {
+    console.error('Failed to fetch Zalo whitelist', err)
+  }
+}
+
 const availableEmployees = computed(() => {
-  if (!activeGroup.value || !userStore.users) return []
-  const existingIds = new Set(activeGroup.value.employees?.map((e: any) => e.user_id) || [])
-  return userStore.users.filter((u: any) => !existingIds.has(u.user_id))
+  if (!activeGroup.value || !whitelistStaff.value) return []
+  const existingIds = new Set(activeGroup.value.employees?.map((e: any) => e.id) || [])
+  return whitelistStaff.value.filter((s: any) => s.status === 'active' && !existingIds.has(s.id))
 })
 
 const availableCustomers = computed(() => {
@@ -1100,6 +1110,7 @@ onMounted(async () => {
   window.addEventListener('crm-data-updated', fetchCustomers)
   await userStore.fetchUsers(tenantId.value)
   await channelStore.fetchChannels(tenantId.value)
+  await fetchWhitelistStaff()
   await fetchGroups()
   await fetchCustomers()
   await fetchCustomerCodes()
@@ -1421,7 +1432,7 @@ async function addGroupEmployee() {
   if (!selectedEmployeeToAdd.value || !activeGroup.value) return
   try {
     await api.post(`/tenants/${tenantId.value}/crm/groups/${activeGroup.value.id}/members`, {
-      employee_ids: [selectedEmployeeToAdd.value.user_id]
+      employee_ids: [selectedEmployeeToAdd.value.id]
     })
     
     // Update local state
@@ -1429,6 +1440,7 @@ async function addGroupEmployee() {
     activeGroup.value.employees.push(selectedEmployeeToAdd.value)
     selectedEmployeeToAdd.value = null
     showSnack('Đã thêm nhân viên vào nhóm', 'success')
+    await fetchWhitelistStaff()
     await fetchGroups() // reload values
     await fetchLiveMembers(activeGroup.value.id)
   } catch (err) {
@@ -1441,8 +1453,9 @@ async function removeGroupEmployee(empID: string) {
     await api.delete(`/tenants/${tenantId.value}/crm/groups/${activeGroup.value.id}/members`, {
       data: { employee_ids: [empID] }
     })
-    activeGroup.value.employees = activeGroup.value.employees.filter((e: any) => e.user_id !== empID)
+    activeGroup.value.employees = activeGroup.value.employees.filter((e: any) => e.id !== empID)
     showSnack('Đã gỡ nhân viên khỏi nhóm', 'success')
+    await fetchWhitelistStaff()
     await fetchGroups()
     await fetchLiveMembers(activeGroup.value.id)
   } catch (err) {

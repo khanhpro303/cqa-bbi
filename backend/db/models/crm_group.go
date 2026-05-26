@@ -15,9 +15,9 @@ type CRMGroup struct {
 	CreatedAt     time.Time      `gorm:"not null" json:"created_at"`
 	UpdatedAt     time.Time      `gorm:"not null" json:"updated_at"`
 
-	Employees []User         `gorm:"many2many:crm_group_employees;joinForeignKey:GroupID;joinReferences:UserID" json:"employees,omitempty"`
-	Customers []ZaloCustomer `gorm:"many2many:crm_group_customers;joinForeignKey:GroupID;joinReferences:ZaloCustomerID" json:"customers,omitempty"`
-	Channel   *Channel       `gorm:"foreignKey:ChannelID" json:"channel,omitempty"`
+	Employees []ZaloWhitelist `gorm:"many2many:crm_group_employees;joinForeignKey:GroupID;joinReferences:ZaloWhitelistID" json:"employees,omitempty"`
+	Customers []ZaloCustomer  `gorm:"many2many:crm_group_customers;joinForeignKey:GroupID;joinReferences:ZaloCustomerID" json:"customers,omitempty"`
+	Channel   *Channel        `gorm:"foreignKey:ChannelID" json:"channel,omitempty"`
 }
 
 func (CRMGroup) TableName() string {
@@ -25,8 +25,8 @@ func (CRMGroup) TableName() string {
 }
 
 type CRMGroupEmployee struct {
-	GroupID string `gorm:"type:char(36);primaryKey" json:"group_id"`
-	UserID  string `gorm:"type:char(36);primaryKey" json:"user_id"`
+	GroupID         string `gorm:"type:char(36);primaryKey" json:"group_id"`
+	ZaloWhitelistID string `gorm:"type:char(36);primaryKey" json:"zalo_whitelist_id"`
 }
 
 func (CRMGroupEmployee) TableName() string {
