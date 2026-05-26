@@ -69,12 +69,36 @@ func AutoMigrate() error {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
 
+	// Clean up deprecated database schema from older versions
+	cleanupDeprecatedSchema()
+
 	// Add unique constraints that GORM can't express directly
 	addUniqueConstraints()
 
 	log.Println("Database migration completed")
 	return nil
 }
+
+func cleanupDeprecatedSchema() {
+	// Drop old unique index if exists
+	if DB.Migrator().HasIndex(&models.ERPEndpoint{}, "idx_erp_ep_tenant_agent_res") {
+		if err := DB.Migrator().DropIndex(&models.ERPEndpoint{}, "idx_erp_ep_tenant_agent_res"); err != nil {
+			log.Printf("[db] failed to drop deprecated index idx_erp_ep_tenant_agent_res: %v", err)
+		} else {
+			log.Println("[db] successfully dropped deprecated index idx_erp_ep_tenant_agent_res from erp_endpoints")
+		}
+	}
+
+	// Drop deprecated column 'agent_type' if exists
+	if DB.Migrator().HasColumn(&models.ERPEndpoint{}, "agent_type") {
+		if err := DB.Migrator().DropColumn(&models.ERPEndpoint{}, "agent_type"); err != nil {
+			log.Printf("[db] failed to drop deprecated column agent_type: %v", err)
+		} else {
+			log.Println("[db] successfully dropped deprecated column agent_type from erp_endpoints")
+		}
+	}
+}
+
 
 func addUniqueConstraints() {
 	constraints := []struct {
