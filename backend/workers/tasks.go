@@ -1335,8 +1335,8 @@ func parseAttachmentText(atts []ZaloWebhookAttachment) string {
 	return sb.String()
 }
 
-// extractInventoryQueryKeyword uses LLM to identify if the message is asking for stock, and extracts the keyword.
-func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string) (bool, string, error) {
+// getAIClient creates an AI provider client based on tenant settings.
+func getAIClient(ctx context.Context, tenantID string) (ai.AIProvider, error) {
 	provider := "claude"
 	var providerSetting models.AppSetting
 	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_provider'", tenantID).First(&providerSetting).Error; err == nil && providerSetting.ValuePlain != "" {
@@ -1358,7 +1358,7 @@ func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string)
 		if setting.ValueEncrypted != nil && len(setting.ValueEncrypted) > 0 {
 			decrypted, err := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
 			if err != nil {
-				return false, "", fmt.Errorf("failed to decrypt API key: %w", err)
+				return nil, fmt.Errorf("failed to decrypt API key: %w", err)
 			}
 			apiKey = string(decrypted)
 		} else {
@@ -1373,7 +1373,7 @@ func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string)
 	}
 
 	if apiKey == "" {
-		return false, "", nil
+		return nil, fmt.Errorf("API key not configured for provider %s", provider)
 	}
 
 	model := "claude-haiku-4-5"
@@ -1393,16 +1393,83 @@ func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string)
 		baseURL = baseURLSetting.ValuePlain
 	}
 
-	var aiClient ai.AIProvider
 	switch provider {
 	case "claude":
-		aiClient = ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL)
+		return ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL), nil
 	case "gemini":
-		aiClient = ai.NewGeminiProvider(apiKey, model, baseURL)
+		return ai.NewGeminiProvider(apiKey, model, baseURL), nil
 	case "openai":
-		aiClient = ai.NewOpenAIProvider(apiKey, model, baseURL)
+		return ai.NewOpenAIProvider(apiKey, model, baseURL), nil
 	default:
-		return false, "", fmt.Errorf("unsupported AI provider: %s", provider)
+		return nil, fmt.Errorf("unsupported AI provider: %s", provider)
+	}
+}
+
+// fuzzyMatchMaChaWithLLM uses the LLM to find the best matching ma_cha
+// from the local cached_products table when SQL LIKE returns no results.
+func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (string, error) {
+	// 1. Fetch unique parent product codes (ma_cha) from cache
+	var maChaList []string
+	err := db.DB.Model(&models.CachedProduct{}).
+		Where("tenant_id = ?", tenantID).
+		Distinct("ma_cha").
+		Where("ma_cha != ''").
+		Pluck("ma_cha", &maChaList).Error
+	if err != nil || len(maChaList) == 0 {
+		return "", fmt.Errorf("no ma_cha values found: %w", err)
+	}
+
+	// 2. Create AI client
+	aiClient, err := getAIClient(ctx, tenantID)
+	if err != nil || aiClient == nil {
+		return "", fmt.Errorf("AI client not available: %w", err)
+	}
+
+	// 3. Prompt LLM to match the keyword
+	systemPrompt := fmt.Sprintf(`Bạn là trợ lý mapping mã sản phẩm.
+Nhiệm vụ: Khách hàng tìm kiếm "%s". Hãy chọn MÃ SẢN PHẨM khớp nhất từ danh sách bên dưới.
+Lưu ý:
+- Bỏ qua dấu gạch ngang, dấu chấm, số 0 đầu khi so sánh (VD: E05 = E-5, E5 = E-5, E.5 = E-5)
+- Trả lời CHỈ mã sản phẩm khớp nhất, không thêm bất kỳ từ ngữ hay dấu câu nào khác
+- Nếu hoàn toàn không có mã nào khớp, trả về "NONE"
+
+Danh sách mã sản phẩm:
+%s`, keyword, strings.Join(maChaList, ", "))
+
+	llmCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	resp, err := aiClient.AnalyzeChat(llmCtx, systemPrompt, keyword)
+	if err != nil {
+		return "", err
+	}
+
+	matched := strings.TrimSpace(resp.Content)
+	if matched == "" || strings.EqualFold(matched, "NONE") {
+		return "", nil
+	}
+
+	// Clean up markdown quotes or wrappers if any
+	if strings.HasPrefix(matched, "`") && strings.HasSuffix(matched, "`") {
+		matched = strings.Trim(matched, "`")
+	}
+
+	// Validate matched value exists in our list (case-insensitive)
+	for _, mc := range maChaList {
+		if strings.EqualFold(mc, matched) {
+			return mc, nil
+		}
+	}
+
+	return "", nil
+}
+
+// extractInventoryQueryKeyword uses LLM to identify if the message is asking for stock, and extracts the keyword.
+func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string) (bool, string, error) {
+	aiClient, err := getAIClient(ctx, tenantID)
+	if err != nil {
+		log.Printf("[worker] Failed to get AI client for extractInventoryQueryKeyword: %v", err)
+		return false, "", nil
 	}
 
 	systemPrompt := `Bạn là trợ lý trích xuất từ khóa sản phẩm thông minh của doanh nghiệp BBI.
@@ -1459,6 +1526,24 @@ func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, 
 		return nil, fmt.Errorf("local MySQL cache query failed: %w", err)
 	}
 
+	// Fallback to LLM fuzzy matching if SQL LIKE returned no results
+	if len(products) == 0 {
+		matchedMaCha, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, keyword)
+		if llmErr != nil {
+			log.Printf("[worker] LLM fuzzy matching failed for keyword '%s': %v", keyword, llmErr)
+		} else if matchedMaCha != "" {
+			log.Printf("[worker] LLM fuzzy matched keyword '%s' to ma_cha '%s'", keyword, matchedMaCha)
+			// Query again using the matched parent product code
+			err = db.DB.WithContext(ctx).
+				Where("tenant_id = ? AND ma_cha = ?", tenantID, matchedMaCha).
+				Limit(100).
+				Find(&products).Error
+			if err != nil {
+				return nil, fmt.Errorf("local MySQL cache query (LLM fallback) failed: %w", err)
+			}
+		}
+	}
+
 	var results []map[string]interface{}
 	for _, p := range products {
 		results = append(results, map[string]interface{}{
@@ -1488,103 +1573,40 @@ func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, 
 
 // sumInventoryByMaChaAndWebName aggregates realtime inventory by MA_CHA and optionally WEB_NAME
 func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string, webName string) (float64, []string, error) {
-	cfg, _ := config.Load()
-	apiEndpoint := cfg.AstraDBAPIEndpoint
-	token := cfg.AstraDBToken
-	keyspace := "cache_product"
-	if cfg.AstraDBKeyspace != "" {
-		keyspace = cfg.AstraDBKeyspace
+	var products []models.CachedProduct
+	q := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha)
+	if webName != "" {
+		q = q.Where("ten_dong_bo_web = ?", webName)
 	}
-	collection := "erp_product_bbi"
-	if cfg.AstraDBProductCollection != "" {
-		collection = cfg.AstraDBProductCollection
+	err := q.Limit(100).Find(&products).Error
+	if err != nil {
+		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
 	}
 
-	var endpointSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
-		apiEndpoint = endpointSetting.ValuePlain
-	}
-	var tokenSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
-		if len(tokenSetting.ValueEncrypted) > 0 {
-			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
-				token = string(decrypted)
-			}
-		} else if tokenSetting.ValuePlain != "" {
-			token = tokenSetting.ValuePlain
+	childProducts := make([]map[string]interface{}, len(products))
+	for i, p := range products {
+		childProducts[i] = map[string]interface{}{
+			"MA":                 p.MA,
+			"ma":                 p.MA,
+			"code":               p.MA,
+			"ma_hang":            p.MA,
+			"product_code":       p.MA,
+			"TEN_DONG_BO_WEB":    p.TEN_DONG_BO_WEB,
+			"TEN":                p.TEN,
+			"ten":                p.TEN,
+			"ten_hang":           p.TEN,
+			"THUOC_TINH_1":       p.THUOC_TINH_1,
+			"THUOC_TINH_2":       p.THUOC_TINH_2,
+			"DON_GIA_BAN":        p.DON_GIA_BAN,
+			"LINK_ANH":           p.LINK_ANH,
+			"NHAN_HIEU_NAME":     p.NHAN_HIEU_NAME,
+			"LIST_TEN_NHOM_VTHH": p.LIST_TEN_NHOM_VTHH,
+			"KHO":                p.KHO,
+			"MA_CHA":             p.MA_CHA,
+			"ma_cha":             p.MA_CHA,
+			"DVT":                p.DVT,
 		}
 	}
-	var keyspaceSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
-		keyspace = keyspaceSetting.ValuePlain
-	}
-	var collectionSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
-		collection = collectionSetting.ValuePlain
-	}
-
-	if apiEndpoint == "" || token == "" {
-		return 0, nil, fmt.Errorf("Astra DB is not configured")
-	}
-
-	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
-	
-	filter := map[string]interface{}{
-		"MA_CHA": strings.ToUpper(maCha),
-	}
-	if webName != "" {
-		filter["TEN_DONG_BO_WEB"] = webName
-	}
-	
-	payload := map[string]interface{}{
-		"find": map[string]interface{}{
-			"filter": filter,
-			"options": map[string]interface{}{
-				"limit": 100,
-			},
-		},
-	}
-
-	bodyBytes, err := json.Marshal(payload)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Token", token)
-
-	httpClient := &http.Client{Timeout: 10 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return 0, nil, fmt.Errorf("Astra DB returned status code %d", resp.StatusCode)
-	}
-
-	var astraResp struct {
-		Data struct {
-			Documents []map[string]interface{} `json:"documents"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
-		return 0, nil, err
-	}
-
-	if len(astraResp.Errors) > 0 {
-		return 0, nil, fmt.Errorf("Astra DB error: %s", astraResp.Errors[0].Message)
-	}
-
-	childProducts := astraResp.Data.Documents
 
 	// 2. Fetch allowed product groups for "inventory" resource
 	_, _, allowedProductGroups := permCtx.IsResourceAllowed("inventory")
@@ -1623,6 +1645,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	}
 
 	// 3. Load ERP credentials
+	cfg, _ := config.Load()
 	erpURL, erpDB, erpLogin, erpPassword, err := loadCloudifyCredentials(tenantID, cfg)
 	if err != nil {
 		return 0, nil, err

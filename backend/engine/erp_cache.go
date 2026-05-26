@@ -1,12 +1,10 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -319,72 +317,12 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		}
 	}
 
-	// 5. Connect to Astra DB and cache the data
-	apiEndpoint := a.cfg.AstraDBAPIEndpoint
-	token := a.cfg.AstraDBToken
-
-	keyspace := "cache_product"
-	if a.cfg.AstraDBKeyspace != "" {
-		keyspace = a.cfg.AstraDBKeyspace
-	}
-
-	collection := "erp_product_bbi"
-	if a.cfg.AstraDBProductCollection != "" {
-		collection = a.cfg.AstraDBProductCollection
-	}
-
-	// Fallback to setting values if configured on the tenant level
-	var endpointSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
-		apiEndpoint = endpointSetting.ValuePlain
-	}
-	var tokenSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
-		if len(tokenSetting.ValueEncrypted) > 0 {
-			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, a.cfg.EncryptionKey); err == nil {
-				token = string(decrypted)
-			}
-		} else if tokenSetting.ValuePlain != "" {
-			token = tokenSetting.ValuePlain
-		}
-	}
-	var keyspaceSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
-		keyspace = keyspaceSetting.ValuePlain
-	}
-	var collectionSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
-		collection = collectionSetting.ValuePlain
-	}
-
-	if apiEndpoint == "" || token == "" {
-		return a.failRun(&run, fmt.Errorf("Astra DB is not configured (missing endpoint or token)"))
-	}
-
-	// 5.1 Create Collection on Astra DB (if not exists)
-	err = createAstraCollection(ctx, apiEndpoint, token, keyspace, collection)
-	if err != nil {
-		log.Printf("[erp_cache] warn: create Astra DB collection failed: %v", err)
-	}
-
-	// 5.2 Clear existing records (deleteMany with filter {})
-	err = clearAstraCollection(ctx, apiEndpoint, token, keyspace, collection)
-	if err != nil {
-		return a.failRun(&run, fmt.Errorf("clear Astra DB cache collection: %w", err))
-	}
-
-	// 5.3 Batch insert products in chunks of 20
-	err = insertAstraCollectionBatches(ctx, apiEndpoint, token, keyspace, collection, cachedProducts)
-	if err != nil {
-		return a.failRun(&run, fmt.Errorf("write products to Astra DB: %w", err))
-	}
-
-	// 5.4 Clear local MySQL cached_products for this tenant
+	// 5. Clear local MySQL cached_products for this tenant
 	if errDel := db.DB.Where("tenant_id = ?", job.TenantID).Delete(&models.CachedProduct{}).Error; errDel != nil {
 		log.Printf("[erp_cache] warn: failed to clear local MySQL cache: %v", errDel)
 	}
 
-	// 5.5 Batch insert to local MySQL
+	// 5.1 Batch insert to local MySQL
 	var sqlProducts []models.CachedProduct
 	for _, p := range cachedProducts {
 		var price float64
@@ -423,7 +361,6 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 			log.Printf("[erp_cache] warn: failed to batch insert to local MySQL: %v", errCreate)
 		}
 	}
-
 	finishedAt := time.Now()
 	runStatus := "success"
 	summaryMsg := fmt.Sprintf("Đã đồng bộ %d sản phẩm từ ERP", len(cachedProducts))
@@ -453,99 +390,6 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		fmt.Sprintf("Job '%s': completed, %s", job.Name, summaryMsg), "", "")
 
 	return &run, nil
-}
-
-// createAstraCollection sends createCollection command to keyspace endpoint.
-func createAstraCollection(ctx context.Context, apiEndpoint, token, keyspace, collection string) error {
-	url := fmt.Sprintf("%s/api/json/v1/%s", apiEndpoint, keyspace)
-	payload := map[string]interface{}{
-		"createCollection": map[string]interface{}{
-			"name": collection,
-		},
-	}
-	return sendAstraRequest(ctx, url, token, payload)
-}
-
-// clearAstraCollection sends deleteMany command to collection endpoint.
-func clearAstraCollection(ctx context.Context, apiEndpoint, token, keyspace, collection string) error {
-	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
-	payload := map[string]interface{}{
-		"deleteMany": map[string]interface{}{
-			"filter": map[string]interface{}{},
-		},
-	}
-	return sendAstraRequest(ctx, url, token, payload)
-}
-
-// insertAstraCollectionBatches chunks products into batches of 20 and inserts them.
-func insertAstraCollectionBatches(ctx context.Context, apiEndpoint, token, keyspace, collection string, products []map[string]interface{}) error {
-	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
-	
-	const batchSize = 20
-	for i := 0; i < len(products); i += batchSize {
-		end := i + batchSize
-		if end > len(products) {
-			end = len(products)
-		}
-		chunk := products[i:end]
-
-		payload := map[string]interface{}{
-			"insertMany": map[string]interface{}{
-				"documents": chunk,
-			},
-		}
-
-		err := sendAstraRequest(ctx, url, token, payload)
-		if err != nil {
-			return fmt.Errorf("batch insert at index %d: %w", i, err)
-		}
-	}
-	return nil
-}
-
-func sendAstraRequest(ctx context.Context, url, token string, payload interface{}) error {
-	bodyBytes, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Token", token)
-
-	client := &http.Client{Timeout: 180 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("Astra DB API returned status code %d", resp.StatusCode)
-	}
-
-	// Parse body for errors field inside the JSON response
-	var responseBody struct {
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&responseBody); err == nil {
-		if len(responseBody.Errors) > 0 {
-			// Check if it's "Collection already exists" error, which we can safely ignore
-			firstErrMsg := responseBody.Errors[0].Message
-			if strings.Contains(strings.ToLower(firstErrMsg), "already exists") {
-				return nil
-			}
-			return fmt.Errorf("Astra DB API error: %s", firstErrMsg)
-		}
-	}
-
-	return nil
 }
 
 // loadCloudifyCredentials load ERP credentials from settings
