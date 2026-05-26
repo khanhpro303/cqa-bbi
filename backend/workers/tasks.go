@@ -41,6 +41,7 @@ type ZaloWebhookPayload struct {
 		Text  string `json:"text"`
 		MsgID string `json:"msg_id"`
 	} `json:"message"`
+	OAID      string `json:"oa_id"`
 }
 
 // NewZaloWebhookTask creates a new task for processing a Zalo webhook
@@ -112,10 +113,16 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
-		// First pass: try to match by exact OA ID (Recipient ID) using ExternalID field in DB
-		if matchedChannel == nil {
+		// Determine the OA ID from the payload (either Recipient.ID for direct messages, or OAID for group messages)
+		oaID := payload.Recipient.ID
+		if payload.OAID != "" {
+			oaID = payload.OAID
+		}
+
+		// First pass: try to match by exact OA ID using ExternalID field in DB
+		if matchedChannel == nil && oaID != "" {
 			for i, ch := range allChannels {
-				if ch.ExternalID != "" && ch.ExternalID == payload.Recipient.ID {
+				if ch.ExternalID != "" && ch.ExternalID == oaID {
 					credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
 					if err != nil {
 						continue
@@ -132,7 +139,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// Second pass: fallback to decrypted OA ID match (if ExternalID in DB was empty)
-		if matchedChannel == nil {
+		if matchedChannel == nil && oaID != "" {
 			for i, ch := range allChannels {
 				credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
 				if err != nil {
@@ -142,7 +149,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				if err := json.Unmarshal(credBytes, &creds); err != nil {
 					continue
 				}
-				if creds.OAId != "" && creds.OAId == payload.Recipient.ID {
+				if creds.OAId != "" && creds.OAId == oaID {
 					matchedChannel = &allChannels[i]
 					zaloCreds = creds
 					break
@@ -170,7 +177,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		if matchedChannel == nil {
-			log.Printf("[worker] no active channel found for OA %s or App %s", payload.Recipient.ID, payload.AppID)
+			log.Printf("[worker] no active channel found for OA/Group %s (OAID: %s) or App %s", payload.Recipient.ID, payload.OAID, payload.AppID)
 			return asynq.SkipRetry // Skip retry if channel not found
 		}
 
@@ -394,6 +401,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
+		if matchedGroup.ZaloGroupID == "" && payload.EventName == "user_send_group_text" {
+			matchedGroup.ZaloGroupID = payload.Recipient.ID
+		}
+
 		if hasGroup {
 			// Verify membership
 			isMember := false
@@ -417,7 +428,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		sessionKey := fmt.Sprintf("zalo_session:%s:%s", matchedChannel.ID, payload.Sender.ID)
-		if matchedGroup.ID != "" {
+		if matchedGroup.ZaloGroupID != "" {
 			sessionKey = fmt.Sprintf("zalo_session:%s:group:%s", matchedChannel.ID, matchedGroup.ZaloGroupID)
 		}
 
@@ -475,7 +486,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				}
 				// Send welcome message
 				var err error
-				if matchedGroup.ID != "" {
+				if matchedGroup.ZaloGroupID != "" {
 					err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionWelcomeMessage)
 				} else {
 					err = adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionWelcomeMessage)
@@ -505,7 +516,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				db.RedisClient.Del(ctx, sessionKey)
 			}
 			var err error
-			if matchedGroup.ID != "" {
+			if matchedGroup.ZaloGroupID != "" {
 				err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionGoodbyeMessage)
 			} else {
 				err = adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionGoodbyeMessage)
@@ -551,7 +562,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 			handoverMsg := "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Em sẽ báo các bạn nhân viên admin liên hệ trực tiếp hỗ trợ mình ngay nhé ạ!"
 			var sendErr error
-			if matchedGroup.ID != "" {
+			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, handoverMsg)
 			} else {
 				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, handoverMsg)
@@ -573,7 +584,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Determine which Flow ID to use
 		flowIDToUse := meta.LangflowPublicFlowID
 		// Only route to the private flow if the user is whitelisted AND we are NOT in a GMF group chat context
-		if isWhitelisted && matchedGroup.ID == "" {
+		if isWhitelisted && matchedGroup.ZaloGroupID == "" {
 			flowIDToUse = meta.LangflowFlowID
 			log.Printf("[worker] Routing whitelisted internal staff %s to RAG Agent Flow (%s)", payload.Sender.ID, flowIDToUse)
 		} else {
@@ -586,7 +597,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Resolve permission context and sign JWT token
 		agentType := "public"
 		// Only set agentType to "private" if the user is whitelisted AND we are NOT in a GMF group chat context
-		if isWhitelisted && matchedGroup.ID == "" {
+		if isWhitelisted && matchedGroup.ZaloGroupID == "" {
 			agentType = "private"
 		}
 		permCtx := engine.ResolvePermissionsWithGroup(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType, matchedGroup.ID)
@@ -601,7 +612,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 			reply := fmt.Sprintf("Bạn muốn xem tồn kho cụ thể của màu và size nào cho dòng sản phẩm %s?\nVui lòng nhập thông tin (Ví dụ: %s màu đỏ size L).", maChaName, maChaName)
 			var err error
-			if matchedGroup.ID != "" {
+			if matchedGroup.ZaloGroupID != "" {
 				err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
 			} else {
 				err = adapter.SendMessage(ctx, payload.Sender.ID, reply)
@@ -625,7 +636,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if err != nil {
 				log.Printf("[worker] error summing inventory: %v", err)
 				var sendErr error
-				if matchedGroup.ID != "" {
+				if matchedGroup.ZaloGroupID != "" {
 					sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, "Đã có lỗi xảy ra khi tính toán tồn kho dòng sản phẩm.")
 				} else {
 					sendErr = adapter.SendMessage(ctx, payload.Sender.ID, "Đã có lỗi xảy ra khi tính toán tồn kho dòng sản phẩm.")
@@ -636,7 +647,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			reply := fmt.Sprintf("Tổng tồn kho của dòng sản phẩm %s (Mã: %s) trên hệ thống hiện tại là: %.1f", displayName, clickPayload.MaCha, totalStock)
 			var sendErr error
-			if matchedGroup.ID != "" {
+			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
 			} else {
 				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, reply)
@@ -671,7 +682,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// 3. Send message back to Zalo
 		var sendErr error
-		if matchedGroup.ID != "" {
+		if matchedGroup.ZaloGroupID != "" {
 			sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, replyText)
 		} else {
 			sendErr = adapter.SendMessage(ctx, payload.Sender.ID, replyText)
