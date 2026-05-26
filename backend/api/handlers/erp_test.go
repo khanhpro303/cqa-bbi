@@ -1,9 +1,114 @@
 package handlers
 
 import (
+	"context"
 	"testing"
 	"time"
 )
+
+func TestCalculateProductPriceRange(t *testing.T) {
+	tests := []struct {
+		name      string
+		products  []map[string]interface{}
+		wantMin   float64
+		wantMax   float64
+		wantLabel string
+	}{
+		{
+			name: "multiple prices returns min max range",
+			products: []map[string]interface{}{
+				{"DON_GIA_BAN": 2900000.0},
+				{"DON_GIA_BAN": 3490000.0},
+			},
+			wantMin:   2900000.0,
+			wantMax:   3490000.0,
+			wantLabel: "2.900.000đ - 3.490.000đ",
+		},
+		{
+			name: "same prices returns single price",
+			products: []map[string]interface{}{
+				{"DON_GIA_BAN": 2900000.0},
+				{"DON_GIA_BAN": 2900000.0},
+			},
+			wantMin:   2900000.0,
+			wantMax:   2900000.0,
+			wantLabel: "2.900.000đ",
+		},
+		{
+			name: "zero prices are ignored",
+			products: []map[string]interface{}{
+				{"DON_GIA_BAN": 0.0},
+				{"DON_GIA_BAN": 3490000.0},
+			},
+			wantMin:   3490000.0,
+			wantMax:   3490000.0,
+			wantLabel: "3.490.000đ",
+		},
+		{
+			name: "all zero prices returns contact",
+			products: []map[string]interface{}{
+				{"DON_GIA_BAN": 0.0},
+				{"DON_GIA_BAN": 0.0},
+			},
+			wantMin:   0,
+			wantMax:   0,
+			wantLabel: "Liên hệ",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := calculateProductPriceRange(tc.products)
+			if got.Min != tc.wantMin {
+				t.Errorf("Min = %v; want %v", got.Min, tc.wantMin)
+			}
+			if got.Max != tc.wantMax {
+				t.Errorf("Max = %v; want %v", got.Max, tc.wantMax)
+			}
+			if got.Label != tc.wantLabel {
+				t.Errorf("Label = %q; want %q", got.Label, tc.wantLabel)
+			}
+		})
+	}
+}
+
+func TestEnrichProductsWithPriceRangesUsesVariantsByMaCha(t *testing.T) {
+	products := []map[string]interface{}{
+		{
+			"MA":                 "SP001710",
+			"MA_CHA":             "SP456836",
+			"LIST_TEN_NHOM_VTHH": "Nguyên Đầu",
+			"DON_GIA_BAN":        1500000.0,
+		},
+	}
+
+	loadVariants := func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
+		if maCha != "SP456836" {
+			t.Fatalf("unexpected ma_cha lookup: %s", maCha)
+		}
+		return []map[string]interface{}{
+			{"MA": "SP001710", "MA_CHA": maCha, "LIST_TEN_NHOM_VTHH": "Nguyên Đầu", "DON_GIA_BAN": 2900000.0},
+			{"MA": "SP001711", "MA_CHA": maCha, "LIST_TEN_NHOM_VTHH": "Nguyên Đầu", "DON_GIA_BAN": 3490000.0},
+			{"MA": "SP001712", "MA_CHA": maCha, "LIST_TEN_NHOM_VTHH": "Nguyên Đầu", "DON_GIA_BAN": 0.0},
+			{"MA": "SAMPLE001", "MA_CHA": maCha, "LIST_TEN_NHOM_VTHH": "Sample", "DON_GIA_BAN": 990000.0},
+		}, nil
+	}
+
+	enriched := enrichProductsWithPriceRanges(context.Background(), products, []string{"Nguyên Đầu"}, loadVariants)
+
+	if len(enriched) != 1 {
+		t.Fatalf("expected 1 enriched product, got %d", len(enriched))
+	}
+	if enriched[0]["price_range"] != "2.900.000đ - 3.490.000đ" {
+		t.Errorf("price_range = %#v; want range from allowed variants", enriched[0]["price_range"])
+	}
+	if enriched[0]["price_min"] != 2900000.0 {
+		t.Errorf("price_min = %#v; want 2900000", enriched[0]["price_min"])
+	}
+	if enriched[0]["price_max"] != 3490000.0 {
+		t.Errorf("price_max = %#v; want 3490000", enriched[0]["price_max"])
+	}
+}
 
 func TestFilterProductsByGroupsUsesProductGroupBeforeBrand(t *testing.T) {
 	products := []map[string]interface{}{

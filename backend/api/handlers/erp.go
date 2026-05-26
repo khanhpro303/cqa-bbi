@@ -223,6 +223,70 @@ func ERPQuery(c *gin.Context) {
 		}
 	}
 
+	// ── 6. Products are served from local cache only ──────────────────────
+	if req.Resource == "products" {
+		cachedData, err := searchProductsFromAstraDB(c.Request.Context(), tenantID, req.Search, req.Limit)
+		if err != nil {
+			log.Printf("[erp_query] product cache search error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "product_cache_error",
+				"message": fmt.Sprintf("Không thể lấy dữ liệu sản phẩm từ cache: %s", err.Error()),
+			})
+			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusInternalServerError, 0, c.ClientIP())
+			return
+		}
+		if cachedData == nil {
+			cachedData = []map[string]interface{}{}
+		}
+
+		filteredCached := filterProductsByGroups(cachedData, productGroups)
+		filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
+			return getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
+		})
+
+		// Group by parent code check
+		if req.Search != "" && len(filteredCached) > 0 {
+			maChaCounts := make(map[string]int)
+			for _, p := range filteredCached {
+				maChaVal := getMapString(p, "MA_CHA", "ma_cha")
+				maVal := getMapString(p, "MA", "ma_hang", "ma")
+				if maChaVal != "" {
+					maChaCounts[maChaVal]++
+				} else if maVal != "" {
+					maChaCounts[maVal]++
+				}
+			}
+
+			if len(maChaCounts) > 1 {
+				sent := sendProductRichMessage(c, tenantID, req.Search, maChaCounts, permCtx)
+				if sent {
+					c.JSON(http.StatusOK, gin.H{
+						"status":          "success",
+						"is_product_rich":  true,
+						"data":            []map[string]interface{}{
+							{
+								"message": fmt.Sprintf("Đã gửi danh sách lựa chọn dòng sản phẩm cho từ khóa '%s' trực tiếp qua Zalo cho người dùng. Hãy hướng dẫn người dùng chọn dòng sản phẩm trên Zalo.", req.Search),
+							},
+						},
+						"message":         "zalo_rich_message_sent_directly",
+						"count":           1,
+					})
+					return
+				}
+			}
+		}
+
+		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(filteredCached), c.ClientIP())
+		c.JSON(http.StatusOK, gin.H{
+			"status":   "success",
+			"data":     filteredCached,
+			"source":   "astradb_cache",
+			"resource": req.Resource,
+			"count":    len(filteredCached),
+		})
+		return
+	}
+
 	// ── 6. Load Cloudify credentials ──────────────────────────────────────
 	erpURL, erpDB, erpLogin, erpPassword, credErr := loadCloudifyCredentials(tenantID, cfg)
 	if credErr != nil {
@@ -297,58 +361,6 @@ func ERPQuery(c *gin.Context) {
 		respondWithMockDataV2(c, req.Resource, req.Search, req.Limit, allowedGroups, scopeType, permCtx.CustomerCode, tenantID, permCtx.Groups, permCtx.ZaloUserID)
 		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, 0, c.ClientIP())
 		return
-	}
-
-	// ── 9. Check if resource is products and attempt cached search in Astra DB ──
-	if req.Resource == "products" {
-		cachedData, err := searchProductsFromAstraDB(c.Request.Context(), tenantID, req.Search, req.Limit)
-		if err != nil {
-			log.Printf("[erp_query] Astra DB cache search error: %v. Falling back to live Cloudify ERP.", err)
-		} else if cachedData != nil {
-			filteredCached := filterProductsByGroups(cachedData, productGroups)
-
-			// Group by parent code check
-			if req.Search != "" && len(filteredCached) > 0 {
-				maChaCounts := make(map[string]int)
-				for _, p := range filteredCached {
-					maChaVal := getMapString(p, "MA_CHA", "ma_cha")
-					maVal := getMapString(p, "MA", "ma_hang", "ma")
-					if maChaVal != "" {
-						maChaCounts[maChaVal]++
-					} else if maVal != "" {
-						maChaCounts[maVal]++
-					}
-				}
-
-				if len(maChaCounts) > 1 {
-					sent := sendProductRichMessage(c, tenantID, req.Search, maChaCounts, permCtx)
-					if sent {
-						c.JSON(http.StatusOK, gin.H{
-							"status":          "success",
-							"is_product_rich":  true,
-							"data":            []map[string]interface{}{
-								{
-									"message": fmt.Sprintf("Đã gửi danh sách lựa chọn dòng sản phẩm cho từ khóa '%s' trực tiếp qua Zalo cho người dùng. Hãy hướng dẫn người dùng chọn dòng sản phẩm trên Zalo.", req.Search),
-								},
-							},
-							"message":         "zalo_rich_message_sent_directly",
-							"count":           1,
-						})
-						return
-					}
-				}
-			}
-
-			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(filteredCached), c.ClientIP())
-			c.JSON(http.StatusOK, gin.H{
-				"status":   "success",
-				"data":     filteredCached,
-				"source":   "astradb_cache",
-				"resource": req.Resource,
-				"count":    len(filteredCached),
-			})
-			return
-		}
 	}
 
 	// ── 10. Execute live Cloudify call with filters ───────────────────────
@@ -689,6 +701,109 @@ func mapCachedProductToAPIResponse(p map[string]interface{}) map[string]interfac
 	return res
 }
 
+type productPriceRange struct {
+	Min   float64
+	Max   float64
+	Label string
+}
+
+func enrichProductsWithPriceRanges(ctx context.Context, products []map[string]interface{}, allowedGroups []string, loadVariants func(context.Context, string) ([]map[string]interface{}, error)) []map[string]interface{} {
+	priceRangeByMaCha := make(map[string]productPriceRange)
+	enriched := make([]map[string]interface{}, 0, len(products))
+
+	for _, product := range products {
+		maCha := getMapString(product, "MA_CHA", "ma_cha")
+		var priceRange productPriceRange
+
+		if maCha == "" {
+			priceRange = calculateProductPriceRange([]map[string]interface{}{product})
+		} else {
+			var ok bool
+			priceRange, ok = priceRangeByMaCha[maCha]
+			if !ok {
+				var variants []map[string]interface{}
+				var err error
+				if loadVariants != nil {
+					variants, err = loadVariants(ctx, maCha)
+				}
+				if err != nil || len(variants) == 0 {
+					variants = []map[string]interface{}{product}
+				}
+
+				variants = filterProductsByGroups(variants, allowedGroups)
+				if len(variants) == 0 {
+					variants = []map[string]interface{}{product}
+				}
+
+				priceRange = calculateProductPriceRange(variants)
+				priceRangeByMaCha[maCha] = priceRange
+			}
+		}
+
+		enriched = append(enriched, withProductPriceRange(product, priceRange))
+	}
+
+	return enriched
+}
+
+func withProductPriceRange(product map[string]interface{}, priceRange productPriceRange) map[string]interface{} {
+	enriched := make(map[string]interface{}, len(product)+5)
+	for k, v := range product {
+		enriched[k] = v
+	}
+	enriched["price_min"] = priceRange.Min
+	enriched["price_max"] = priceRange.Max
+	enriched["don_gia_ban_min"] = priceRange.Min
+	enriched["don_gia_ban_max"] = priceRange.Max
+	enriched["price_range"] = priceRange.Label
+	return enriched
+}
+
+func calculateProductPriceRange(products []map[string]interface{}) productPriceRange {
+	var minPrice float64
+	var maxPrice float64
+
+	for _, product := range products {
+		price := getMapFloat(product, "DON_GIA_BAN", "don_gia_ban", "price")
+		if price <= 0 {
+			continue
+		}
+		if minPrice == 0 || price < minPrice {
+			minPrice = price
+		}
+		if price > maxPrice {
+			maxPrice = price
+		}
+	}
+
+	return productPriceRange{
+		Min:   minPrice,
+		Max:   maxPrice,
+		Label: formatProductPriceRange(minPrice, maxPrice),
+	}
+}
+
+func formatProductPriceRange(minPrice, maxPrice float64) string {
+	if minPrice <= 0 || maxPrice <= 0 {
+		return "Liên hệ"
+	}
+	if minPrice == maxPrice {
+		return formatVNDPrice(minPrice)
+	}
+	return fmt.Sprintf("%s - %s", formatVNDPrice(minPrice), formatVNDPrice(maxPrice))
+}
+
+func formatVNDPrice(price float64) string {
+	value := strconv.FormatInt(int64(price+0.5), 10)
+	var parts []string
+	for len(value) > 3 {
+		parts = append([]string{value[len(value)-3:]}, parts...)
+		value = value[:len(value)-3]
+	}
+	parts = append([]string{value}, parts...)
+	return strings.Join(parts, ".") + "đ"
+}
+
 func getMapString(m map[string]interface{}, keys ...string) string {
 	for _, k := range keys {
 		if val, ok := m[k]; ok && val != nil {
@@ -734,8 +849,6 @@ func respondWithLiveData(c *gin.Context, client *pkg.CloudifyClient, resource, s
 	)
 
 	switch resource {
-	case "products":
-		data, err = client.SearchProducts(search, limit)
 	case "inventory":
 		data, err = client.SearchInventory(search, limit)
 	case "orders":
@@ -1328,91 +1441,6 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	)
 
 	switch resource {
-	case "products":
-		productsEndpoint := "product/search"
-		usePostMethod := false
-		var globalPermsSetting models.AppSetting
-		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
-			type EndpointConfig struct {
-				Get  bool   `json:"get"`
-				Post bool   `json:"post"`
-				Path string `json:"path"`
-			}
-			var globalPerms map[string]EndpointConfig
-			if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
-				if prodConfig, exists := globalPerms["products"]; exists && prodConfig.Path != "" && prodConfig.Path != "products" {
-					path := prodConfig.Path
-					path = strings.TrimPrefix(path, "/")
-					path = strings.TrimPrefix(path, "rest_api/private/")
-					path = strings.TrimPrefix(path, "/")
-					productsEndpoint = path
-					usePostMethod = prodConfig.Post
-				}
-			}
-		}
-
-		sanitizedSearch := sanitizeSearchQuery(search)
-		if usePostMethod {
-			bodyPayload := map[string]interface{}{
-				"limit": limit,
-			}
-			if productsEndpoint == "product/search" {
-				bodyPayload["keyword"] = sanitizedSearch
-			} else {
-				bodyPayload["MA_HANG"] = sanitizedSearch
-			}
-			data, err = client.SearchCustomEndpointWithBody(productsEndpoint, bodyPayload)
-		} else {
-			params := map[string]string{
-				"limit": strconv.Itoa(limit),
-			}
-			if productsEndpoint == "product/search" {
-				params["keyword"] = sanitizedSearch
-			} else {
-				params["MA_HANG"] = sanitizedSearch
-			}
-			data, err = client.SearchCustomEndpoint(productsEndpoint, params)
-		}
-
-		if err != nil {
-			log.Printf("[erp_query] Cloudify product search error for search '%s' (sanitized: '%s'): %v. Overriding to empty list.", search, sanitizedSearch, err)
-			err = nil
-			data = []map[string]interface{}{}
-		}
-
-		if err == nil && data != nil {
-			filtered := filterProductsByGroups(data, productGroups)
-			if search != "" && len(filtered) > 0 {
-				maChaCounts := make(map[string]int)
-				for _, p := range filtered {
-					maChaVal := getMapString(p, "MA_CHA", "ma_cha")
-					maVal := getMapString(p, "MA", "ma_hang", "ma")
-					if maChaVal != "" {
-						maChaCounts[maChaVal]++
-					} else if maVal != "" {
-						maChaCounts[maVal]++
-					}
-				}
-
-				if len(maChaCounts) > 1 {
-					sent := sendProductRichMessage(c, tenantID, search, maChaCounts, permCtx)
-					if sent {
-						c.JSON(http.StatusOK, gin.H{
-							"status":          "success",
-							"is_product_rich":  true,
-							"data":            []map[string]interface{}{
-								{
-									"message": fmt.Sprintf("Đã gửi danh sách lựa chọn dòng sản phẩm cho từ khóa '%s' trực tiếp qua Zalo cho người dùng. Hãy hướng dẫn người dùng chọn dòng sản phẩm trên Zalo.", search),
-								},
-							},
-							"message":         "zalo_rich_message_sent_directly",
-							"count":           1,
-						})
-						return
-					}
-				}
-			}
-		}
 	case "inventory":
 		// Load custom inventory endpoint config
 		inventoryEndpoint := "inventory_receipt/search"
@@ -2148,13 +2176,11 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		data = []map[string]interface{}{}
 	}
 
-	if resource == "products" || resource == "inventory" {
-		if resource == "inventory" {
-			for i, p := range data {
-				sku := getMapString(p, "code", "ma_hang", "ma", "product_code", "MA_HANG", "MA")
-				group := getProductGroupFromAstra(c.Request.Context(), tenantID, sku)
-				data[i]["list_ten_nhom_vthh"] = group
-			}
+	if resource == "inventory" {
+		for i, p := range data {
+			sku := getMapString(p, "code", "ma_hang", "ma", "product_code", "MA_HANG", "MA")
+			group := getProductGroupFromAstra(c.Request.Context(), tenantID, sku)
+			data[i]["list_ten_nhom_vthh"] = group
 		}
 		data = filterProductsByGroups(data, productGroups)
 	}
@@ -3123,4 +3149,3 @@ func sanitizeSearchQuery(search string) string {
 	}
 	return search
 }
-
