@@ -26,6 +26,23 @@ const (
 	TypeZaloWebhook = "zalo:webhook"
 )
 
+type ZaloWebhookAttachment struct {
+	Type    string `json:"type"`
+	Payload struct {
+		Thumbnail   string `json:"thumbnail,omitempty"`
+		Description string `json:"description,omitempty"`
+		URL         string `json:"url,omitempty"`
+		Size        string `json:"size,omitempty"`
+		Name        string `json:"name,omitempty"`
+		Checksum    string `json:"checksum,omitempty"`
+		Type        string `json:"type,omitempty"`
+		Coordinates struct {
+			Latitude  string `json:"latitude,omitempty"`
+			Longitude string `json:"longitude,omitempty"`
+		} `json:"coordinates,omitempty"`
+	} `json:"payload"`
+}
+
 // ZaloWebhookPayload must match the one in handlers/webhooks.go
 type ZaloWebhookPayload struct {
 	AppID     string `json:"app_id"`
@@ -38,8 +55,9 @@ type ZaloWebhookPayload struct {
 		ID string `json:"id"`
 	} `json:"recipient"`
 	Message struct {
-		Text  string `json:"text"`
-		MsgID string `json:"msg_id"`
+		Text        string                  `json:"text"`
+		MsgID       string                  `json:"msg_id"`
+		Attachments []ZaloWebhookAttachment `json:"attachments,omitempty"`
 	} `json:"message"`
 	OAID      string `json:"oa_id"`
 }
@@ -282,6 +300,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		})
 
 		userText := strings.TrimSpace(payload.Message.Text)
+		attachmentText := parseAttachmentText(payload.Message.Attachments)
+		if attachmentText != "" {
+			if userText == "" {
+				userText = strings.TrimSpace(attachmentText)
+			} else {
+				userText = userText + "\n" + strings.TrimSpace(attachmentText)
+			}
+		}
 
 		// 1. Check for verification token command: "verify <token>"
 		if strings.HasPrefix(strings.ToLower(userText), "verify ") {
@@ -1122,3 +1148,30 @@ CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`
 	}
 	return "IN_SCOPE", nil
 }
+
+func parseAttachmentText(atts []ZaloWebhookAttachment) string {
+	var sb strings.Builder
+	for _, att := range atts {
+		switch att.Type {
+		case "location":
+			sb.WriteString(fmt.Sprintf("\n[Vị trí: vĩ độ %s, kinh độ %s]", att.Payload.Coordinates.Latitude, att.Payload.Coordinates.Longitude))
+		case "file":
+			sb.WriteString(fmt.Sprintf("\n[File: %s, Url: %s, dung lượng: %s byte]", att.Payload.Name, att.Payload.URL, att.Payload.Size))
+		case "link":
+			// Check if description contains business card JSON
+			if strings.Contains(att.Payload.Description, "phone") && strings.Contains(att.Payload.Description, "qrCodeUrl") {
+				var bizCard struct {
+					Phone     string `json:"phone"`
+					QRCodeURL string `json:"qrCodeUrl"`
+				}
+				if err := json.Unmarshal([]byte(att.Payload.Description), &bizCard); err == nil {
+					sb.WriteString(fmt.Sprintf("\n[Danh thiếp: SĐT %s, QR: %s]", bizCard.Phone, bizCard.QRCodeURL))
+					continue
+				}
+			}
+			sb.WriteString(fmt.Sprintf("\n[Liên kết: %s - %s]", att.Payload.Description, att.Payload.URL))
+		}
+	}
+	return sb.String()
+}
+

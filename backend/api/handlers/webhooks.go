@@ -29,7 +29,7 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 		// Always return 200 OK to Zalo quickly
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 
-		if (payload.EventName != "user_send_text" && payload.EventName != "user_send_group_text") || payload.Message.Text == "" {
+		if (payload.EventName != "user_send_text" && payload.EventName != "user_send_group_text") || (payload.Message.Text == "" && len(payload.Message.Attachments) == 0) {
 			return
 		}
 
