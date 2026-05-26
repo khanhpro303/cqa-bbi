@@ -89,21 +89,45 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		var matchedChannel *models.Channel
 		var zaloCreds channels.ZaloOACredentials
+		var resolvedGroup *models.CRMGroup
+
+		// 1a. Try to match by group ID if payload.Recipient.ID matches a Zalo group ID in our CRM groups
+		if payload.Recipient.ID != "" {
+			var group models.CRMGroup
+			if err := db.DB.Where("zalo_group_id = ?", payload.Recipient.ID).First(&group).Error; err == nil {
+				for i, ch := range allChannels {
+					if ch.ID == group.ChannelID {
+						credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
+						if err == nil {
+							var creds channels.ZaloOACredentials
+							if err := json.Unmarshal(credBytes, &creds); err == nil {
+								matchedChannel = &allChannels[i]
+								zaloCreds = creds
+								resolvedGroup = &group
+								break
+							}
+						}
+					}
+				}
+			}
+		}
 
 		// First pass: try to match by exact OA ID (Recipient ID) using ExternalID field in DB
-		for i, ch := range allChannels {
-			if ch.ExternalID != "" && ch.ExternalID == payload.Recipient.ID {
-				credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
-				if err != nil {
-					continue
+		if matchedChannel == nil {
+			for i, ch := range allChannels {
+				if ch.ExternalID != "" && ch.ExternalID == payload.Recipient.ID {
+					credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
+					if err != nil {
+						continue
+					}
+					var creds channels.ZaloOACredentials
+					if err := json.Unmarshal(credBytes, &creds); err != nil {
+						continue
+					}
+					matchedChannel = &allChannels[i]
+					zaloCreds = creds
+					break
 				}
-				var creds channels.ZaloOACredentials
-				if err := json.Unmarshal(credBytes, &creds); err != nil {
-					continue
-				}
-				matchedChannel = &allChannels[i]
-				zaloCreds = creds
-				break
 			}
 		}
 
@@ -360,7 +384,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// GMF Group Chat Context Detection & CustomerCode Override
 		var matchedGroup models.CRMGroup
-		if err := db.DB.Where("tenant_id = ? AND zalo_group_id = ?", matchedChannel.TenantID, payload.Recipient.ID).First(&matchedGroup).Error; err == nil {
+		var hasGroup bool
+		if resolvedGroup != nil {
+			matchedGroup = *resolvedGroup
+			hasGroup = true
+		} else if matchedChannel != nil {
+			if err := db.DB.Where("tenant_id = ? AND zalo_group_id = ?", matchedChannel.TenantID, payload.Recipient.ID).First(&matchedGroup).Error; err == nil {
+				hasGroup = true
+			}
+		}
+
+		if hasGroup {
 			// Verify membership
 			isMember := false
 			if isWhitelisted {
