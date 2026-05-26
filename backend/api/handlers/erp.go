@@ -1307,13 +1307,57 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 	switch resource {
 	case "products":
+		productsEndpoint := "product/search"
+		usePostMethod := false
+		var globalPermsSetting models.AppSetting
+		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
+			type EndpointConfig struct {
+				Get  bool   `json:"get"`
+				Post bool   `json:"post"`
+				Path string `json:"path"`
+			}
+			var globalPerms map[string]EndpointConfig
+			if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
+				if prodConfig, exists := globalPerms["products"]; exists && prodConfig.Path != "" && prodConfig.Path != "products" {
+					path := prodConfig.Path
+					path = strings.TrimPrefix(path, "/")
+					path = strings.TrimPrefix(path, "rest_api/private/")
+					path = strings.TrimPrefix(path, "/")
+					productsEndpoint = path
+					usePostMethod = prodConfig.Post
+				}
+			}
+		}
+
 		sanitizedSearch := sanitizeSearchQuery(search)
-		data, err = client.SearchProducts(sanitizedSearch, limit)
+		if usePostMethod {
+			bodyPayload := map[string]interface{}{
+				"limit": limit,
+			}
+			if productsEndpoint == "product/search" {
+				bodyPayload["keyword"] = sanitizedSearch
+			} else {
+				bodyPayload["MA_HANG"] = sanitizedSearch
+			}
+			data, err = client.SearchCustomEndpointWithBody(productsEndpoint, bodyPayload)
+		} else {
+			params := map[string]string{
+				"limit": strconv.Itoa(limit),
+			}
+			if productsEndpoint == "product/search" {
+				params["keyword"] = sanitizedSearch
+			} else {
+				params["MA_HANG"] = sanitizedSearch
+			}
+			data, err = client.SearchCustomEndpoint(productsEndpoint, params)
+		}
+
 		if err != nil {
 			log.Printf("[erp_query] Cloudify product search error for search '%s' (sanitized: '%s'): %v. Overriding to empty list.", search, sanitizedSearch, err)
 			err = nil
 			data = []map[string]interface{}{}
 		}
+
 		if err == nil && data != nil {
 			filtered := filterProductsByGroups(data, productGroups)
 			if search != "" && len(filtered) > 0 {
