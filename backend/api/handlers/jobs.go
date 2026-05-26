@@ -790,20 +790,8 @@ func GetJobERPCache(c *gin.Context) {
 		return
 	}
 
-	limitStr := c.Query("limit")
-	limit := 500
-	if limitStr != "" {
-		if val, err := strconv.Atoi(limitStr); err == nil && val > 0 {
-			limit = val
-		}
-	}
-	if limit > 1000 {
-		limit = 1000
-	}
-
 	var products []models.CachedProduct
 	if err := db.DB.Where("tenant_id = ?", tenantID).
-		Limit(limit).
 		Find(&products).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db_query_failed", "message": err.Error()})
 		return
