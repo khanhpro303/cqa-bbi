@@ -89,7 +89,7 @@
       </v-row>
 
       <v-row>
-        <v-col cols="12" md="4">
+        <v-col cols="12" md="6">
           <v-text-field
             v-model="astradb.keyspace"
             label="Keyspace"
@@ -99,21 +99,11 @@
             density="compact"
           />
         </v-col>
-        <v-col cols="12" md="4">
+        <v-col cols="12" md="6">
           <v-text-field
             v-model="astradb.collection"
             label="Chat History Collection"
             placeholder="zalo_chat_history"
-            class="mb-3"
-            clearable
-            density="compact"
-          />
-        </v-col>
-        <v-col cols="12" md="4">
-          <v-text-field
-            v-model="astradb.productCollection"
-            label="Product Cache Collection"
-            placeholder="erp_product_bbi"
             class="mb-3"
             clearable
             density="compact"
@@ -432,7 +422,6 @@ const astradb = reactive({
   token: '',
   keyspace: '',
   collection: '',
-  productCollection: '',
 })
 
 const listTenNhomVthh = ref<string[]>([])
@@ -502,7 +491,6 @@ async function loadSettings() {
 
     astradb.apiEndpoint = settings.astradb_api_endpoint || ''
     astradb.keyspace = settings.astradb_keyspace || ''
-    astradb.productCollection = settings.astradb_product_collection || ''
     astradb.collection = settings.astradb_collection || ''
     if (settings.astradb_token) {
       astradb.token = settings.astradb_token
@@ -560,7 +548,6 @@ async function save() {
       astradb_api_endpoint: astradb.apiEndpoint,
       astradb_token: astradb.token,
       astradb_keyspace: astradb.keyspace,
-      astradb_product_collection: astradb.productCollection,
       astradb_collection: astradb.collection,
     })
     showSnack(t('success'), 'success')

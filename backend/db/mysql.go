@@ -58,6 +58,7 @@ func AutoMigrate() error {
 		&models.JobRun{},
 		&models.JobResult{},
 		&models.AppSetting{},
+		&models.CachedProduct{},
 		&models.NotificationLog{},
 		&models.AIUsageLog{},
 		&models.OAuthClient{},

@@ -379,6 +379,51 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		return a.failRun(&run, fmt.Errorf("write products to Astra DB: %w", err))
 	}
 
+	// 5.4 Clear local MySQL cached_products for this tenant
+	if errDel := db.DB.Where("tenant_id = ?", job.TenantID).Delete(&models.CachedProduct{}).Error; errDel != nil {
+		log.Printf("[erp_cache] warn: failed to clear local MySQL cache: %v", errDel)
+	}
+
+	// 5.5 Batch insert to local MySQL
+	var sqlProducts []models.CachedProduct
+	for _, p := range cachedProducts {
+		var price float64
+		if val, ok := p["DON_GIA_BAN"].(float64); ok {
+			price = val
+		}
+
+		sqlProducts = append(sqlProducts, models.CachedProduct{
+			ID:                 pkg.NewUUID(),
+			TenantID:           job.TenantID,
+			MA:                 getStringVal(p, "MA"),
+			TEN_DONG_BO_WEB:    getStringVal(p, "TEN_DONG_BO_WEB"),
+			TEN:                getStringVal(p, "TEN"),
+			THUOC_TINH_1:       getStringVal(p, "THUOC_TINH_1"),
+			THUOC_TINH_2:       getStringVal(p, "THUOC_TINH_2"),
+			DON_GIA_BAN:        price,
+			LINK_ANH:           getStringVal(p, "LINK_ANH"),
+			NHAN_HIEU_NAME:     getStringVal(p, "NHAN_HIEU_NAME"),
+			LIST_TEN_NHOM_VTHH: getStringVal(p, "LIST_TEN_NHOM_VTHH"),
+			KHO:                getStringVal(p, "KHO"),
+			MA_CHA:             getStringVal(p, "MA_CHA"),
+			DVT:                getStringVal(p, "DVT"),
+			CreatedAt:          time.Now(),
+			UpdatedAt:          time.Now(),
+		})
+	}
+
+	// Batch insert in chunks of 100 for MySQL performance
+	const chunkSQLSize = 100
+	for i := 0; i < len(sqlProducts); i += chunkSQLSize {
+		end := i + chunkSQLSize
+		if end > len(sqlProducts) {
+			end = len(sqlProducts)
+		}
+		if errCreate := db.DB.Create(sqlProducts[i:end]).Error; errCreate != nil {
+			log.Printf("[erp_cache] warn: failed to batch insert to local MySQL: %v", errCreate)
+		}
+	}
+
 	finishedAt := time.Now()
 	runStatus := "success"
 	summaryMsg := fmt.Sprintf("Đã đồng bộ %d sản phẩm từ ERP vào Astra DB", len(cachedProducts))
