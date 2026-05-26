@@ -326,9 +326,13 @@ func ERPQuery(c *gin.Context) {
 						c.JSON(http.StatusOK, gin.H{
 							"status":          "success",
 							"is_product_rich":  true,
-							"data":            []map[string]interface{}{},
+							"data":            []map[string]interface{}{
+								{
+									"message": fmt.Sprintf("Đã gửi danh sách lựa chọn dòng sản phẩm cho từ khóa '%s' trực tiếp qua Zalo cho người dùng. Hãy hướng dẫn người dùng chọn dòng sản phẩm trên Zalo.", req.Search),
+								},
+							},
 							"message":         "zalo_rich_message_sent_directly",
-							"count":           0,
+							"count":           1,
 						})
 						return
 					}
@@ -1378,9 +1382,13 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						c.JSON(http.StatusOK, gin.H{
 							"status":          "success",
 							"is_product_rich":  true,
-							"data":            []map[string]interface{}{},
+							"data":            []map[string]interface{}{
+								{
+									"message": fmt.Sprintf("Đã gửi danh sách lựa chọn dòng sản phẩm cho từ khóa '%s' trực tiếp qua Zalo cho người dùng. Hãy hướng dẫn người dùng chọn dòng sản phẩm trên Zalo.", search),
+								},
+							},
 							"message":         "zalo_rich_message_sent_directly",
-							"count":           0,
+							"count":           1,
 						})
 						return
 					}
