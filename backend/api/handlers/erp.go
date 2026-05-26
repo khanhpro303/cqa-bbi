@@ -1745,6 +1745,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	}
 
 	if err != nil {
+		log.Printf("[erp_query_error] tenant=%s resource=%s search=%s error=%v", tenantID, resource, search, err)
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error":   "erp_upstream_error",
 			"message": fmt.Sprintf("Không thể lấy dữ liệu từ Cloudify ERP: %s", err.Error()),
