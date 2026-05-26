@@ -898,6 +898,81 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
+		// 3. Show Product Variants Selection (#show_product_variants:<MA_CHA>)
+		if strings.HasPrefix(userText, "#show_product_variants:") {
+			maCha := strings.TrimPrefix(userText, "#show_product_variants:")
+			childProducts, err := getProductsByMaChaFromAstraDB(ctx, matchedChannel.TenantID, maCha)
+			if err != nil || len(childProducts) == 0 {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Không tìm thấy thông tin chi tiết của dòng sản phẩm.")
+				return nil
+			}
+
+			if len(childProducts) == 1 {
+				p := childProducts[0]
+				sku := getMapString(p, "MA", "code", "ma")
+				sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID)
+				return nil
+			}
+
+			var buttons []gin.H
+			for i, p := range childProducts {
+				if i >= 4 { // Zalo template supports max 4 buttons
+					break
+				}
+				sku := getMapString(p, "MA", "code", "ma")
+				t1 := getMapString(p, "THUOC_TINH_1", "thuoc_tinh_1")
+				t2 := getMapString(p, "THUOC_TINH_2", "thuoc_tinh_2")
+
+				btnTitle := sku
+				if t1 != "" && t2 != "" {
+					btnTitle = fmt.Sprintf("%s (%s/%s)", sku, t1, t2)
+				} else if t1 != "" {
+					btnTitle = fmt.Sprintf("%s (%s)", sku, t1)
+				} else if t2 != "" {
+					btnTitle = fmt.Sprintf("%s (%s)", sku, t2)
+				}
+
+				buttons = append(buttons, gin.H{
+					"title":   btnTitle,
+					"type":    "oa.query.hide",
+					"payload": "#show_product_detail:" + sku,
+				})
+			}
+
+			promptMsg := gin.H{
+				"recipient": gin.H{
+					"user_id": payload.Sender.ID,
+				},
+				"message": gin.H{
+					"text": fmt.Sprintf("Dòng sản phẩm '%s' có các tùy chọn màu/size sau. Vui lòng chọn một tùy chọn để xem chi tiết sản phẩm:", maCha),
+					"attachment": gin.H{
+						"type": "template",
+						"payload": gin.H{
+							"buttons": buttons,
+						},
+					},
+				},
+			}
+			promptMsgJSON, _ := json.Marshal(promptMsg)
+
+			var sendErr error
+			if matchedGroup.ZaloGroupID != "" {
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, string(promptMsgJSON))
+			} else {
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, string(promptMsgJSON))
+			}
+			_ = sendErr
+			return nil
+		}
+
+		// 4. Show Product Detail Selection (#show_product_detail:<SKU>)
+		if strings.HasPrefix(userText, "#show_product_detail:") {
+			sku := strings.TrimPrefix(userText, "#show_product_detail:")
+			sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID)
+			return nil
+		}
+
+
 
 		permissionToken, err := engine.SignPermissionToken(permCtx, cfg.EncryptionKey)
 		if err != nil {
@@ -1114,6 +1189,51 @@ func getProductsByMaChaFromAstraDB(ctx context.Context, tenantID, maCha string) 
 		})
 	}
 	return results, nil
+}
+
+func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAdapter, tenantID, sku, zaloGroupID, senderID string) {
+	var p models.CachedProduct
+	if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma = ?", tenantID, sku).First(&p).Error; err != nil {
+		log.Printf("[worker] error finding cached product details: %v", err)
+		_ = adapter.SendMessage(ctx, senderID, "Không tìm thấy thông tin chi tiết cho mã SKU: "+sku)
+		return
+	}
+
+	// Format price nicely
+	priceStr := "Liên hệ"
+	if p.DON_GIA_BAN > 0 {
+		priceStr = fmt.Sprintf("%.0fđ", p.DON_GIA_BAN)
+	}
+
+	// Format weight
+	weightStr := "1.0 kg" // default fallback
+
+	// Construct detail message
+	name := p.TEN_DONG_BO_WEB
+	if name == "" {
+		name = p.TEN
+	}
+
+	var detailMsg strings.Builder
+	detailMsg.WriteString("Thông tin chi tiết sản phẩm:\n")
+	detailMsg.WriteString(fmt.Sprintf("- Mã sản phẩm/SKU: %s\n", p.MA))
+	detailMsg.WriteString(fmt.Sprintf("- Tên sản phẩm: %s\n", name))
+	detailMsg.WriteString(fmt.Sprintf("- Đơn giá bán: %s\n", priceStr))
+	detailMsg.WriteString(fmt.Sprintf("- Đơn vị tính (DVT): %s\n", p.DVT))
+	detailMsg.WriteString(fmt.Sprintf("- Trọng lượng: %s\n", weightStr))
+	if p.THUOC_TINH_1 != "" {
+		detailMsg.WriteString(fmt.Sprintf("- Thuộc tính 1: %s\n", p.THUOC_TINH_1))
+	}
+	if p.THUOC_TINH_2 != "" {
+		detailMsg.WriteString(fmt.Sprintf("- Thuộc tính 2: %s\n", p.THUOC_TINH_2))
+	}
+
+	reply := detailMsg.String()
+	if zaloGroupID != "" {
+		_ = adapter.SendGroupMessage(ctx, zaloGroupID, reply)
+	} else {
+		_ = adapter.SendMessage(ctx, senderID, reply)
+	}
 }
 
 func getMapString(m map[string]interface{}, keys ...string) string {

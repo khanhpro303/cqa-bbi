@@ -2995,8 +2995,8 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 		}
 		buttons = append(buttons, gin.H{
 			"title":   mc.code,
-			"type":    "oa.query.show",
-			"payload": mc.code,
+			"type":    "oa.query.hide",
+			"payload": "#show_product_variants:" + mc.code,
 		})
 	}
 
