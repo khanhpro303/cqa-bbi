@@ -312,7 +312,7 @@
           />
           <div v-if="erpCacheBackgroundLoading" class="ml-auto d-flex align-center text-caption text-info mr-3">
             <v-progress-circular indeterminate size="16" width="2" color="info" class="mr-2" />
-            Đang tải thêm sản phẩm từ Astra DB...
+            Đang tải thêm sản phẩm từ cache...
           </div>
           <v-chip :class="erpCacheBackgroundLoading ? 'mr-3' : 'ml-auto mr-3'" size="small" variant="tonal" color="info">
             <v-icon start size="small">mdi-package-variant</v-icon>
@@ -694,10 +694,12 @@
               <template v-if="job?.job_type === 'chatbot_toggle' || job?.job_type === 'erp_product_cache'">
                 <td class="text-body-2">
                   <template v-if="job?.job_type === 'erp_product_cache'">
-                    {{ parseSummary(run.summary).message || 'Đã đồng bộ sản phẩm từ ERP vào Astra DB' }}
+                    <span v-if="run.status === 'running'">Đang đồng bộ sản phẩm từ ERP...</span>
+                    <span v-else>{{ parseSummary(run.summary).message || 'Đã đồng bộ sản phẩm từ ERP' }}</span>
                   </template>
                   <template v-else>
-                    {{ parseSummary(run.summary).message || 'Đã tự động thay đổi trạng thái chatbot' }}
+                    <span v-if="run.status === 'running'">Đang tự động thay đổi trạng thái chatbot...</span>
+                    <span v-else>{{ parseSummary(run.summary).message || 'Đã tự động thay đổi trạng thái chatbot' }}</span>
                   </template>
                 </td>
                 <td>
@@ -885,7 +887,7 @@
       <v-card>
         <v-card-title class="px-6 pt-6 pb-2 text-error font-weight-bold">Xóa cache sản phẩm ERP</v-card-title>
         <v-card-text class="px-6 py-2">
-          Hành động này sẽ xóa toàn bộ dữ liệu danh mục sản phẩm đã cache trong Astra DB. Bạn sẽ cần chạy lại công việc này để đồng bộ lại dữ liệu từ ERP.
+          Hành động này sẽ xóa toàn bộ dữ liệu danh mục sản phẩm đã cache. Bạn sẽ cần chạy lại công việc này để đồng bộ lại dữ liệu từ ERP.
         </v-card-text>
         <v-card-actions class="px-6 pb-6 pt-2">
           <v-spacer />
@@ -1358,7 +1360,7 @@ async function fetchERPCache() {
   } catch (err: any) {
     if (currentId !== erpCacheLoadId) return
     const msg = err?.response?.data?.message || err?.response?.data?.error || ''
-    erpCacheError.value = msg || 'Không thể tải danh sách sản phẩm đã cache. Vui lòng kiểm tra cấu hình Astra DB.'
+    erpCacheError.value = msg || 'Không thể tải danh sách sản phẩm đã cache. Vui lòng kiểm tra cấu hình hệ thống.'
     erpCacheLoading.value = false
   }
 }

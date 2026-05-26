@@ -426,7 +426,7 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 
 	finishedAt := time.Now()
 	runStatus := "success"
-	summaryMsg := fmt.Sprintf("Đã đồng bộ %d sản phẩm từ ERP vào Astra DB", len(cachedProducts))
+	summaryMsg := fmt.Sprintf("Đã đồng bộ %d sản phẩm từ ERP", len(cachedProducts))
 	summaryJSON, _ := json.Marshal(map[string]interface{}{
 		"message":                summaryMsg,
 		"conversations_analyzed": len(cachedProducts),
