@@ -1296,6 +1296,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	case "inventory":
 		// Load custom inventory endpoint config
 		inventoryEndpoint := "inventory_receipt/search"
+		usePostMethod := false
 		var globalPermsSetting models.AppSetting
 		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
 			type EndpointConfig struct {
@@ -1311,6 +1312,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					path = strings.TrimPrefix(path, "rest_api/private/")
 					path = strings.TrimPrefix(path, "/")
 					inventoryEndpoint = path
+					usePostMethod = invConfig.Post
 				}
 			}
 		}
@@ -1332,16 +1334,29 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						continue
 					}
 					
-					params := map[string]string{
-						"limit": "100",
-					}
-					if inventoryEndpoint == "inventory_receipt/search" {
-						params["keyword"] = childSKU
+					var skuInventory []map[string]interface{}
+					var errQuery error
+					if usePostMethod {
+						bodyPayload := map[string]interface{}{
+							"limit": 100,
+						}
+						if inventoryEndpoint == "inventory_receipt/search" {
+							bodyPayload["keyword"] = childSKU
+						} else {
+							bodyPayload["MA_HANG"] = childSKU
+						}
+						skuInventory, errQuery = client.SearchCustomEndpointWithBody(inventoryEndpoint, bodyPayload)
 					} else {
-						params["MA_HANG"] = childSKU
+						params := map[string]string{
+							"limit": "100",
+						}
+						if inventoryEndpoint == "inventory_receipt/search" {
+							params["keyword"] = childSKU
+						} else {
+							params["MA_HANG"] = childSKU
+						}
+						skuInventory, errQuery = client.SearchCustomEndpoint(inventoryEndpoint, params)
 					}
-					
-					skuInventory, errQuery := client.SearchCustomEndpoint(inventoryEndpoint, params)
 					if errQuery != nil {
 						log.Printf("[inventory_query] error querying stock for SKU %s: %v", childSKU, errQuery)
 						continue
@@ -1349,7 +1364,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					
 					var skuStock float64
 					for _, invItem := range skuInventory {
-						stockVal := getMapFloat(invItem, "stock", "ton", "ton_kho")
+						stockVal := getMapFloat(invItem, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
 						skuStock += stockVal
 					}
 					
@@ -1380,15 +1395,39 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			}
 		} else {
 			// Query for single SKU
-			params := map[string]string{
-				"limit": strconv.Itoa(limit),
-			}
-			if inventoryEndpoint == "inventory_receipt/search" {
-				params["keyword"] = search
+			if usePostMethod {
+				bodyPayload := map[string]interface{}{
+					"limit": limit,
+				}
+				if inventoryEndpoint == "inventory_receipt/search" {
+					bodyPayload["keyword"] = search
+				} else {
+					bodyPayload["MA_HANG"] = search
+				}
+				data, err = client.SearchCustomEndpointWithBody(inventoryEndpoint, bodyPayload)
 			} else {
-				params["MA_HANG"] = search
+				params := map[string]string{
+					"limit": strconv.Itoa(limit),
+				}
+				if inventoryEndpoint == "inventory_receipt/search" {
+					params["keyword"] = search
+				} else {
+					params["MA_HANG"] = search
+				}
+				data, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
 			}
-			data, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
+
+			// Normalize stock keys in response for custom inventory endpoints
+			if err == nil {
+				for i, item := range data {
+					if _, hasTon := item["ton_kho"]; !hasTon {
+						stockVal := getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
+						data[i]["ton_kho"] = stockVal
+						data[i]["TON_KHO"] = stockVal
+						data[i]["stock"] = stockVal
+					}
+				}
+			}
 		}
 	case "orders":
 		if isGenericOrderSearch(search) {
