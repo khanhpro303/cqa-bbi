@@ -28,9 +28,15 @@ type ZaloWhitelistResponse struct {
 
 func ListZaloWhitelist(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
+	channelID := c.Query("channel_id")
 
 	var list []models.ZaloWhitelist
-	if err := db.DB.Preload("Channel").Where("tenant_id = ?", tenantID).Order("created_at DESC").Find(&list).Error; err != nil {
+	query := db.DB.Preload("Channel").Where("tenant_id = ?", tenantID)
+	if channelID != "" {
+		query = query.Where("channel_id = ?", channelID)
+	}
+
+	if err := query.Order("created_at DESC").Find(&list).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_fetch_whitelist"})
 		return
 	}

@@ -1055,9 +1055,12 @@ const pendingApprovalCount = computed(() => {
 
 // Available members to add to active group
 const whitelistStaff = ref<any[]>([])
-async function fetchWhitelistStaff() {
+async function fetchWhitelistStaff(channelId?: string) {
   try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/zalo-whitelist`)
+    const url = channelId 
+      ? `/tenants/${tenantId.value}/zalo-whitelist?channel_id=${channelId}`
+      : `/tenants/${tenantId.value}/zalo-whitelist`
+    const { data } = await api.get(url)
     whitelistStaff.value = data || []
   } catch (err) {
     console.error('Failed to fetch Zalo whitelist', err)
@@ -1376,6 +1379,7 @@ function openManageMembersDialog(g: any) {
   liveCustomers.value = []
   pendingInvites.value = []
   membersDialog.value = true
+  fetchWhitelistStaff(g.channel_id)
   fetchLiveMembers(g.id)
   fetchPendingInvites(g.id)
 }
@@ -1440,7 +1444,7 @@ async function addGroupEmployee() {
     activeGroup.value.employees.push(selectedEmployeeToAdd.value)
     selectedEmployeeToAdd.value = null
     showSnack('Đã thêm nhân viên vào nhóm', 'success')
-    await fetchWhitelistStaff()
+    await fetchWhitelistStaff(activeGroup.value.channel_id)
     await fetchGroups() // reload values
     await fetchLiveMembers(activeGroup.value.id)
   } catch (err) {
@@ -1455,7 +1459,7 @@ async function removeGroupEmployee(empID: string) {
     })
     activeGroup.value.employees = activeGroup.value.employees.filter((e: any) => e.id !== empID)
     showSnack('Đã gỡ nhân viên khỏi nhóm', 'success')
-    await fetchWhitelistStaff()
+    await fetchWhitelistStaff(activeGroup.value.channel_id)
     await fetchGroups()
     await fetchLiveMembers(activeGroup.value.id)
   } catch (err) {
