@@ -829,6 +829,7 @@
                             color="primary"
                             density="compact"
                             hide-details
+                            :disabled="!isOwnerOrAdmin"
                             @change="quickToggleGroupEndpoint(ep)"
                           />
                         </td>
@@ -853,7 +854,7 @@
                             density="compact"
                             variant="plain"
                             hide-details
-                            :disabled="!ep.is_enabled"
+                            :disabled="!ep.is_enabled || !isOwnerOrAdmin"
                             placeholder="Chọn nhóm..."
                             style="font-size:0.75rem"
                           />
@@ -864,7 +865,7 @@
                   </v-table>
                 </div>
                 <div class="pa-3 d-flex align-center ga-2">
-                  <v-btn size="small" color="primary" variant="tonal" :loading="savingGroupEndpoints" @click="saveGroupEndpoints">
+                  <v-btn v-if="isOwnerOrAdmin" size="small" color="primary" variant="tonal" :loading="savingGroupEndpoints" @click="saveGroupEndpoints">
                     <v-icon start size="small">mdi-content-save</v-icon>
                     {{ $t('erp_save_endpoints') }}
                   </v-btn>
@@ -941,13 +942,19 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useUserStore } from '../stores/users'
 import { useChannelStore } from '../stores/channels'
+import { useAuthStore } from '../stores/auth'
 import api from '../api'
 
 const route = useRoute()
 const { t } = useI18n()
 const userStore = useUserStore()
+const authStore = useAuthStore()
 const channelStore = useChannelStore()
 const tenantId = computed(() => route.params.tenantId as string)
+
+const isOwnerOrAdmin = computed(() => {
+  return authStore.tenantPerms?.role === 'owner' || authStore.tenantPerms?.role === 'admin'
+})
 
 const currentTab = ref('groups')
 const memberTab = ref('employees')
@@ -1650,8 +1657,10 @@ async function quickToggleGroupEndpoint(ep: any) {
       resource: ep.resource,
       is_enabled: ep.is_enabled,
     })
-  } catch {
+  } catch (err: any) {
     ep.is_enabled = !ep.is_enabled
+    const errMsg = err.response?.data?.details || err.response?.data?.error || 'Có lỗi xảy ra khi cập nhật phân quyền'
+    showSnack(errMsg, 'error')
   }
 }
 
