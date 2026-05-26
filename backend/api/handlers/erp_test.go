@@ -363,3 +363,120 @@ func TestParseDebtPeriodFromSearch(t *testing.T) {
 		}
 	}
 }
+
+func TestSlimProductsForLLM(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []map[string]interface{}
+		want []map[string]interface{}
+	}{
+		{
+			name: "empty input returns empty slice",
+			in:   nil,
+			want: []map[string]interface{}{},
+		},
+		{
+			name: "single product picks all expected fields",
+			in: []map[string]interface{}{
+				{
+					"TEN_DONG_BO_WEB":    "LS2 FF901",
+					"price_range":        "9.200.000đ - 9.900.000đ",
+					"NHAN_HIEU_NAME":     "LS2",
+					"LIST_TEN_NHOM_VTHH": "Lật Hàm",
+					"DVT":                "Cái",
+					"DON_GIA_BAN":        9900000,
+					"LINK_ANH":           "https://example/image.jpg",
+					"MA":                 "SP458484",
+				},
+			},
+			want: []map[string]interface{}{
+				{
+					"name":               "LS2 FF901",
+					"price_range":        "9.200.000đ - 9.900.000đ",
+					"nhan_hieu_name":     "LS2",
+					"list_ten_nhom_vthh": "Lật Hàm",
+					"dvt":                "Cái",
+				},
+			},
+		},
+		{
+			name: "variants with same name dedupe to one row",
+			in: []map[string]interface{}{
+				{"TEN_DONG_BO_WEB": "LS2 FF901", "price_range": "9.200.000đ - 9.900.000đ", "NHAN_HIEU_NAME": "LS2"},
+				{"TEN_DONG_BO_WEB": "LS2 FF901", "price_range": "9.200.000đ - 9.900.000đ", "NHAN_HIEU_NAME": "LS2"},
+				{"TEN_DONG_BO_WEB": "LS2 FF901 Carbon", "price_range": "12.000.000đ - 13.500.000đ", "NHAN_HIEU_NAME": "LS2"},
+			},
+			want: []map[string]interface{}{
+				{"name": "LS2 FF901", "price_range": "9.200.000đ - 9.900.000đ", "nhan_hieu_name": "LS2", "list_ten_nhom_vthh": "", "dvt": ""},
+				{"name": "LS2 FF901 Carbon", "price_range": "12.000.000đ - 13.500.000đ", "nhan_hieu_name": "LS2", "list_ten_nhom_vthh": "", "dvt": ""},
+			},
+		},
+		{
+			name: "missing fields default to empty strings",
+			in: []map[string]interface{}{
+				{"TEN": "Generic helmet"},
+			},
+			want: []map[string]interface{}{
+				{"name": "Generic helmet", "price_range": "", "nhan_hieu_name": "", "list_ten_nhom_vthh": "", "dvt": ""},
+			},
+		},
+		{
+			name: "product without resolvable name is skipped",
+			in: []map[string]interface{}{
+				{"TEN_DONG_BO_WEB": "", "ten_dong_bo_web": "", "TEN": "", "ten": "", "name": ""},
+				{"TEN_DONG_BO_WEB": "LS2 FF901", "price_range": "x"},
+			},
+			want: []map[string]interface{}{
+				{"name": "LS2 FF901", "price_range": "x", "nhan_hieu_name": "", "list_ten_nhom_vthh": "", "dvt": ""},
+			},
+		},
+		{
+			name: "caps result at slimProductsForLLMLimit",
+			in: []map[string]interface{}{
+				{"name": "p1", "price_range": "1"},
+				{"name": "p2", "price_range": "2"},
+				{"name": "p3", "price_range": "3"},
+				{"name": "p4", "price_range": "4"},
+				{"name": "p5", "price_range": "5"},
+				{"name": "p6", "price_range": "6"},
+				{"name": "p7", "price_range": "7"},
+			},
+			want: []map[string]interface{}{
+				{"name": "p1", "price_range": "1", "nhan_hieu_name": "", "list_ten_nhom_vthh": "", "dvt": ""},
+				{"name": "p2", "price_range": "2", "nhan_hieu_name": "", "list_ten_nhom_vthh": "", "dvt": ""},
+				{"name": "p3", "price_range": "3", "nhan_hieu_name": "", "list_ten_nhom_vthh": "", "dvt": ""},
+				{"name": "p4", "price_range": "4", "nhan_hieu_name": "", "list_ten_nhom_vthh": "", "dvt": ""},
+				{"name": "p5", "price_range": "5", "nhan_hieu_name": "", "list_ten_nhom_vthh": "", "dvt": ""},
+			},
+		},
+		{
+			name: "falls back from TEN_DONG_BO_WEB to TEN when web name is empty",
+			in: []map[string]interface{}{
+				{"TEN_DONG_BO_WEB": "", "TEN": "Helmet X", "price_range": "5đ - 9đ"},
+			},
+			want: []map[string]interface{}{
+				{"name": "Helmet X", "price_range": "5đ - 9đ", "nhan_hieu_name": "", "list_ten_nhom_vthh": "", "dvt": ""},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := slimProductsForLLM(tc.in)
+
+			if len(got) != len(tc.want) {
+				t.Fatalf("slimProductsForLLM length = %d; want %d (got=%v)", len(got), len(tc.want), got)
+			}
+			for i, w := range tc.want {
+				if len(got[i]) != len(w) {
+					t.Errorf("row %d field count = %d; want %d", i, len(got[i]), len(w))
+				}
+				for k, v := range w {
+					if got[i][k] != v {
+						t.Errorf("row %d key %q = %v; want %v", i, k, got[i][k], v)
+					}
+				}
+			}
+		})
+	}
+}

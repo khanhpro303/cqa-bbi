@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -268,13 +269,23 @@ func ERPQuery(c *gin.Context) {
 			return getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
 		})
 
-		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(filteredCached), c.ClientIP())
+		slim := slimProductsForLLM(filteredCached)
+
+		if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
+			go func(search string, payload []map[string]interface{}) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				pushFallbackPayloadToZaloOA(ctx, tenantID, search, payload, permCtx)
+			}(req.Search, slim)
+		}
+
+		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(slim), c.ClientIP())
 		c.JSON(http.StatusOK, gin.H{
 			"status":   "success",
-			"data":     filteredCached,
+			"data":     slim,
 			"source":   "astradb_cache",
 			"resource": req.Resource,
-			"count":    len(filteredCached),
+			"count":    len(slim),
 		})
 		return
 	}
@@ -733,6 +744,44 @@ func searchProductsFromAstraDBWithFilter(ctx context.Context, tenantID, search, 
 	}
 
 	return results, nil
+}
+
+// slimProductsForLLM reduces a product list to the minimal set of fields the
+// Langflow LLM needs to answer a price/availability question: name,
+// price_range, brand, product group, unit. Variants that share the same name
+// (and therefore the same parent SKU + price_range) collapse into one row, and
+// the result is capped at slimProductsForLLMLimit entries to keep the payload
+// tiny.
+const slimProductsForLLMLimit = 5
+
+func slimProductsForLLM(products []map[string]interface{}) []map[string]interface{} {
+	slim := make([]map[string]interface{}, 0, len(products))
+	seen := make(map[string]struct{}, len(products))
+
+	for _, p := range products {
+		name := getFirstNonEmptyMapString(p, "TEN_DONG_BO_WEB", "ten_dong_bo_web", "TEN", "ten", "name")
+		if name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+
+		slim = append(slim, map[string]interface{}{
+			"name":               name,
+			"price_range":        getFirstNonEmptyMapString(p, "price_range"),
+			"nhan_hieu_name":     getFirstNonEmptyMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name"),
+			"list_ten_nhom_vthh": getFirstNonEmptyMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
+			"dvt":                getFirstNonEmptyMapString(p, "DVT", "dvt_chinh_id", "unit"),
+		})
+
+		if len(slim) >= slimProductsForLLMLimit {
+			break
+		}
+	}
+
+	return slim
 }
 
 func mapCachedProductToAPIResponse(p map[string]interface{}) map[string]interface{} {
@@ -3102,6 +3151,53 @@ func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, 
 	return results, nil
 }
 
+// loadActiveZaloOAAdapter looks up the tenant's active Zalo OA channel,
+// decrypts its credentials, builds a ZaloOAAdapter, and wires a token-refresh
+// callback that re-encrypts and persists rotated tokens. Returns (nil, nil,
+// err) when the tenant has no active OA channel or credentials cannot be
+// loaded. Used by both the rich-message and the debug-fallback push paths.
+func loadActiveZaloOAAdapter(tenantID string) (*channels.ZaloOAAdapter, *models.Channel, error) {
+	var allChannels []models.Channel
+	if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&allChannels).Error; err != nil {
+		return nil, nil, fmt.Errorf("query zalo_oa channels: %w", err)
+	}
+	if len(allChannels) == 0 {
+		return nil, nil, fmt.Errorf("no active zalo_oa channel")
+	}
+	activeChannel := &allChannels[0]
+
+	cfg, _ := config.Load()
+	credBytes, err := pkg.Decrypt(activeChannel.CredentialsEncrypted, cfg.EncryptionKey)
+	if err != nil {
+		return nil, activeChannel, fmt.Errorf("decrypt credentials: %w", err)
+	}
+
+	var zaloCreds channels.ZaloOACredentials
+	if err := json.Unmarshal(credBytes, &zaloCreds); err != nil {
+		return nil, activeChannel, fmt.Errorf("invalid credentials json: %w", err)
+	}
+
+	adapter := channels.NewZaloOAAdapter(zaloCreds)
+	channelID := activeChannel.ID
+	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+		var ch models.Channel
+		if db.DB.First(&ch, "id = ?", channelID).Error == nil {
+			credsMap := map[string]interface{}{
+				"app_id":        zaloCreds.AppID,
+				"app_secret":    zaloCreds.AppSecret,
+				"access_token":  newAccess,
+				"refresh_token": newRefresh,
+				"oa_id":         zaloCreds.OAId,
+			}
+			newCredJSON, _ := json.Marshal(credsMap)
+			encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+			db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
+		}
+	})
+
+	return adapter, activeChannel, nil
+}
+
 func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts map[string]int, permCtx *engine.GroupPermissionContext) bool {
 	var sortedMaChas []productParentMatch
 	for k, v := range maChaCounts {
@@ -3121,50 +3217,16 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 		})
 	}
 
-	var activeChannel *models.Channel
-	var allChannels []models.Channel
-	if errChan := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&allChannels).Error; errChan == nil && len(allChannels) > 0 {
-		activeChannel = &allChannels[0]
-	}
-
-	if activeChannel == nil {
-		log.Printf("[erp_query] cannot send Zalo Rich Message for products: no active zalo_oa channel")
-		return false
-	}
 	if permCtx.ZaloUserID == "" {
 		log.Printf("[erp_query] cannot send Zalo Rich Message for products: missing zalo user id")
 		return false
 	}
 
-	cfg, _ := config.Load()
-	credBytes, errDec := pkg.Decrypt(activeChannel.CredentialsEncrypted, cfg.EncryptionKey)
-	if errDec != nil {
-		log.Printf("[erp_query] cannot send Zalo Rich Message for products: decrypt credentials failed: %v", errDec)
+	adapter, _, err := loadActiveZaloOAAdapter(tenantID)
+	if err != nil {
+		log.Printf("[erp_query] cannot send Zalo Rich Message for products: %v", err)
 		return false
 	}
-
-	var zaloCreds channels.ZaloOACredentials
-	if errCreds := json.Unmarshal(credBytes, &zaloCreds); errCreds != nil {
-		log.Printf("[erp_query] cannot send Zalo Rich Message for products: invalid credentials json: %v", errCreds)
-		return false
-	}
-
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		var ch models.Channel
-		if db.DB.First(&ch, "id = ?", activeChannel.ID).Error == nil {
-			credsMap := map[string]interface{}{
-				"app_id":        zaloCreds.AppID,
-				"app_secret":    zaloCreds.AppSecret,
-				"access_token":  newAccess,
-				"refresh_token": newRefresh,
-				"oa_id":         zaloCreds.OAId,
-			}
-			newCredJSON, _ := json.Marshal(credsMap)
-			encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-			db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
-		}
-	})
 
 	promptMsg := gin.H{
 		"recipient": gin.H{
@@ -3209,6 +3271,35 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 
 	log.Printf("[erp_query] successfully sent Zalo Rich Message for products to %s", permCtx.ZaloUserID)
 	return true
+}
+
+// pushFallbackPayloadToZaloOA mirrors the slim product fallback payload to the
+// user's Zalo OA as a plain-text debug message. It is gated by the env flag
+// DEBUG_PUSH_FALLBACK_TO_ZALO=true and is a no-op otherwise. All errors are
+// logged and never propagate — this must not affect the HTTP response.
+func pushFallbackPayloadToZaloOA(ctx context.Context, tenantID, search string, slim []map[string]interface{}, permCtx *engine.GroupPermissionContext) {
+	if permCtx == nil || permCtx.ZaloUserID == "" {
+		return
+	}
+
+	adapter, _, err := loadActiveZaloOAAdapter(tenantID)
+	if err != nil {
+		log.Printf("[erp_query] debug push to zalo oa skipped: %v", err)
+		return
+	}
+
+	body, err := json.MarshalIndent(slim, "", "  ")
+	if err != nil {
+		log.Printf("[erp_query] debug push to zalo oa skipped: marshal slim failed: %v", err)
+		return
+	}
+
+	text := fmt.Sprintf("[DEBUG fallback] search=%q\n%s", search, string(body))
+	if err := adapter.SendMessage(ctx, permCtx.ZaloUserID, text); err != nil {
+		log.Printf("[erp_query] debug push to zalo oa failed: %v", err)
+		return
+	}
+	log.Printf("[erp_query] debug push to zalo oa sent for search=%q items=%d", search, len(slim))
 }
 
 func sanitizeSearchQuery(search string) string {
