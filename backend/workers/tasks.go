@@ -688,7 +688,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
-		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, payload.Message.Text, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken)
+		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}
