@@ -1307,7 +1307,13 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 	switch resource {
 	case "products":
-		data, err = client.SearchProducts(search, limit)
+		sanitizedSearch := sanitizeSearchQuery(search)
+		data, err = client.SearchProducts(sanitizedSearch, limit)
+		if err != nil {
+			log.Printf("[erp_query] Cloudify product search error for search '%s' (sanitized: '%s'): %v. Overriding to empty list.", search, sanitizedSearch, err)
+			err = nil
+			data = []map[string]interface{}{}
+		}
 		if err == nil && data != nil {
 			filtered := filterProductsByGroups(data, productGroups)
 			if search != "" && len(filtered) > 0 {
@@ -3031,6 +3037,21 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 
 	log.Printf("[erp_query] successfully sent Zalo Rich Message for products to %s", permCtx.ZaloUserID)
 	return true
+}
+
+func sanitizeSearchQuery(search string) string {
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return ""
+	}
+	// If it contains a separator " - ", take the part before it
+	if idx := strings.Index(search, " - "); idx != -1 {
+		part := strings.TrimSpace(search[:idx])
+		if part != "" {
+			return part
+		}
+	}
+	return search
 }
 
 
