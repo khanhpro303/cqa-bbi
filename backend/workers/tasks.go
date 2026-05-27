@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	TypeZaloWebhook = "zalo:webhook"
+	TypeZaloWebhook    = "zalo:webhook"
+	TypeSessionTimeout = "session:timeout"
 )
 
 type ZaloWebhookAttachment struct {
@@ -72,6 +73,25 @@ func NewZaloWebhookTask(payload ZaloWebhookPayload) (*asynq.Task, error) {
 	return asynq.NewTask(TypeZaloWebhook, payloadBytes), nil
 }
 
+type SessionTimeoutPayload struct {
+	SessionKey     string `json:"session_key"`
+	SessionID      string `json:"session_id"`
+	TenantID       string `json:"tenant_id"`
+	ChannelID      string `json:"channel_id"`
+	ZaloUserID     string `json:"zalo_user_id"`
+	ZaloGroupID    string `json:"zalo_group_id"`
+	TimeoutMessage string `json:"timeout_message"`
+}
+
+// NewSessionTimeoutTask creates a new task to check session timeout
+func NewSessionTimeoutTask(payload SessionTimeoutPayload) (*asynq.Task, error) {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeSessionTimeout, payloadBytes), nil
+}
+
 // ChannelMetadata holds the session settings mapped from models.Channel.Metadata
 type ChannelMetadata struct {
 	SessionKeyword        string `json:"session_keyword"`
@@ -79,6 +99,7 @@ type ChannelMetadata struct {
 	SessionWelcomeMessage string `json:"session_welcome_message"`
 	SessionGoodbyeMessage string `json:"session_goodbye_message"`
 	SessionTimeout        int    `json:"session_timeout_minutes"`
+	SessionTimeoutMessage string `json:"session_timeout_message"`
 
 	LangflowAPIURL       string `json:"langflow_api_url"`
 	LangflowAPIKey       string `json:"langflow_api_key"`
@@ -93,6 +114,14 @@ type ChannelMetadata struct {
 
 // HandleZaloWebhookTask processes the webhook task
 func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowClient) asynq.HandlerFunc {
+	var asynqClient *asynq.Client
+	if cfg.RedisURL != "" {
+		opt, err := asynq.ParseRedisURI(cfg.RedisURL)
+		if err == nil {
+			asynqClient = asynq.NewClient(opt)
+		}
+	}
+
 	return func(ctx context.Context, t *asynq.Task) error {
 		var payload ZaloWebhookPayload
 		if err := json.Unmarshal(t.Payload(), &payload); err != nil {
@@ -233,6 +262,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		if meta.SessionTimeout == 0 {
 			meta.SessionTimeout = cfg.ChatbotSessionTimeout
+		}
+		if meta.SessionTimeoutMessage == "" {
+			meta.SessionTimeoutMessage = cfg.ChatbotSessionTimeoutMessage
 		}
 		if meta.LangflowAPIURL == "" {
 			var setting models.AppSetting
@@ -513,7 +545,21 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				// Open session and generate unique session ID
 				newSessionID := uuid.New().String()
 				if db.RedisClient != nil {
-					db.RedisClient.Set(ctx, sessionKey, newSessionID, time.Duration(meta.SessionTimeout)*time.Minute)
+					db.RedisClient.Set(ctx, sessionKey, newSessionID, time.Duration(meta.SessionTimeout)*time.Minute+1*time.Minute)
+				}
+				if asynqClient != nil {
+					timeoutTask, err := NewSessionTimeoutTask(SessionTimeoutPayload{
+						SessionKey:     sessionKey,
+						SessionID:      newSessionID,
+						TenantID:       matchedChannel.TenantID,
+						ChannelID:      matchedChannel.ID,
+						ZaloUserID:     payload.Sender.ID,
+						ZaloGroupID:    matchedGroup.ZaloGroupID,
+						TimeoutMessage: meta.SessionTimeoutMessage,
+					})
+					if err == nil {
+						_, _ = asynqClient.Enqueue(timeoutTask, asynq.ProcessIn(time.Duration(meta.SessionTimeout)*time.Minute))
+					}
 				}
 				// Send welcome message
 				var err error
@@ -561,7 +607,21 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// Keep session alive
 		if db.RedisClient != nil {
-			db.RedisClient.Expire(ctx, sessionKey, time.Duration(meta.SessionTimeout)*time.Minute)
+			db.RedisClient.Expire(ctx, sessionKey, time.Duration(meta.SessionTimeout)*time.Minute+1*time.Minute)
+		}
+		if asynqClient != nil {
+			timeoutTask, err := NewSessionTimeoutTask(SessionTimeoutPayload{
+				SessionKey:     sessionKey,
+				SessionID:      activeSessionID,
+				TenantID:       matchedChannel.TenantID,
+				ChannelID:      matchedChannel.ID,
+				ZaloUserID:     payload.Sender.ID,
+				ZaloGroupID:    matchedGroup.ZaloGroupID,
+				TimeoutMessage: meta.SessionTimeoutMessage,
+			})
+			if err == nil {
+				_, _ = asynqClient.Enqueue(timeoutTask, asynq.ProcessIn(time.Duration(meta.SessionTimeout)*time.Minute))
+			}
 		}
 
 		// Save user message to Astra DB asynchronously
@@ -976,6 +1036,108 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		log.Printf("[worker] successfully replied to user %s via Langflow", payload.Sender.ID)
+		return nil
+	}
+}
+
+// HandleSessionTimeoutTask processes the session timeout delayed task
+func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
+	return func(ctx context.Context, t *asynq.Task) error {
+		var payload SessionTimeoutPayload
+		if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+			return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+		}
+
+		log.Printf("[worker] processing session timeout check for session %s (key: %s)", payload.SessionID, payload.SessionKey)
+
+		if db.RedisClient == nil {
+			log.Printf("[worker] RedisClient is nil, cannot process session timeout")
+			return nil
+		}
+
+		val, err := db.RedisClient.Get(ctx, payload.SessionKey).Result()
+		if err != nil || val == "" {
+			// Session already expired or deleted, nothing to do
+			log.Printf("[worker] session %s already expired or deleted from Redis", payload.SessionID)
+			return nil
+		}
+
+		if val != payload.SessionID {
+			// The session key now holds a different session ID (a new session was started)
+			log.Printf("[worker] session ID mismatch (current: %s, task: %s), skipping timeout", val, payload.SessionID)
+			return nil
+		}
+
+		// Check remaining TTL. If it has been extended, skip timeout.
+		ttl, err := db.RedisClient.TTL(ctx, payload.SessionKey).Result()
+		if err != nil {
+			return fmt.Errorf("failed to get session TTL: %w", err)
+		}
+
+		if ttl > 65*time.Second {
+			log.Printf("[worker] session %s was extended (remaining TTL: %v), skipping timeout", payload.SessionID, ttl)
+			return nil
+		}
+
+		// Close the session: delete the key from Redis
+		if err := db.RedisClient.Del(ctx, payload.SessionKey).Err(); err != nil {
+			log.Printf("[worker] failed to delete session key %s: %v", payload.SessionKey, err)
+		}
+
+		// Find the channel to get credentials
+		var ch models.Channel
+		if err := db.DB.Where("id = ? AND is_active = true", payload.ChannelID).First(&ch).Error; err != nil {
+			log.Printf("[worker] channel not found or inactive: %v", err)
+			return nil
+		}
+
+		credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
+		if err != nil {
+			log.Printf("[worker] failed to decrypt credentials for channel %s: %v", payload.ChannelID, err)
+			return nil
+		}
+
+		var zaloCreds channels.ZaloOACredentials
+		if err := json.Unmarshal(credBytes, &zaloCreds); err != nil {
+			log.Printf("[worker] failed to unmarshal credentials: %v", err)
+			return nil
+		}
+
+		adapter := channels.NewZaloOAAdapter(zaloCreds)
+		adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
+			var channel models.Channel
+			if db.DB.First(&channel, "id = ?", ch.ID).Error == nil {
+				credsMap := map[string]interface{}{
+					"app_id":        zaloCreds.AppID,
+					"app_secret":    zaloCreds.AppSecret,
+					"access_token":  newAccess,
+					"refresh_token": newRefresh,
+					"oa_id":         zaloCreds.OAId,
+				}
+				newCredJSON, _ := json.Marshal(credsMap)
+				encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
+				db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
+			}
+		})
+
+		timeoutMsg := payload.TimeoutMessage
+		if timeoutMsg == "" {
+			timeoutMsg = cfg.ChatbotSessionTimeoutMessage
+		}
+
+		var sendErr error
+		if payload.ZaloGroupID != "" {
+			sendErr = adapter.SendGroupMessage(ctx, payload.ZaloGroupID, timeoutMsg)
+		} else {
+			sendErr = adapter.SendMessage(ctx, payload.ZaloUserID, timeoutMsg)
+		}
+
+		if sendErr != nil {
+			log.Printf("[worker] failed to send session timeout message: %v", sendErr)
+			return sendErr
+		}
+
+		log.Printf("[worker] successfully sent timeout message and closed session %s", payload.SessionID)
 		return nil
 	}
 }

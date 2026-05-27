@@ -49,6 +49,7 @@ func NewWorkerPool(cfg *config.Config) *WorkerPool {
 	
 	// Register handlers
 	mux.HandleFunc(TypeZaloWebhook, HandleZaloWebhookTask(cfg, langflowClient))
+	mux.HandleFunc(TypeSessionTimeout, HandleSessionTimeoutTask(cfg))
 
 	return &WorkerPool{
 		server: srv,

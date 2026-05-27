@@ -63,6 +63,7 @@ type Config struct {
 	ChatbotSessionWelcomeMessage string
 	ChatbotSessionGoodbyeMessage string
 	ChatbotSessionTimeout        int
+	ChatbotSessionTimeoutMessage string
 	ChatbotHistoryRetentionDays  int
 }
 
@@ -100,6 +101,7 @@ func Load() (*Config, error) {
 		ChatbotSessionWelcomeMessage: getEnv("CHATBOT_SESSION_WELCOME_MESSAGE", "Chào bạn, tôi đã sẵn sàng!"),
 		ChatbotSessionGoodbyeMessage: getEnv("CHATBOT_SESSION_GOODBYE_MESSAGE", "Phiên hỗ trợ đã kết thúc. Hẹn gặp lại bạn!"),
 		ChatbotSessionTimeout:        getEnvInt("CHATBOT_SESSION_TIMEOUT", 30),
+		ChatbotSessionTimeoutMessage: getEnv("CHATBOT_SESSION_TIMEOUT_MESSAGE", "Nếu bạn không cần mình hỗ trợ gì thêm, mình xin phép dừng cuộc trò chuyện tại đây, nếu cần thì bạn biết kiếm mình sao rồi đó ;)"),
 		ChatbotHistoryRetentionDays:  getEnvInt("CHATBOT_HISTORY_RETENTION_DAYS", 30),
 	}
 

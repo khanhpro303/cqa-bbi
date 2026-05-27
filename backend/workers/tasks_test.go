@@ -40,3 +40,33 @@ func TestMockInventoryAggregation(t *testing.T) {
 		t.Errorf("getMapFloat failed, got: %f", stock)
 	}
 }
+
+func TestSessionTimeoutTaskCreation(t *testing.T) {
+	payload := SessionTimeoutPayload{
+		SessionKey:     "zalo_session:ch-1:user-1",
+		SessionID:      "session-1",
+		TenantID:       "tenant-1",
+		ChannelID:      "ch-1",
+		ZaloUserID:     "user-1",
+		ZaloGroupID:    "group-1",
+		TimeoutMessage: "Nếu bạn không cần...",
+	}
+
+	task, err := NewSessionTimeoutTask(payload)
+	if err != nil {
+		t.Fatalf("failed to create session timeout task: %v", err)
+	}
+
+	if task.Type() != TypeSessionTimeout {
+		t.Errorf("expected task type %s, got %s", TypeSessionTimeout, task.Type())
+	}
+
+	var parsed SessionTimeoutPayload
+	if err := json.Unmarshal(task.Payload(), &parsed); err != nil {
+		t.Fatalf("failed to unmarshal task payload: %v", err)
+	}
+
+	if parsed.SessionID != payload.SessionID {
+		t.Errorf("expected session ID %s, got %s", payload.SessionID, parsed.SessionID)
+	}
+}
