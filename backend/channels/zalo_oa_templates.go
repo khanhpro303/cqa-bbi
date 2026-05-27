@@ -9,54 +9,102 @@ import (
 // ZaloOAButton is a postback button used in a Zalo OA V3 "list" template
 // message. All buttons use type "oa.query.hide" with the string Payload echoed
 // back to the webhook on click (e.g. "#show_product_variants:SP123").
+//
+// Subtitle is optional helper text rendered under the button's card title. If
+// empty, defaultListCardSubtitle is used so Zalo does not reject the element
+// (api error -201: "subtitle is empty").
 type ZaloOAButton struct {
-	Title   string
-	Payload string
+	Title    string
+	Payload  string
+	Subtitle string
 }
 
-// defaultListElementSubtitle is the helper text rendered under the prompt when
-// the caller does not embed an explicit subtitle in the prompt (via a newline
-// separator). Zalo V3 list templates reject elements with an empty subtitle
-// (api error -201: "subtitle is empty"), so this field must always be set.
-const defaultListElementSubtitle = "Vui lòng chọn một tùy chọn bên dưới."
+// defaultListCardSubtitle is the helper text rendered under each option card
+// when the caller does not provide ZaloOAButton.Subtitle. Required because
+// Zalo V3 rejects elements with empty subtitle.
+const defaultListCardSubtitle = "Bấm để chọn tùy chọn này."
 
 // BuildV3ListTemplatePayload returns the JSON body for a Zalo OA V3 "list"
 // template message intended for /v3.0/oa/message/cs (1:1 customer-support
-// chat). The prompt becomes the single list element title (the first line if
-// the prompt contains "\n"; the remainder is used as the subtitle) and the
-// buttons appear below. Pass the returned string to ZaloOAAdapter.SendMessage
-// which parses it back into the request body.
+// chat). Pass the returned string to ZaloOAAdapter.SendMessage which parses
+// it back into the request body.
 //
-// Zalo deprecated the V2 buttons-only template (error -240); list/buttons must
-// now be wrapped under template_type="list" with an elements array.
-// Zalo V3 also rejects elements without a non-empty subtitle (error -201), so
-// when the prompt has no embedded subtitle this function falls back to a
-// generic helper sentence.
+// Layout per Zalo V3 spec:
+//   - message.text holds the header sentence (the prompt) shown above the list.
+//   - Each ZaloOAButton becomes its own element (a "card") with its own
+//     embedded button. Element title = button title; subtitle = optional helper
+//     text; the embedded button carries the postback payload.
+//
+// Buttons must NOT be placed at the payload top-level — Zalo answers -233
+// ("message type is invalid or not support") when the structure does not
+// match. Each element also requires non-empty title and subtitle, otherwise
+// Zalo returns -201.
 func BuildV3ListTemplatePayload(userID, prompt string, buttons []ZaloOAButton) (string, error) {
-	btns := make([]map[string]interface{}, 0, len(buttons))
+	return BuildV3ListTemplatePayloadWithImage(userID, prompt, "", buttons)
+}
+
+// BuildV3ListTemplatePayloadWithImage is like BuildV3ListTemplatePayload but
+// also embeds an image_url on every element so each card renders the same
+// banner image. imageURL must be a publicly reachable HTTPS URL that Zalo's
+// servers can fetch; pass "" to omit the field (image_url is optional in
+// Zalo V3, but when present must be non-empty).
+func BuildV3ListTemplatePayloadWithImage(userID, prompt, imageURL string, buttons []ZaloOAButton) (string, error) {
+	trimmedPrompt := strings.TrimSpace(prompt)
+	trimmedImage := strings.TrimSpace(imageURL)
+
+	elements := make([]map[string]interface{}, 0, len(buttons))
 	for _, b := range buttons {
-		btns = append(btns, map[string]interface{}{
-			"title":   b.Title,
-			"type":    "oa.query.hide",
-			"payload": b.Payload,
-		})
+		subtitle := strings.TrimSpace(b.Subtitle)
+		if subtitle == "" {
+			subtitle = defaultListCardSubtitle
+		}
+		el := map[string]interface{}{
+			"title":    b.Title,
+			"subtitle": subtitle,
+			"buttons": []map[string]interface{}{
+				{
+					"title":   b.Title,
+					"type":    "oa.query.hide",
+					"payload": b.Payload,
+				},
+			},
+		}
+		if trimmedImage != "" {
+			el["image_url"] = trimmedImage
+		}
+		elements = append(elements, el)
 	}
 
-	title, subtitle := splitPromptTitleSubtitle(prompt)
+	// Empty button list — emit a single info card using the prompt as title so
+	// the template stays renderable. Rare in practice (callers always supply
+	// at least one option), but avoids producing a "list" payload with zero
+	// elements which Zalo also rejects.
+	if len(elements) == 0 {
+		title := trimmedPrompt
+		if title == "" {
+			title = defaultListCardSubtitle
+		}
+		el := map[string]interface{}{
+			"title":    title,
+			"subtitle": defaultListCardSubtitle,
+		}
+		if trimmedImage != "" {
+			el["image_url"] = trimmedImage
+		}
+		elements = append(elements, el)
+	}
 
 	payload := map[string]interface{}{
 		"recipient": map[string]interface{}{
 			"user_id": userID,
 		},
 		"message": map[string]interface{}{
+			"text": trimmedPrompt,
 			"attachment": map[string]interface{}{
 				"type": "template",
 				"payload": map[string]interface{}{
 					"template_type": "list",
-					"elements": []map[string]interface{}{
-						{"title": title, "subtitle": subtitle},
-					},
-					"buttons": btns,
+					"elements":      elements,
 				},
 			},
 		},
@@ -65,79 +113,6 @@ func BuildV3ListTemplatePayload(userID, prompt string, buttons []ZaloOAButton) (
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal v3 list template: %w", err)
-	}
-	return string(out), nil
-}
-
-// splitPromptTitleSubtitle derives a (title, subtitle) pair from a single
-// prompt string. If the prompt contains a newline, the first line becomes the
-// title and the rest becomes the subtitle. Otherwise the whole prompt is the
-// title and a generic helper sentence is used as the subtitle so Zalo does not
-// reject the element.
-func splitPromptTitleSubtitle(prompt string) (string, string) {
-	trimmed := strings.TrimSpace(prompt)
-	if idx := strings.IndexAny(trimmed, "\n"); idx >= 0 {
-		title := strings.TrimSpace(trimmed[:idx])
-		subtitle := strings.TrimSpace(trimmed[idx+1:])
-		if title == "" {
-			title = trimmed
-		}
-		if subtitle == "" {
-			subtitle = defaultListElementSubtitle
-		}
-		return title, subtitle
-	}
-	if trimmed == "" {
-		return defaultListElementSubtitle, defaultListElementSubtitle
-	}
-	return trimmed, defaultListElementSubtitle
-}
-
-// BuildV3ListTemplatePayloadWithImage is like BuildV3ListTemplatePayload but
-// also embeds an image_url on the single element. Zalo V3 list templates
-// reject elements without a non-empty image_url (api error -201: "image_url
-// is empty"), so callers that hit strict validation must use this variant
-// and pass a publicly reachable HTTPS URL that Zalo's servers can fetch.
-// Note: existing callers of BuildV3ListTemplatePayload have the same latent
-// validation risk and should migrate to this function as they hit -201.
-func BuildV3ListTemplatePayloadWithImage(userID, prompt, imageURL string, buttons []ZaloOAButton) (string, error) {
-	btns := make([]map[string]interface{}, 0, len(buttons))
-	for _, b := range buttons {
-		btns = append(btns, map[string]interface{}{
-			"title":   b.Title,
-			"type":    "oa.query.hide",
-			"payload": b.Payload,
-		})
-	}
-
-	title, subtitle := splitPromptTitleSubtitle(prompt)
-	element := map[string]interface{}{
-		"title":    title,
-		"subtitle": subtitle,
-	}
-	if strings.TrimSpace(imageURL) != "" {
-		element["image_url"] = imageURL
-	}
-
-	payload := map[string]interface{}{
-		"recipient": map[string]interface{}{
-			"user_id": userID,
-		},
-		"message": map[string]interface{}{
-			"attachment": map[string]interface{}{
-				"type": "template",
-				"payload": map[string]interface{}{
-					"template_type": "list",
-					"elements":      []map[string]interface{}{element},
-					"buttons":       btns,
-				},
-			},
-		},
-	}
-
-	out, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal v3 list template with image: %w", err)
 	}
 	return string(out), nil
 }

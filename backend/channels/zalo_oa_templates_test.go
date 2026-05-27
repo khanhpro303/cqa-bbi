@@ -6,7 +6,41 @@ import (
 	"testing"
 )
 
-func TestBuildV3ListTemplatePayload(t *testing.T) {
+// decodeListPayload is a small helper that drills into the nested map shape
+// produced by BuildV3ListTemplate* so individual tests stay readable.
+func decodeListPayload(t *testing.T, body string) (text string, elements []map[string]interface{}) {
+	t.Helper()
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("payload is not valid JSON: %v\nraw=%s", err, body)
+	}
+
+	message, _ := decoded["message"].(map[string]interface{})
+	text, _ = message["text"].(string)
+
+	attachment, _ := message["attachment"].(map[string]interface{})
+	if attachment["type"] != "template" {
+		t.Errorf("attachment.type = %v; want template", attachment["type"])
+	}
+
+	payload, _ := attachment["payload"].(map[string]interface{})
+	if payload["template_type"] != "list" {
+		t.Errorf("payload.template_type = %v; want list", payload["template_type"])
+	}
+	if _, present := payload["buttons"]; present {
+		t.Errorf("payload.buttons must NOT exist at top level (Zalo -233); buttons belong inside each element")
+	}
+
+	rawElements, _ := payload["elements"].([]interface{})
+	for _, el := range rawElements {
+		m, _ := el.(map[string]interface{})
+		elements = append(elements, m)
+	}
+	return text, elements
+}
+
+func TestBuildV3ListTemplatePayload_OneElementPerButton(t *testing.T) {
 	got, err := BuildV3ListTemplatePayload("USER123", "Pick a product line", []ZaloOAButton{
 		{Title: "SP100", Payload: "#show_product_variants:SP100"},
 		{Title: "SP200", Payload: "#show_product_variants:SP200"},
@@ -17,151 +51,119 @@ func TestBuildV3ListTemplatePayload(t *testing.T) {
 
 	var decoded map[string]interface{}
 	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatalf("payload is not valid JSON: %v\nraw=%s", err, got)
+		t.Fatalf("invalid JSON: %v", err)
 	}
-
 	recipient, _ := decoded["recipient"].(map[string]interface{})
 	if recipient["user_id"] != "USER123" {
 		t.Errorf("recipient.user_id = %v; want USER123", recipient["user_id"])
 	}
 
-	message, _ := decoded["message"].(map[string]interface{})
-	attachment, _ := message["attachment"].(map[string]interface{})
-	if attachment["type"] != "template" {
-		t.Errorf("attachment.type = %v; want template", attachment["type"])
+	text, elements := decodeListPayload(t, got)
+	if text != "Pick a product line" {
+		t.Errorf("message.text = %q; want prompt", text)
+	}
+	if len(elements) != 2 {
+		t.Fatalf("expected 2 elements (one per button); got %d", len(elements))
 	}
 
-	payload, _ := attachment["payload"].(map[string]interface{})
-	if payload["template_type"] != "list" {
-		t.Errorf("payload.template_type = %v; want list", payload["template_type"])
-	}
-
-	elements, _ := payload["elements"].([]interface{})
-	if len(elements) != 1 {
-		t.Fatalf("expected 1 element; got %d", len(elements))
-	}
-	firstEl, _ := elements[0].(map[string]interface{})
-	if firstEl["title"] != "Pick a product line" {
-		t.Errorf("first element title = %v; want prompt text", firstEl["title"])
-	}
-	subtitle, _ := firstEl["subtitle"].(string)
-	if strings.TrimSpace(subtitle) == "" {
-		t.Errorf("element subtitle must be non-empty (Zalo rejects with -201); got %q", subtitle)
-	}
-
-	buttons, _ := payload["buttons"].([]interface{})
-	if len(buttons) != 2 {
-		t.Fatalf("expected 2 buttons; got %d", len(buttons))
-	}
-	firstBtn, _ := buttons[0].(map[string]interface{})
-	if firstBtn["title"] != "SP100" {
-		t.Errorf("button[0].title = %v; want SP100", firstBtn["title"])
-	}
-	if firstBtn["type"] != "oa.query.hide" {
-		t.Errorf("button[0].type = %v; want oa.query.hide", firstBtn["type"])
-	}
-	if firstBtn["payload"] != "#show_product_variants:SP100" {
-		t.Errorf("button[0].payload = %v; want postback string", firstBtn["payload"])
+	for i, want := range []struct {
+		title, payload string
+	}{
+		{"SP100", "#show_product_variants:SP100"},
+		{"SP200", "#show_product_variants:SP200"},
+	} {
+		el := elements[i]
+		if el["title"] != want.title {
+			t.Errorf("element[%d].title = %v; want %q", i, el["title"], want.title)
+		}
+		if strings.TrimSpace(el["subtitle"].(string)) == "" {
+			t.Errorf("element[%d].subtitle must be non-empty (Zalo -201)", i)
+		}
+		btns, _ := el["buttons"].([]interface{})
+		if len(btns) != 1 {
+			t.Fatalf("element[%d] expected 1 embedded button; got %d", i, len(btns))
+		}
+		btn, _ := btns[0].(map[string]interface{})
+		if btn["type"] != "oa.query.hide" {
+			t.Errorf("element[%d].buttons[0].type = %v; want oa.query.hide", i, btn["type"])
+		}
+		if btn["payload"] != want.payload {
+			t.Errorf("element[%d].buttons[0].payload = %v; want %q", i, btn["payload"], want.payload)
+		}
 	}
 }
 
-func TestBuildV3ListTemplatePayload_NoButtons(t *testing.T) {
+func TestBuildV3ListTemplatePayload_NoButtonsFallsBackToInfoCard(t *testing.T) {
 	got, err := BuildV3ListTemplatePayload("U1", "hello", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var decoded map[string]interface{}
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
+	text, elements := decodeListPayload(t, got)
+	if text != "hello" {
+		t.Errorf("message.text = %q; want %q", text, "hello")
 	}
-	message, _ := decoded["message"].(map[string]interface{})
-	attachment, _ := message["attachment"].(map[string]interface{})
-	payload, _ := attachment["payload"].(map[string]interface{})
-
-	buttons, ok := payload["buttons"].([]interface{})
-	if !ok {
-		t.Fatalf("buttons field missing or wrong type: %T", payload["buttons"])
+	if len(elements) != 1 {
+		t.Fatalf("expected single info element; got %d", len(elements))
 	}
-	if len(buttons) != 0 {
-		t.Errorf("expected empty buttons array; got %d", len(buttons))
+	if elements[0]["title"] != "hello" {
+		t.Errorf("info card title = %v; want prompt", elements[0]["title"])
+	}
+	if strings.TrimSpace(elements[0]["subtitle"].(string)) == "" {
+		t.Errorf("info card subtitle must be non-empty")
+	}
+	if _, present := elements[0]["buttons"]; present {
+		t.Errorf("info card should have no embedded buttons; got %v", elements[0]["buttons"])
 	}
 }
 
-func TestBuildV3ListTemplatePayload_SplitsTitleAndSubtitleOnNewline(t *testing.T) {
-	got, err := BuildV3ListTemplatePayload("U1", "Header line\nLonger helper sentence underneath.", nil)
+func TestBuildV3ListTemplatePayload_UsesProvidedSubtitle(t *testing.T) {
+	got, err := BuildV3ListTemplatePayload("U1", "Prompt", []ZaloOAButton{
+		{Title: "Option A", Payload: "#a", Subtitle: "Detailed helper for A"},
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	var decoded map[string]interface{}
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	message, _ := decoded["message"].(map[string]interface{})
-	attachment, _ := message["attachment"].(map[string]interface{})
-	payload, _ := attachment["payload"].(map[string]interface{})
-	elements, _ := payload["elements"].([]interface{})
-	first, _ := elements[0].(map[string]interface{})
-
-	if first["title"] != "Header line" {
-		t.Errorf("title = %v; want %q", first["title"], "Header line")
-	}
-	if first["subtitle"] != "Longer helper sentence underneath." {
-		t.Errorf("subtitle = %v; want second line of prompt", first["subtitle"])
+	_, elements := decodeListPayload(t, got)
+	if elements[0]["subtitle"] != "Detailed helper for A" {
+		t.Errorf("subtitle = %v; want caller-provided value", elements[0]["subtitle"])
 	}
 }
 
-func TestBuildV3ListTemplatePayloadWithImage_IncludesImageURL(t *testing.T) {
+func TestBuildV3ListTemplatePayloadWithImage_EmbedsImageInEachElement(t *testing.T) {
 	got, err := BuildV3ListTemplatePayloadWithImage(
 		"U1",
-		"Header\nHelper line",
+		"Header",
 		"https://example.com/banner.png",
-		[]ZaloOAButton{{Title: "A", Payload: "#a"}},
+		[]ZaloOAButton{
+			{Title: "A", Payload: "#a"},
+			{Title: "B", Payload: "#b"},
+		},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	var decoded map[string]interface{}
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
+	_, elements := decodeListPayload(t, got)
+	if len(elements) != 2 {
+		t.Fatalf("expected 2 elements; got %d", len(elements))
 	}
-	message, _ := decoded["message"].(map[string]interface{})
-	attachment, _ := message["attachment"].(map[string]interface{})
-	payload, _ := attachment["payload"].(map[string]interface{})
-	elements, _ := payload["elements"].([]interface{})
-	first, _ := elements[0].(map[string]interface{})
-
-	if first["image_url"] != "https://example.com/banner.png" {
-		t.Errorf("image_url = %v; want banner URL", first["image_url"])
-	}
-	if first["title"] != "Header" {
-		t.Errorf("title = %v; want %q", first["title"], "Header")
-	}
-	if strings.TrimSpace(first["subtitle"].(string)) == "" {
-		t.Errorf("subtitle must be non-empty")
+	for i, el := range elements {
+		if el["image_url"] != "https://example.com/banner.png" {
+			t.Errorf("element[%d].image_url = %v; want banner URL", i, el["image_url"])
+		}
 	}
 }
 
 func TestBuildV3ListTemplatePayloadWithImage_OmitsEmptyImageURL(t *testing.T) {
-	got, err := BuildV3ListTemplatePayloadWithImage("U1", "Hello", "   ", nil)
+	got, err := BuildV3ListTemplatePayloadWithImage("U1", "Hello", "   ", []ZaloOAButton{
+		{Title: "A", Payload: "#a"},
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	var decoded map[string]interface{}
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	message, _ := decoded["message"].(map[string]interface{})
-	attachment, _ := message["attachment"].(map[string]interface{})
-	payload, _ := attachment["payload"].(map[string]interface{})
-	elements, _ := payload["elements"].([]interface{})
-	first, _ := elements[0].(map[string]interface{})
-
-	if _, present := first["image_url"]; present {
-		t.Errorf("image_url should be omitted when empty/whitespace; got %v", first["image_url"])
+	_, elements := decodeListPayload(t, got)
+	if _, present := elements[0]["image_url"]; present {
+		t.Errorf("image_url should be omitted when blank; got %v", elements[0]["image_url"])
 	}
 }
 

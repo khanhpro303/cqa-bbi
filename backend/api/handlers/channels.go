@@ -421,11 +421,11 @@ func SendTestTemplateMessage(c *gin.Context) {
 		return
 	}
 
-	const testPrompt = "🔧 Test rich message\nChọn 1 option bên dưới để xác nhận template hiển thị đúng."
+	const testPrompt = "🔧 Test rich message — chọn 1 option để xác nhận template hiển thị đúng."
 	testButtons := []channels.ZaloOAButton{
-		{Title: "Option A", Payload: "#test_template:a"},
-		{Title: "Option B", Payload: "#test_template:b"},
-		{Title: "Option C", Payload: "#test_template:c"},
+		{Title: "Option A", Payload: "#test_template:a", Subtitle: "Gửi postback #test_template:a"},
+		{Title: "Option B", Payload: "#test_template:b", Subtitle: "Gửi postback #test_template:b"},
+		{Title: "Option C", Payload: "#test_template:c", Subtitle: "Gửi postback #test_template:c"},
 	}
 
 	// Banner image is bundled with the frontend (frontend/public/) and served
