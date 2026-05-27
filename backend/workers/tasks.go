@@ -312,13 +312,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			meta.AstraDBCollection = cfg.AstraDBCollection
 		}
 
-		// Embedder for $vector field on AstraDB chat history rows. Optional —
-		// nil if LANGFLOW_EMBEDDING_API_KEY / OPENAI_API_KEY is not set, in
-		// which case rows are written without a vector (degraded mode).
-		var astraEmbedder *ai.EmbeddingsClient
-		if cfg.LangflowEmbeddingAPIKey != "" {
-			astraEmbedder = ai.NewEmbeddingsClient(cfg.LangflowEmbeddingAPIKey, cfg.LangflowEmbeddingModel, cfg.LangflowEmbeddingBaseURL)
-		}
+		// Embedder for $vector field on AstraDB chat history rows. Reads the
+		// tenant's `ai_api_key_openai` setting first (set via CQA Settings UI)
+		// then falls back to env LANGFLOW_EMBEDDING_API_KEY / OPENAI_API_KEY.
+		// Returns nil if no key is available — rows are then written without a
+		// vector (degraded mode).
+		astraEmbedder := engine.BuildTenantEmbedder(matchedChannel.TenantID, engine.EmbeddingConfig{
+			FallbackAPIKey: cfg.LangflowEmbeddingAPIKey,
+			Model:          cfg.LangflowEmbeddingModel,
+			BaseURL:        cfg.LangflowEmbeddingBaseURL,
+			EncryptionKey:  cfg.EncryptionKey,
+		})
 
 		// Setup Zalo adapter for replies
 		adapter := channels.NewZaloOAAdapter(zaloCreds)

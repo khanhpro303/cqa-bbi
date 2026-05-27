@@ -3261,10 +3261,12 @@ func persistOptionListToHistory(channelID, tenantID, zaloUserID, zaloGroupID, co
 		return
 	}
 
-	var embedder *ai.EmbeddingsClient
-	if cfg.LangflowEmbeddingAPIKey != "" {
-		embedder = ai.NewEmbeddingsClient(cfg.LangflowEmbeddingAPIKey, cfg.LangflowEmbeddingModel, cfg.LangflowEmbeddingBaseURL)
-	}
+	embedder := engine.BuildTenantEmbedder(tenantID, engine.EmbeddingConfig{
+		FallbackAPIKey: cfg.LangflowEmbeddingAPIKey,
+		Model:          cfg.LangflowEmbeddingModel,
+		BaseURL:        cfg.LangflowEmbeddingBaseURL,
+		EncryptionKey:  cfg.EncryptionKey,
+	})
 
 	if err := engine.SaveChatMessage(ctx, apiEndpoint, token, keyspace, collection, zaloUserID, sessionID, "assistant", content, embedder); err != nil {
 		log.Printf("[erp_query] failed to persist option list to astra: %v", err)
