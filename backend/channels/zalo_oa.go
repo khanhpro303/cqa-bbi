@@ -391,7 +391,12 @@ func (z *ZaloOAAdapter) SendMessage(ctx context.Context, conversationID string, 
 		}
 	}
 
-	result, err := z.doRequest(ctx, "POST", zaloAPIBaseV3+"/message/cs", payload)
+	// /v3.0/oa/message/cs expects the payload as a JSON request body. The
+	// legacy doRequest helper passes params via ?data=<JSON> query string
+	// (Zalo V2 pattern), which Zalo accepts for trivial text replies but
+	// rejects with -233 ("message type is invalid or not support") for
+	// template attachments. Use the JSON-body variant for V3.
+	result, err := z.doRequestJSON(ctx, "POST", zaloAPIBaseV3+"/message/cs", payload)
 	if err != nil {
 		return fmt.Errorf("zalo send message failed: %w", err)
 	}
