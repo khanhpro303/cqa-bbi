@@ -164,6 +164,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/channels/:channelId/personal-zalo-gateway/reconnect", middleware.RequirePermission("channels", "w"), handlers.ReconnectPersonalZaloGateway)
 			tenant.POST("/channels/:channelId/personal-zalo-gateway/sync", middleware.RequirePermission("channels", "w"), handlers.SyncPersonalZaloGateway)
 			tenant.POST("/channels/:channelId/test", middleware.RequirePermission("channels", "r"), handlers.TestChannelConnection)
+			tenant.POST("/channels/:channelId/test-template", middleware.RequireRole("owner"), handlers.SendTestTemplateMessage)
 			tenant.POST("/channels/:channelId/sync", middleware.RequirePermission("channels", "w"), handlers.SyncChannelNow)
 			tenant.POST("/channels/:channelId/reauth", middleware.RequirePermission("channels", "w"), handlers.ReauthChannel)
 			tenant.GET("/channels/:channelId/sync-history", middleware.RequirePermission("channels", "r"), handlers.GetChannelSyncHistory)

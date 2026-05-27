@@ -70,6 +70,17 @@
             <v-btn v-if="ch.channel_type !== 'personal_zalo_import'" size="small" variant="text" color="primary" :disabled="!ch.is_active" @click="testConn(ch.id)">
               {{ $t('test_connection') }}
             </v-btn>
+            <v-btn
+              v-if="ch.channel_type === 'zalo_oa' && authStore.tenantPerms.role === 'owner'"
+              size="small"
+              variant="text"
+              color="secondary"
+              prepend-icon="mdi-message-flash"
+              :disabled="!ch.is_active"
+              @click="openTestTemplate(ch)"
+            >
+              {{ $t('test_template') }}
+            </v-btn>
             <v-spacer />
             <v-btn icon="mdi-pencil" size="small" variant="text" color="primary" @click="openEdit(ch)" />
             <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="remove(ch.id)" />
@@ -262,6 +273,45 @@
       </v-card>
     </v-dialog>
 
+    <!-- Test Template Dialog (owner only) -->
+    <v-dialog v-model="showTestTemplate" max-width="520">
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2">{{ $t('test_template_title') }}</v-card-title>
+        <v-card-text class="px-6 py-2">
+          <div v-if="testTemplateChannel" class="d-flex align-center mb-3 ga-2">
+            <v-icon :color="channelColor(testTemplateChannel.channel_type)" size="20">{{ channelIcon(testTemplateChannel.channel_type) }}</v-icon>
+            <v-chip size="small" variant="tonal" :color="channelColor(testTemplateChannel.channel_type)">
+              {{ testTemplateChannel.name }}
+            </v-chip>
+            <span v-if="testTemplateChannel.external_id" class="text-caption text-grey">OA: {{ testTemplateChannel.external_id }}</span>
+          </div>
+          <div class="text-body-2 text-grey-darken-1 mb-3">{{ $t('test_template_desc') }}</div>
+          <v-select
+            v-model="testStaffId"
+            :items="testWhitelistOptions"
+            :label="$t('test_template_select_staff')"
+            :loading="loadingWhitelist"
+            :no-data-text="$t('test_template_no_staff')"
+            density="compact"
+            class="mb-2"
+          />
+        </v-card-text>
+        <v-card-actions class="px-6 pb-6">
+          <v-spacer />
+          <v-btn variant="text" :disabled="sendingTest" @click="showTestTemplate = false">{{ $t('cancel') }}</v-btn>
+          <v-btn
+            color="primary"
+            variant="flat"
+            :loading="sendingTest"
+            :disabled="!testStaffId"
+            @click="sendTestTemplate"
+          >
+            {{ $t('test_template_send') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Snackbar -->
     <v-snackbar v-model="snackbar" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
   </div>
@@ -289,6 +339,25 @@ const reauthing = ref('')
 const snackbar = ref(false)
 const snackText = ref('')
 const snackColor = ref('success')
+
+// Test rich-message template (owner only)
+interface WhitelistEntry {
+  id: string
+  zalo_user_id: string
+  name: string
+  status: string
+}
+const showTestTemplate = ref(false)
+const testTemplateChannel = ref<any>(null)
+const testWhitelist = ref<WhitelistEntry[]>([])
+const testStaffId = ref('')
+const sendingTest = ref(false)
+const loadingWhitelist = ref(false)
+const testWhitelistOptions = computed(() =>
+  testWhitelist.value
+    .filter((w) => w.status === 'active' && !!w.zalo_user_id)
+    .map((w) => ({ title: `${w.name} — ${w.zalo_user_id}`, value: w.zalo_user_id }))
+)
 
 const newChannel = reactive({
   channel_type: 'zalo_oa',
@@ -459,6 +528,42 @@ async function testConn(channelId: string) {
     showSnack(t('connection_ok'), 'success')
   } catch {
     showSnack(t('connection_failed'), 'error')
+  }
+}
+
+async function openTestTemplate(ch: any) {
+  testTemplateChannel.value = ch
+  testStaffId.value = ''
+  testWhitelist.value = []
+  showTestTemplate.value = true
+  loadingWhitelist.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/zalo-whitelist`, {
+      params: { channel_id: ch.id },
+    })
+    testWhitelist.value = Array.isArray(data) ? (data as WhitelistEntry[]) : []
+  } catch {
+    showSnack(t('error'), 'error')
+  } finally {
+    loadingWhitelist.value = false
+  }
+}
+
+async function sendTestTemplate() {
+  if (!testTemplateChannel.value || !testStaffId.value) return
+  sendingTest.value = true
+  try {
+    await api.post(
+      `/tenants/${tenantId.value}/channels/${testTemplateChannel.value.id}/test-template`,
+      { zalo_user_id: testStaffId.value }
+    )
+    showSnack(t('test_template_sent'), 'success')
+    showTestTemplate.value = false
+  } catch (e: any) {
+    const code = e?.response?.data?.error
+    showSnack(code ? t(`error_${code}`, code) : t('error'), 'error')
+  } finally {
+    sendingTest.value = false
   }
 }
 

@@ -368,6 +368,112 @@ func TestChannelConnection(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "connection_successful"})
 }
 
+// SendTestTemplateMessage sends a fixed 3-button "list" template via Zalo OA V3
+// to a whitelisted staff Zalo user for owner-side smoke testing of the rich
+// message pipeline. Restricted to role=owner via router middleware.
+func SendTestTemplateMessage(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	channelID := c.Param("channelId")
+	actorUserID := middleware.GetUserID(c)
+
+	var req struct {
+		ZaloUserID string `json:"zalo_user_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
+		return
+	}
+
+	var channel models.Channel
+	if err := db.DB.Where("id = ? AND tenant_id = ?", channelID, tenantID).First(&channel).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "channel_not_found"})
+		return
+	}
+	if channel.ChannelType != "zalo_oa" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_channel_type"})
+		return
+	}
+	if !channel.IsActive {
+		c.JSON(http.StatusForbidden, gin.H{"error": "channel_is_inactive"})
+		return
+	}
+
+	var wl models.ZaloWhitelist
+	if err := db.DB.Where("tenant_id = ? AND channel_id = ? AND zalo_user_id = ? AND status = ?",
+		tenantID, channelID, req.ZaloUserID, "active").First(&wl).Error; err != nil {
+		log.Printf("[security] test-template denied: tenant=%s channel=%s actor=%s target=%s reason=not_whitelisted",
+			tenantID, channelID, actorUserID, req.ZaloUserID)
+		c.JSON(http.StatusForbidden, gin.H{"error": "not_whitelisted"})
+		return
+	}
+
+	cfg, _ := config.Load()
+	credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey)
+	if err != nil {
+		log.Printf("[error] decrypt channel %s for test-template: %v", channelID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "decrypt_failed"})
+		return
+	}
+
+	var creds channels.ZaloOACredentials
+	if err := json.Unmarshal(credBytes, &creds); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid_credentials"})
+		return
+	}
+
+	const testPrompt = "🔧 Test rich message — vui lòng chọn 1 option để xác nhận template hiển thị đúng:"
+	testButtons := []channels.ZaloOAButton{
+		{Title: "Option A", Payload: "#test_template:a"},
+		{Title: "Option B", Payload: "#test_template:b"},
+		{Title: "Option C", Payload: "#test_template:c"},
+	}
+
+	payload, err := channels.BuildV3ListTemplatePayload(req.ZaloUserID, testPrompt, testButtons)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "build_payload_failed", "details": err.Error()})
+		return
+	}
+
+	adapter := channels.NewZaloOAAdapter(creds)
+	adapter.SetTokenRefreshCallback(func(at, rt string) {
+		creds.AccessToken = at
+		creds.RefreshToken = rt
+		newCredBytes, mErr := json.Marshal(creds)
+		if mErr != nil {
+			log.Printf("[error] marshal refreshed creds for channel %s: %v", channelID, mErr)
+			return
+		}
+		encrypted, eErr := pkg.Encrypt(newCredBytes, cfg.EncryptionKey)
+		if eErr != nil {
+			log.Printf("[error] re-encrypt refreshed creds for channel %s: %v", channelID, eErr)
+			return
+		}
+		db.DB.Model(&models.Channel{}).Where("id = ?", channelID).Updates(map[string]interface{}{
+			"credentials_encrypted": encrypted,
+			"updated_at":            time.Now(),
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := adapter.SendMessage(ctx, req.ZaloUserID, payload); err != nil {
+		log.Printf("[error] test-template send failed: tenant=%s channel=%s actor=%s target=%s err=%v",
+			tenantID, channelID, actorUserID, req.ZaloUserID, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "send_failed", "details": err.Error()})
+		return
+	}
+
+	log.Printf("[audit] test-template sent: tenant=%s channel=%s actor=%s target=%s",
+		tenantID, channelID, actorUserID, req.ZaloUserID)
+	c.JSON(http.StatusOK, gin.H{
+		"sent":          true,
+		"to":            req.ZaloUserID,
+		"to_name":       wl.Name,
+		"button_count":  len(testButtons),
+	})
+}
+
 // signOAuthState creates an HMAC-signed state parameter: "tenantId:channelId:hmac"
 func signOAuthState(tenantID, channelID, secret string) string {
 	payload := tenantID + ":" + channelID
