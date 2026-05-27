@@ -18,13 +18,21 @@ from pathlib import Path
 ERP_PATH = Path("backend/api/handlers/erp.go")
 
 # (start_marker, end_marker_that_must_remain)
+#
+# Each tuple removes the half-open span [start, end) so the surviving file
+# still starts at the `end_marker` line. Banner comments above the start
+# marker (e.g. "// ---") stay put — when the next surviving block already
+# expects a banner above it, the orphaned line becomes its new top banner.
 BLOCKS_TO_REMOVE = [
+    # Moved to erp_admin.go — leaves a "// ---" line above the surviving
+    # respondWithMockData banner, which folds into that section's banner.
     (
-        "// searchVariantsByAttributes returns child variants under a parent SKU",
-        "func detectMaChaFromSearch(",
+        "// SaveERPSettings — persist ERP connection and per-agent-type config",
+        "// respondWithMockData — development fallback (no ERP credentials configured)",
     ),
+    # Moved to erp_orders.go + erp_debt.go (one contiguous span).
     (
-        "// getAIClient creates an AI provider client based on tenant settings.",
+        "func isGenericOrderSearch(search string) bool {",
         "func searchProductsByWebNameAstraDBNonVectorized(",
     ),
 ]
