@@ -107,21 +107,36 @@ func TestSaveChatMessage_WritesLangflowShape(t *testing.T) {
 		t.Fatalf("decode astra body: %v", err)
 	}
 	doc := envelope.InsertOne.Document
-	mustEqual := map[string]any{
-		"zalo_user_id": userID,
-		"session_id":   sessionID,
-		"role":         "assistant",
-		"content":      content,
-		"text":         content,
+
+	if got := doc["page_content"]; got != content {
+		t.Errorf("page_content = %v, want %v", got, content)
 	}
-	for k, want := range mustEqual {
-		if got, ok := doc[k]; !ok || got != want {
-			t.Errorf("doc[%q] = %v (present=%v), want %v", k, got, ok, want)
+
+	meta, ok := doc["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata missing or wrong type: %T", doc["metadata"])
+	}
+	wantMeta := map[string]any{
+		"role":         "assistant",
+		"session_id":   sessionID,
+		"zalo_user_id": userID,
+	}
+	for k, want := range wantMeta {
+		if got := meta[k]; got != want {
+			t.Errorf("metadata[%q] = %v, want %v", k, got, want)
 		}
 	}
-	if _, ok := doc["created_at"]; !ok {
-		t.Error("created_at missing from document")
+	if _, ok := meta["created_at"]; !ok {
+		t.Error("metadata.created_at missing")
 	}
+
+	// Custom fields must NOT leak to top level — autodetect chokes on mixed shapes.
+	for _, badTopField := range []string{"role", "content", "text", "session_id", "zalo_user_id", "created_at"} {
+		if _, present := doc[badTopField]; present {
+			t.Errorf("doc has unexpected top-level field %q (must live in metadata)", badTopField)
+		}
+	}
+
 	vec, ok := doc["$vector"].([]any)
 	if !ok {
 		t.Fatalf("$vector missing or wrong type: %T", doc["$vector"])
@@ -154,11 +169,12 @@ func TestSaveChatMessage_DegradedWhenEmbedderFails(t *testing.T) {
 	if err := json.Unmarshal(astra.receivedB, &envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, ok := envelope.InsertOne.Document["$vector"]; ok {
+	doc := envelope.InsertOne.Document
+	if _, ok := doc["$vector"]; ok {
 		t.Error("$vector should be absent when embed fails (degraded mode)")
 	}
-	if envelope.InsertOne.Document["text"] != "hello" {
-		t.Errorf("text field missing/wrong: %v", envelope.InsertOne.Document["text"])
+	if doc["page_content"] != "hello" {
+		t.Errorf("page_content missing/wrong: %v", doc["page_content"])
 	}
 }
 

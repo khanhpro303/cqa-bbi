@@ -15,10 +15,12 @@ import (
 // SaveChatMessage persists a chat message into the AstraDB conversation
 // history collection used by the Langflow flow's AstraDB-HistoryRetriever.
 //
-// The document shape mirrors what the Langflow MessageToDocument component
-// produces (see BBI_RAG_Bot_Ext.json, nodes CustomComponent-sUNVR and
-// MessageToDocument-yUtXJ) so rows written from Go are retrievable by the
-// same retriever node that reads rows written by Langflow.
+// Shape must match what Langflow's AstraDB Vectorstore writes after ingesting
+// a langchain Document — top-level {page_content, metadata, $vector} — or the
+// collection's autodetect mode will fail with "Mixed document shapes detected"
+// the next time AstraDB-HistoryStore / AstraDB-HistoryRetriever initializes.
+// Custom fields (role, session_id, zalo_user_id, created_at) go inside the
+// metadata map, not at the top level.
 //
 // If embedder is non-nil the function calls it to compute a $vector field in
 // the same embedding space as the EmbeddingModel-OnvoJ node. An embedder
@@ -38,12 +40,13 @@ func SaveChatMessage(ctx context.Context, apiEndpoint, token, keyspace, collecti
 	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
 
 	document := map[string]interface{}{
-		"zalo_user_id": zaloUserID,
-		"session_id":   sessionID,
-		"role":         role,
-		"content":      content,
-		"text":         content,
-		"created_at":   time.Now().Unix(),
+		"page_content": content,
+		"metadata": map[string]interface{}{
+			"role":         role,
+			"session_id":   sessionID,
+			"zalo_user_id": zaloUserID,
+			"created_at":   time.Now().Unix(),
+		},
 	}
 
 	if embedder != nil {
