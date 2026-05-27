@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"sort"
@@ -668,39 +667,28 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return sortedMaChas[i].count > sortedMaChas[j].count
 			})
 
-			var buttons []gin.H
+			buttons := make([]channels.ZaloOAButton, 0, 3)
 			for i, mc := range sortedMaChas {
 				if i >= 3 {
 					break
 				}
-				buttons = append(buttons, gin.H{
-					"title":   fmt.Sprintf("Dòng %s", mc.code),
-					"type":    "oa.query.hide",
-					"payload": "#show_macha_options:" + mc.code,
+				buttons = append(buttons, channels.ZaloOAButton{
+					Title:   fmt.Sprintf("Dòng %s", mc.code),
+					Payload: "#show_macha_options:" + mc.code,
 				})
 			}
-
-			promptMsg := gin.H{
-				"recipient": gin.H{
-					"user_id": payload.Sender.ID,
-				},
-				"message": gin.H{
-					"text": fmt.Sprintf("Tôi tìm thấy các dòng sản phẩm khớp với '%s'. Bạn muốn kiểm tra tồn kho dòng nào?", keyword),
-					"attachment": gin.H{
-						"type": "template",
-						"payload": gin.H{
-							"buttons": buttons,
-						},
-					},
-				},
-			}
-			promptMsgJSON, _ := json.Marshal(promptMsg)
+			prompt := fmt.Sprintf("Tôi tìm thấy các dòng sản phẩm khớp với '%s'. Bạn muốn kiểm tra tồn kho dòng nào?", keyword)
 
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
-				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, string(promptMsgJSON))
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
 			} else {
-				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, string(promptMsgJSON))
+				body, buildErr := channels.BuildV3ListTemplatePayload(payload.Sender.ID, prompt, buttons)
+				if buildErr != nil {
+					log.Printf("[zalo_webhook] cannot build V3 list template (flow_type prompt): %v", buildErr)
+					return nil
+				}
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, body)
 			}
 			_ = sendErr
 			return nil
@@ -778,41 +766,30 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 
 			// Construct Zalo rich message with buttons (oa.query.hide)
-			var buttons []gin.H
+			buttons := make([]channels.ZaloOAButton, 0, len(webNames))
 			for _, wName := range webNames {
 				btnPayload := map[string]string{
 					"MA_CHA":   maCha,
 					"WEB_NAME": wName,
 				}
 				btnPayloadJSON, _ := json.Marshal(btnPayload)
-				buttons = append(buttons, gin.H{
-					"title":   wName,
-					"type":    "oa.query.hide",
-					"payload": "#check_stock_webname:" + string(btnPayloadJSON),
+				buttons = append(buttons, channels.ZaloOAButton{
+					Title:   wName,
+					Payload: "#check_stock_webname:" + string(btnPayloadJSON),
 				})
 			}
-
-			promptMsg := gin.H{
-				"recipient": gin.H{
-					"user_id": payload.Sender.ID,
-				},
-				"message": gin.H{
-					"text": fmt.Sprintf("Dòng sản phẩm '%s' có các tùy chọn đồng bộ sau. Vui lòng chọn một tùy chọn để kiểm tra tồn kho:", maCha),
-					"attachment": gin.H{
-						"type": "template",
-						"payload": gin.H{
-							"buttons": buttons,
-						},
-					},
-				},
-			}
-			promptMsgJSON, _ := json.Marshal(promptMsg)
+			prompt := fmt.Sprintf("Dòng sản phẩm '%s' có các tùy chọn đồng bộ sau. Vui lòng chọn một tùy chọn để kiểm tra tồn kho:", maCha)
 
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
-				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, string(promptMsgJSON))
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
 			} else {
-				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, string(promptMsgJSON))
+				body, buildErr := channels.BuildV3ListTemplatePayload(payload.Sender.ID, prompt, buttons)
+				if buildErr != nil {
+					log.Printf("[zalo_webhook] cannot build V3 list template (macha_options): %v", buildErr)
+					return nil
+				}
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, body)
 			}
 			_ = sendErr
 			return nil
@@ -914,7 +891,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return nil
 			}
 
-			var buttons []gin.H
+			buttons := make([]channels.ZaloOAButton, 0, 4)
 			for i, p := range childProducts {
 				if i >= 4 { // Zalo template supports max 4 buttons
 					break
@@ -932,34 +909,23 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					btnTitle = fmt.Sprintf("%s (%s)", sku, t2)
 				}
 
-				buttons = append(buttons, gin.H{
-					"title":   btnTitle,
-					"type":    "oa.query.hide",
-					"payload": "#show_product_detail:" + sku,
+				buttons = append(buttons, channels.ZaloOAButton{
+					Title:   btnTitle,
+					Payload: "#show_product_detail:" + sku,
 				})
 			}
-
-			promptMsg := gin.H{
-				"recipient": gin.H{
-					"user_id": payload.Sender.ID,
-				},
-				"message": gin.H{
-					"text": fmt.Sprintf("Dòng sản phẩm '%s' có các tùy chọn màu/size sau. Vui lòng chọn một tùy chọn để xem chi tiết sản phẩm:", maCha),
-					"attachment": gin.H{
-						"type": "template",
-						"payload": gin.H{
-							"buttons": buttons,
-						},
-					},
-				},
-			}
-			promptMsgJSON, _ := json.Marshal(promptMsg)
+			prompt := fmt.Sprintf("Dòng sản phẩm '%s' có các tùy chọn màu/size sau. Vui lòng chọn một tùy chọn để xem chi tiết sản phẩm:", maCha)
 
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
-				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, string(promptMsgJSON))
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
 			} else {
-				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, string(promptMsgJSON))
+				body, buildErr := channels.BuildV3ListTemplatePayload(payload.Sender.ID, prompt, buttons)
+				if buildErr != nil {
+					log.Printf("[zalo_webhook] cannot build V3 list template (product_variants): %v", buildErr)
+					return nil
+				}
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, body)
 			}
 			_ = sendErr
 			return nil

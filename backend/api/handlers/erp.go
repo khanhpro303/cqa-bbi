@@ -1687,91 +1687,45 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					}
 
 					if len(maChaCounts) > 0 {
-						var buttons []gin.H
-						buttons = append(buttons, gin.H{
-							"title":   "📦 Xem theo dòng sản phẩm",
-							"type":    "oa.query.hide",
-							"payload": "#choose_flow_type:dongsp:" + search,
-						})
-						buttons = append(buttons, gin.H{
-							"title":   "🔍 Xem theo mã SKU cụ thể",
-							"type":    "oa.query.hide",
-							"payload": "#choose_flow_type:skucuthe:" + search,
-						})
-
-						promptMsg := gin.H{
-							"recipient": gin.H{
-								"user_id": permCtx.ZaloUserID,
-							},
-							"message": gin.H{
-								"text": fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search),
-								"attachment": gin.H{
-									"type": "template",
-									"payload": gin.H{
-										"buttons": buttons,
-									},
-								},
-							},
+						buttons := []channels.ZaloOAButton{
+							{Title: "📦 Xem theo dòng sản phẩm", Payload: "#choose_flow_type:dongsp:" + search},
+							{Title: "🔍 Xem theo mã SKU cụ thể", Payload: "#choose_flow_type:skucuthe:" + search},
 						}
+						prompt := fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search)
 
-						// Send rich message directly to Zalo from backend
-						var activeChannel *models.Channel
-						var allChannels []models.Channel
-						if errChan := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&allChannels).Error; errChan == nil && len(allChannels) > 0 {
-							activeChannel = &allChannels[0]
-						}
-
-						if activeChannel != nil {
-							cfg, _ := config.Load()
-							credBytes, errDec := pkg.Decrypt(activeChannel.CredentialsEncrypted, cfg.EncryptionKey)
-							if errDec == nil {
-								var zaloCreds channels.ZaloOACredentials
-								if errCreds := json.Unmarshal(credBytes, &zaloCreds); errCreds == nil {
-									adapter := channels.NewZaloOAAdapter(zaloCreds)
-									adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-										var ch models.Channel
-										if db.DB.First(&ch, "id = ?", activeChannel.ID).Error == nil {
-											credsMap := map[string]interface{}{
-												"app_id":        zaloCreds.AppID,
-												"app_secret":    zaloCreds.AppSecret,
-												"access_token":  newAccess,
-												"refresh_token": newRefresh,
-												"oa_id":         zaloCreds.OAId,
-											}
-											newCredJSON, _ := json.Marshal(credsMap)
-											encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-											db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
+						adapter, _, adapterErr := loadActiveZaloOAAdapter(tenantID)
+						if adapterErr != nil {
+							log.Printf("[inventory_query] cannot send Zalo Rich Message: %v", adapterErr)
+						} else {
+							var matchedGroup models.CRMGroup
+							hasGroup := false
+							if len(permCtx.Groups) > 0 {
+								for _, gp := range permCtx.Groups {
+									if gp.GroupID != "private_bot" {
+										if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
+											hasGroup = true
+											break
 										}
-									})
-
-									promptMsgJSON, _ := json.Marshal(promptMsg)
-
-									var matchedGroup models.CRMGroup
-									hasGroup := false
-									if len(permCtx.Groups) > 0 {
-										for _, gp := range permCtx.Groups {
-											if gp.GroupID != "private_bot" {
-												if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
-													hasGroup = true
-													break
-												}
-											}
-										}
-									}
-
-									var sendErr error
-									if hasGroup {
-										sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, string(promptMsgJSON))
-									} else {
-										sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, string(promptMsgJSON))
-									}
-
-									if sendErr != nil {
-										log.Printf("[inventory_query] failed to send Zalo Rich Message directly: %v", sendErr)
-									} else {
-										log.Printf("[inventory_query] successfully sent Zalo Rich Message directly to %s", permCtx.ZaloUserID)
 									}
 								}
+							}
+
+							var sendErr error
+							if hasGroup {
+								sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
+							} else {
+								body, buildErr := channels.BuildV3ListTemplatePayload(permCtx.ZaloUserID, prompt, buttons)
+								if buildErr != nil {
+									log.Printf("[inventory_query] cannot build Zalo V3 list template: %v", buildErr)
+								} else {
+									sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, body)
+								}
+							}
+
+							if sendErr != nil {
+								log.Printf("[inventory_query] failed to send Zalo Rich Message directly: %v", sendErr)
+							} else {
+								log.Printf("[inventory_query] successfully sent Zalo Rich Message directly to %s", permCtx.ZaloUserID)
 							}
 						}
 
@@ -3205,15 +3159,14 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 	}
 	sortProductParentMatches(sortedMaChas)
 
-	var buttons []gin.H
+	buttons := make([]channels.ZaloOAButton, 0, 3)
 	for i, mc := range sortedMaChas {
 		if i >= 3 {
 			break
 		}
-		buttons = append(buttons, gin.H{
-			"title":   mc.code,
-			"type":    "oa.query.hide",
-			"payload": "#show_product_variants:" + mc.code,
+		buttons = append(buttons, channels.ZaloOAButton{
+			Title:   mc.code,
+			Payload: "#show_product_variants:" + mc.code,
 		})
 	}
 
@@ -3228,21 +3181,7 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 		return false
 	}
 
-	promptMsg := gin.H{
-		"recipient": gin.H{
-			"user_id": permCtx.ZaloUserID,
-		},
-		"message": gin.H{
-			"text": fmt.Sprintf("Tôi tìm thấy nhiều sản phẩm khớp với '%s'. Bạn muốn hỏi về dòng sản phẩm nào?", search),
-			"attachment": gin.H{
-				"type": "template",
-				"payload": gin.H{
-					"buttons": buttons,
-				},
-			},
-		},
-	}
-	promptMsgJSON, _ := json.Marshal(promptMsg)
+	prompt := fmt.Sprintf("Tôi tìm thấy nhiều sản phẩm khớp với '%s'. Bạn muốn hỏi về dòng sản phẩm nào?", search)
 
 	var matchedGroup models.CRMGroup
 	hasGroup := false
@@ -3259,9 +3198,14 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 
 	var sendErr error
 	if hasGroup {
-		sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, string(promptMsgJSON))
+		sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
 	} else {
-		sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, string(promptMsgJSON))
+		body, buildErr := channels.BuildV3ListTemplatePayload(permCtx.ZaloUserID, prompt, buttons)
+		if buildErr != nil {
+			log.Printf("[erp_query] cannot build Zalo V3 list template for products: %v", buildErr)
+			return false
+		}
+		sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, body)
 	}
 
 	if sendErr != nil {
