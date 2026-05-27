@@ -93,6 +93,55 @@ func splitPromptTitleSubtitle(prompt string) (string, string) {
 	return trimmed, defaultListElementSubtitle
 }
 
+// BuildV3ListTemplatePayloadWithImage is like BuildV3ListTemplatePayload but
+// also embeds an image_url on the single element. Zalo V3 list templates
+// reject elements without a non-empty image_url (api error -201: "image_url
+// is empty"), so callers that hit strict validation must use this variant
+// and pass a publicly reachable HTTPS URL that Zalo's servers can fetch.
+// Note: existing callers of BuildV3ListTemplatePayload have the same latent
+// validation risk and should migrate to this function as they hit -201.
+func BuildV3ListTemplatePayloadWithImage(userID, prompt, imageURL string, buttons []ZaloOAButton) (string, error) {
+	btns := make([]map[string]interface{}, 0, len(buttons))
+	for _, b := range buttons {
+		btns = append(btns, map[string]interface{}{
+			"title":   b.Title,
+			"type":    "oa.query.hide",
+			"payload": b.Payload,
+		})
+	}
+
+	title, subtitle := splitPromptTitleSubtitle(prompt)
+	element := map[string]interface{}{
+		"title":    title,
+		"subtitle": subtitle,
+	}
+	if strings.TrimSpace(imageURL) != "" {
+		element["image_url"] = imageURL
+	}
+
+	payload := map[string]interface{}{
+		"recipient": map[string]interface{}{
+			"user_id": userID,
+		},
+		"message": map[string]interface{}{
+			"attachment": map[string]interface{}{
+				"type": "template",
+				"payload": map[string]interface{}{
+					"template_type": "list",
+					"elements":      []map[string]interface{}{element},
+					"buttons":       btns,
+				},
+			},
+		},
+	}
+
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal v3 list template with image: %w", err)
+	}
+	return string(out), nil
+}
+
 // BuildButtonOptionsAsText renders the prompt + button labels as a plain text
 // message. Used as a fallback for Zalo OA group chats (/v3.0/oa/group/message)
 // which only support text/file/image/sticker in V3 — template+buttons are not

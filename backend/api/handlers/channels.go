@@ -428,7 +428,10 @@ func SendTestTemplateMessage(c *gin.Context) {
 		{Title: "Option C", Payload: "#test_template:c"},
 	}
 
-	payload, err := channels.BuildV3ListTemplatePayload(req.ZaloUserID, testPrompt, testButtons)
+	// Banner image is bundled with the frontend (frontend/public/) and served
+	// at the same domain Zalo will fetch from.
+	imageURL := getBaseURL(c) + "/banner-template-oa.png"
+	payload, err := channels.BuildV3ListTemplatePayloadWithImage(req.ZaloUserID, testPrompt, imageURL, testButtons)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "build_payload_failed", "details": err.Error()})
 		return

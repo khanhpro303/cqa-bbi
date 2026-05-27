@@ -112,6 +112,59 @@ func TestBuildV3ListTemplatePayload_SplitsTitleAndSubtitleOnNewline(t *testing.T
 	}
 }
 
+func TestBuildV3ListTemplatePayloadWithImage_IncludesImageURL(t *testing.T) {
+	got, err := BuildV3ListTemplatePayloadWithImage(
+		"U1",
+		"Header\nHelper line",
+		"https://example.com/banner.png",
+		[]ZaloOAButton{{Title: "A", Payload: "#a"}},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	message, _ := decoded["message"].(map[string]interface{})
+	attachment, _ := message["attachment"].(map[string]interface{})
+	payload, _ := attachment["payload"].(map[string]interface{})
+	elements, _ := payload["elements"].([]interface{})
+	first, _ := elements[0].(map[string]interface{})
+
+	if first["image_url"] != "https://example.com/banner.png" {
+		t.Errorf("image_url = %v; want banner URL", first["image_url"])
+	}
+	if first["title"] != "Header" {
+		t.Errorf("title = %v; want %q", first["title"], "Header")
+	}
+	if strings.TrimSpace(first["subtitle"].(string)) == "" {
+		t.Errorf("subtitle must be non-empty")
+	}
+}
+
+func TestBuildV3ListTemplatePayloadWithImage_OmitsEmptyImageURL(t *testing.T) {
+	got, err := BuildV3ListTemplatePayloadWithImage("U1", "Hello", "   ", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	message, _ := decoded["message"].(map[string]interface{})
+	attachment, _ := message["attachment"].(map[string]interface{})
+	payload, _ := attachment["payload"].(map[string]interface{})
+	elements, _ := payload["elements"].([]interface{})
+	first, _ := elements[0].(map[string]interface{})
+
+	if _, present := first["image_url"]; present {
+		t.Errorf("image_url should be omitted when empty/whitespace; got %v", first["image_url"])
+	}
+}
+
 func TestBuildButtonOptionsAsText(t *testing.T) {
 	tests := []struct {
 		name        string
