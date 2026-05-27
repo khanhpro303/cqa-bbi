@@ -14,14 +14,24 @@ type ZaloOAButton struct {
 	Payload string
 }
 
+// defaultListElementSubtitle is the helper text rendered under the prompt when
+// the caller does not embed an explicit subtitle in the prompt (via a newline
+// separator). Zalo V3 list templates reject elements with an empty subtitle
+// (api error -201: "subtitle is empty"), so this field must always be set.
+const defaultListElementSubtitle = "Vui lòng chọn một tùy chọn bên dưới."
+
 // BuildV3ListTemplatePayload returns the JSON body for a Zalo OA V3 "list"
 // template message intended for /v3.0/oa/message/cs (1:1 customer-support
-// chat). The prompt becomes the single list element title and the buttons
-// appear below. Pass the returned string to ZaloOAAdapter.SendMessage which
-// parses it back into the request body.
+// chat). The prompt becomes the single list element title (the first line if
+// the prompt contains "\n"; the remainder is used as the subtitle) and the
+// buttons appear below. Pass the returned string to ZaloOAAdapter.SendMessage
+// which parses it back into the request body.
 //
 // Zalo deprecated the V2 buttons-only template (error -240); list/buttons must
 // now be wrapped under template_type="list" with an elements array.
+// Zalo V3 also rejects elements without a non-empty subtitle (error -201), so
+// when the prompt has no embedded subtitle this function falls back to a
+// generic helper sentence.
 func BuildV3ListTemplatePayload(userID, prompt string, buttons []ZaloOAButton) (string, error) {
 	btns := make([]map[string]interface{}, 0, len(buttons))
 	for _, b := range buttons {
@@ -31,6 +41,8 @@ func BuildV3ListTemplatePayload(userID, prompt string, buttons []ZaloOAButton) (
 			"payload": b.Payload,
 		})
 	}
+
+	title, subtitle := splitPromptTitleSubtitle(prompt)
 
 	payload := map[string]interface{}{
 		"recipient": map[string]interface{}{
@@ -42,7 +54,7 @@ func BuildV3ListTemplatePayload(userID, prompt string, buttons []ZaloOAButton) (
 				"payload": map[string]interface{}{
 					"template_type": "list",
 					"elements": []map[string]interface{}{
-						{"title": prompt},
+						{"title": title, "subtitle": subtitle},
 					},
 					"buttons": btns,
 				},
@@ -55,6 +67,30 @@ func BuildV3ListTemplatePayload(userID, prompt string, buttons []ZaloOAButton) (
 		return "", fmt.Errorf("marshal v3 list template: %w", err)
 	}
 	return string(out), nil
+}
+
+// splitPromptTitleSubtitle derives a (title, subtitle) pair from a single
+// prompt string. If the prompt contains a newline, the first line becomes the
+// title and the rest becomes the subtitle. Otherwise the whole prompt is the
+// title and a generic helper sentence is used as the subtitle so Zalo does not
+// reject the element.
+func splitPromptTitleSubtitle(prompt string) (string, string) {
+	trimmed := strings.TrimSpace(prompt)
+	if idx := strings.IndexAny(trimmed, "\n"); idx >= 0 {
+		title := strings.TrimSpace(trimmed[:idx])
+		subtitle := strings.TrimSpace(trimmed[idx+1:])
+		if title == "" {
+			title = trimmed
+		}
+		if subtitle == "" {
+			subtitle = defaultListElementSubtitle
+		}
+		return title, subtitle
+	}
+	if trimmed == "" {
+		return defaultListElementSubtitle, defaultListElementSubtitle
+	}
+	return trimmed, defaultListElementSubtitle
 }
 
 // BuildButtonOptionsAsText renders the prompt + button labels as a plain text

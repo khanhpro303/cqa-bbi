@@ -421,7 +421,7 @@ func SendTestTemplateMessage(c *gin.Context) {
 		return
 	}
 
-	const testPrompt = "🔧 Test rich message — vui lòng chọn 1 option để xác nhận template hiển thị đúng:"
+	const testPrompt = "🔧 Test rich message\nChọn 1 option bên dưới để xác nhận template hiển thị đúng."
 	testButtons := []channels.ZaloOAButton{
 		{Title: "Option A", Payload: "#test_template:a"},
 		{Title: "Option B", Payload: "#test_template:b"},

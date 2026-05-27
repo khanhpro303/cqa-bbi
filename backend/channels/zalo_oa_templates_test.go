@@ -44,6 +44,10 @@ func TestBuildV3ListTemplatePayload(t *testing.T) {
 	if firstEl["title"] != "Pick a product line" {
 		t.Errorf("first element title = %v; want prompt text", firstEl["title"])
 	}
+	subtitle, _ := firstEl["subtitle"].(string)
+	if strings.TrimSpace(subtitle) == "" {
+		t.Errorf("element subtitle must be non-empty (Zalo rejects with -201); got %q", subtitle)
+	}
 
 	buttons, _ := payload["buttons"].([]interface{})
 	if len(buttons) != 2 {
@@ -81,6 +85,30 @@ func TestBuildV3ListTemplatePayload_NoButtons(t *testing.T) {
 	}
 	if len(buttons) != 0 {
 		t.Errorf("expected empty buttons array; got %d", len(buttons))
+	}
+}
+
+func TestBuildV3ListTemplatePayload_SplitsTitleAndSubtitleOnNewline(t *testing.T) {
+	got, err := BuildV3ListTemplatePayload("U1", "Header line\nLonger helper sentence underneath.", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	message, _ := decoded["message"].(map[string]interface{})
+	attachment, _ := message["attachment"].(map[string]interface{})
+	payload, _ := attachment["payload"].(map[string]interface{})
+	elements, _ := payload["elements"].([]interface{})
+	first, _ := elements[0].(map[string]interface{})
+
+	if first["title"] != "Header line" {
+		t.Errorf("title = %v; want %q", first["title"], "Header line")
+	}
+	if first["subtitle"] != "Longer helper sentence underneath." {
+		t.Errorf("subtitle = %v; want second line of prompt", first["subtitle"])
 	}
 }
 
