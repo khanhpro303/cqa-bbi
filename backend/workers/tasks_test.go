@@ -70,3 +70,39 @@ func TestSessionTimeoutTaskCreation(t *testing.T) {
 		t.Errorf("expected session ID %s, got %s", payload.SessionID, parsed.SessionID)
 	}
 }
+
+func TestIsDisambiguationReply(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		// Should match — bypasses CASUAL classifier
+		{"1", true},
+		{"5", true},
+		{"9", true},
+		{" 1 ", true},
+		{"\t2\n", true},
+		{"SP458484", true},
+		{"SP458495_TL", true},
+		{"SP123456ab", true},
+
+		// Should NOT match — must still go through intent classifier
+		{"0", false},      // leading zero is not a valid menu pick
+		{"10", false},     // two-digit reply is ambiguous; let LLM decide
+		{"", false},       // empty
+		{"ok", false},     // genuine CASUAL acknowledgment
+		{"dạ", false},     // genuine CASUAL
+		{"FF901", false},  // not an SP code — should hit normal classifier
+		{"SP12345", false}, // SP must have 6 digits per agent rule
+		{"hello", false},
+		{"cảm ơn", false},
+		{"1 cái áo size L", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := isDisambiguationReply(tc.in); got != tc.want {
+				t.Errorf("isDisambiguationReply(%q) = %v; want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}

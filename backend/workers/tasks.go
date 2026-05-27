@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,22 @@ import (
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 )
+
+// disambiguationReplyPattern matches the short replies the Langflow agent's
+// DISAMBIGUATION FOLLOW-UP rule expects to resolve against a recent option
+// list: a single digit 1–9, or an SP product code (with optional 1–4 char
+// alpha/underscore suffix, e.g. SP458495_TL). These would otherwise be
+// classified as CASUAL by the intent LLM — "1" looks exactly like the
+// throwaway acknowledgements ("ok", "dạ") the prompt teaches it to drop —
+// which closes the session and silences the bot mid-flow.
+var disambiguationReplyPattern = regexp.MustCompile(`^\s*(?:[1-9]|SP\d{6}[a-zA-Z_]{0,4})\s*$`)
+
+// isDisambiguationReply reports whether the given user text should bypass
+// the CASUAL/HANDOVER intent classifier and be treated as IN_SCOPE because
+// it is structurally a follow-up to an earlier product disambiguation list.
+func isDisambiguationReply(text string) bool {
+	return disambiguationReplyPattern.MatchString(text)
+}
 
 const (
 	TypeZaloWebhook    = "zalo:webhook"
@@ -1393,6 +1410,14 @@ func loadCloudifyCredentials(tenantID string, cfg *config.Config) (erpURL, erpDB
 }
 
 func classifyMessageIntent(ctx context.Context, tenantID, message string) (string, error) {
+	// 0. Fast-path: structural disambiguation reply (digit 1–9 or SPxxxxxx[_TL])
+	//    must not be re-classified by the LLM. The classifier prompt teaches
+	//    short tokens like "1"/"dạ"/"ok" as CASUAL, which would close the
+	//    session and drop the customer's actual pick on the floor.
+	if isDisambiguationReply(message) {
+		return "IN_SCOPE", nil
+	}
+
 	// 1. Get AI provider from tenant settings
 	provider := "claude"
 	var providerSetting models.AppSetting
