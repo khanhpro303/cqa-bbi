@@ -1,12 +1,10 @@
 package workers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -312,6 +310,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		if meta.AstraDBCollection == "" {
 			meta.AstraDBCollection = cfg.AstraDBCollection
+		}
+
+		// Embedder for $vector field on AstraDB chat history rows. Optional —
+		// nil if LANGFLOW_EMBEDDING_API_KEY / OPENAI_API_KEY is not set, in
+		// which case rows are written without a vector (degraded mode).
+		var astraEmbedder *ai.EmbeddingsClient
+		if cfg.LangflowEmbeddingAPIKey != "" {
+			astraEmbedder = ai.NewEmbeddingsClient(cfg.LangflowEmbeddingAPIKey, cfg.LangflowEmbeddingModel, cfg.LangflowEmbeddingBaseURL)
 		}
 
 		// Setup Zalo adapter for replies
@@ -626,7 +632,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// Save user message to Astra DB asynchronously
 		go func() {
-			err := saveMessageToAstraDB(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, payload.Sender.ID, activeSessionID, "user", payload.Message.Text)
+			err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, payload.Sender.ID, activeSessionID, "user", payload.Message.Text, astraEmbedder)
 			if err != nil {
 				log.Printf("[worker] failed to save user message to Astra DB: %v", err)
 			}
@@ -1018,7 +1024,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// Save assistant reply to Astra DB asynchronously
 		go func() {
-			err := saveMessageToAstraDB(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, payload.Sender.ID, activeSessionID, "assistant", replyText)
+			err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, payload.Sender.ID, activeSessionID, "assistant", replyText, astraEmbedder)
 			if err != nil {
 				log.Printf("[worker] failed to save assistant message to Astra DB: %v", err)
 			}
@@ -1140,62 +1146,6 @@ func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
 		log.Printf("[worker] successfully sent timeout message and closed session %s", payload.SessionID)
 		return nil
 	}
-}
-
-// saveMessageToAstraDB saves a chat message to DataStax Astra DB asynchronously.
-func saveMessageToAstraDB(ctx context.Context, apiEndpoint, token, keyspace, collection, zaloUserID, sessionID, role, content string) error {
-	if apiEndpoint == "" || token == "" || collection == "" {
-		// Skip if not configured
-		return nil
-	}
-
-	// Format endpoint: https://<ASTRA_DB_ID>-<REGION>.apps.astra.datastax.com/api/json/v1/<KEYSPACE>/<COLLECTION>
-	if keyspace == "" {
-		keyspace = "default_keyspace"
-	}
-	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
-
-	// Build the document representing the chat log
-	document := map[string]interface{}{
-		"zalo_user_id": zaloUserID,
-		"session_id":   sessionID,
-		"role":         role,
-		"content":      content,
-		"created_at":   time.Now().Unix(),
-	}
-
-	// Payload for inserting one document into Astra DB
-	payload := map[string]interface{}{
-		"insertOne": map[string]interface{}{
-			"document": document,
-		},
-	}
-
-	bodyBytes, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal astra db payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return fmt.Errorf("create astra db request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Token", token)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("astra db request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("astra db api error (status %d)", resp.StatusCode)
-	}
-
-	return nil
 }
 
 func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string) (float64, error) {

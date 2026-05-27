@@ -3175,7 +3175,7 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 		return false
 	}
 
-	adapter, _, err := loadActiveZaloOAAdapter(tenantID)
+	adapter, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
 	if err != nil {
 		log.Printf("[erp_query] cannot send Zalo Rich Message for products: %v", err)
 		return false
@@ -3214,7 +3214,86 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 	}
 
 	log.Printf("[erp_query] successfully sent Zalo Rich Message for products to %s", permCtx.ZaloUserID)
+
+	// Persist the option-list message into AstraDB chat history so the bot
+	// has context for the user's follow-up reply (e.g. "1" → SP458484).
+	// The Zalo push above bypasses Langflow, so the regular MsgToDoc path in
+	// the flow never sees this message. We mirror the displayed text and
+	// write it under the user's active Langflow session.
+	displayed := channels.BuildButtonOptionsAsText(prompt, buttons)
+	groupID := ""
+	if hasGroup {
+		groupID = matchedGroup.ZaloGroupID
+	}
+	go persistOptionListToHistory(activeChannel.ID, tenantID, permCtx.ZaloUserID, groupID, displayed)
+
 	return true
+}
+
+// persistOptionListToHistory asynchronously stores a Zalo OA option-list
+// message as an "assistant" row in the AstraDB conversation history. Failures
+// are logged and never surfaced to the HTTP caller — chat-history persistence
+// must never block product lookup.
+func persistOptionListToHistory(channelID, tenantID, zaloUserID, zaloGroupID, content string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[erp_query] panic while persisting option list to astra: %v", r)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	sessionID := engine.ResolveActiveSessionID(ctx, channelID, zaloUserID, zaloGroupID)
+	if sessionID == "" {
+		log.Printf("[erp_query] no active session for %s, skip astra save", zaloUserID)
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		log.Printf("[erp_query] config load failed, skip astra save: %v", err)
+		return
+	}
+	apiEndpoint, token, keyspace, collection := resolveAstraCredsForTenant(tenantID, cfg)
+	if apiEndpoint == "" || token == "" {
+		log.Printf("[erp_query] astra not configured for tenant %s, skip save", tenantID)
+		return
+	}
+
+	var embedder *ai.EmbeddingsClient
+	if cfg.LangflowEmbeddingAPIKey != "" {
+		embedder = ai.NewEmbeddingsClient(cfg.LangflowEmbeddingAPIKey, cfg.LangflowEmbeddingModel, cfg.LangflowEmbeddingBaseURL)
+	}
+
+	if err := engine.SaveChatMessage(ctx, apiEndpoint, token, keyspace, collection, zaloUserID, sessionID, "assistant", content, embedder); err != nil {
+		log.Printf("[erp_query] failed to persist option list to astra: %v", err)
+	}
+}
+
+// resolveAstraCredsForTenant returns the AstraDB connection settings for a
+// tenant by reading per-tenant overrides from app_settings and falling back to
+// the global config. Mirrors the resolution done in workers/tasks.go so both
+// write paths target the same collection.
+func resolveAstraCredsForTenant(tenantID string, cfg *config.Config) (apiEndpoint, token, keyspace, collection string) {
+	apiEndpoint = cfg.AstraDBAPIEndpoint
+	token = cfg.AstraDBToken
+	keyspace = cfg.AstraDBKeyspace
+	collection = cfg.AstraDBCollection
+
+	overrides := map[string]*string{
+		"astradb_api_endpoint": &apiEndpoint,
+		"astradb_token":        &token,
+		"astradb_keyspace":     &keyspace,
+		"astradb_collection":   &collection,
+	}
+	for key, ptr := range overrides {
+		var s models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&s).Error; err == nil && s.ValuePlain != "" {
+			*ptr = s.ValuePlain
+		}
+	}
+	return
 }
 
 // pushFallbackPayloadToZaloOA mirrors the slim product fallback payload to the

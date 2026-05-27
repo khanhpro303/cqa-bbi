@@ -44,6 +44,14 @@ type Config struct {
 	LangflowFlowID       string
 	LangflowPublicFlowID string
 
+	// Embeddings for AstraDB chat-history persistence from Go.
+	// Must match the EmbeddingModel node configured inside the Langflow flow
+	// so Go-written rows share an embedding space with Langflow-written rows.
+	// Falls back to OPENAI_API_KEY if LANGFLOW_EMBEDDING_API_KEY is unset.
+	LangflowEmbeddingAPIKey  string
+	LangflowEmbeddingModel   string
+	LangflowEmbeddingBaseURL string
+
 	// Redis Task Queue
 	RedisURL string
 
@@ -89,6 +97,9 @@ func Load() (*Config, error) {
 		LangflowAPIKey:             getEnv("LANGFLOW_API_KEY", ""),
 		LangflowFlowID:             getEnv("LANGFLOW_FLOW_ID", ""),
 		LangflowPublicFlowID:       getEnv("LANGFLOW_PUBLIC_FLOW_ID", ""),
+		LangflowEmbeddingAPIKey:    getEnv("LANGFLOW_EMBEDDING_API_KEY", getEnv("OPENAI_API_KEY", "")),
+		LangflowEmbeddingModel:     getEnv("LANGFLOW_EMBEDDING_MODEL", "text-embedding-ada-002"),
+		LangflowEmbeddingBaseURL:   strings.TrimRight(getEnv("LANGFLOW_EMBEDDING_BASE_URL", ""), "/"),
 		RedisURL:                   getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		PostgresURL:                getEnv("POSTGRES_URL", "postgresql://bbikhai:Kdoan4801@103.130.218.163:5432/bbi"),
 		AstraDBAPIEndpoint:         strings.TrimRight(getEnv("ASTRA_DB_API_ENDPOINT", ""), "/"),
