@@ -253,6 +253,15 @@ func ERPQuery(c *gin.Context) {
 			if cachedData == nil {
 				cachedData = []map[string]interface{}{}
 			}
+
+			if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
+				go func(s string, payload []map[string]interface{}) {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					pushFallbackPayloadToZaloOA(ctx, tenantID, "exact_web", s, payload, permCtx)
+				}(search, cachedData)
+			}
+
 			filteredCached := filterProductsByGroups(cachedData, productGroups)
 			filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
 				return getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
@@ -274,6 +283,22 @@ func ERPQuery(c *gin.Context) {
 			if err != nil {
 				log.Printf("[erp_query] product web-group search error: %v", err)
 			} else if len(webGroups) > 1 {
+				if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
+					payload := make([]map[string]interface{}, 0, len(webGroups))
+					for _, g := range webGroups {
+						payload = append(payload, map[string]interface{}{
+							"web_name":     g.WebName,
+							"parent_codes": g.ParentCodes,
+							"count":        g.Count,
+							"is_fallback":  g.IsFallback,
+						})
+					}
+					go func(s string, p []map[string]interface{}) {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						pushFallbackPayloadToZaloOA(ctx, tenantID, "raw_like_groups", s, p, permCtx)
+					}(req.Search, payload)
+				}
 				sent, sentGroups := sendProductRichMessage(c, tenantID, req.Search, webGroups, permCtx)
 				if sent {
 					numberedList := engine.BuildNumberedWebNameList(sentGroups)
