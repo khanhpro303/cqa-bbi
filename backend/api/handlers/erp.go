@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -77,10 +76,11 @@ func ERPQuery(c *gin.Context) {
 		Resource        string `json:"resource" form:"resource" binding:"required"` // products|inventory|orders|customers|debt
 		Search          string `json:"search" form:"search"`
 		Limit           int    `json:"limit" form:"limit"`
-		PartnerID       string `json:"partner_id" form:"partner_id"`    // filter orders/debt by customer Cloudify ID
+		PartnerID       string `json:"partner_id" form:"partner_id"`     // filter orders/debt by customer Cloudify ID
 		ZaloUserID      string `json:"zalo_user_id" form:"zalo_user_id"` // reserved for user-level scoping
 		PermissionToken string `json:"permission_token" form:"permission_token"`
 		ParentCode      string `json:"parent_code" form:"parent_code"`
+		ExactWebName    bool   `json:"exact_web_name" form:"exact_web_name"`
 	}
 
 	if c.Request.Method == "POST" {
@@ -226,18 +226,65 @@ func ERPQuery(c *gin.Context) {
 
 	// ── 6. Products are served from local cache only ──────────────────────
 	if req.Resource == "products" {
-		if strings.TrimSpace(req.Search) != "" {
-			parentMatches, err := searchProductParentMatchesFromAstraDB(c.Request.Context(), tenantID, req.Search, productGroups)
+		// Exact-match path: agent already resolved a specific web name from
+		// the disambiguation history and is asking the backend NOT to push
+		// the option list again (which would loop on prefix-overlapping web
+		// names like "FF901" vs "FF901 Carbon").
+		if req.ExactWebName && strings.TrimSpace(req.Search) != "" {
+			search := strings.TrimSpace(req.Search)
+			cachedData, err := searchProductsByExactWebNameFromAstraDB(c.Request.Context(), tenantID, search, req.Limit)
 			if err != nil {
-				log.Printf("[erp_query] product parent match search error: %v", err)
-			} else if len(parentMatches) > 1 {
-				sent, parentCodes := sendProductRichMessage(c, tenantID, req.Search, productParentMatchCounts(parentMatches), permCtx)
+				log.Printf("[erp_query] exact web-name search error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":   "product_cache_error",
+					"message": fmt.Sprintf("Không thể lấy dữ liệu sản phẩm từ cache: %s", err.Error()),
+				})
+				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, search, http.StatusInternalServerError, 0, c.ClientIP())
+				return
+			}
+			if cachedData == nil {
+				cachedData = []map[string]interface{}{}
+			}
+			filteredCached := filterProductsByGroups(cachedData, productGroups)
+			filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
+				return getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
+			})
+			slim := slimProductsForLLM(filteredCached)
+			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, search, http.StatusOK, len(slim), c.ClientIP())
+			c.JSON(http.StatusOK, gin.H{
+				"status":   "success",
+				"data":     slim,
+				"source":   "astradb_cache_exact_web",
+				"resource": req.Resource,
+				"count":    len(slim),
+			})
+			return
+		}
+
+		if strings.TrimSpace(req.Search) != "" {
+			webGroups, err := searchProductWebGroupsFromAstraDB(c.Request.Context(), tenantID, req.Search, productGroups)
+			if err != nil {
+				log.Printf("[erp_query] product web-group search error: %v", err)
+			} else if len(webGroups) > 1 {
+				sent, sentGroups := sendProductRichMessage(c, tenantID, req.Search, webGroups, permCtx)
 				if sent {
-					numberedList := buildNumberedParentCodeList(parentCodes)
+					numberedList := engine.BuildNumberedWebNameList(sentGroups)
+					webNames := make([]string, 0, len(sentGroups))
+					groupPayloads := make([]map[string]interface{}, 0, len(sentGroups))
+					for _, g := range sentGroups {
+						webNames = append(webNames, g.WebName)
+						groupPayloads = append(groupPayloads, map[string]interface{}{
+							"web_name":     g.WebName,
+							"parent_codes": g.ParentCodes,
+							"is_fallback":  g.IsFallback,
+						})
+					}
 					c.JSON(http.StatusOK, gin.H{
 						"status":          "success",
 						"is_product_rich": true,
-						"parent_codes":    parentCodes,
+						"web_names":       webNames,
+						"web_groups":      groupPayloads,
+						"parent_codes":    engine.FlattenWebGroupParentCodes(sentGroups),
 						"numbered_list":   numberedList,
 						"data": []map[string]interface{}{
 							{
@@ -249,7 +296,7 @@ func ERPQuery(c *gin.Context) {
 					})
 					return
 				}
-				log.Printf("[erp_query] product rich message fallback to JSON for search=%q parent_matches=%d", req.Search, len(parentMatches))
+				log.Printf("[erp_query] product rich message fallback to JSON for search=%q web_groups=%d", req.Search, len(webGroups))
 			}
 		}
 
@@ -628,12 +675,49 @@ func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, lim
 	return results, nil
 }
 
-type productParentMatch struct {
-	code  string
-	count int
+// searchProductsByExactWebNameFromAstraDB queries the local MySQL cache for
+// products whose ten_dong_bo_web equals webName exactly. Used by the agent's
+// disambiguation-resolution path to skip the LIKE-based fuzzy lookup that
+// would otherwise re-trigger the option-list disambiguation push for
+// prefix-overlapping web names (e.g. "FF901" matching "FF901 Carbon").
+func searchProductsByExactWebNameFromAstraDB(ctx context.Context, tenantID, webName string, limit int) ([]map[string]interface{}, error) {
+	var products []models.CachedProduct
+	err := db.DB.WithContext(ctx).
+		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
+		Limit(limit).
+		Find(&products).Error
+	if err != nil {
+		return nil, fmt.Errorf("local MySQL cache exact web-name query failed: %w", err)
+	}
+
+	results := make([]map[string]interface{}, 0, len(products))
+	for _, p := range products {
+		results = append(results, mapCachedProductToAPIResponse(map[string]interface{}{
+			"MA":                 p.MA,
+			"ma":                 p.MA,
+			"code":               p.MA,
+			"ma_hang":            p.MA,
+			"product_code":       p.MA,
+			"TEN_DONG_BO_WEB":    p.TEN_DONG_BO_WEB,
+			"TEN":                p.TEN,
+			"ten":                p.TEN,
+			"ten_hang":           p.TEN,
+			"THUOC_TINH_1":       p.THUOC_TINH_1,
+			"THUOC_TINH_2":       p.THUOC_TINH_2,
+			"DON_GIA_BAN":        p.DON_GIA_BAN,
+			"LINK_ANH":           p.LINK_ANH,
+			"NHAN_HIEU_NAME":     p.NHAN_HIEU_NAME,
+			"LIST_TEN_NHOM_VTHH": p.LIST_TEN_NHOM_VTHH,
+			"KHO":                p.KHO,
+			"MA_CHA":             p.MA_CHA,
+			"ma_cha":             p.MA_CHA,
+			"DVT":                p.DVT,
+		}))
+	}
+	return results, nil
 }
 
-func searchProductParentMatchesFromAstraDB(ctx context.Context, tenantID, search string, allowedGroups []string) ([]productParentMatch, error) {
+func searchProductWebGroupsFromAstraDB(ctx context.Context, tenantID, search string, allowedGroups []string) ([]engine.WebGroupMatch, error) {
 	search = strings.TrimSpace(search)
 	if search == "" {
 		return nil, nil
@@ -667,46 +751,8 @@ func searchProductParentMatchesFromAstraDB(ctx context.Context, tenantID, search
 		})
 	}
 
-	return rankProductParentMatches(candidates, allowedGroups), nil
-}
-
-func rankProductParentMatches(products []map[string]interface{}, allowedGroups []string) []productParentMatch {
-	filteredProducts := filterProductsByGroups(products, allowedGroups)
-	counts := make(map[string]int)
-
-	for _, product := range filteredProducts {
-		parentCode := strings.TrimSpace(getMapString(product, "MA_CHA", "ma_cha"))
-		if parentCode == "" {
-			parentCode = strings.TrimSpace(getMapString(product, "MA", "ma_hang", "ma", "code"))
-		}
-		if parentCode != "" {
-			counts[parentCode]++
-		}
-	}
-
-	matches := make([]productParentMatch, 0, len(counts))
-	for code, count := range counts {
-		matches = append(matches, productParentMatch{code: code, count: count})
-	}
-	sortProductParentMatches(matches)
-	return matches
-}
-
-func productParentMatchCounts(matches []productParentMatch) map[string]int {
-	counts := make(map[string]int, len(matches))
-	for _, match := range matches {
-		counts[match.code] = match.count
-	}
-	return counts
-}
-
-func sortProductParentMatches(matches []productParentMatch) {
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].count == matches[j].count {
-			return matches[i].code < matches[j].code
-		}
-		return matches[i].count > matches[j].count
-	})
+	filtered := filterProductsByGroups(candidates, allowedGroups)
+	return engine.RankProductWebGroups(filtered), nil
 }
 
 // searchProductsFromAstraDBWithFilter — queries the cached product collection in the local MySQL database with a parent code filter.
@@ -1017,10 +1063,10 @@ func SaveERPSettings(c *gin.Context) {
 	var req struct {
 		// Shared connection
 		URL      string `json:"url"`
-		DBName   string `json:"db"`      // Cloudify database name
+		DBName   string `json:"db"` // Cloudify database name
 		Username string `json:"username"`
 		Password string `json:"password"`
-		Token    string `json:"token"`   // optional API token (alternative to password)
+		Token    string `json:"token"` // optional API token (alternative to password)
 
 		// Public bot config
 		PublicActive        string `json:"public_active" binding:"required,oneof=true false"`
@@ -1734,7 +1780,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 						c.JSON(http.StatusOK, gin.H{
 							"status":            "success",
-							"is_inventory_rich":  true,
+							"is_inventory_rich": true,
 							"data":              []map[string]interface{}{},
 							"message":           "zalo_rich_message_sent_directly",
 							"count":             0,
@@ -2526,58 +2572,58 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 
 		mockData := []map[string]interface{}{
 			{
-				"MA_KHACH_HANG":             "BBI - Đoàn Lâm Khải",
-				"TEN_KHACH_HANG":            "BBI - Đoàn Lâm Khải",
-				"TAI_KHOAN_CONG_NO":         "131",
-				"NO_SO_DU_DAU_KY":           1050000.0,
-				"CO_SO_DU_DAU_KY":           0.0,
-				"NO_SO_PHAT_SINH":           0.0,
-				"CO_SO_PHAT_SINH":           0.0,
-				"NO_SO_DU_CUOI_KY":          1050000.0,
-				"CO_SO_DU_CUOI_KY":          0.0,
-				"NO_TRUOC":                  1050000.0,
-				"NO_TRONG":                  0.0,
-				"NO_SAU":                    1050000.0,
-				"tu_ngay":                   tuNgay,
-				"den_ngay":                  denNgay,
-				"NO_SO_DU_DAU_KY_QUY_DOI":   1050000.0,
-				"CO_SO_DU_DAU_KY_QUY_DOI":   0.0,
-				"NO_SO_QUY_DOI":             0.0,
-				"CO_SO_QUY_DOI":             0.0,
-				"NO_SO_DU_CUOI_KY_QUY_DOI":  1050000.0,
-				"CO_SO_DU_CUOI_KY_QUY_DOI":  0.0,
-				"NO_SO_DU_DAU_KY_NGUYEN_TE": 1050000.0,
-				"CO_SO_DU_DAU_KY_NGUYEN_TE": 0.0,
-				"NO_SO_PHAT_SINH_NGUYEN_TE": 0.0,
-				"CO_SO_PHAT_SINH_NGUYEN_TE": 0.0,
+				"MA_KHACH_HANG":              "BBI - Đoàn Lâm Khải",
+				"TEN_KHACH_HANG":             "BBI - Đoàn Lâm Khải",
+				"TAI_KHOAN_CONG_NO":          "131",
+				"NO_SO_DU_DAU_KY":            1050000.0,
+				"CO_SO_DU_DAU_KY":            0.0,
+				"NO_SO_PHAT_SINH":            0.0,
+				"CO_SO_PHAT_SINH":            0.0,
+				"NO_SO_DU_CUOI_KY":           1050000.0,
+				"CO_SO_DU_CUOI_KY":           0.0,
+				"NO_TRUOC":                   1050000.0,
+				"NO_TRONG":                   0.0,
+				"NO_SAU":                     1050000.0,
+				"tu_ngay":                    tuNgay,
+				"den_ngay":                   denNgay,
+				"NO_SO_DU_DAU_KY_QUY_DOI":    1050000.0,
+				"CO_SO_DU_DAU_KY_QUY_DOI":    0.0,
+				"NO_SO_QUY_DOI":              0.0,
+				"CO_SO_QUY_DOI":              0.0,
+				"NO_SO_DU_CUOI_KY_QUY_DOI":   1050000.0,
+				"CO_SO_DU_CUOI_KY_QUY_DOI":   0.0,
+				"NO_SO_DU_DAU_KY_NGUYEN_TE":  1050000.0,
+				"CO_SO_DU_DAU_KY_NGUYEN_TE":  0.0,
+				"NO_SO_PHAT_SINH_NGUYEN_TE":  0.0,
+				"CO_SO_PHAT_SINH_NGUYEN_TE":  0.0,
 				"NO_SO_DU_CUOI_KY_NGUYEN_TE": 1050000.0,
 				"CO_SO_DU_CUOI_KY_NGUYEN_TE": 0.0,
 			},
 			{
-				"MA_KHACH_HANG":             "BBI - Nguyễn Đăng Khoa",
-				"TEN_KHACH_HANG":            "BBI - Nguyễn Đăng Khoa",
-				"TAI_KHOAN_CONG_NO":         "131",
-				"NO_SO_DU_DAU_KY":           630000.0,
-				"CO_SO_DU_DAU_KY":           0.0,
-				"NO_SO_PHAT_SINH":           0.0,
-				"CO_SO_PHAT_SINH":           0.0,
-				"NO_SO_DU_CUOI_KY":          630000.0,
-				"CO_SO_DU_CUOI_KY":          0.0,
-				"NO_TRUOC":                  630000.0,
-				"NO_TRONG":                  0.0,
-				"NO_SAU":                    630000.0,
-				"tu_ngay":                   tuNgay,
-				"den_ngay":                  denNgay,
-				"NO_SO_DU_DAU_KY_QUY_DOI":   630000.0,
-				"CO_SO_DU_DAU_KY_QUY_DOI":   0.0,
-				"NO_SO_QUY_DOI":             0.0,
-				"CO_SO_QUY_DOI":             0.0,
-				"NO_SO_DU_CUOI_KY_QUY_DOI":  630000.0,
-				"CO_SO_DU_CUOI_KY_QUY_DOI":  0.0,
-				"NO_SO_DU_DAU_KY_NGUYEN_TE": 630000.0,
-				"CO_SO_DU_DAU_KY_NGUYEN_TE": 0.0,
-				"NO_SO_PHAT_SINH_NGUYEN_TE": 0.0,
-				"CO_SO_PHAT_SINH_NGUYEN_TE": 0.0,
+				"MA_KHACH_HANG":              "BBI - Nguyễn Đăng Khoa",
+				"TEN_KHACH_HANG":             "BBI - Nguyễn Đăng Khoa",
+				"TAI_KHOAN_CONG_NO":          "131",
+				"NO_SO_DU_DAU_KY":            630000.0,
+				"CO_SO_DU_DAU_KY":            0.0,
+				"NO_SO_PHAT_SINH":            0.0,
+				"CO_SO_PHAT_SINH":            0.0,
+				"NO_SO_DU_CUOI_KY":           630000.0,
+				"CO_SO_DU_CUOI_KY":           0.0,
+				"NO_TRUOC":                   630000.0,
+				"NO_TRONG":                   0.0,
+				"NO_SAU":                     630000.0,
+				"tu_ngay":                    tuNgay,
+				"den_ngay":                   denNgay,
+				"NO_SO_DU_DAU_KY_QUY_DOI":    630000.0,
+				"CO_SO_DU_DAU_KY_QUY_DOI":    0.0,
+				"NO_SO_QUY_DOI":              0.0,
+				"CO_SO_QUY_DOI":              0.0,
+				"NO_SO_DU_CUOI_KY_QUY_DOI":   630000.0,
+				"CO_SO_DU_CUOI_KY_QUY_DOI":   0.0,
+				"NO_SO_DU_DAU_KY_NGUYEN_TE":  630000.0,
+				"CO_SO_DU_DAU_KY_NGUYEN_TE":  0.0,
+				"NO_SO_PHAT_SINH_NGUYEN_TE":  0.0,
+				"CO_SO_PHAT_SINH_NGUYEN_TE":  0.0,
 				"NO_SO_DU_CUOI_KY_NGUYEN_TE": 630000.0,
 				"CO_SO_DU_CUOI_KY_NGUYEN_TE": 0.0,
 			},
@@ -2593,10 +2639,10 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"status":   "success",
-			"data":     filtered,
-			"source":   "mock_erp",
-			"count":    len(filtered),
+			"status": "success",
+			"data":   filtered,
+			"source": "mock_erp",
+			"count":  len(filtered),
 		})
 
 	default:
@@ -2888,7 +2934,7 @@ func parseDebtPeriodFromSearch(search string) (tuNgay, denNgay string, ok bool) 
 	}
 	if strings.Contains(s, "quý này") || strings.Contains(s, "quy nay") {
 		currentMonth := int(now.Month())
-		startMonth := ((currentMonth - 1) / 3) * 3 + 1
+		startMonth := ((currentMonth-1)/3)*3 + 1
 		tuNgay = time.Date(now.Year(), time.Month(startMonth), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
 		denNgay = now.Format("2006-01-02")
 		return tuNgay, denNgay, true
@@ -3169,24 +3215,24 @@ func loadActiveZaloOAAdapter(tenantID string) (*channels.ZaloOAAdapter, *models.
 // to a real parent_code before calling ERP again. Without the list in the
 // retriever-visible turn, that rule has nothing to scan and the follow-up
 // goes silent.
-func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts map[string]int, permCtx *engine.GroupPermissionContext) (bool, []string) {
-	var sortedMaChas []productParentMatch
-	for k, v := range maChaCounts {
-		sortedMaChas = append(sortedMaChas, productParentMatch{code: k, count: v})
-	}
-	sortProductParentMatches(sortedMaChas)
-
+func sendProductRichMessage(c *gin.Context, tenantID, search string, webGroups []engine.WebGroupMatch, permCtx *engine.GroupPermissionContext) (bool, []engine.WebGroupMatch) {
 	buttons := make([]channels.ZaloOAButton, 0, 3)
-	parentCodes := make([]string, 0, 3)
-	for i, mc := range sortedMaChas {
+	sentGroups := make([]engine.WebGroupMatch, 0, 3)
+	for i, g := range webGroups {
 		if i >= 3 {
 			break
 		}
+		var payload string
+		if g.IsFallback && len(g.ParentCodes) > 0 {
+			payload = "#show_product_variants:" + g.ParentCodes[0]
+		} else {
+			payload = "#show_web_variants:" + g.WebName
+		}
 		buttons = append(buttons, channels.ZaloOAButton{
-			Title:   mc.code,
-			Payload: "#show_product_variants:" + mc.code,
+			Title:   g.WebName,
+			Payload: payload,
 		})
-		parentCodes = append(parentCodes, mc.code)
+		sentGroups = append(sentGroups, g)
 	}
 
 	if permCtx.ZaloUserID == "" {
@@ -3246,24 +3292,7 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 	}
 	go persistOptionListToHistory(activeChannel.ID, tenantID, permCtx.ZaloUserID, groupID, displayed)
 
-	return true, parentCodes
-}
-
-// buildNumberedParentCodeList renders parent codes as "1. <code>\n2. <code>"
-// for embedding in the ERP query tool output. The Langflow agent uses this
-// exact format to map a follow-up "1/2/3" reply back to a parent SP code.
-func buildNumberedParentCodeList(parentCodes []string) string {
-	if len(parentCodes) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for i, code := range parentCodes {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		fmt.Fprintf(&b, "%d. %s", i+1, code)
-	}
-	return b.String()
+	return true, sentGroups
 }
 
 // persistOptionListToHistory asynchronously stores a Zalo OA option-list

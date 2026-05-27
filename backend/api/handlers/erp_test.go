@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/vietbui/chat-quality-agent/engine"
 )
 
 func TestCalculateProductPriceRange(t *testing.T) {
@@ -110,83 +112,41 @@ func TestEnrichProductsWithPriceRangesUsesVariantsByMaCha(t *testing.T) {
 	}
 }
 
-func TestRankProductParentMatchesSortsByVariantCountAndFiltersByGroup(t *testing.T) {
-	products := []map[string]interface{}{}
-	products = appendProductParentMatchVariants(products, "SP000", 6, "Sample")
-	products = appendProductParentMatchVariants(products, "SP200", 5, "Nguyên Đầu")
-	products = appendProductParentMatchVariants(products, "SP300", 5, "Nguyên Đầu")
-	products = appendProductParentMatchVariants(products, "SP100", 3, "Nguyên Đầu")
-	products = appendProductParentMatchVariants(products, "SP400", 2, "Nguyên Đầu")
-
-	matches := rankProductParentMatches(products, []string{"Nguyên Đầu"})
-
-	wantCodes := []string{"SP200", "SP300", "SP100"}
-	if len(matches) < len(wantCodes) {
-		t.Fatalf("expected at least %d matches, got %d: %#v", len(wantCodes), len(matches), matches)
-	}
-	for i, want := range wantCodes {
-		if matches[i].code != want {
-			t.Fatalf("match[%d].code = %q; want %q; matches=%#v", i, matches[i].code, want, matches)
-		}
-	}
-	for _, match := range matches {
-		if match.code == "SP000" {
-			t.Fatalf("sample product group should be filtered out: %#v", matches)
-		}
-	}
-
-	counts := productParentMatchCounts(matches[:3])
-	if counts["SP200"] != 5 || counts["SP300"] != 5 || counts["SP100"] != 3 {
-		t.Fatalf("unexpected top match counts: %#v", counts)
-	}
-}
-
-func TestRankProductParentMatchesFallsBackToMAWhenMaChaMissing(t *testing.T) {
+func TestFilterProductsByGroupsThenRankWebGroupsAppliesPermissionsBeforeGrouping(t *testing.T) {
 	products := []map[string]interface{}{
-		{"MA": "SKU-ONLY", "MA_CHA": "", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
-		{"MA": "SKU-ONLY", "MA_CHA": "", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
+		{"MA": "SP000-SKU", "MA_CHA": "SP000", "TEN_DONG_BO_WEB": "Sample Line", "LIST_TEN_NHOM_VTHH": "Sample"},
+		{"MA": "SP200-SKU1", "MA_CHA": "SP200", "TEN_DONG_BO_WEB": "FF901", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
+		{"MA": "SP200-SKU2", "MA_CHA": "SP200", "TEN_DONG_BO_WEB": "FF901", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
+		{"MA": "SP300-SKU1", "MA_CHA": "SP300", "TEN_DONG_BO_WEB": "FF901", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
+		{"MA": "SP100-SKU1", "MA_CHA": "SP100", "TEN_DONG_BO_WEB": "FF901 Carbon", "LIST_TEN_NHOM_VTHH": "Nguyên Đầu"},
 	}
 
-	matches := rankProductParentMatches(products, []string{"Nguyên Đầu"})
+	filtered := filterProductsByGroups(products, []string{"Nguyên Đầu"})
+	groups := engine.RankProductWebGroups(filtered)
 
-	if len(matches) != 1 {
-		t.Fatalf("expected 1 fallback match, got %d: %#v", len(matches), matches)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 web groups after filtering, got %d: %#v", len(groups), groups)
 	}
-	if matches[0].code != "SKU-ONLY" || matches[0].count != 2 {
-		t.Fatalf("unexpected fallback match: %#v", matches[0])
+	if groups[0].WebName != "FF901" || groups[0].Count != 3 {
+		t.Fatalf("top group = %#v; want FF901 count=3", groups[0])
 	}
-}
-
-func TestRankProductParentMatchesUsesFullCandidatesBeyondResponseLimit(t *testing.T) {
-	fullCandidates := []map[string]interface{}{}
-	fullCandidates = appendProductParentMatchVariants(fullCandidates, "SP100", 3, "Nguyên Đầu")
-	fullCandidates = appendProductParentMatchVariants(fullCandidates, "SP200", 2, "Nguyên Đầu")
-	limitedResponse := fullCandidates[:1]
-
-	limitedMatches := rankProductParentMatches(limitedResponse, []string{"Nguyên Đầu"})
-	fullMatches := rankProductParentMatches(fullCandidates, []string{"Nguyên Đầu"})
-
-	if len(limitedMatches) != 1 {
-		t.Fatalf("expected limited response to see only 1 parent, got %d: %#v", len(limitedMatches), limitedMatches)
+	wantParents := []string{"SP200", "SP300"}
+	if len(groups[0].ParentCodes) != len(wantParents) {
+		t.Fatalf("FF901 parent codes = %#v; want %#v", groups[0].ParentCodes, wantParents)
 	}
-	if len(fullMatches) != 2 {
-		t.Fatalf("expected full candidates to see multiple parents, got %d: %#v", len(fullMatches), fullMatches)
+	for i, want := range wantParents {
+		if groups[0].ParentCodes[i] != want {
+			t.Fatalf("FF901 parent[%d] = %q; want %q", i, groups[0].ParentCodes[i], want)
+		}
 	}
-	if fullMatches[0].code != "SP100" || fullMatches[0].count != 3 {
-		t.Fatalf("unexpected top full match: %#v", fullMatches[0])
+	if groups[1].WebName != "FF901 Carbon" || groups[1].Count != 1 {
+		t.Fatalf("group[1] = %#v; want FF901 Carbon count=1", groups[1])
 	}
-}
-
-func appendProductParentMatchVariants(products []map[string]interface{}, maCha string, count int, group string) []map[string]interface{} {
-	for i := 0; i < count; i++ {
-		products = append(products, map[string]interface{}{
-			"MA":                 maCha + "-SKU",
-			"MA_CHA":             maCha,
-			"TEN":                "Product " + maCha,
-			"LIST_TEN_NHOM_VTHH": group,
-		})
+	for _, g := range groups {
+		if g.WebName == "Sample Line" {
+			t.Fatalf("sample product group should be filtered out: %#v", groups)
+		}
 	}
-	return products
 }
 
 func TestFilterProductsByGroupsUsesProductGroupBeforeBrand(t *testing.T) {
@@ -476,30 +436,6 @@ func TestSlimProductsForLLM(t *testing.T) {
 						t.Errorf("row %d key %q = %v; want %v", i, k, got[i][k], v)
 					}
 				}
-			}
-		})
-	}
-}
-
-func TestBuildNumberedParentCodeList(t *testing.T) {
-	tests := []struct {
-		name string
-		in   []string
-		want string
-	}{
-		{"empty", nil, ""},
-		{"empty slice", []string{}, ""},
-		{"single", []string{"SP458484"}, "1. SP458484"},
-		{
-			name: "three preserves order",
-			in:   []string{"SP458484", "SP458516", "SP458495"},
-			want: "1. SP458484\n2. SP458516\n3. SP458495",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := buildNumberedParentCodeList(tc.in); got != tc.want {
-				t.Errorf("buildNumberedParentCodeList(%v) = %q; want %q", tc.in, got, tc.want)
 			}
 		})
 	}

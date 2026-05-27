@@ -12,7 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
-	"sort"
+
 	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
@@ -76,7 +76,7 @@ type ZaloWebhookPayload struct {
 		MsgID       string                  `json:"msg_id"`
 		Attachments []ZaloWebhookAttachment `json:"attachments,omitempty"`
 	} `json:"message"`
-	OAID      string `json:"oa_id"`
+	OAID string `json:"oa_id"`
 }
 
 // NewZaloWebhookTask creates a new task for processing a Zalo webhook
@@ -416,7 +416,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 						if avatarURL != "" {
 							customerRec.Avatar = avatarURL
 						}
-						
+
 						statusWas := customerRec.Status
 						if customerRec.Status == "pending_verify" {
 							customerRec.Status = "pending_approval"
@@ -735,38 +735,25 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return nil
 			}
 
-			// Group the matched products by MA_CHA
-			maChaCounts := make(map[string]int)
-			for _, p := range matchedProducts {
-				maChaVal := getMapString(p, "MA_CHA", "ma_cha")
-				maVal := getMapString(p, "MA", "ma_hang", "ma")
-				if maChaVal != "" {
-					maChaCounts[maChaVal]++
-				} else if maVal != "" {
-					maChaCounts[maVal]++
-				}
-			}
-
-			type maChaCount struct {
-				code  string
-				count int
-			}
-			var sortedMaChas []maChaCount
-			for k, v := range maChaCounts {
-				sortedMaChas = append(sortedMaChas, maChaCount{code: k, count: v})
-			}
-			sort.Slice(sortedMaChas, func(i, j int) bool {
-				return sortedMaChas[i].count > sortedMaChas[j].count
-			})
+			// Group the matched products by TEN_DONG_BO_WEB (synced web name);
+			// fall back to MA_CHA when a product has no web name so legacy SKUs
+			// still appear.
+			webGroups := engine.RankProductWebGroups(matchedProducts)
 
 			buttons := make([]channels.ZaloOAButton, 0, 3)
-			for i, mc := range sortedMaChas {
+			for i, g := range webGroups {
 				if i >= 3 {
 					break
 				}
+				var payload string
+				if g.IsFallback && len(g.ParentCodes) > 0 {
+					payload = "#show_macha_options:" + g.ParentCodes[0]
+				} else {
+					payload = "#show_macha_options_by_web:" + g.WebName
+				}
 				buttons = append(buttons, channels.ZaloOAButton{
-					Title:   fmt.Sprintf("Dòng %s", mc.code),
-					Payload: "#show_macha_options:" + mc.code,
+					Title:   g.WebName,
+					Payload: payload,
 				})
 			}
 			prompt := fmt.Sprintf("Tôi tìm thấy các dòng sản phẩm khớp với '%s'. Bạn muốn kiểm tra tồn kho dòng nào?", keyword)
@@ -884,6 +871,56 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, body)
 			}
 			_ = sendErr
+			return nil
+		}
+
+		// 1b. Inventory by Web Name (#show_macha_options_by_web:<TEN_DONG_BO_WEB>)
+		// Triggered after the user selects a web-name option from the
+		// dongsp flow. Aggregates inventory across every MA_CHA that shares
+		// the same ten_dong_bo_web so a single product line answers with
+		// totals across all parent SKUs.
+		if strings.HasPrefix(userText, "#show_macha_options_by_web:") {
+			webName := strings.TrimPrefix(userText, "#show_macha_options_by_web:")
+			childProducts, err := getProductsByWebNameFromAstraDB(ctx, matchedChannel.TenantID, webName)
+			if err != nil || len(childProducts) == 0 {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy sản phẩm nào trong dòng '%s'.", webName))
+				return nil
+			}
+
+			maChaSeen := make(map[string]struct{})
+			var maChas []string
+			for _, p := range childProducts {
+				if mc := getMapString(p, "MA_CHA", "ma_cha"); mc != "" {
+					if _, dup := maChaSeen[mc]; !dup {
+						maChaSeen[mc] = struct{}{}
+						maChas = append(maChas, mc)
+					}
+				}
+			}
+
+			if len(maChas) == 0 {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không xác định được mã cha cho dòng '%s'.", webName))
+				return nil
+			}
+
+			var totalStock float64
+			var details []string
+			for _, mc := range maChas {
+				stock, lines, sumErr := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, mc, webName)
+				if sumErr != nil {
+					log.Printf("[zalo_webhook] inventory error ma_cha=%s web=%s: %v", mc, webName, sumErr)
+					continue
+				}
+				totalStock += stock
+				details = append(details, lines...)
+			}
+
+			reply := fmt.Sprintf("Tổng tồn kho của dòng %s: %.1f\n\nChi tiết:\n%s", webName, totalStock, strings.Join(details, "\n"))
+			if matchedGroup.ZaloGroupID != "" {
+				_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+			} else {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			}
 			return nil
 		}
 
@@ -1023,14 +1060,74 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
+		// 3b. Show Product Variants By Web Name (#show_web_variants:<TEN_DONG_BO_WEB>)
+		// Triggered when the user taps a web-name option from the products
+		// flow. Renders the variant SKUs (color/size) across every MA_CHA in
+		// the line so the user sees the full catalog for that product line.
+		if strings.HasPrefix(userText, "#show_web_variants:") {
+			webName := strings.TrimPrefix(userText, "#show_web_variants:")
+			childProducts, err := getProductsByWebNameFromAstraDB(ctx, matchedChannel.TenantID, webName)
+			if err != nil || len(childProducts) == 0 {
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy sản phẩm nào trong dòng '%s'.", webName))
+				return nil
+			}
+
+			if len(childProducts) == 1 {
+				p := childProducts[0]
+				sku := getMapString(p, "MA", "code", "ma")
+				sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID)
+				return nil
+			}
+
+			buttons := make([]channels.ZaloOAButton, 0, 4)
+			for i, p := range childProducts {
+				if i >= 4 { // Zalo template supports max 4 buttons
+					break
+				}
+				sku := getMapString(p, "MA", "code", "ma")
+				t1 := getMapString(p, "THUOC_TINH_1", "thuoc_tinh_1")
+				t2 := getMapString(p, "THUOC_TINH_2", "thuoc_tinh_2")
+
+				btnTitle := sku
+				if t1 != "" && t2 != "" {
+					btnTitle = fmt.Sprintf("%s (%s/%s)", sku, t1, t2)
+				} else if t1 != "" {
+					btnTitle = fmt.Sprintf("%s (%s)", sku, t1)
+				} else if t2 != "" {
+					btnTitle = fmt.Sprintf("%s (%s)", sku, t2)
+				}
+
+				buttons = append(buttons, channels.ZaloOAButton{
+					Title:   btnTitle,
+					Payload: "#show_product_detail:" + sku,
+				})
+			}
+			prompt := fmt.Sprintf("Dòng sản phẩm '%s' có các tùy chọn màu/size sau. Vui lòng chọn một tùy chọn để xem chi tiết sản phẩm:", webName)
+			if len(childProducts) > 4 {
+				prompt = fmt.Sprintf("Dòng sản phẩm '%s' có %d biến thể. Hiển thị 4 lựa chọn đầu — nhập từ khóa cụ thể hơn (vd. màu/size) để xem hết:", webName, len(childProducts))
+			}
+
+			var sendErr error
+			if matchedGroup.ZaloGroupID != "" {
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
+			} else {
+				body, buildErr := channels.BuildV3ListTemplatePayload(payload.Sender.ID, prompt, buttons)
+				if buildErr != nil {
+					log.Printf("[zalo_webhook] cannot build V3 list template (web_variants): %v", buildErr)
+					return nil
+				}
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, body)
+			}
+			_ = sendErr
+			return nil
+		}
+
 		// 4. Show Product Detail Selection (#show_product_detail:<SKU>)
 		if strings.HasPrefix(userText, "#show_product_detail:") {
 			sku := strings.TrimPrefix(userText, "#show_product_detail:")
 			sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID)
 			return nil
 		}
-
-
 
 		permissionToken, err := engine.SignPermissionToken(permCtx, cfg.EncryptionKey)
 		if err != nil {
@@ -1922,7 +2019,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		if isMatch {
 			stock := getMapFloat(item, "stock", "ton", "ton_kho")
 			totalStock += stock
-			
+
 			displayName := skuToName[codeLower]
 			if displayName == "" {
 				displayName = code
@@ -1934,3 +2031,43 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	return totalStock, details, nil
 }
 
+// getProductsByWebNameFromAstraDB returns every cached product whose
+// ten_dong_bo_web equals webName for the given tenant. Used by the web-name
+// option flow to expand a single "product line" selection into the underlying
+// MA_CHA list / variant SKUs.
+func getProductsByWebNameFromAstraDB(ctx context.Context, tenantID, webName string) ([]map[string]interface{}, error) {
+	var products []models.CachedProduct
+	err := db.DB.WithContext(ctx).
+		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
+		Limit(100).
+		Find(&products).Error
+	if err != nil {
+		return nil, fmt.Errorf("local MySQL cache query (by web name) failed: %w", err)
+	}
+
+	results := make([]map[string]interface{}, 0, len(products))
+	for _, p := range products {
+		results = append(results, map[string]interface{}{
+			"MA":                 p.MA,
+			"ma":                 p.MA,
+			"code":               p.MA,
+			"ma_hang":            p.MA,
+			"product_code":       p.MA,
+			"TEN_DONG_BO_WEB":    p.TEN_DONG_BO_WEB,
+			"TEN":                p.TEN,
+			"ten":                p.TEN,
+			"ten_hang":           p.TEN,
+			"THUOC_TINH_1":       p.THUOC_TINH_1,
+			"THUOC_TINH_2":       p.THUOC_TINH_2,
+			"DON_GIA_BAN":        p.DON_GIA_BAN,
+			"LINK_ANH":           p.LINK_ANH,
+			"NHAN_HIEU_NAME":     p.NHAN_HIEU_NAME,
+			"LIST_TEN_NHOM_VTHH": p.LIST_TEN_NHOM_VTHH,
+			"KHO":                p.KHO,
+			"MA_CHA":             p.MA_CHA,
+			"ma_cha":             p.MA_CHA,
+			"DVT":                p.DVT,
+		})
+	}
+	return results, nil
+}
