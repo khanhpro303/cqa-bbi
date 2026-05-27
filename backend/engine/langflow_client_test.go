@@ -91,12 +91,17 @@ func TestRunFlowWithCustomerPassesPermissionTokenToCustomComponent(t *testing.T)
 	if !ok {
 		t.Fatalf("expected AstraDB-HistoryRetriever tweaks object, got %#v", tweaks["AstraDB-HistoryRetriever"])
 	}
-	filter, ok := retrieverTweaks["advanced_search_filter"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected advanced_search_filter object, got %#v", retrieverTweaks["advanced_search_filter"])
-	}
-	if got := filter["zalo_user_id"]; got != "zalo-user-1" {
-		t.Fatalf("expected AstraDB-HistoryRetriever filter zalo_user_id, got %#v", got)
+	for _, key := range []string{"search_filter", "advanced_search_filter"} {
+		filter, ok := retrieverTweaks[key].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected %s object, got %#v", key, retrieverTweaks[key])
+		}
+		if got := filter["metadata.zalo_user_id"]; got != "zalo-user-1" {
+			t.Errorf("%s[metadata.zalo_user_id] = %#v, want zalo-user-1", key, got)
+		}
+		if got := filter["metadata.session_id"]; got != "session-1" {
+			t.Errorf("%s[metadata.session_id] = %#v, want session-1", key, got)
+		}
 	}
 
 	for _, node := range []string{"MsgToDoc-User", "MsgToDoc-Assistant"} {
@@ -167,12 +172,23 @@ func TestRunFlowWithOverridesPassesZaloUserIDToHistoryNodes(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected AstraDB-HistoryRetriever tweaks object, got %#v", tweaks["AstraDB-HistoryRetriever"])
 	}
-	filter, ok := retrieverTweaks["advanced_search_filter"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected advanced_search_filter object, got %#v", retrieverTweaks["advanced_search_filter"])
-	}
-	if got := filter["zalo_user_id"]; got != "zalo-user-9" {
-		t.Fatalf("expected AstraDB-HistoryRetriever filter zalo_user_id, got %#v", got)
+	// Both search_filter and advanced_search_filter must carry the same scope
+	// so the filter applies regardless of which Langflow component version reads it.
+	for _, key := range []string{"search_filter", "advanced_search_filter"} {
+		filter, ok := retrieverTweaks[key].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected %s object, got %#v", key, retrieverTweaks[key])
+		}
+		if got := filter["metadata.zalo_user_id"]; got != "zalo-user-9" {
+			t.Errorf("%s[metadata.zalo_user_id] = %#v, want zalo-user-9", key, got)
+		}
+		if got := filter["metadata.session_id"]; got != "session-3" {
+			t.Errorf("%s[metadata.session_id] = %#v, want session-3", key, got)
+		}
+		// Old un-prefixed key must NOT be set — would match the wrong field.
+		if _, present := filter["zalo_user_id"]; present {
+			t.Errorf("%s contains un-prefixed zalo_user_id key (must use metadata.zalo_user_id)", key)
+		}
 	}
 
 	for _, node := range []string{"MsgToDoc-User", "MsgToDoc-Assistant"} {
@@ -183,5 +199,56 @@ func TestRunFlowWithOverridesPassesZaloUserIDToHistoryNodes(t *testing.T) {
 		if got := nodeTweaks["zalo_user_id"]; got != "zalo-user-9" {
 			t.Fatalf("expected %s zalo_user_id, got %#v", node, got)
 		}
+	}
+}
+
+func TestBuildHistoryFilter(t *testing.T) {
+	tests := []struct {
+		name      string
+		userID    string
+		sessionID string
+		want      map[string]interface{}
+	}{
+		{
+			name:      "both scopes present",
+			userID:    "u1",
+			sessionID: "s1",
+			want: map[string]interface{}{
+				"metadata.zalo_user_id": "u1",
+				"metadata.session_id":   "s1",
+			},
+		},
+		{
+			name:   "user only — session_id missing means no session filter",
+			userID: "u1",
+			want: map[string]interface{}{
+				"metadata.zalo_user_id": "u1",
+			},
+		},
+		{
+			name:      "session only",
+			sessionID: "s1",
+			want: map[string]interface{}{
+				"metadata.session_id": "s1",
+			},
+		},
+		{
+			name: "both empty produces empty filter (caller must guard)",
+			want: map[string]interface{}{},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildHistoryFilter(tc.userID, tc.sessionID)
+			if len(got) != len(tc.want) {
+				t.Fatalf("filter = %#v, want %#v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Errorf("filter[%q] = %#v, want %#v", k, got[k], v)
+				}
+			}
+		})
 	}
 }

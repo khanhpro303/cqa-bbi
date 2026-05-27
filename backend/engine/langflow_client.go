@@ -27,6 +27,26 @@ func NewLangflowClient(cfg *config.Config) *LangflowClient {
 	}
 }
 
+// buildHistoryFilter returns the metadata filter applied to the AstraDB
+// HistoryRetriever so similarity search is scoped to the current user +
+// session. Both keys use the `metadata.` dotted path because chat-history
+// rows store custom fields inside the metadata sub-document (see how
+// engine.SaveChatMessage and Langflow's MsgToDoc/AstraDB Vectorstore write
+// them).
+//
+// Returning an empty dict (when both args are empty) would disable the
+// filter — callers should guard against that and skip the tweak if needed.
+func buildHistoryFilter(zaloUserID, sessionID string) map[string]interface{} {
+	filter := map[string]interface{}{}
+	if zaloUserID != "" {
+		filter["metadata.zalo_user_id"] = zaloUserID
+	}
+	if sessionID != "" {
+		filter["metadata.session_id"] = sessionID
+	}
+	return filter
+}
+
 // RunFlow sends a message to a Langflow flow using global config.
 func (l *LangflowClient) RunFlow(ctx context.Context, sessionID, zaloUserID, message string) (string, error) {
 	return l.RunFlowWithOverrides(ctx, sessionID, zaloUserID, message, l.cfg.LangflowAPIURL, l.cfg.LangflowAPIKey, l.cfg.LangflowFlowID)
@@ -46,14 +66,20 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 	}
 
 	if zaloUserID != "" {
-		// Pass advanced search metadata filter dynamically for the Astra DB history retriever
+		// Strict isolation for the AstraDB HistoryRetriever:
+		//   - filter by metadata.zalo_user_id  → no cross-user leak
+		//   - filter by metadata.session_id    → no cross-session leak within same user
+		// Both ingest paths (Langflow MsgToDoc + Go engine.SaveChatMessage) write
+		// these keys inside `metadata`, so the dotted-path keys here will match.
+		// Sent under both `search_filter` and `advanced_search_filter` so it works
+		// regardless of which the installed Langflow AstraDB component version reads.
+		historyFilter := buildHistoryFilter(zaloUserID, sessionID)
 		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{
-			"advanced_search_filter": map[string]interface{}{
-				"zalo_user_id": zaloUserID,
-			},
+			"search_filter":          historyFilter,
+			"advanced_search_filter": historyFilter,
 		}
 		// Tag every chat document with zalo_user_id at ingest time so the
-		// AstraDB-HistoryRetriever filter above can isolate semantic memory per user.
+		// filter above can isolate semantic memory per user.
 		tweaks["MsgToDoc-User"] = map[string]interface{}{
 			"zalo_user_id": zaloUserID,
 		}
@@ -190,13 +216,13 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 
 	if zaloUserID != "" {
 		tweaks["zalo_user_id"] = zaloUserID
+		historyFilter := buildHistoryFilter(zaloUserID, sessionID)
 		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{
-			"advanced_search_filter": map[string]interface{}{
-				"zalo_user_id": zaloUserID,
-			},
+			"search_filter":          historyFilter,
+			"advanced_search_filter": historyFilter,
 		}
 		// Tag every chat document with zalo_user_id at ingest time so the
-		// AstraDB-HistoryRetriever filter above can isolate semantic memory per user.
+		// filter above can isolate semantic memory per user.
 		tweaks["MsgToDoc-User"] = map[string]interface{}{
 			"zalo_user_id": zaloUserID,
 		}
