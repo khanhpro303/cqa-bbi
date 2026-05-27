@@ -63,7 +63,9 @@ func TestSaveChatMessage_SkipsWhenUnconfigured(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			err := SaveChatMessage(context.Background(), tc.apiEndpoint, tc.token, tc.keyspace, tc.col, "u1", "s1", "user", "hello", nil)
+			err := SaveChatMessage(context.Background(), tc.apiEndpoint, tc.token, tc.keyspace, tc.col, ChatMessage{
+				ZaloUserID: "u1", SessionID: "s1", Role: "user", Content: "hello",
+			}, nil)
 			if err != nil {
 				t.Fatalf("expected nil error when unconfigured, got %v", err)
 			}
@@ -83,7 +85,13 @@ func TestSaveChatMessage_WritesLangflowShape(t *testing.T) {
 	const sessionID = "sess_xyz"
 	const content = "Tôi tìm thấy nhiều sản phẩm khớp với 'FF901'.\n1. SP458484\n2. SP458516\n3. SP001187"
 
-	if err := SaveChatMessage(ctx, astra.server.URL, "tok-123", "cqa_bbi", "zalo_chat_history", userID, sessionID, "assistant", content, embedder); err != nil {
+	if err := SaveChatMessage(ctx, astra.server.URL, "tok-123", "cqa_bbi", "zalo_chat_history", ChatMessage{
+		ZaloUserID:       userID,
+		SessionID:        sessionID,
+		Role:             "assistant",
+		Content:          content,
+		IsDisambiguation: true,
+	}, embedder); err != nil {
 		t.Fatalf("SaveChatMessage: %v", err)
 	}
 
@@ -117,9 +125,10 @@ func TestSaveChatMessage_WritesLangflowShape(t *testing.T) {
 		t.Fatalf("metadata missing or wrong type: %T", doc["metadata"])
 	}
 	wantMeta := map[string]any{
-		"role":         "assistant",
-		"session_id":   sessionID,
-		"zalo_user_id": userID,
+		"role":              "assistant",
+		"session_id":        sessionID,
+		"zalo_user_id":      userID,
+		"is_disambiguation": true,
 	}
 	for k, want := range wantMeta {
 		if got := meta[k]; got != want {
@@ -157,7 +166,9 @@ func TestSaveChatMessage_DegradedWhenEmbedderFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := SaveChatMessage(ctx, astra.server.URL, "t", "ks", "col", "u", "s", "user", "hello", embedder); err != nil {
+	if err := SaveChatMessage(ctx, astra.server.URL, "t", "ks", "col", ChatMessage{
+		ZaloUserID: "u", SessionID: "s", Role: "user", Content: "hello",
+	}, embedder); err != nil {
 		t.Fatalf("SaveChatMessage: %v", err)
 	}
 
@@ -180,7 +191,9 @@ func TestSaveChatMessage_DegradedWhenEmbedderFails(t *testing.T) {
 
 func TestSaveChatMessage_NoEmbedderOmitsVector(t *testing.T) {
 	astra := newAstraStub(t, http.StatusOK)
-	if err := SaveChatMessage(context.Background(), astra.server.URL, "t", "", "col", "u", "s", "user", "hi", nil); err != nil {
+	if err := SaveChatMessage(context.Background(), astra.server.URL, "t", "", "col", ChatMessage{
+		ZaloUserID: "u", SessionID: "s", Role: "user", Content: "hi",
+	}, nil); err != nil {
 		t.Fatalf("SaveChatMessage: %v", err)
 	}
 	if !strings.Contains(astra.path, "default_keyspace") {
@@ -190,8 +203,34 @@ func TestSaveChatMessage_NoEmbedderOmitsVector(t *testing.T) {
 
 func TestSaveChatMessage_PropagatesAstraError(t *testing.T) {
 	astra := newAstraStub(t, http.StatusBadRequest)
-	err := SaveChatMessage(context.Background(), astra.server.URL, "t", "ks", "col", "u", "s", "user", "hi", nil)
+	err := SaveChatMessage(context.Background(), astra.server.URL, "t", "ks", "col", ChatMessage{
+		ZaloUserID: "u", SessionID: "s", Role: "user", Content: "hi",
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "status 400") {
 		t.Fatalf("expected status 400 error, got %v", err)
+	}
+}
+
+func TestSaveChatMessage_OmitsDisambiguationFlagWhenFalse(t *testing.T) {
+	astra := newAstraStub(t, http.StatusOK)
+	if err := SaveChatMessage(context.Background(), astra.server.URL, "t", "ks", "col", ChatMessage{
+		ZaloUserID: "u", SessionID: "s", Role: "user", Content: "hi",
+	}, nil); err != nil {
+		t.Fatalf("SaveChatMessage: %v", err)
+	}
+	var envelope struct {
+		InsertOne struct {
+			Document map[string]any `json:"document"`
+		} `json:"insertOne"`
+	}
+	if err := json.Unmarshal(astra.receivedB, &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	meta := envelope.InsertOne.Document["metadata"].(map[string]any)
+	// Normal Q&A turns must not carry the flag — retriever filter uses
+	// `$ne true` which matches both `false` and absent, but absent keeps
+	// docs cheap and matches Langflow MsgToDoc shape exactly.
+	if _, present := meta["is_disambiguation"]; present {
+		t.Errorf("metadata.is_disambiguation should be omitted when false, got %v", meta["is_disambiguation"])
 	}
 }

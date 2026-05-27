@@ -3268,7 +3268,13 @@ func persistOptionListToHistory(channelID, tenantID, zaloUserID, zaloGroupID, co
 		EncryptionKey:  cfg.EncryptionKey,
 	})
 
-	if err := engine.SaveChatMessage(ctx, apiEndpoint, token, keyspace, collection, zaloUserID, sessionID, "assistant", content, embedder); err != nil {
+	if err := engine.SaveChatMessage(ctx, apiEndpoint, token, keyspace, collection, engine.ChatMessage{
+		ZaloUserID:       zaloUserID,
+		SessionID:        sessionID,
+		Role:             "assistant",
+		Content:          content,
+		IsDisambiguation: true,
+	}, embedder); err != nil {
 		log.Printf("[erp_query] failed to persist option list to astra: %v", err)
 	}
 }

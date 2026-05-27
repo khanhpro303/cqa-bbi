@@ -27,22 +27,37 @@ func NewLangflowClient(cfg *config.Config) *LangflowClient {
 	}
 }
 
-// buildHistoryFilter returns the metadata filter applied to the AstraDB
-// HistoryRetriever so similarity search is scoped to the current user +
-// session. Both keys use the `metadata.` dotted path because chat-history
-// rows store custom fields inside the metadata sub-document (see how
-// engine.SaveChatMessage and Langflow's MsgToDoc/AstraDB Vectorstore write
-// them).
+// buildHistoryFilter returns the metadata filter for the AstraDB
+// HistoryRetriever. Scope:
 //
-// Returning an empty dict (when both args are empty) would disable the
-// filter — callers should guard against that and skip the tweak if needed.
-func buildHistoryFilter(zaloUserID, sessionID string) map[string]interface{} {
-	filter := map[string]interface{}{}
+//   - metadata.zalo_user_id == <uid>
+//       Strict per-user isolation, no cross-user leak.
+//
+//   - metadata.is_disambiguation != true
+//       Excludes ephemeral option-list pushes (see engine.ChatMessage
+//       IsDisambiguation). Two reasons:
+//         1. Cross-context within a session: if user asks Q1 then Q2 and
+//            both end with "1./2./3." option lists, embedding "1" matches
+//            both equally — leaving them in the recall pool would poison
+//            the prompt with stale options. They're still retrievable via
+//            Memory-zEYL8 (sequential, time-ordered) for the immediate
+//            follow-up, which is the only place they're useful.
+//         2. Long-term recall stays meaningful: only real Q&A turns
+//            survive into semantic memory.
+//
+// Note: no `session_id` filter — that would kill cross-session memory
+// ("the customer from last week asked about FF901..."). Sequential
+// short-term memory is the job of Memory-zEYL8, not this retriever.
+//
+// Dotted keys (`metadata.<field>`) because Langflow's AstraDB Vectorstore
+// nests custom fields inside the `metadata` sub-document; the same shape
+// is mirrored by engine.SaveChatMessage.
+func buildHistoryFilter(zaloUserID string) map[string]interface{} {
+	filter := map[string]interface{}{
+		"metadata.is_disambiguation": map[string]interface{}{"$ne": true},
+	}
 	if zaloUserID != "" {
 		filter["metadata.zalo_user_id"] = zaloUserID
-	}
-	if sessionID != "" {
-		filter["metadata.session_id"] = sessionID
 	}
 	return filter
 }
@@ -73,7 +88,7 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 		// these keys inside `metadata`, so the dotted-path keys here will match.
 		// Sent under both `search_filter` and `advanced_search_filter` so it works
 		// regardless of which the installed Langflow AstraDB component version reads.
-		historyFilter := buildHistoryFilter(zaloUserID, sessionID)
+		historyFilter := buildHistoryFilter(zaloUserID)
 		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{
 			"search_filter":          historyFilter,
 			"advanced_search_filter": historyFilter,
@@ -216,7 +231,7 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 
 	if zaloUserID != "" {
 		tweaks["zalo_user_id"] = zaloUserID
-		historyFilter := buildHistoryFilter(zaloUserID, sessionID)
+		historyFilter := buildHistoryFilter(zaloUserID)
 		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{
 			"search_filter":          historyFilter,
 			"advanced_search_filter": historyFilter,

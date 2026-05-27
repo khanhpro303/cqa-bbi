@@ -636,7 +636,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// Save user message to Astra DB asynchronously
 		go func() {
-			err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, payload.Sender.ID, activeSessionID, "user", payload.Message.Text, astraEmbedder)
+			err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, engine.ChatMessage{
+				ZaloUserID: payload.Sender.ID,
+				SessionID:  activeSessionID,
+				Role:       "user",
+				Content:    payload.Message.Text,
+			}, astraEmbedder)
 			if err != nil {
 				log.Printf("[worker] failed to save user message to Astra DB: %v", err)
 			}
@@ -1028,7 +1033,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// Save assistant reply to Astra DB asynchronously
 		go func() {
-			err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, payload.Sender.ID, activeSessionID, "assistant", replyText, astraEmbedder)
+			err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, engine.ChatMessage{
+				ZaloUserID: payload.Sender.ID,
+				SessionID:  activeSessionID,
+				Role:       "assistant",
+				Content:    replyText,
+			}, astraEmbedder)
 			if err != nil {
 				log.Printf("[worker] failed to save assistant message to Astra DB: %v", err)
 			}

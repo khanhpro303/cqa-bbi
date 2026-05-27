@@ -99,8 +99,20 @@ func TestRunFlowWithCustomerPassesPermissionTokenToCustomComponent(t *testing.T)
 		if got := filter["metadata.zalo_user_id"]; got != "zalo-user-1" {
 			t.Errorf("%s[metadata.zalo_user_id] = %#v, want zalo-user-1", key, got)
 		}
-		if got := filter["metadata.session_id"]; got != "session-1" {
-			t.Errorf("%s[metadata.session_id] = %#v, want session-1", key, got)
+		// session_id must NOT be in the filter — that would kill cross-session
+		// memory recall. Sequential short-term context is Memory-zEYL8's job.
+		if _, present := filter["metadata.session_id"]; present {
+			t.Errorf("%s must not contain metadata.session_id (breaks long-term memory)", key)
+		}
+		// Disambiguation docs (Go option-list pushes) must be excluded so two
+		// option lists in the same session don't blur into the same "1" reply.
+		excl, ok := filter["metadata.is_disambiguation"].(map[string]interface{})
+		if !ok {
+			t.Errorf("%s missing metadata.is_disambiguation exclusion, got %#v", key, filter["metadata.is_disambiguation"])
+			continue
+		}
+		if excl["$ne"] != true {
+			t.Errorf("%s[metadata.is_disambiguation] = %#v, want {$ne: true}", key, excl)
 		}
 	}
 
@@ -172,8 +184,6 @@ func TestRunFlowWithOverridesPassesZaloUserIDToHistoryNodes(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected AstraDB-HistoryRetriever tweaks object, got %#v", tweaks["AstraDB-HistoryRetriever"])
 	}
-	// Both search_filter and advanced_search_filter must carry the same scope
-	// so the filter applies regardless of which Langflow component version reads it.
 	for _, key := range []string{"search_filter", "advanced_search_filter"} {
 		filter, ok := retrieverTweaks[key].(map[string]interface{})
 		if !ok {
@@ -182,12 +192,11 @@ func TestRunFlowWithOverridesPassesZaloUserIDToHistoryNodes(t *testing.T) {
 		if got := filter["metadata.zalo_user_id"]; got != "zalo-user-9" {
 			t.Errorf("%s[metadata.zalo_user_id] = %#v, want zalo-user-9", key, got)
 		}
-		if got := filter["metadata.session_id"]; got != "session-3" {
-			t.Errorf("%s[metadata.session_id] = %#v, want session-3", key, got)
+		if _, present := filter["metadata.session_id"]; present {
+			t.Errorf("%s must not contain metadata.session_id", key)
 		}
-		// Old un-prefixed key must NOT be set — would match the wrong field.
 		if _, present := filter["zalo_user_id"]; present {
-			t.Errorf("%s contains un-prefixed zalo_user_id key (must use metadata.zalo_user_id)", key)
+			t.Errorf("%s contains un-prefixed zalo_user_id (must use metadata. prefix)", key)
 		}
 	}
 
@@ -203,52 +212,29 @@ func TestRunFlowWithOverridesPassesZaloUserIDToHistoryNodes(t *testing.T) {
 }
 
 func TestBuildHistoryFilter(t *testing.T) {
-	tests := []struct {
-		name      string
-		userID    string
-		sessionID string
-		want      map[string]interface{}
-	}{
-		{
-			name:      "both scopes present",
-			userID:    "u1",
-			sessionID: "s1",
-			want: map[string]interface{}{
-				"metadata.zalo_user_id": "u1",
-				"metadata.session_id":   "s1",
-			},
-		},
-		{
-			name:   "user only — session_id missing means no session filter",
-			userID: "u1",
-			want: map[string]interface{}{
-				"metadata.zalo_user_id": "u1",
-			},
-		},
-		{
-			name:      "session only",
-			sessionID: "s1",
-			want: map[string]interface{}{
-				"metadata.session_id": "s1",
-			},
-		},
-		{
-			name: "both empty produces empty filter (caller must guard)",
-			want: map[string]interface{}{},
-		},
-	}
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			got := buildHistoryFilter(tc.userID, tc.sessionID)
-			if len(got) != len(tc.want) {
-				t.Fatalf("filter = %#v, want %#v", got, tc.want)
-			}
-			for k, v := range tc.want {
-				if got[k] != v {
-					t.Errorf("filter[%q] = %#v, want %#v", k, got[k], v)
-				}
-			}
-		})
-	}
+	excludeDisambig := map[string]interface{}{"$ne": true}
+
+	t.Run("with user id", func(t *testing.T) {
+		got := buildHistoryFilter("u1")
+		if got["metadata.zalo_user_id"] != "u1" {
+			t.Errorf("metadata.zalo_user_id = %#v, want u1", got["metadata.zalo_user_id"])
+		}
+		excl, ok := got["metadata.is_disambiguation"].(map[string]interface{})
+		if !ok || excl["$ne"] != excludeDisambig["$ne"] {
+			t.Errorf("metadata.is_disambiguation = %#v, want %#v", got["metadata.is_disambiguation"], excludeDisambig)
+		}
+		if _, present := got["metadata.session_id"]; present {
+			t.Errorf("filter must not contain metadata.session_id (cross-session memory)")
+		}
+	})
+
+	t.Run("empty user keeps disambiguation exclusion", func(t *testing.T) {
+		got := buildHistoryFilter("")
+		if _, present := got["metadata.zalo_user_id"]; present {
+			t.Errorf("empty user must skip metadata.zalo_user_id entry")
+		}
+		if _, present := got["metadata.is_disambiguation"]; !present {
+			t.Errorf("disambiguation exclusion must apply unconditionally")
+		}
+	})
 }
