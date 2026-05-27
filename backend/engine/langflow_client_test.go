@@ -86,4 +86,102 @@ func TestRunFlowWithCustomerPassesPermissionTokenToCustomComponent(t *testing.T)
 	if got := customTweaks["zalo_user_id"]; got != "zalo-user-1" {
 		t.Fatalf("expected CustomComponent zalo_user_id, got %#v", got)
 	}
+
+	retrieverTweaks, ok := tweaks["AstraDB-HistoryRetriever"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected AstraDB-HistoryRetriever tweaks object, got %#v", tweaks["AstraDB-HistoryRetriever"])
+	}
+	filter, ok := retrieverTweaks["advanced_search_filter"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected advanced_search_filter object, got %#v", retrieverTweaks["advanced_search_filter"])
+	}
+	if got := filter["zalo_user_id"]; got != "zalo-user-1" {
+		t.Fatalf("expected AstraDB-HistoryRetriever filter zalo_user_id, got %#v", got)
+	}
+
+	for _, node := range []string{"MsgToDoc-User", "MsgToDoc-Assistant"} {
+		nodeTweaks, ok := tweaks[node].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected %s tweaks object, got %#v", node, tweaks[node])
+		}
+		if got := nodeTweaks["zalo_user_id"]; got != "zalo-user-1" {
+			t.Fatalf("expected %s zalo_user_id, got %#v", node, got)
+		}
+	}
+}
+
+func TestRunFlowWithCustomerOmitsZaloUserIDTweaksWhenEmpty(t *testing.T) {
+	transport := &captureRoundTripper{}
+	client := NewLangflowClient(&config.Config{})
+	client.client = &http.Client{Transport: transport}
+
+	if _, err := client.RunFlowWithCustomer(
+		context.Background(),
+		"session-2",
+		"",
+		"hello",
+		"https://langflow.example",
+		"langflow-key",
+		"flow-2",
+		"",
+		"",
+	); err != nil {
+		t.Fatalf("RunFlowWithCustomer returned error: %v", err)
+	}
+
+	tweaks, ok := transport.payload["tweaks"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tweaks object, got %#v", transport.payload["tweaks"])
+	}
+
+	for _, key := range []string{"zalo_user_id", "AstraDB-HistoryRetriever", "MsgToDoc-User", "MsgToDoc-Assistant"} {
+		if _, present := tweaks[key]; present {
+			t.Fatalf("expected tweak %q to be absent when zaloUserID is empty, got %#v", key, tweaks[key])
+		}
+	}
+}
+
+func TestRunFlowWithOverridesPassesZaloUserIDToHistoryNodes(t *testing.T) {
+	transport := &captureRoundTripper{}
+	client := NewLangflowClient(&config.Config{})
+	client.client = &http.Client{Transport: transport}
+
+	if _, err := client.RunFlowWithOverrides(
+		context.Background(),
+		"session-3",
+		"zalo-user-9",
+		"ping",
+		"https://langflow.example",
+		"langflow-key",
+		"flow-3",
+	); err != nil {
+		t.Fatalf("RunFlowWithOverrides returned error: %v", err)
+	}
+
+	tweaks, ok := transport.payload["tweaks"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tweaks object, got %#v", transport.payload["tweaks"])
+	}
+
+	retrieverTweaks, ok := tweaks["AstraDB-HistoryRetriever"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected AstraDB-HistoryRetriever tweaks object, got %#v", tweaks["AstraDB-HistoryRetriever"])
+	}
+	filter, ok := retrieverTweaks["advanced_search_filter"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected advanced_search_filter object, got %#v", retrieverTweaks["advanced_search_filter"])
+	}
+	if got := filter["zalo_user_id"]; got != "zalo-user-9" {
+		t.Fatalf("expected AstraDB-HistoryRetriever filter zalo_user_id, got %#v", got)
+	}
+
+	for _, node := range []string{"MsgToDoc-User", "MsgToDoc-Assistant"} {
+		nodeTweaks, ok := tweaks[node].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected %s tweaks object, got %#v", node, tweaks[node])
+		}
+		if got := nodeTweaks["zalo_user_id"]; got != "zalo-user-9" {
+			t.Fatalf("expected %s zalo_user_id, got %#v", node, got)
+		}
+	}
 }

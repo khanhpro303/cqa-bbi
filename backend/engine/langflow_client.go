@@ -52,6 +52,14 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 				"zalo_user_id": zaloUserID,
 			},
 		}
+		// Tag every chat document with zalo_user_id at ingest time so the
+		// AstraDB-HistoryRetriever filter above can isolate semantic memory per user.
+		tweaks["MsgToDoc-User"] = map[string]interface{}{
+			"zalo_user_id": zaloUserID,
+		}
+		tweaks["MsgToDoc-Assistant"] = map[string]interface{}{
+			"zalo_user_id": zaloUserID,
+		}
 	}
 
 	payload := map[string]interface{}{
@@ -186,6 +194,14 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 			"advanced_search_filter": map[string]interface{}{
 				"zalo_user_id": zaloUserID,
 			},
+		}
+		// Tag every chat document with zalo_user_id at ingest time so the
+		// AstraDB-HistoryRetriever filter above can isolate semantic memory per user.
+		tweaks["MsgToDoc-User"] = map[string]interface{}{
+			"zalo_user_id": zaloUserID,
+		}
+		tweaks["MsgToDoc-Assistant"] = map[string]interface{}{
+			"zalo_user_id": zaloUserID,
 		}
 		customComponentTweaks["zalo_user_id"] = zaloUserID
 	}
