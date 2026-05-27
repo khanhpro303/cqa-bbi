@@ -842,8 +842,12 @@ func ClearJobERPCache(c *gin.Context) {
 		return
 	}
 
-	// 2. Clear local MySQL cache
+	// 2. Clear local MySQL cache (both raw crawl + AI-facing filtered cache)
 	if err := db.DB.Where("tenant_id = ?", tenantID).Delete(&models.CachedProduct{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db_delete_failed", "message": err.Error()})
+		return
+	}
+	if err := db.DB.Where("tenant_id = ?", tenantID).Delete(&models.ERPRawProduct{}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db_delete_failed", "message": err.Error()})
 		return
 	}

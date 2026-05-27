@@ -290,6 +290,10 @@
           <v-icon start size="small">mdi-database-check</v-icon>
           Danh mục đã cache
         </v-tab>
+        <v-tab value="exclude_parents" v-if="job?.job_type === 'erp_product_cache'">
+          <v-icon start size="small">mdi-filter-off-outline</v-icon>
+          Loại trừ dòng SP
+        </v-tab>
         <v-tab value="history">
           <v-icon start size="small">mdi-history</v-icon>
           {{ $t('run_history') }}
@@ -396,6 +400,75 @@
           <div v-else class="text-center text-grey pa-6">
             <v-icon size="48" color="grey-lighten-1">mdi-database-off-outline</v-icon>
             <div class="mt-2 text-body-2">Chưa có dữ liệu cache. Hãy chạy job để đồng bộ sản phẩm từ ERP.</div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Tab: Exclude Parent SKUs -->
+      <div v-if="activeTab === 'exclude_parents' && job?.job_type === 'erp_product_cache'">
+        <div class="d-flex align-center flex-wrap ga-2 mb-3">
+          <v-chip size="small" variant="tonal" color="info">
+            <v-icon start size="small">mdi-shape-outline</v-icon>
+            Tổng mã cha: {{ parentSkuList.length }}
+          </v-chip>
+          <v-chip size="small" variant="tonal" color="warning">
+            <v-icon start size="small">mdi-filter-off-outline</v-icon>
+            Đang loại trừ: {{ excludedParentCount }}
+          </v-chip>
+          <v-spacer />
+          <v-btn
+            size="small"
+            variant="outlined"
+            prepend-icon="mdi-refresh"
+            :loading="parentSkuLoading"
+            @click="fetchParentSKUs"
+          >Tải lại</v-btn>
+          <v-btn
+            size="small"
+            variant="outlined"
+            color="primary"
+            prepend-icon="mdi-file-upload-outline"
+            :disabled="!authStore.canEdit('settings')"
+            @click="importModal = true"
+          >Import Excel</v-btn>
+          <v-btn
+            size="small"
+            color="primary"
+            variant="flat"
+            prepend-icon="mdi-filter-cog-outline"
+            :disabled="!authStore.canEdit('settings') || parentSkuList.length === 0"
+            @click="manageModal = true"
+          >Cấu hình thủ công</v-btn>
+        </div>
+
+        <v-progress-linear v-if="parentSkuLoading" indeterminate color="info" class="mb-3" />
+
+        <v-alert v-if="parentSkuError" type="error" variant="tonal" density="compact" class="mb-3">
+          {{ parentSkuError }}
+        </v-alert>
+
+        <template v-if="!parentSkuLoading && !parentSkuError">
+          <v-table v-if="excludedParents.length > 0" density="compact" hover>
+            <thead>
+              <tr>
+                <th class="text-no-wrap">Mã cha</th>
+                <th class="text-no-wrap">Nhãn hiệu</th>
+                <th class="text-no-wrap text-right">Số SKU con</th>
+                <th class="text-no-wrap">Cập nhật lúc</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in excludedParents" :key="item.parent_sku">
+                <td class="text-caption font-weight-medium">{{ item.parent_sku }}</td>
+                <td class="text-caption">{{ item.nhan_hieu || '—' }}</td>
+                <td class="text-caption text-right">{{ item.child_count }}</td>
+                <td class="text-caption text-grey">{{ formatExclusionDate(item.updated_at) }}</td>
+              </tr>
+            </tbody>
+          </v-table>
+          <div v-else class="text-center text-grey pa-6">
+            <v-icon size="48" color="grey-lighten-1">mdi-filter-off-outline</v-icon>
+            <div class="mt-2 text-body-2">Chưa có mã cha nào bị loại trừ. Tất cả sản phẩm đều xuất hiện trong cache AI.</div>
           </div>
         </template>
       </div>
@@ -897,6 +970,19 @@
       </v-card>
     </v-dialog>
 
+    <!-- Exclude parents — modals -->
+    <ExcludeParentsImportModal
+      v-model="importModal"
+      :tenant-id="tenantId"
+      @updated="onExclusionUpdated"
+    />
+    <ExcludeParentsManageModal
+      v-model="manageModal"
+      :tenant-id="tenantId"
+      :initial-items="parentSkuList"
+      @updated="onExclusionUpdated"
+    />
+
     <!-- Lightbox overlay for image zoom -->
     <div v-if="lightboxSrc" class="lightbox-overlay" @click="lightboxSrc = ''">
       <img :src="lightboxSrc" class="lightbox-img" @click.stop />
@@ -912,6 +998,16 @@ import { useDisplay } from 'vuetify'
 import { useJobStore, type JobResult } from '../../stores/jobs'
 import { useAuthStore } from '../../stores/auth'
 import api from '../../api'
+import ExcludeParentsImportModal from '../../components/erp-exclusions/ExcludeParentsImportModal.vue'
+import ExcludeParentsManageModal from '../../components/erp-exclusions/ExcludeParentsManageModal.vue'
+
+interface ParentSKURow {
+  parent_sku: string
+  child_count: number
+  nhan_hieu: string
+  is_excluded: boolean
+  updated_at?: string
+}
 import { parseImageMessagePayload, parseStructuredMessageText, type ImageMessageView } from '../../utils/message-render'
 import { Line } from 'vue-chartjs'
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Filler, Legend } from 'chart.js'
@@ -983,6 +1079,13 @@ const clearERPCacheDialog = ref(false)
 const erpCacheClearing = ref(false)
 const erpProductEndpoint = ref('danhmucvattuhanghoa/search')
 
+// Parent-SKU exclusion (Loại trừ dòng SP) tab
+const parentSkuList = ref<ParentSKURow[]>([])
+const parentSkuLoading = ref(false)
+const parentSkuError = ref('')
+const importModal = ref(false)
+const manageModal = ref(false)
+
 const erpCacheFilteredProducts = computed(() => {
   const q = erpCacheSearch.value?.toLowerCase().trim()
   if (!q) return erpCacheProducts.value
@@ -997,6 +1100,11 @@ const erpCacheFilteredProducts = computed(() => {
     (p.DVT || '').toLowerCase().includes(q)
   )
 })
+
+const excludedParents = computed(() =>
+  parentSkuList.value.filter((p) => p.is_excluded),
+)
+const excludedParentCount = computed(() => excludedParents.value.length)
 
 const erpCacheTotalPages = computed(() => Math.ceil(erpCacheFilteredProducts.value.length / erpCachePerPage))
 const erpCachePaginatedProducts = computed(() => {
@@ -1393,6 +1501,40 @@ async function loadNextPages(initialPageState: string, loadId: number) {
   }
 }
 
+async function fetchParentSKUs() {
+  parentSkuLoading.value = true
+  parentSkuError.value = ''
+  try {
+    const { data } = await api.get<{ items: ParentSKURow[] }>(
+      `/tenants/${tenantId.value}/erp/parent-skus`,
+    )
+    parentSkuList.value = data.items || []
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || err?.response?.data?.error || ''
+    parentSkuError.value = msg || 'Không thể tải danh sách mã cha.'
+  } finally {
+    parentSkuLoading.value = false
+  }
+}
+
+async function onExclusionUpdated() {
+  await fetchParentSKUs()
+  await fetchERPCache()
+}
+
+function formatExclusionDate(value?: string): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 async function clearERPCache() {
   erpCacheClearing.value = true
   erpCacheError.value = ''
@@ -1415,6 +1557,7 @@ onMounted(async () => {
   if (job.value?.job_type === 'erp_product_cache') {
     activeTab.value = 'erp_cache'
     fetchERPCache() // non-blocking, loads in background
+    fetchParentSKUs() // non-blocking
   }
   await jobStore.fetchJobRuns(tenantId.value, jobId.value)
   await jobStore.fetchAllJobResults(tenantId.value, jobId.value)

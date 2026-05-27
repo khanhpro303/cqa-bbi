@@ -59,6 +59,8 @@ func AutoMigrate() error {
 		&models.JobResult{},
 		&models.AppSetting{},
 		&models.CachedProduct{},
+		&models.ERPRawProduct{},
+		&models.ERPParentSKUExclusion{},
 		&models.NotificationLog{},
 		&models.AIUsageLog{},
 		&models.OAuthClient{},

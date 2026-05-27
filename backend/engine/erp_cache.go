@@ -13,6 +13,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
 )
 
 // runERPProductCacheJob connects to Cloudify ERP, pulls danhmucvattuhanghoa/search data,
@@ -317,20 +318,21 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		}
 	}
 
-	// 5. Clear local MySQL cached_products for this tenant
-	if errDel := db.DB.Where("tenant_id = ?", job.TenantID).Delete(&models.CachedProduct{}).Error; errDel != nil {
-		log.Printf("[erp_cache] warn: failed to clear local MySQL cache: %v", errDel)
+	// 5. Clear local MySQL erp_raw_products for this tenant (full crawl table)
+	if errDel := db.DB.Where("tenant_id = ?", job.TenantID).Delete(&models.ERPRawProduct{}).Error; errDel != nil {
+		log.Printf("[erp_cache] warn: failed to clear erp_raw_products: %v", errDel)
 	}
 
-	// 5.1 Batch insert to local MySQL
-	var sqlProducts []models.CachedProduct
+	// 5.1 Batch insert raw crawl rows to erp_raw_products
+	rawProducts := make([]models.ERPRawProduct, 0, len(cachedProducts))
 	for _, p := range cachedProducts {
 		var price float64
 		if val, ok := p["DON_GIA_BAN"].(float64); ok {
 			price = val
 		}
 
-		sqlProducts = append(sqlProducts, models.CachedProduct{
+		now := time.Now()
+		rawProducts = append(rawProducts, models.ERPRawProduct{
 			ID:                 pkg.NewUUID(),
 			TenantID:           job.TenantID,
 			MA:                 getStringVal(p, "MA"),
@@ -345,30 +347,36 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 			KHO:                getStringVal(p, "KHO"),
 			MA_CHA:             getStringVal(p, "MA_CHA"),
 			DVT:                getStringVal(p, "DVT"),
-			CreatedAt:          time.Now(),
-			UpdatedAt:          time.Now(),
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		})
 	}
 
-	// Batch insert in chunks of 100 for MySQL performance
 	const chunkSQLSize = 100
-	for i := 0; i < len(sqlProducts); i += chunkSQLSize {
+	for i := 0; i < len(rawProducts); i += chunkSQLSize {
 		end := i + chunkSQLSize
-		if end > len(sqlProducts) {
-			end = len(sqlProducts)
+		if end > len(rawProducts) {
+			end = len(rawProducts)
 		}
-		if errCreate := db.DB.Create(sqlProducts[i:end]).Error; errCreate != nil {
-			log.Printf("[erp_cache] warn: failed to batch insert to local MySQL: %v", errCreate)
+		if errCreate := db.DB.Create(rawProducts[i:end]).Error; errCreate != nil {
+			log.Printf("[erp_cache] warn: failed to batch insert to erp_raw_products: %v", errCreate)
 		}
 	}
+
+	// 5.2 Rebuild AI-facing cached_products from raw, applying exclusion filter
+	cachedCount, errRebuild := RebuildCachedProductsFromRaw(job.TenantID)
+	if errRebuild != nil {
+		log.Printf("[erp_cache] warn: failed to rebuild cached_products from raw: %v", errRebuild)
+	}
+
 	finishedAt := time.Now()
 	runStatus := "success"
-	summaryMsg := fmt.Sprintf("Đã đồng bộ %d sản phẩm từ ERP", len(cachedProducts))
+	summaryMsg := fmt.Sprintf("Đã đồng bộ %d sản phẩm từ ERP (cache AI: %d)", len(cachedProducts), cachedCount)
 	summaryJSON, _ := json.Marshal(map[string]interface{}{
 		"message":                summaryMsg,
 		"conversations_analyzed": len(cachedProducts),
 		"conversations_found":    len(cachedProducts),
-		"conversations_passed":   len(cachedProducts),
+		"conversations_passed":   cachedCount,
 	})
 
 	if err := db.DB.Model(&run).Updates(map[string]interface{}{
@@ -443,6 +451,85 @@ func getStringVal(m map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+// RebuildCachedProductsFromRaw rewrites the AI-facing cached_products table
+// for a tenant by streaming erp_raw_products and skipping rows whose MA_CHA
+// appears in erp_parent_sku_exclusions. Returns the number of cached rows
+// written.
+func RebuildCachedProductsFromRaw(tenantID string) (int, error) {
+	// Load exclusion set
+	var exclusions []models.ERPParentSKUExclusion
+	if err := db.DB.Where("tenant_id = ?", tenantID).Find(&exclusions).Error; err != nil {
+		return 0, fmt.Errorf("load exclusions: %w", err)
+	}
+	excludedSet := make(map[string]struct{}, len(exclusions))
+	for _, e := range exclusions {
+		excludedSet[strings.TrimSpace(e.ParentSKU)] = struct{}{}
+	}
+
+	// Clear existing cache for this tenant
+	if err := db.DB.Where("tenant_id = ?", tenantID).Delete(&models.CachedProduct{}).Error; err != nil {
+		return 0, fmt.Errorf("clear cached_products: %w", err)
+	}
+
+	const insertChunk = 100
+	buffer := make([]models.CachedProduct, 0, insertChunk)
+	inserted := 0
+
+	flush := func() error {
+		if len(buffer) == 0 {
+			return nil
+		}
+		if err := db.DB.Create(buffer).Error; err != nil {
+			return fmt.Errorf("bulk insert cached_products: %w", err)
+		}
+		inserted += len(buffer)
+		buffer = buffer[:0]
+		return nil
+	}
+
+	var rawBatch []models.ERPRawProduct
+	err := db.DB.Where("tenant_id = ?", tenantID).
+		FindInBatches(&rawBatch, 500, func(_ *gorm.DB, _ int) error {
+			now := time.Now()
+			for _, r := range rawBatch {
+				if _, skip := excludedSet[strings.TrimSpace(r.MA_CHA)]; skip {
+					continue
+				}
+				buffer = append(buffer, models.CachedProduct{
+					ID:                 pkg.NewUUID(),
+					TenantID:           r.TenantID,
+					MA:                 r.MA,
+					TEN_DONG_BO_WEB:    r.TEN_DONG_BO_WEB,
+					TEN:                r.TEN,
+					THUOC_TINH_1:       r.THUOC_TINH_1,
+					THUOC_TINH_2:       r.THUOC_TINH_2,
+					DON_GIA_BAN:        r.DON_GIA_BAN,
+					LINK_ANH:           r.LINK_ANH,
+					NHAN_HIEU_NAME:     r.NHAN_HIEU_NAME,
+					LIST_TEN_NHOM_VTHH: r.LIST_TEN_NHOM_VTHH,
+					KHO:                r.KHO,
+					MA_CHA:             r.MA_CHA,
+					DVT:                r.DVT,
+					CreatedAt:          now,
+					UpdatedAt:          now,
+				})
+				if len(buffer) >= insertChunk {
+					if err := flush(); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}).Error
+	if err != nil {
+		return inserted, fmt.Errorf("stream raw products: %w", err)
+	}
+	if err := flush(); err != nil {
+		return inserted, err
+	}
+	return inserted, nil
 }
 
 func getFloatVal(m map[string]interface{}, key string) (float64, bool) {

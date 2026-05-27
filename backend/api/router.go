@@ -264,6 +264,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.PUT("/settings/erp", middleware.RequirePermission("settings", "w"), handlers.SaveERPSettings)
 			tenant.POST("/settings/erp/test", middleware.RequirePermission("settings", "w"), handlers.TestERPConnection)
 
+			// ERP Parent-SKU exclusion list (filters AI-facing product cache)
+			tenant.GET("/erp/parent-skus", middleware.RequirePermission("settings", "r"), handlers.ListParentSKUs)
+			tenant.GET("/erp/parent-skus/template", middleware.RequirePermission("settings", "r"), handlers.DownloadParentSKUTemplate)
+			tenant.POST("/erp/parent-skus/import", middleware.RequirePermission("settings", "w"), handlers.ImportParentSKUExclusions)
+			tenant.PUT("/erp/parent-skus/exclusions", middleware.RequirePermission("settings", "w"), handlers.PutParentSKUExclusions)
+
 			// Notification logs
 			tenant.GET("/notification-logs", handlers.ListNotificationLogs)
 
