@@ -322,6 +322,14 @@ func ERPQuery(c *gin.Context) {
 			cachedData = []map[string]interface{}{}
 		}
 
+		if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
+			go func(search string, payload []map[string]interface{}) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				pushFallbackPayloadToZaloOA(ctx, tenantID, "raw_like", search, payload, permCtx)
+			}(req.Search, cachedData)
+		}
+
 		filteredCached := filterProductsByGroups(cachedData, productGroups)
 		filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
 			return getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
@@ -333,7 +341,7 @@ func ERPQuery(c *gin.Context) {
 			go func(search string, payload []map[string]interface{}) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				pushFallbackPayloadToZaloOA(ctx, tenantID, search, payload, permCtx)
+				pushFallbackPayloadToZaloOA(ctx, tenantID, "slim", search, payload, permCtx)
 			}(req.Search, slim)
 		}
 
@@ -3024,33 +3032,36 @@ func resolveAstraCredsForTenant(tenantID string, cfg *config.Config) (apiEndpoin
 	return
 }
 
-// pushFallbackPayloadToZaloOA mirrors the slim product fallback payload to the
-// user's Zalo OA as a plain-text debug message. It is gated by the env flag
-// DEBUG_PUSH_FALLBACK_TO_ZALO=true and is a no-op otherwise. All errors are
-// logged and never propagate — this must not affect the HTTP response.
-func pushFallbackPayloadToZaloOA(ctx context.Context, tenantID, search string, slim []map[string]interface{}, permCtx *engine.GroupPermissionContext) {
+// pushFallbackPayloadToZaloOA mirrors a product fallback payload to the user's
+// Zalo OA as a plain-text debug message. The stage label tags the pipeline step
+// being inspected (e.g. "raw_like" for the post-LIKE cache result, "slim" for
+// the final LLM-ready payload) so multiple pushes from the same request stay
+// distinguishable on the operator's screen. Gated by env flag
+// DEBUG_PUSH_FALLBACK_TO_ZALO=true; no-op otherwise. All errors are logged and
+// never propagate — this must not affect the HTTP response.
+func pushFallbackPayloadToZaloOA(ctx context.Context, tenantID, stage, search string, payload []map[string]interface{}, permCtx *engine.GroupPermissionContext) {
 	if permCtx == nil || permCtx.ZaloUserID == "" {
 		return
 	}
 
 	adapter, _, err := loadActiveZaloOAAdapter(tenantID)
 	if err != nil {
-		log.Printf("[erp_query] debug push to zalo oa skipped: %v", err)
+		log.Printf("[erp_query] debug push to zalo oa skipped (stage=%s): %v", stage, err)
 		return
 	}
 
-	body, err := json.MarshalIndent(slim, "", "  ")
+	body, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		log.Printf("[erp_query] debug push to zalo oa skipped: marshal slim failed: %v", err)
+		log.Printf("[erp_query] debug push to zalo oa skipped (stage=%s): marshal payload failed: %v", stage, err)
 		return
 	}
 
-	text := fmt.Sprintf("[DEBUG fallback] search=%q\n%s", search, string(body))
+	text := fmt.Sprintf("[DEBUG fallback stage=%s] search=%q\n%s", stage, search, string(body))
 	if err := adapter.SendMessage(ctx, permCtx.ZaloUserID, text); err != nil {
-		log.Printf("[erp_query] debug push to zalo oa failed: %v", err)
+		log.Printf("[erp_query] debug push to zalo oa failed (stage=%s): %v", stage, err)
 		return
 	}
-	log.Printf("[erp_query] debug push to zalo oa sent for search=%q items=%d", search, len(slim))
+	log.Printf("[erp_query] debug push to zalo oa sent stage=%s search=%q items=%d", stage, search, len(payload))
 }
 
 func sanitizeSearchQuery(search string) string {
