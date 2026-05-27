@@ -231,11 +231,14 @@ func ERPQuery(c *gin.Context) {
 			if err != nil {
 				log.Printf("[erp_query] product parent match search error: %v", err)
 			} else if len(parentMatches) > 1 {
-				sent := sendProductRichMessage(c, tenantID, req.Search, productParentMatchCounts(parentMatches), permCtx)
+				sent, parentCodes := sendProductRichMessage(c, tenantID, req.Search, productParentMatchCounts(parentMatches), permCtx)
 				if sent {
+					numberedList := buildNumberedParentCodeList(parentCodes)
 					c.JSON(http.StatusOK, gin.H{
 						"status":          "success",
 						"is_product_rich": true,
+						"parent_codes":    parentCodes,
+						"numbered_list":   numberedList,
 						"data": []map[string]interface{}{
 							{
 								"message": fmt.Sprintf("Đã gửi danh sách lựa chọn dòng sản phẩm cho từ khóa '%s' trực tiếp qua Zalo cho người dùng. Hãy hướng dẫn người dùng chọn dòng sản phẩm trên Zalo.", req.Search),
@@ -3152,7 +3155,21 @@ func loadActiveZaloOAAdapter(tenantID string) (*channels.ZaloOAAdapter, *models.
 	return adapter, activeChannel, nil
 }
 
-func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts map[string]int, permCtx *engine.GroupPermissionContext) bool {
+// sendProductRichMessage sends the Zalo OA option-list rich message for an
+// ambiguous product search and returns the parent SP codes (in displayed
+// order, max 3) when the push succeeds.
+//
+// The returned codes feed back into the /api/erp/query JSON response as
+// `parent_codes` + `numbered_list` so the Langflow ToolCallingAgent can
+// include the same list inside its final assistant text. That assistant text
+// is then persisted with `is_disambiguation=false` and ends up in the
+// HistoryRetriever scope, which is required by the agent's DISAMBIGUATION
+// FOLLOW-UP rule: when the next user message is "1/2/3" or "SPxxxxxx",
+// the agent scans chat history for the numbered list to resolve the digit
+// to a real parent_code before calling ERP again. Without the list in the
+// retriever-visible turn, that rule has nothing to scan and the follow-up
+// goes silent.
+func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts map[string]int, permCtx *engine.GroupPermissionContext) (bool, []string) {
 	var sortedMaChas []productParentMatch
 	for k, v := range maChaCounts {
 		sortedMaChas = append(sortedMaChas, productParentMatch{code: k, count: v})
@@ -3160,6 +3177,7 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 	sortProductParentMatches(sortedMaChas)
 
 	buttons := make([]channels.ZaloOAButton, 0, 3)
+	parentCodes := make([]string, 0, 3)
 	for i, mc := range sortedMaChas {
 		if i >= 3 {
 			break
@@ -3168,17 +3186,18 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 			Title:   mc.code,
 			Payload: "#show_product_variants:" + mc.code,
 		})
+		parentCodes = append(parentCodes, mc.code)
 	}
 
 	if permCtx.ZaloUserID == "" {
 		log.Printf("[erp_query] cannot send Zalo Rich Message for products: missing zalo user id")
-		return false
+		return false, nil
 	}
 
 	adapter, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
 	if err != nil {
 		log.Printf("[erp_query] cannot send Zalo Rich Message for products: %v", err)
-		return false
+		return false, nil
 	}
 
 	prompt := fmt.Sprintf("Tôi tìm thấy nhiều sản phẩm khớp với '%s'. Bạn muốn hỏi về dòng sản phẩm nào?", search)
@@ -3203,14 +3222,14 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 		body, buildErr := channels.BuildV3ListTemplatePayload(permCtx.ZaloUserID, prompt, buttons)
 		if buildErr != nil {
 			log.Printf("[erp_query] cannot build Zalo V3 list template for products: %v", buildErr)
-			return false
+			return false, nil
 		}
 		sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, body)
 	}
 
 	if sendErr != nil {
 		log.Printf("[erp_query] failed to send Zalo Rich Message for products: %v", sendErr)
-		return false
+		return false, nil
 	}
 
 	log.Printf("[erp_query] successfully sent Zalo Rich Message for products to %s", permCtx.ZaloUserID)
@@ -3227,7 +3246,24 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, maChaCounts
 	}
 	go persistOptionListToHistory(activeChannel.ID, tenantID, permCtx.ZaloUserID, groupID, displayed)
 
-	return true
+	return true, parentCodes
+}
+
+// buildNumberedParentCodeList renders parent codes as "1. <code>\n2. <code>"
+// for embedding in the ERP query tool output. The Langflow agent uses this
+// exact format to map a follow-up "1/2/3" reply back to a parent SP code.
+func buildNumberedParentCodeList(parentCodes []string) string {
+	if len(parentCodes) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, code := range parentCodes {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "%d. %s", i+1, code)
+	}
+	return b.String()
 }
 
 // persistOptionListToHistory asynchronously stores a Zalo OA option-list

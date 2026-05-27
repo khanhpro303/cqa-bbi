@@ -480,3 +480,27 @@ func TestSlimProductsForLLM(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildNumberedParentCodeList(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want string
+	}{
+		{"empty", nil, ""},
+		{"empty slice", []string{}, ""},
+		{"single", []string{"SP458484"}, "1. SP458484"},
+		{
+			name: "three preserves order",
+			in:   []string{"SP458484", "SP458516", "SP458495"},
+			want: "1. SP458484\n2. SP458516\n3. SP458495",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := buildNumberedParentCodeList(tc.in); got != tc.want {
+				t.Errorf("buildNumberedParentCodeList(%v) = %q; want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

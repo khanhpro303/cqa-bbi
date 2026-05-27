@@ -81,13 +81,11 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 	}
 
 	if zaloUserID != "" {
-		// Strict isolation for the AstraDB HistoryRetriever:
-		//   - filter by metadata.zalo_user_id  → no cross-user leak
-		//   - filter by metadata.session_id    → no cross-session leak within same user
-		// Both ingest paths (Langflow MsgToDoc + Go engine.SaveChatMessage) write
-		// these keys inside `metadata`, so the dotted-path keys here will match.
-		// Sent under both `search_filter` and `advanced_search_filter` so it works
-		// regardless of which the installed Langflow AstraDB component version reads.
+		// HistoryRetriever scope is per-user only — see buildHistoryFilter
+		// for the rationale (cross-session recall preserved; option-list
+		// bleed killed via the is_disambiguation exclusion). Sent under both
+		// search_filter and advanced_search_filter so it works regardless of
+		// which key the installed Langflow AstraDB component version reads.
 		historyFilter := buildHistoryFilter(zaloUserID)
 		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{
 			"search_filter":          historyFilter,
@@ -231,6 +229,10 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 
 	if zaloUserID != "" {
 		tweaks["zalo_user_id"] = zaloUserID
+		// HistoryRetriever scope is per-user only (no session_id) — see
+		// buildHistoryFilter for the rationale. Cross-session recall is
+		// preserved; option-list bleed is killed by the is_disambiguation
+		// exclusion in the filter.
 		historyFilter := buildHistoryFilter(zaloUserID)
 		tweaks["AstraDB-HistoryRetriever"] = map[string]interface{}{
 			"search_filter":          historyFilter,
