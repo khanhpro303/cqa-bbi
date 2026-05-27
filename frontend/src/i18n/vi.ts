@@ -67,13 +67,6 @@ export default {
   last_sync: 'Đồng bộ lần cuối',
   sync_status: 'Trạng thái đồng bộ',
   test_connection: 'Kiểm tra kết nối',
-  test_template: 'Test template',
-  test_template_title: 'Gửi rich message thử',
-  test_template_desc: 'Gửi 1 template demo gồm 3 button tới nhân viên trong whitelist để bạn xác nhận template hiển thị đúng trên Zalo.',
-  test_template_select_staff: 'Chọn nhân viên (whitelist)',
-  test_template_no_staff: 'Kênh chưa có nhân viên whitelist đang hoạt động',
-  test_template_send: 'Gửi thử',
-  test_template_sent: 'Đã gửi tin nhắn thử',
   sync_now: 'Đồng bộ ngay',
 
   // Jobs

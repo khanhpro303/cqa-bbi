@@ -29,6 +29,13 @@ const defaultListCardSubtitle = "Bấm để chọn tùy chọn này."
 // chat). Pass the returned string to ZaloOAAdapter.SendMessage which parses
 // it back into the request body.
 //
+// NOTE: currently NOT called from production. Brute-force testing (see
+// commit 92c38df) showed Zalo OA returns -233 ("message type is invalid")
+// for every list-template shape we tried — including the verbatim doc
+// example. Production callers in workers/tasks.go and api/handlers/erp.go
+// now fall back to BuildButtonOptionsAsText (plain text). Keep this helper
+// + its tests in place so we can re-enable quickly if Zalo confirms support.
+//
 // Layout per Zalo V3 spec:
 //   - message.text holds the header sentence (the prompt) shown above the list.
 //   - Each ZaloOAButton becomes its own element (a "card") with its own

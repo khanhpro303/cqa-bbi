@@ -67,13 +67,6 @@ export default {
   last_sync: 'Last Synced',
   sync_status: 'Sync Status',
   test_connection: 'Test Connection',
-  test_template: 'Test template',
-  test_template_title: 'Send test rich message',
-  test_template_desc: 'Sends a demo template with 3 buttons to the selected whitelisted staff so you can verify how the rich message renders on Zalo.',
-  test_template_select_staff: 'Select staff (whitelist)',
-  test_template_no_staff: 'No active whitelist members for this channel',
-  test_template_send: 'Send test',
-  test_template_sent: 'Test message sent',
   sync_now: 'Sync Now',
 
   // Jobs

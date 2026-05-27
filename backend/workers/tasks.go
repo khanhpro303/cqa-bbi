@@ -758,16 +758,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 			prompt := fmt.Sprintf("Tôi tìm thấy các dòng sản phẩm khớp với '%s'. Bạn muốn kiểm tra tồn kho dòng nào?", keyword)
 
+			// Zalo OA hiện không support template_type "list" trên /message/cs
+			// (luôn trả -233). Fallback về plain text cho cả group lẫn 1:1.
+			// Re-enable channels.BuildV3ListTemplatePayload nếu Zalo confirm hỗ trợ.
+			text := channels.BuildButtonOptionsAsText(prompt, buttons)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
-				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, text)
 			} else {
-				body, buildErr := channels.BuildV3ListTemplatePayload(payload.Sender.ID, prompt, buttons)
-				if buildErr != nil {
-					log.Printf("[zalo_webhook] cannot build V3 list template (flow_type prompt): %v", buildErr)
-					return nil
-				}
-				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, body)
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, text)
 			}
 			_ = sendErr
 			return nil
@@ -859,16 +858,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 			prompt := fmt.Sprintf("Dòng sản phẩm '%s' có các tùy chọn đồng bộ sau. Vui lòng chọn một tùy chọn để kiểm tra tồn kho:", maCha)
 
+			// Zalo OA list template fallback to plain text — see flow_type prompt above.
+			text := channels.BuildButtonOptionsAsText(prompt, buttons)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
-				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, text)
 			} else {
-				body, buildErr := channels.BuildV3ListTemplatePayload(payload.Sender.ID, prompt, buttons)
-				if buildErr != nil {
-					log.Printf("[zalo_webhook] cannot build V3 list template (macha_options): %v", buildErr)
-					return nil
-				}
-				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, body)
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, text)
 			}
 			_ = sendErr
 			return nil
@@ -1045,16 +1041,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 			prompt := fmt.Sprintf("Dòng sản phẩm '%s' có các tùy chọn màu/size sau. Vui lòng chọn một tùy chọn để xem chi tiết sản phẩm:", maCha)
 
+			// Zalo OA list template fallback to plain text — see flow_type prompt above.
+			text := channels.BuildButtonOptionsAsText(prompt, buttons)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
-				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, text)
 			} else {
-				body, buildErr := channels.BuildV3ListTemplatePayload(payload.Sender.ID, prompt, buttons)
-				if buildErr != nil {
-					log.Printf("[zalo_webhook] cannot build V3 list template (product_variants): %v", buildErr)
-					return nil
-				}
-				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, body)
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, text)
 			}
 			_ = sendErr
 			return nil
@@ -1107,16 +1100,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				prompt = fmt.Sprintf("Dòng sản phẩm '%s' có %d biến thể. Hiển thị 4 lựa chọn đầu — nhập từ khóa cụ thể hơn (vd. màu/size) để xem hết:", webName, len(childProducts))
 			}
 
+			// Zalo OA list template fallback to plain text — see flow_type prompt above.
+			text := channels.BuildButtonOptionsAsText(prompt, buttons)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
-				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, text)
 			} else {
-				body, buildErr := channels.BuildV3ListTemplatePayload(payload.Sender.ID, prompt, buttons)
-				if buildErr != nil {
-					log.Printf("[zalo_webhook] cannot build V3 list template (web_variants): %v", buildErr)
-					return nil
-				}
-				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, body)
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, text)
 			}
 			_ = sendErr
 			return nil

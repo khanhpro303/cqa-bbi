@@ -1657,22 +1657,20 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 								}
 							}
 
+							// Zalo OA list template fallback to plain text — see
+							// workers/tasks.go flow_type prompt for context.
+							text := channels.BuildButtonOptionsAsText(prompt, buttons)
 							var sendErr error
 							if hasGroup {
-								sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
+								sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, text)
 							} else {
-								body, buildErr := channels.BuildV3ListTemplatePayload(permCtx.ZaloUserID, prompt, buttons)
-								if buildErr != nil {
-									log.Printf("[inventory_query] cannot build Zalo V3 list template: %v", buildErr)
-								} else {
-									sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, body)
-								}
+								sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, text)
 							}
 
 							if sendErr != nil {
-								log.Printf("[inventory_query] failed to send Zalo Rich Message directly: %v", sendErr)
+								log.Printf("[inventory_query] failed to send Zalo option list directly: %v", sendErr)
 							} else {
-								log.Printf("[inventory_query] successfully sent Zalo Rich Message directly to %s", permCtx.ZaloUserID)
+								log.Printf("[inventory_query] successfully sent Zalo option list directly to %s", permCtx.ZaloUserID)
 							}
 						}
 
@@ -2949,36 +2947,33 @@ func sendProductRichMessage(c *gin.Context, tenantID, search string, webGroups [
 		}
 	}
 
+	// Zalo OA list template fallback to plain text — see workers/tasks.go
+	// flow_type prompt for context.
+	text := channels.BuildButtonOptionsAsText(prompt, buttons)
 	var sendErr error
 	if hasGroup {
-		sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, channels.BuildButtonOptionsAsText(prompt, buttons))
+		sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, text)
 	} else {
-		body, buildErr := channels.BuildV3ListTemplatePayload(permCtx.ZaloUserID, prompt, buttons)
-		if buildErr != nil {
-			log.Printf("[erp_query] cannot build Zalo V3 list template for products: %v", buildErr)
-			return false, nil
-		}
-		sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, body)
+		sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, text)
 	}
 
 	if sendErr != nil {
-		log.Printf("[erp_query] failed to send Zalo Rich Message for products: %v", sendErr)
+		log.Printf("[erp_query] failed to send Zalo option list for products: %v", sendErr)
 		return false, nil
 	}
 
-	log.Printf("[erp_query] successfully sent Zalo Rich Message for products to %s", permCtx.ZaloUserID)
+	log.Printf("[erp_query] successfully sent Zalo option list for products to %s", permCtx.ZaloUserID)
 
 	// Persist the option-list message into AstraDB chat history so the bot
 	// has context for the user's follow-up reply (e.g. "1" → SP458484).
 	// The Zalo push above bypasses Langflow, so the regular MsgToDoc path in
 	// the flow never sees this message. We mirror the displayed text and
 	// write it under the user's active Langflow session.
-	displayed := channels.BuildButtonOptionsAsText(prompt, buttons)
 	groupID := ""
 	if hasGroup {
 		groupID = matchedGroup.ZaloGroupID
 	}
-	go persistOptionListToHistory(activeChannel.ID, tenantID, permCtx.ZaloUserID, groupID, displayed)
+	go persistOptionListToHistory(activeChannel.ID, tenantID, permCtx.ZaloUserID, groupID, text)
 
 	return true, sentGroups
 }
