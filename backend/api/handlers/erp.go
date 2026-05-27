@@ -9,13 +9,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
@@ -81,6 +81,9 @@ func ERPQuery(c *gin.Context) {
 		PermissionToken string `json:"permission_token" form:"permission_token"`
 		ParentCode      string `json:"parent_code" form:"parent_code"`
 		ExactWebName    bool   `json:"exact_web_name" form:"exact_web_name"`
+		Color           string `json:"color" form:"color"`
+		Size            string `json:"size" form:"size"`
+		Brand           string `json:"brand" form:"brand"`
 	}
 
 	if c.Request.Method == "POST" {
@@ -190,8 +193,15 @@ func ERPQuery(c *gin.Context) {
 		return
 	}
 
-	// Enforce permitted resources & scope
-	allowed, scopeType, productGroups := permCtx.IsResourceAllowed(req.Resource)
+	// Enforce permitted resources & scope.
+	// product_variants is a finer-grained read against the same cache as
+	// products, so it inherits the products permission grant — tenants do
+	// not need to configure a second resource entry.
+	permResource := req.Resource
+	if permResource == "product_variants" {
+		permResource = "products"
+	}
+	allowed, scopeType, productGroups := permCtx.IsResourceAllowed(permResource)
 	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden_scope",
@@ -337,6 +347,123 @@ func ERPQuery(c *gin.Context) {
 			"resource": req.Resource,
 			"count":    len(slim),
 		})
+		return
+	}
+
+	// ── 6b. product_variants — variant-level lookup with attribute filters ──
+	// Used by the agent when the customer asks about a specific variant
+	// ("FF901 đen bóng size L giá bao nhiêu?"). Returns concrete variant
+	// SKUs + prices instead of an aggregated price_range.
+	if req.Resource == "product_variants" {
+		parentCode := strings.TrimSpace(req.ParentCode)
+		if parentCode == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "missing_parent_code",
+				"message": "product_variants yêu cầu parent_code (mã cha sản phẩm).",
+			})
+			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusBadRequest, 0, c.ClientIP())
+			return
+		}
+
+		variants, err := searchVariantsByAttributes(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand, req.Limit)
+		if err != nil {
+			log.Printf("[erp_query] variant attribute search error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "variant_cache_error",
+				"message": fmt.Sprintf("Không thể tra cứu variant từ cache: %s", err.Error()),
+			})
+			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusInternalServerError, 0, c.ClientIP())
+			return
+		}
+
+		filtered := filterProductsByGroups(variants, productGroups)
+		slim := slimVariantsForLLM(filtered)
+
+		response := gin.H{
+			"status":      "success",
+			"data":        slim,
+			"source":      "astradb_cache_variants",
+			"resource":    req.Resource,
+			"parent_code": parentCode,
+			"count":       len(slim),
+		}
+
+		// Zero-result fallback. Two passes:
+		//  (1) Bilingual fuzzy match — the cache may store "Gloss Black"
+		//      while the customer typed "đen bóng". Resolve color/size/brand
+		//      against the parent's actual stored values and retry once.
+		//  (2) If still zero, surface available_* lists so the LLM agent can
+		//      ask the customer to pick a real combination.
+		if len(slim) == 0 && (strings.TrimSpace(req.Color) != "" || strings.TrimSpace(req.Size) != "" || strings.TrimSpace(req.Brand) != "") {
+			allVariants, allErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, parentCode)
+			if allErr != nil {
+				log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
+			} else {
+				allowed := filterProductsByGroups(allVariants, productGroups)
+				availColors, availSizes, availBrands := collectAvailableAttributes(allowed)
+
+				matchedColor, matchedSize, matchedBrand, matchErr := fuzzyMatchAttributesWithLLM(
+					c.Request.Context(), tenantID,
+					req.Color, req.Size, req.Brand,
+					availColors, availSizes, availBrands,
+				)
+				if matchErr != nil {
+					log.Printf("[erp_query] bilingual attribute match failed: %v", matchErr)
+				}
+
+				// Only retry if the LLM moved at least one filter to a value
+				// different from what we already tried (otherwise we'd loop).
+				movedColor := matchedColor != "" && !strings.EqualFold(matchedColor, strings.TrimSpace(req.Color))
+				movedSize := matchedSize != "" && !strings.EqualFold(matchedSize, strings.TrimSpace(req.Size))
+				movedBrand := matchedBrand != "" && !strings.EqualFold(matchedBrand, strings.TrimSpace(req.Brand))
+
+				if movedColor || movedSize || movedBrand {
+					retryColor := matchedColor
+					if retryColor == "" {
+						retryColor = req.Color
+					}
+					retrySize := matchedSize
+					if retrySize == "" {
+						retrySize = req.Size
+					}
+					retryBrand := matchedBrand
+					if retryBrand == "" {
+						retryBrand = req.Brand
+					}
+
+					retryVariants, retryErr := searchVariantsByAttributes(c.Request.Context(), tenantID, parentCode, retryColor, retrySize, retryBrand, req.Limit)
+					if retryErr != nil {
+						log.Printf("[erp_query] variant retry after bilingual match error: %v", retryErr)
+					} else {
+						retryFiltered := filterProductsByGroups(retryVariants, productGroups)
+						retrySlim := slimVariantsForLLM(retryFiltered)
+						if len(retrySlim) > 0 {
+							slim = retrySlim
+							response["data"] = retrySlim
+							response["count"] = len(retrySlim)
+							response["bilingual_match"] = gin.H{
+								"color": retryColor,
+								"size":  retrySize,
+								"brand": retryBrand,
+							}
+							log.Printf("[erp_query] bilingual match resolved parent=%s color=%q→%q size=%q→%q brand=%q→%q",
+								parentCode, req.Color, retryColor, req.Size, retrySize, req.Brand, retryBrand)
+						}
+					}
+				}
+
+				// Still zero after bilingual retry → surface the candidate set.
+				if len(slim) == 0 {
+					response["available_colors"] = availColors
+					response["available_sizes"] = availSizes
+					response["available_brands"] = availBrands
+					response["message"] = "Không có variant khớp màu/size yêu cầu (kể cả sau khi thử map song ngữ). Tham khảo các tuỳ chọn có sẵn ở available_colors / available_sizes / available_brands."
+				}
+			}
+		}
+
+		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, parentCode, http.StatusOK, len(slim), c.ClientIP())
+		c.JSON(http.StatusOK, response)
 		return
 	}
 
@@ -1638,6 +1765,8 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			}
 		}
 
+		stockCache := engine.DefaultInventoryStockCache()
+
 		if parentCode != "" && search != "" {
 			matchedProducts, errSearch := searchProductsFromAstraDBWithFilter(c.Request.Context(), tenantID, search, parentCode, 20)
 			if errSearch == nil && len(matchedProducts) > 0 {
@@ -1649,38 +1778,10 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						continue
 					}
 
-					var skuInventory []map[string]interface{}
-					var errQuery error
-					if usePostMethod {
-						bodyPayload := map[string]interface{}{
-							"limit": 100,
-						}
-						if inventoryEndpoint == "inventory_receipt/search" {
-							bodyPayload["keyword"] = childSKU
-						} else {
-							bodyPayload["MA_HANG"] = childSKU
-						}
-						skuInventory, errQuery = client.SearchCustomEndpointWithBody(inventoryEndpoint, bodyPayload)
-					} else {
-						params := map[string]string{
-							"limit": "100",
-						}
-						if inventoryEndpoint == "inventory_receipt/search" {
-							params["keyword"] = childSKU
-						} else {
-							params["MA_HANG"] = childSKU
-						}
-						skuInventory, errQuery = client.SearchCustomEndpoint(inventoryEndpoint, params)
-					}
+					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, stockCache, tenantID, childSKU, inventoryEndpoint, usePostMethod)
 					if errQuery != nil {
 						log.Printf("[inventory_query_filtered] error querying stock for SKU %s: %v", childSKU, errQuery)
 						continue
-					}
-
-					var skuStock float64
-					for _, invItem := range skuInventory {
-						stockVal := getMapFloat(invItem, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
-						skuStock += stockVal
 					}
 
 					record := map[string]interface{}{
@@ -1813,38 +1914,10 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						continue
 					}
 
-					var skuInventory []map[string]interface{}
-					var errQuery error
-					if usePostMethod {
-						bodyPayload := map[string]interface{}{
-							"limit": 100,
-						}
-						if inventoryEndpoint == "inventory_receipt/search" {
-							bodyPayload["keyword"] = childSKU
-						} else {
-							bodyPayload["MA_HANG"] = childSKU
-						}
-						skuInventory, errQuery = client.SearchCustomEndpointWithBody(inventoryEndpoint, bodyPayload)
-					} else {
-						params := map[string]string{
-							"limit": "100",
-						}
-						if inventoryEndpoint == "inventory_receipt/search" {
-							params["keyword"] = childSKU
-						} else {
-							params["MA_HANG"] = childSKU
-						}
-						skuInventory, errQuery = client.SearchCustomEndpoint(inventoryEndpoint, params)
-					}
+					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, stockCache, tenantID, childSKU, inventoryEndpoint, usePostMethod)
 					if errQuery != nil {
 						log.Printf("[inventory_query] error querying stock for SKU %s: %v", childSKU, errQuery)
 						continue
-					}
-
-					var skuStock float64
-					for _, invItem := range skuInventory {
-						stockVal := getMapFloat(invItem, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
-						skuStock += stockVal
 					}
 
 					record := map[string]interface{}{
@@ -1905,11 +1978,13 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				}
 			}
 
-			// Normalize stock keys in response for custom inventory endpoints
+			// Normalize stock keys in response for custom inventory endpoints,
+			// and write-through to the stock cache so subsequent parent-loop
+			// queries can serve the same SKU from cache.
 			if err == nil {
 				for i, item := range data {
+					stockVal := getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
 					if _, hasTon := item["ton_kho"]; !hasTon {
-						stockVal := getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
 						data[i]["ton_kho"] = stockVal
 						data[i]["TON_KHO"] = stockVal
 						data[i]["stock"] = stockVal
@@ -1922,6 +1997,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						data[i]["code"] = sku
 						data[i]["ma_hang"] = sku
 						data[i]["product_code"] = sku
+						stockCache.Set(c.Request.Context(), tenantID, sku, stockVal)
 					}
 					name := getMapString(item, "TEN_HANG", "ten_hang", "TEN", "ten", "name")
 					if name != "" {
@@ -2048,6 +2124,29 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					filteredData = append(filteredData, record)
 				}
 				data = filteredData
+
+				// Aggregate per-status totals so the LLM replies with one
+				// summary line (count/total per Đang giao / Đang thực hiện /
+				// Hoàn thành / Hủy) instead of re-counting raw rows and
+				// risking arithmetic errors on long lists.
+				summary := buildOrdersSummary(filteredData)
+				trimmed := trimOrdersForLLM(filteredData, 20)
+				writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusOK, len(filteredData), c.ClientIP())
+				c.JSON(http.StatusOK, gin.H{
+					"status":         "success",
+					"source":         "cloudify_live",
+					"resource":       "orders",
+					"scope":          scopeType,
+					"customer_code":  permCtx.CustomerCode,
+					"range_days":     days,
+					"from":           tuNgay,
+					"to":             denNgay,
+					"count":          len(filteredData),
+					"orders_summary": summary,
+					"orders":         trimmed,
+					"data":           trimmed,
+				})
+				return
 			}
 		} else {
 			params := map[string]string{
@@ -2218,7 +2317,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			branchName = branchSetting.ValuePlain
 		}
 
-		debtEndpoint := "partner_ledger/search"
+		debtEndpoint := "th_cong_no_phai_thu/search"
 		usePost := false
 		var globalPermsSetting models.AppSetting
 		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
@@ -2265,21 +2364,9 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		}
 
 		if err == nil && data != nil {
-			var mappedData []map[string]interface{}
+			mappedData := make([]map[string]interface{}, 0, len(data))
 			for _, item := range data {
-				noDuCuoiKy := getMapFloat(item, "NO_SO_DU_CUOI_KY", "no_so_du_cuoi_ky", "NO_SAU", "no_sau")
-				mappedItem := map[string]interface{}{
-					"MA_KHACH_HANG":    getMapString(item, "MA_KHACH_HANG", "ma_khach_hang", "MA_KH", "ma_kh"),
-					"TEN_KHACH_HANG":   getMapString(item, "TEN_KHACH_HANG", "ten_khach_hang", "TEN_KH", "ten_kh"),
-					"NO_SO_DU_CUOI_KY": noDuCuoiKy,
-					"no_so_du_cuoi_ky": noDuCuoiKy,
-				}
-				for k, v := range item {
-					if k != "MA_KHACH_HANG" && k != "TEN_KHACH_HANG" && k != "NO_SO_DU_CUOI_KY" && k != "no_so_du_cuoi_ky" {
-						mappedItem[k] = v
-					}
-				}
-				mappedData = append(mappedData, mappedItem)
+				mappedData = append(mappedData, mapDebtItemForLLM(item))
 			}
 			data = mappedData
 		}
@@ -2347,6 +2434,54 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		"resource": resource,
 		"count":    len(data),
 	})
+}
+
+// fetchInventoryStockForSKU returns the live ERP stock for a single SKU,
+// served from cache when an entry under the configured TTL is available. On a
+// miss it calls Cloudify, sums the stock fields across response items, stores
+// the result in cache and returns it. The endpoint and HTTP method are passed
+// in by the caller so the per-tenant inventory endpoint config is honoured.
+func fetchInventoryStockForSKU(
+	ctx context.Context,
+	client *pkg.CloudifyClient,
+	cache *engine.InventoryStockCache,
+	tenantID, sku, inventoryEndpoint string,
+	usePostMethod bool,
+) (float64, error) {
+	if cached, ok := cache.Get(ctx, tenantID, sku); ok {
+		return cached, nil
+	}
+
+	var skuInventory []map[string]interface{}
+	var err error
+	if usePostMethod {
+		bodyPayload := map[string]interface{}{"limit": 100}
+		if inventoryEndpoint == "inventory_receipt/search" {
+			bodyPayload["keyword"] = sku
+		} else {
+			bodyPayload["MA_HANG"] = sku
+		}
+		skuInventory, err = client.SearchCustomEndpointWithBody(inventoryEndpoint, bodyPayload)
+	} else {
+		params := map[string]string{"limit": "100"}
+		if inventoryEndpoint == "inventory_receipt/search" {
+			params["keyword"] = sku
+		} else {
+			params["MA_HANG"] = sku
+		}
+		skuInventory, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	var total float64
+	for _, item := range skuInventory {
+		total += getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
+	}
+
+	cache.Set(ctx, tenantID, sku, total)
+	return total, nil
 }
 
 func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, allowedGroups []string, scopeType string, customerCode string, tenantID string, groups []engine.GroupPermission, zaloUserID string) {
@@ -2908,6 +3043,145 @@ func parseOrderDate(item map[string]interface{}) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// OrdersStatusBucket is a per-TRANG_THAI breakdown of orders in the summary.
+type OrdersStatusBucket struct {
+	Status     string  `json:"status"`
+	StatusName string  `json:"status_name"`
+	Count      int     `json:"count"`
+	Quantity   float64 `json:"quantity"`
+	Value      float64 `json:"value"`
+}
+
+// OrdersSummary is the aggregate payload the LLM uses to reply to the
+// customer instead of re-counting raw rows.
+type OrdersSummary struct {
+	TotalOrders   int                  `json:"total_orders"`
+	TotalValue    float64              `json:"total_value"`
+	TotalQuantity float64              `json:"total_quantity"`
+	ByStatus      []OrdersStatusBucket `json:"by_status"`
+}
+
+// orderStatusName maps BBI ERP TRANG_THAI codes to the Vietnamese label
+// surfaced to customers.
+var orderStatusName = map[string]string{
+	"0": "Hủy",
+	"1": "Đang thực hiện",
+	"2": "Hoàn thành",
+	"3": "Đang giao",
+}
+
+// orderStatusReportOrder is the canonical order ByStatus is emitted in:
+// in-flight first, finished, cancelled last. Customer-friendly framing.
+var orderStatusReportOrder = []string{"3", "1", "2", "0"}
+
+func orderStatusDisplayName(code string) string {
+	if name, ok := orderStatusName[code]; ok {
+		return name
+	}
+	if code == "" {
+		return "Không xác định"
+	}
+	return fmt.Sprintf("Khác (mã %s)", code)
+}
+
+// sumOrderLineQuantity walks DON_DAT_HANG_CHI_TIET and totals SO_LUONG.
+// Returns 0 when the field is missing or malformed (defensive — ERP rows
+// are passthrough JSON).
+func sumOrderLineQuantity(item map[string]interface{}) float64 {
+	raw, ok := item["don_dat_hang_chi_tiet"]
+	if !ok || raw == nil {
+		raw = item["DON_DAT_HANG_CHI_TIET"]
+	}
+	if raw == nil {
+		return 0
+	}
+	lines, ok := raw.([]interface{})
+	if !ok {
+		return 0
+	}
+	var total float64
+	for _, line := range lines {
+		m, ok := line.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		total += getMapFloat(m, "SO_LUONG", "so_luong", "quantity", "SL", "sl")
+	}
+	return total
+}
+
+// buildOrdersSummary aggregates customer-scoped orders into per-status
+// buckets plus overall totals. Buckets are ordered canonically (Đang giao →
+// Đang thực hiện → Hoàn thành → Hủy) with any unknown statuses appended
+// after, so the LLM's reply order is stable across runs.
+func buildOrdersSummary(items []map[string]interface{}) OrdersSummary {
+	summary := OrdersSummary{}
+	buckets := map[string]*OrdersStatusBucket{}
+	for _, item := range items {
+		status := strings.TrimSpace(getMapString(item, "trang_thai", "TRANG_THAI", "status"))
+		value := getMapFloat(item, "total", "TONG_TIEN", "tong_tien")
+		qty := sumOrderLineQuantity(item)
+
+		summary.TotalOrders++
+		summary.TotalValue += value
+		summary.TotalQuantity += qty
+
+		bucket, exists := buckets[status]
+		if !exists {
+			bucket = &OrdersStatusBucket{
+				Status:     status,
+				StatusName: orderStatusDisplayName(status),
+			}
+			buckets[status] = bucket
+		}
+		bucket.Count++
+		bucket.Quantity += qty
+		bucket.Value += value
+	}
+
+	emitted := map[string]bool{}
+	for _, s := range orderStatusReportOrder {
+		if b, ok := buckets[s]; ok {
+			summary.ByStatus = append(summary.ByStatus, *b)
+			emitted[s] = true
+		}
+	}
+	var leftovers []string
+	for s := range buckets {
+		if !emitted[s] {
+			leftovers = append(leftovers, s)
+		}
+	}
+	sort.Strings(leftovers)
+	for _, s := range leftovers {
+		summary.ByStatus = append(summary.ByStatus, *buckets[s])
+	}
+	return summary
+}
+
+// trimOrdersForLLM sorts items by date desc (newest first) and caps to max.
+// Keeps a small recent slice so the LLM can disambiguate if the customer
+// asks for a specific order, without flooding the prompt.
+func trimOrdersForLLM(items []map[string]interface{}, max int) []map[string]interface{} {
+	sorted := make([]map[string]interface{}, len(items))
+	copy(sorted, items)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ti, oki := parseOrderDate(sorted[i])
+		tj, okj := parseOrderDate(sorted[j])
+		if !oki {
+			return false
+		}
+		if !okj {
+			return true
+		}
+		return ti.After(tj)
+	})
+	if max > 0 && len(sorted) > max {
+		return sorted[:max]
+	}
+	return sorted
+}
+
 func isGenericDebtSearch(search string) bool {
 	s := strings.ToLower(strings.TrimSpace(search))
 	if s == "" || s == "công nợ" || s == "cong no" || s == "xem công nợ" || s == "xem cong no" || s == "check công nợ" || s == "check cong no" || s == "tra cứu công nợ" || s == "tra cuu cong no" || s == "đối chiếu công nợ" || s == "doi chieu cong no" || s == "nợ" || s == "no" {
@@ -2943,6 +3217,33 @@ func parseDebtPeriodFromSearch(search string) (tuNgay, denNgay string, ok bool) 
 	return "", "", false
 }
 
+// mapDebtItemForLLM projects a raw ERP partner-ledger row into the canonical
+// shape the LLM consumes: customer code/name + opening/closing balances (VND
+// and original currency). Alias keys are folded so the LLM never has to know
+// the legacy NO_TRUOC / NO_SAU names. All other ERP fields are preserved as
+// pass-through to keep debugging/aux data available.
+func mapDebtItemForLLM(item map[string]interface{}) map[string]interface{} {
+	noDuDauKy := getMapFloat(item, "NO_SO_DU_DAU_KY", "no_so_du_dau_ky", "NO_TRUOC", "no_truoc")
+	noDuCuoiKy := getMapFloat(item, "NO_SO_DU_CUOI_KY", "no_so_du_cuoi_ky", "NO_SAU", "no_sau")
+	noDuCuoiKyNT := getMapFloat(item, "NO_SO_DU_CUOI_KY_NGUYEN_TE", "no_so_du_cuoi_ky_nguyen_te")
+	mapped := map[string]interface{}{
+		"MA_KHACH_HANG":              getMapString(item, "MA_KHACH_HANG", "ma_khach_hang", "MA_KH", "ma_kh"),
+		"TEN_KHACH_HANG":             getMapString(item, "TEN_KHACH_HANG", "ten_khach_hang", "TEN_KH", "ten_kh"),
+		"NO_SO_DU_DAU_KY":            noDuDauKy,
+		"no_so_du_dau_ky":            noDuDauKy,
+		"NO_SO_DU_CUOI_KY":           noDuCuoiKy,
+		"no_so_du_cuoi_ky":           noDuCuoiKy,
+		"NO_SO_DU_CUOI_KY_NGUYEN_TE": noDuCuoiKyNT,
+		"no_so_du_cuoi_ky_nguyen_te": noDuCuoiKyNT,
+	}
+	for k, v := range item {
+		if _, exists := mapped[k]; !exists {
+			mapped[k] = v
+		}
+	}
+	return mapped
+}
+
 func resolveCustomerCodeFromPartnerID(client *pkg.CloudifyClient, partnerID string) (string, error) {
 	if partnerID == "" {
 		return "", fmt.Errorf("partner ID is empty")
@@ -2967,135 +3268,6 @@ func resolveCustomerCodeFromPartnerID(client *pkg.CloudifyClient, partnerID stri
 		}
 	}
 	return "", fmt.Errorf("partner %s not found on ERP", partnerID)
-}
-
-// getAIClient creates an AI provider client based on tenant settings.
-func getAIClient(ctx context.Context, tenantID string) (ai.AIProvider, error) {
-	provider := "claude"
-	var providerSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_provider'", tenantID).First(&providerSetting).Error; err == nil && providerSetting.ValuePlain != "" {
-		provider = providerSetting.ValuePlain
-	}
-
-	var setting models.AppSetting
-	keyFound := false
-	for _, key := range ai.ProviderAPIKeySettingKeys(provider) {
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&setting).Error; err == nil {
-			keyFound = true
-			break
-		}
-	}
-
-	cfg, _ := config.Load()
-	apiKey := ""
-	if keyFound {
-		if setting.ValueEncrypted != nil && len(setting.ValueEncrypted) > 0 {
-			decrypted, err := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decrypt API key: %w", err)
-			}
-			apiKey = string(decrypted)
-		} else {
-			apiKey = setting.ValuePlain
-		}
-	}
-
-	if apiKey == "" {
-		if provider == "openai" {
-			apiKey = cfg.LangflowAPIKey
-		}
-	}
-
-	if apiKey == "" {
-		return nil, fmt.Errorf("API key not configured for provider %s", provider)
-	}
-
-	model := "claude-haiku-4-5"
-	if provider == "gemini" {
-		model = "gemini-2.0-flash"
-	} else if provider == "openai" {
-		model = "gpt-5-mini"
-	}
-	var modelSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_model'", tenantID).First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
-		model = modelSetting.ValuePlain
-	}
-
-	var baseURL string
-	var baseURLSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_base_url'", tenantID).First(&baseURLSetting).Error; err == nil {
-		baseURL = baseURLSetting.ValuePlain
-	}
-
-	switch provider {
-	case "claude":
-		return ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL), nil
-	case "gemini":
-		return ai.NewGeminiProvider(apiKey, model, baseURL), nil
-	case "openai":
-		return ai.NewOpenAIProvider(apiKey, model, baseURL), nil
-	default:
-		return nil, fmt.Errorf("unsupported AI provider: %s", provider)
-	}
-}
-
-// fuzzyMatchMaChaWithLLM uses the LLM to find the best matching ma_cha
-// from the local cached_products table when SQL LIKE returns no results.
-func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (string, error) {
-	// 1. Fetch unique parent product codes (ma_cha) from cache
-	var maChaList []string
-	err := db.DB.Model(&models.CachedProduct{}).
-		Where("tenant_id = ?", tenantID).
-		Distinct("ma_cha").
-		Where("ma_cha != ''").
-		Pluck("ma_cha", &maChaList).Error
-	if err != nil || len(maChaList) == 0 {
-		return "", fmt.Errorf("no ma_cha values found: %w", err)
-	}
-
-	// 2. Create AI client
-	aiClient, err := getAIClient(ctx, tenantID)
-	if err != nil || aiClient == nil {
-		return "", fmt.Errorf("AI client not available: %w", err)
-	}
-
-	// 3. Prompt LLM to match the keyword
-	systemPrompt := fmt.Sprintf(`Bạn là trợ lý mapping mã sản phẩm.
-Nhiệm vụ: Khách hàng tìm kiếm "%s". Hãy chọn MÃ SẢN PHẨM khớp nhất từ danh sách bên dưới.
-Lưu ý:
-- Bỏ qua dấu gạch ngang, dấu chấm, số 0 đầu khi so sánh (VD: E05 = E-5, E5 = E-5, E.5 = E-5)
-- Trả lời CHỈ mã sản phẩm khớp nhất, không thêm bất kỳ từ ngữ hay dấu câu nào khác
-- Nếu hoàn toàn không có mã nào khớp, trả về "NONE"
-
-Danh sách mã sản phẩm:
-%s`, keyword, strings.Join(maChaList, ", "))
-
-	llmCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	resp, err := aiClient.AnalyzeChat(llmCtx, systemPrompt, keyword)
-	if err != nil {
-		return "", err
-	}
-
-	matched := strings.TrimSpace(resp.Content)
-	if matched == "" || strings.EqualFold(matched, "NONE") {
-		return "", nil
-	}
-
-	// Clean up markdown quotes or wrappers if any
-	if strings.HasPrefix(matched, "`") && strings.HasSuffix(matched, "`") {
-		matched = strings.Trim(matched, "`")
-	}
-
-	// Validate matched value exists in our list (case-insensitive)
-	for _, mc := range maChaList {
-		if strings.EqualFold(mc, matched) {
-			return mc, nil
-		}
-	}
-
-	return "", nil
 }
 
 func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
