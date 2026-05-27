@@ -362,6 +362,17 @@ func (z *ZaloOAAdapter) HealthCheck(ctx context.Context) error {
 	return err
 }
 
+// SendRawToZaloEndpoint POSTs a raw payload as JSON to the given Zalo V3
+// endpoint path (e.g. "/message/cs", "/message/transaction") and returns the
+// full Zalo response map (including "error", "message", "data"). Intended for
+// debugging / variant brute-forcing: callers can inspect the exact reply Zalo
+// emitted instead of getting an opaque formatted error from SendMessage.
+// The recipient.user_id field is NOT overwritten — pass it verbatim.
+func (z *ZaloOAAdapter) SendRawToZaloEndpoint(ctx context.Context, endpointPath string, payload map[string]interface{}) (map[string]interface{}, error) {
+	url := zaloAPIBaseV3 + endpointPath
+	return z.doRequestJSON(ctx, "POST", url, payload)
+}
+
 func (z *ZaloOAAdapter) SendMessage(ctx context.Context, conversationID string, content string) error {
 	var payload map[string]interface{}
 	trimmedContent := strings.TrimSpace(content)

@@ -295,6 +295,27 @@
             density="compact"
             class="mb-2"
           />
+          <v-select
+            v-model="testVariant"
+            :items="testVariantOptions"
+            label="Variant (brute-force debug)"
+            density="compact"
+            class="mb-2"
+          />
+          <div v-if="testResult" class="mt-3">
+            <div class="text-caption font-weight-bold mb-1">
+              {{ testResult.sent ? '✓ Sent' : '✗ Failed' }} — variant {{ testResult.variant }}
+            </div>
+            <div class="text-caption text-grey mb-1">{{ testResult.description }} ({{ testResult.endpoint }})</div>
+            <details class="mb-2">
+              <summary class="text-caption cursor-pointer">Zalo response</summary>
+              <pre class="text-caption" style="white-space: pre-wrap; word-break: break-all; background: #f5f5f5; padding: 8px; border-radius: 4px; max-height: 200px; overflow: auto;">{{ JSON.stringify(testResult.zalo_response, null, 2) }}</pre>
+            </details>
+            <details>
+              <summary class="text-caption cursor-pointer">Payload sent</summary>
+              <pre class="text-caption" style="white-space: pre-wrap; word-break: break-all; background: #f5f5f5; padding: 8px; border-radius: 4px; max-height: 200px; overflow: auto;">{{ JSON.stringify(testResult.payload_sent, null, 2) }}</pre>
+            </details>
+          </div>
         </v-card-text>
         <v-card-actions class="px-6 pb-6">
           <v-spacer />
@@ -351,6 +372,8 @@ const showTestTemplate = ref(false)
 const testTemplateChannel = ref<any>(null)
 const testWhitelist = ref<WhitelistEntry[]>([])
 const testStaffId = ref('')
+const testVariant = ref(0)
+const testResult = ref<any>(null)
 const sendingTest = ref(false)
 const loadingWhitelist = ref(false)
 const testWhitelistOptions = computed(() =>
@@ -358,6 +381,16 @@ const testWhitelistOptions = computed(() =>
     .filter((w) => w.status === 'active' && !!w.zalo_user_id)
     .map((w) => ({ title: `${w.name} — ${w.zalo_user_id}`, value: w.zalo_user_id }))
 )
+const testVariantOptions = [
+  { title: '0 — default: hide, image, message.text, /cs', value: 0 },
+  { title: '1 — doc-verbatim: 2 elements, show, no image, /cs', value: 1 },
+  { title: '2 — 3 opts, show, no image, message.text, /cs', value: 2 },
+  { title: '3 — 3 opts, show, WITH image, message.text, /cs', value: 3 },
+  { title: '4 — 3 opts, HIDE, no image, message.text, /cs', value: 4 },
+  { title: '5 — 3 opts, show, no image, NO message.text, /cs', value: 5 },
+  { title: '6 — sanity: text only, /cs', value: 6 },
+  { title: '7 — 3 opts, show, no image, /transaction', value: 7 },
+]
 
 const newChannel = reactive({
   channel_type: 'zalo_oa',
@@ -535,6 +568,8 @@ async function openTestTemplate(ch: any) {
   testTemplateChannel.value = ch
   testStaffId.value = ''
   testWhitelist.value = []
+  testResult.value = null
+  testVariant.value = 0
   showTestTemplate.value = true
   loadingWhitelist.value = true
   try {
@@ -552,14 +587,16 @@ async function openTestTemplate(ch: any) {
 async function sendTestTemplate() {
   if (!testTemplateChannel.value || !testStaffId.value) return
   sendingTest.value = true
+  testResult.value = null
   try {
-    await api.post(
+    const { data } = await api.post(
       `/tenants/${tenantId.value}/channels/${testTemplateChannel.value.id}/test-template`,
-      { zalo_user_id: testStaffId.value }
+      { zalo_user_id: testStaffId.value, variant: testVariant.value }
     )
+    testResult.value = data
     showSnack(t('test_template_sent'), 'success')
-    showTestTemplate.value = false
   } catch (e: any) {
+    testResult.value = e?.response?.data || { error: 'unknown', details: String(e) }
     const code = e?.response?.data?.error
     showSnack(code ? t(`error_${code}`, code) : t('error'), 'error')
   } finally {
