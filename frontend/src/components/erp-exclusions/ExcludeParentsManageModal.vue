@@ -68,38 +68,81 @@
 
         <div v-else class="exclusion-list">
           <v-virtual-scroll
-            :items="filteredItems"
+            :items="chunkedItems"
             :item-height="48"
             height="420"
           >
-            <template #default="{ item }">
-              <div
-                :key="item.parent_sku"
-                class="d-flex align-center px-3 py-2 row-item"
-                :class="{ 'row-selected': selected.has(item.parent_sku) }"
-              >
-                <v-checkbox-btn
-                  :model-value="selected.has(item.parent_sku)"
-                  density="compact"
-                  hide-details
-                  @update:model-value="toggleOne(item.parent_sku, $event)"
-                />
-                <div class="flex-grow-1 ml-2">
-                  <div class="text-body-2 font-weight-medium">
-                    {{ item.parent_sku }}
-                  </div>
-                  <div class="text-caption text-grey">
-                    {{ item.nhan_hieu || '—' }} · {{ item.child_count }} SKU con
-                  </div>
-                </div>
-                <v-chip
-                  v-if="selected.has(item.parent_sku)"
-                  size="x-small"
-                  color="warning"
-                  variant="tonal"
+            <template #default="{ item: pair }">
+              <div class="d-flex w-100 scroll-row">
+                <!-- Column 1 -->
+                <div
+                  v-if="pair[0]"
+                  class="d-flex align-center px-3 py-2 col-item"
+                  :class="{ 'row-selected': selected.has(pair[0].parent_sku) }"
+                  @click="toggleOne(pair[0].parent_sku, !selected.has(pair[0].parent_sku))"
+                  style="cursor: pointer; text-align: left;"
                 >
-                  Loại trừ
-                </v-chip>
+                  <v-checkbox-btn
+                    :model-value="selected.has(pair[0].parent_sku)"
+                    density="compact"
+                    hide-details
+                    @click.stop
+                    @update:model-value="toggleOne(pair[0].parent_sku, $event)"
+                  />
+                  <div class="flex-grow-1 ml-2 text-start" style="text-align: left;">
+                    <div class="text-body-2 font-weight-medium">
+                      {{ pair[0].parent_sku }}
+                    </div>
+                    <div class="text-caption text-grey">
+                      {{ pair[0].nhan_hieu || '—' }} · {{ pair[0].child_count }} SKU con
+                    </div>
+                  </div>
+                  <v-chip
+                    v-if="selected.has(pair[0].parent_sku)"
+                    size="x-small"
+                    color="warning"
+                    variant="tonal"
+                    class="ml-2"
+                  >
+                    Loại trừ
+                  </v-chip>
+                </div>
+                <div v-else class="col-item flex-grow-1 opacity-0"></div>
+
+                <!-- Column 2 -->
+                <div
+                  v-if="pair[1]"
+                  class="d-flex align-center px-3 py-2 col-item border-l"
+                  :class="{ 'row-selected': selected.has(pair[1].parent_sku) }"
+                  @click="toggleOne(pair[1].parent_sku, !selected.has(pair[1].parent_sku))"
+                  style="cursor: pointer; text-align: left;"
+                >
+                  <v-checkbox-btn
+                    :model-value="selected.has(pair[1].parent_sku)"
+                    density="compact"
+                    hide-details
+                    @click.stop
+                    @update:model-value="toggleOne(pair[1].parent_sku, $event)"
+                  />
+                  <div class="flex-grow-1 ml-2 text-start" style="text-align: left;">
+                    <div class="text-body-2 font-weight-medium">
+                      {{ pair[1].parent_sku }}
+                    </div>
+                    <div class="text-caption text-grey">
+                      {{ pair[1].nhan_hieu || '—' }} · {{ pair[1].child_count }} SKU con
+                    </div>
+                  </div>
+                  <v-chip
+                    v-if="selected.has(pair[1].parent_sku)"
+                    size="x-small"
+                    color="warning"
+                    variant="tonal"
+                    class="ml-2"
+                  >
+                    Loại trừ
+                  </v-chip>
+                </div>
+                <div v-else class="col-item border-l flex-grow-1" style="flex: 1;"></div>
               </div>
             </template>
           </v-virtual-scroll>
@@ -194,6 +237,17 @@ const filteredItems = computed(() => {
   )
 })
 
+const chunkedItems = computed(() => {
+  const chunks: ParentSKURow[][] = []
+  for (let i = 0; i < filteredItems.value.length; i += 2) {
+    const chunk: ParentSKURow[] = []
+    if (filteredItems.value[i]) chunk.push(filteredItems.value[i])
+    if (filteredItems.value[i + 1]) chunk.push(filteredItems.value[i + 1])
+    chunks.push(chunk)
+  }
+  return chunks
+})
+
 function toggleOne(parentSku: string, value: boolean | null): void {
   const next = new Set(selected.value)
   if (value) {
@@ -254,13 +308,27 @@ function close(): void {
   border-radius: 4px;
   overflow: hidden;
 }
-.row-item {
+.scroll-row {
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
-.row-item:last-child {
+.scroll-row:last-child {
   border-bottom: none;
+}
+.col-item {
+  flex: 1;
+  width: 50%;
+  transition: background-color 0.2s;
+}
+.col-item:hover {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+.border-l {
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
 }
 .row-selected {
   background-color: rgba(255, 152, 0, 0.06);
+}
+.row-selected:hover {
+  background-color: rgba(255, 152, 0, 0.1);
 }
 </style>

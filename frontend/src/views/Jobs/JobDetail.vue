@@ -448,24 +448,34 @@
         </v-alert>
 
         <template v-if="!parentSkuLoading && !parentSkuError">
-          <v-table v-if="excludedParents.length > 0" density="compact" hover>
-            <thead>
-              <tr>
-                <th class="text-no-wrap">Mã cha</th>
-                <th class="text-no-wrap">Nhãn hiệu</th>
-                <th class="text-no-wrap text-right">Số SKU con</th>
-                <th class="text-no-wrap">Cập nhật lúc</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in excludedParents" :key="item.parent_sku">
-                <td class="text-caption font-weight-medium">{{ item.parent_sku }}</td>
-                <td class="text-caption">{{ item.nhan_hieu || '—' }}</td>
-                <td class="text-caption text-right">{{ item.child_count }}</td>
-                <td class="text-caption text-grey">{{ formatExclusionDate(item.updated_at) }}</td>
-              </tr>
-            </tbody>
-          </v-table>
+          <template v-if="excludedParents.length > 0">
+            <v-table density="compact" hover>
+              <thead>
+                <tr>
+                  <th class="text-no-wrap">Mã cha</th>
+                  <th class="text-no-wrap">Nhãn hiệu</th>
+                  <th class="text-no-wrap text-right">Số SKU con</th>
+                  <th class="text-no-wrap">Cập nhật lúc</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in paginatedExcludedParents" :key="item.parent_sku">
+                  <td class="text-caption font-weight-medium">{{ item.parent_sku }}</td>
+                  <td class="text-caption">{{ item.nhan_hieu || '—' }}</td>
+                  <td class="text-caption text-right">{{ item.child_count }}</td>
+                  <td class="text-caption text-grey">{{ formatExclusionDate(item.updated_at) }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+            <v-pagination
+              v-if="excludedTotalPages > 1"
+              v-model="excludedPage"
+              :length="excludedTotalPages"
+              :total-visible="7"
+              density="compact"
+              class="mt-3"
+            />
+          </template>
           <div v-else class="text-center text-grey pa-6">
             <v-icon size="48" color="grey-lighten-1">mdi-filter-off-outline</v-icon>
             <div class="mt-2 text-body-2">Chưa có mã cha nào bị loại trừ. Tất cả sản phẩm đều xuất hiện trong cache AI.</div>
@@ -1105,6 +1115,21 @@ const excludedParents = computed(() =>
   parentSkuList.value.filter((p) => p.is_excluded),
 )
 const excludedParentCount = computed(() => excludedParents.value.length)
+
+// Excluded Parent SKUs pagination
+const excludedPage = ref(1)
+const excludedPerPage = 10
+const excludedTotalPages = computed(() => Math.ceil(excludedParents.value.length / excludedPerPage))
+const paginatedExcludedParents = computed(() => {
+  const start = (excludedPage.value - 1) * excludedPerPage
+  return excludedParents.value.slice(start, start + excludedPerPage)
+})
+
+watch(excludedTotalPages, (newVal) => {
+  if (excludedPage.value > newVal) {
+    excludedPage.value = Math.max(1, newVal)
+  }
+})
 
 const erpCacheTotalPages = computed(() => Math.ceil(erpCacheFilteredProducts.value.length / erpCachePerPage))
 const erpCachePaginatedProducts = computed(() => {
