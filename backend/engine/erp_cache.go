@@ -378,9 +378,10 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 			log.Printf("[erp_cache] embedding sync skipped (config load error): %v", cfgErr)
 		} else {
 			embedCfg := ProductEmbeddingConfig{
-				AstraEndpoint: appCfg.AstraDBAPIEndpoint,
-				AstraToken:    appCfg.AstraDBToken,
-				AstraKeyspace: appCfg.AstraDBKeyspace,
+				AstraEndpoint:   appCfg.AstraDBAPIEndpoint,
+				AstraToken:      appCfg.AstraDBToken,
+				AstraKeyspace:   appCfg.AstraDBKeyspace,
+				AstraCollection: appCfg.AstraDBProductCollection,
 			}
 			go func(tenantID string, embedCfg ProductEmbeddingConfig) {
 				syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)

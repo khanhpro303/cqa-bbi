@@ -30,19 +30,20 @@ import (
 // the embeddings API directly.
 
 const (
-	productEmbeddingsCollection = "product_embeddings"
-	similarityThreshold         = 0.75
-	astraHTTPTimeout            = 30 * time.Second
-	insertManyChunk             = 20
+	defaultEmbeddingCollection = "erp_product_bbi"
+	similarityThreshold        = 0.75
+	astraHTTPTimeout           = 30 * time.Second
+	insertManyChunk            = 20
 )
 
 // ProductEmbeddingConfig holds the Astra DB Data API coordinates for the
-// product_embeddings collection. The collection's vectorize service is
-// configured on the Astra side, not here.
+// embedding collection. The collection's vectorize service is configured on
+// the Astra side, not here.
 type ProductEmbeddingConfig struct {
-	AstraEndpoint string
-	AstraToken    string
-	AstraKeyspace string
+	AstraEndpoint   string
+	AstraToken      string
+	AstraKeyspace   string
+	AstraCollection string
 }
 
 func (c ProductEmbeddingConfig) keyspace() string {
@@ -50,6 +51,13 @@ func (c ProductEmbeddingConfig) keyspace() string {
 		return "default_keyspace"
 	}
 	return c.AstraKeyspace
+}
+
+func (c ProductEmbeddingConfig) collection() string {
+	if c.AstraCollection == "" {
+		return defaultEmbeddingCollection
+	}
+	return c.AstraCollection
 }
 
 func (c ProductEmbeddingConfig) configured() bool {
@@ -255,7 +263,7 @@ func loadExistingProductEmbeddings(ctx context.Context, cfg ProductEmbeddingConf
 			} `json:"data"`
 			Errors []map[string]interface{} `json:"errors"`
 		}
-		if err := astraCollectionCall(ctx, cfg, productEmbeddingsCollection, cmd, &resp); err != nil {
+		if err := astraCollectionCall(ctx, cfg, cfg.collection(), cmd, &resp); err != nil {
 			return nil, err
 		}
 		if len(resp.Errors) > 0 {
@@ -291,7 +299,7 @@ func astraInsertMany(ctx context.Context, cfg ProductEmbeddingConfig, docs []pro
 			Status map[string]interface{}   `json:"status"`
 			Errors []map[string]interface{} `json:"errors"`
 		}
-		if err := astraCollectionCall(ctx, cfg, productEmbeddingsCollection, cmd, &resp); err != nil {
+		if err := astraCollectionCall(ctx, cfg, cfg.collection(), cmd, &resp); err != nil {
 			return err
 		}
 		if len(resp.Errors) > 0 {
@@ -312,7 +320,7 @@ func astraFindOneAndReplace(ctx context.Context, cfg ProductEmbeddingConfig, doc
 	var resp struct {
 		Errors []map[string]interface{} `json:"errors"`
 	}
-	if err := astraCollectionCall(ctx, cfg, productEmbeddingsCollection, cmd, &resp); err != nil {
+	if err := astraCollectionCall(ctx, cfg, cfg.collection(), cmd, &resp); err != nil {
 		return err
 	}
 	if len(resp.Errors) > 0 {
@@ -338,7 +346,7 @@ func astraDeleteMany(ctx context.Context, cfg ProductEmbeddingConfig, docIDs []s
 		} `json:"status"`
 		Errors []map[string]interface{} `json:"errors"`
 	}
-	if err := astraCollectionCall(ctx, cfg, productEmbeddingsCollection, cmd, &resp); err != nil {
+	if err := astraCollectionCall(ctx, cfg, cfg.collection(), cmd, &resp); err != nil {
 		return 0, err
 	}
 	if len(resp.Errors) > 0 {
@@ -367,7 +375,7 @@ func astraVectorFind(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, 
 		} `json:"data"`
 		Errors []map[string]interface{} `json:"errors"`
 	}
-	if err := astraCollectionCall(ctx, cfg, productEmbeddingsCollection, cmd, &resp); err != nil {
+	if err := astraCollectionCall(ctx, cfg, cfg.collection(), cmd, &resp); err != nil {
 		return nil, err
 	}
 	if len(resp.Errors) > 0 {
