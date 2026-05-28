@@ -1832,23 +1832,11 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		} else {
 			// Query for single SKU
 			if usePostMethod {
-				bodyPayload := map[string]interface{}{
-					"limit": limit,
-				}
-				if inventoryEndpoint == "inventory_receipt/search" {
-					bodyPayload["keyword"] = search
-				} else {
-					bodyPayload["MA_HANG"] = search
-				}
-				data, err = client.SearchCustomEndpointWithBody(inventoryEndpoint, bodyPayload)
+				data, err = client.SearchCustomEndpointWithBody(inventoryEndpoint, inventoryStockRequestBody(inventoryEndpoint, search, limit))
 			} else {
-				params := map[string]string{
-					"limit": strconv.Itoa(limit),
-				}
-				if inventoryEndpoint == "inventory_receipt/search" {
-					params["keyword"] = search
-				} else {
-					params["MA_HANG"] = search
+				params := map[string]string{}
+				for k, v := range inventoryStockRequestBody(inventoryEndpoint, search, limit) {
+					params[k] = fmt.Sprintf("%v", v)
 				}
 				data, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
 			}
@@ -1862,10 +1850,34 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				}
 			}
 
-			// Normalize stock keys in response for custom inventory endpoints,
-			// and write-through to the stock cache so subsequent parent-loop
-			// queries can serve the same SKU from cache.
-			if err == nil {
+			// The official total-stock endpoint returns the KHO-TỔNG row first
+			// then per-warehouse breakdown rows. Collapse the response to a
+			// single record carrying the aggregate stock and ignore branches.
+			if err == nil && inventoryEndpoint == inventoryTotalStockEndpoint {
+				total := totalStockFromInventoryItems(data)
+				skuOut := search
+				name := ""
+				if len(data) > 0 {
+					if v := getMapString(data[0], "MA_HANG", "ma_hang", "MA", "ma"); v != "" {
+						skuOut = v
+					}
+					name = getMapString(data[0], "TEN_HANG", "ten_hang", "TEN", "ten", "name")
+				}
+				if len(data) == 0 {
+					data = []map[string]interface{}{}
+				} else {
+					data = []map[string]interface{}{{
+						"MA": skuOut, "ma": skuOut, "code": skuOut,
+						"ma_hang": skuOut, "product_code": skuOut,
+						"TEN": name, "ten": name, "name": name, "ten_hang": name,
+						"TON_KHO": total, "ton_kho": total, "stock": total,
+					}}
+					stockCache.Set(c.Request.Context(), tenantID, skuOut, total)
+				}
+			} else if err == nil {
+				// Legacy receipt-search: normalize stock keys per item and
+				// write-through to the stock cache so subsequent parent-loop
+				// queries can serve the same SKU from cache.
 				for i, item := range data {
 					stockVal := getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
 					if _, hasTon := item["ton_kho"]; !hasTon {
@@ -2320,11 +2332,73 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	})
 }
 
+// inventoryTotalStockEndpoint is the official Cloudify endpoint that returns a
+// product's stock. Each data item carries product fields plus a nested
+// TON_KHO_CHI_TIET array of per-warehouse rows (TEN_KHO/SO_LUONG_TON). We read
+// stock only from the "Kho Tổng" warehouse row, not the SO_LUONG_TON_TONG
+// aggregate. The documented request body is {"MA_HANG": <sku>}.
+const inventoryTotalStockEndpoint = "danhmucvattuhanghoa/lay_ton_kho_san_pham"
+
+// inventoryTotalWarehouseName is the warehouse whose SO_LUONG_TON is treated as
+// the reportable stock. Matching is case- and space-insensitive.
+const inventoryTotalWarehouseName = "Kho Tổng"
+
+// normalizeWarehouseName upper-cases and strips spaces so warehouse names match
+// regardless of casing or incidental spacing (e.g. "1. KHO-TONG").
+func normalizeWarehouseName(name string) string {
+	return strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(name)), " ", "")
+}
+
+// inventoryStockRequestBody builds the documented request body for an inventory
+// endpoint. The total-stock endpoint takes only {"MA_HANG": sku}; the legacy
+// receipt-search endpoint takes keyword + limit; any other custom POST endpoint
+// defaults to MA_HANG + limit.
+func inventoryStockRequestBody(inventoryEndpoint, sku string, limit int) map[string]interface{} {
+	switch inventoryEndpoint {
+	case inventoryTotalStockEndpoint:
+		return map[string]interface{}{"MA_HANG": sku}
+	case "inventory_receipt/search":
+		return map[string]interface{}{"limit": limit, "keyword": sku}
+	default:
+		return map[string]interface{}{"limit": limit, "MA_HANG": sku}
+	}
+}
+
+// totalStockFromInventoryItems sums SO_LUONG_TON across the "Kho Tổng"
+// warehouse rows in a lay_ton_kho_san_pham response. Warehouse rows live in the
+// nested TON_KHO_CHI_TIET array; older/flat responses expose the warehouse on
+// the item itself. The SO_LUONG_TON_TONG aggregate and every other warehouse
+// are ignored. Returns 0 when no matching warehouse row is found.
+func totalStockFromInventoryItems(items []map[string]interface{}) float64 {
+	target := normalizeWarehouseName(inventoryTotalWarehouseName)
+	var total float64
+
+	addIfMatch := func(row map[string]interface{}) {
+		if normalizeWarehouseName(getMapString(row, "TEN_KHO", "ten_kho")) == target {
+			total += getMapFloat(row, "SO_LUONG_TON", "so_luong_ton")
+		}
+	}
+
+	for _, item := range items {
+		if details, ok := item["TON_KHO_CHI_TIET"].([]interface{}); ok {
+			for _, d := range details {
+				if row, ok := d.(map[string]interface{}); ok {
+					addIfMatch(row)
+				}
+			}
+			continue
+		}
+		// Flat shape: the item itself is a warehouse row.
+		addIfMatch(item)
+	}
+	return total
+}
+
 // fetchInventoryStockForSKU returns the live ERP stock for a single SKU,
 // served from cache when an entry under the configured TTL is available. On a
-// miss it calls Cloudify, sums the stock fields across response items, stores
-// the result in cache and returns it. The endpoint and HTTP method are passed
-// in by the caller so the per-tenant inventory endpoint config is honoured.
+// miss it calls Cloudify and extracts the aggregate stock, stores the result in
+// cache and returns it. The endpoint and HTTP method are passed in by the
+// caller so the per-tenant inventory endpoint config is honoured.
 func fetchInventoryStockForSKU(
 	ctx context.Context,
 	client *pkg.CloudifyClient,
@@ -2339,19 +2413,11 @@ func fetchInventoryStockForSKU(
 	var skuInventory []map[string]interface{}
 	var err error
 	if usePostMethod {
-		bodyPayload := map[string]interface{}{"limit": 100}
-		if inventoryEndpoint == "inventory_receipt/search" {
-			bodyPayload["keyword"] = sku
-		} else {
-			bodyPayload["MA_HANG"] = sku
-		}
-		skuInventory, err = client.SearchCustomEndpointWithBody(inventoryEndpoint, bodyPayload)
+		skuInventory, err = client.SearchCustomEndpointWithBody(inventoryEndpoint, inventoryStockRequestBody(inventoryEndpoint, sku, 100))
 	} else {
-		params := map[string]string{"limit": "100"}
-		if inventoryEndpoint == "inventory_receipt/search" {
-			params["keyword"] = sku
-		} else {
-			params["MA_HANG"] = sku
+		params := map[string]string{}
+		for k, v := range inventoryStockRequestBody(inventoryEndpoint, sku, 100) {
+			params[k] = fmt.Sprintf("%v", v)
 		}
 		skuInventory, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
 	}
@@ -2360,8 +2426,14 @@ func fetchInventoryStockForSKU(
 	}
 
 	var total float64
-	for _, item := range skuInventory {
-		total += getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
+	if inventoryEndpoint == inventoryTotalStockEndpoint {
+		// Official endpoint: take only the KHO-TỔNG row, never sum branches.
+		total = totalStockFromInventoryItems(skuInventory)
+	} else {
+		// Legacy receipt-search: sum stock across returned receipt rows.
+		for _, item := range skuInventory {
+			total += getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
+		}
 	}
 
 	cache.Set(ctx, tenantID, sku, total)
