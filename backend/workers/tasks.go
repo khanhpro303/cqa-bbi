@@ -1731,34 +1731,73 @@ func getAIClient(ctx context.Context, tenantID string) (ai.AIProvider, error) {
 
 // fuzzyMatchMaChaWithLLM uses the LLM to find the best matching ma_cha
 // from the local cached_products table when SQL LIKE returns no results.
+// The prompt includes a representative ten_dong_bo_web + ten per ma_cha so
+// the LLM can bridge name-level variations (e.g. "Storm 3" ↔ "Storm III",
+// "mu bao hiem" ↔ "mũ bảo hiểm") in addition to code-format variants.
 func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (string, error) {
-	// 1. Fetch unique parent product codes (ma_cha) from cache
-	var maChaList []string
-	err := db.DB.Model(&models.CachedProduct{}).
-		Where("tenant_id = ?", tenantID).
-		Distinct("ma_cha").
-		Where("ma_cha != ''").
-		Pluck("ma_cha", &maChaList).Error
-	if err != nil || len(maChaList) == 0 {
-		return "", fmt.Errorf("no ma_cha values found: %w", err)
+	type maChaCandidate struct {
+		MaCha        string `gorm:"column:ma_cha"`
+		TenDongBoWeb string `gorm:"column:ten_dong_bo_web"`
+		Ten          string `gorm:"column:ten"`
+	}
+	var candidates []maChaCandidate
+	err := db.DB.WithContext(ctx).
+		Table((&models.CachedProduct{}).TableName()).
+		Select("ma_cha, MAX(ten_dong_bo_web) AS ten_dong_bo_web, MAX(ten) AS ten").
+		Where("tenant_id = ? AND ma_cha != ''", tenantID).
+		Group("ma_cha").
+		Scan(&candidates).Error
+	if err != nil || len(candidates) == 0 {
+		return "", fmt.Errorf("no ma_cha candidates found: %w", err)
 	}
 
-	// 2. Create AI client
+	const fuzzyCandidateCap = 1500
+	if len(candidates) > fuzzyCandidateCap {
+		log.Printf("[fuzzy] tenant=%s has %d ma_cha, truncating to %d for LLM prompt",
+			tenantID, len(candidates), fuzzyCandidateCap)
+		candidates = candidates[:fuzzyCandidateCap]
+	}
+
 	aiClient, err := getAIClient(ctx, tenantID)
 	if err != nil || aiClient == nil {
 		return "", fmt.Errorf("AI client not available: %w", err)
 	}
 
-	// 3. Prompt LLM to match the keyword
-	systemPrompt := fmt.Sprintf(`Bạn là trợ lý mapping mã sản phẩm.
-Nhiệm vụ: Khách hàng tìm kiếm "%s". Hãy chọn MÃ SẢN PHẨM khớp nhất từ danh sách bên dưới.
-Lưu ý:
-- Bỏ qua dấu gạch ngang, dấu chấm, số 0 đầu khi so sánh (VD: E05 = E-5, E5 = E-5, E.5 = E-5)
-- Trả lời CHỈ mã sản phẩm khớp nhất, không thêm bất kỳ từ ngữ hay dấu câu nào khác
-- Nếu hoàn toàn không có mã nào khớp, trả về "NONE"
+	lines := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		webName := strings.TrimSpace(c.TenDongBoWeb)
+		ten := strings.TrimSpace(c.Ten)
+		label := webName
+		if label == "" {
+			label = ten
+		}
+		if label == "" {
+			lines = append(lines, c.MaCha)
+			continue
+		}
+		if webName != "" && ten != "" && !strings.EqualFold(webName, ten) {
+			label = webName + " — " + ten
+		}
+		lines = append(lines, fmt.Sprintf("%s | %s", c.MaCha, label))
+	}
 
-Danh sách mã sản phẩm:
-%s`, keyword, strings.Join(maChaList, ", "))
+	systemPrompt := fmt.Sprintf(`Bạn là trợ lý mapping mã sản phẩm BBI.
+
+Khách hàng tìm kiếm: %q
+
+Hãy chọn 1 MÃ SẢN PHẨM (ma_cha) khớp nhất từ danh sách bên dưới.
+
+Quy tắc khớp:
+- Khớp cả theo MÃ và theo TÊN (web/ERP) sau dấu "|".
+- Bỏ dấu gạch ngang, dấu chấm, số 0 đầu khi so mã (E05 = E-5, E.5 = E-5).
+- Số La Mã ↔ số Ả Rập tương đương (Storm III = Storm 3, MK II = MK 2).
+- Bỏ dấu tiếng Việt khi so tên ("mu bao hiem" = "mũ bảo hiểm").
+- Viết tắt thương hiệu chấp nhận được (LS2 FF818 ≈ FF818).
+- TRẢ LỜI CHỈ ma_cha duy nhất, không thêm chữ, dấu câu, hay tên.
+- Nếu thực sự không có dòng nào hợp lý → trả "NONE".
+
+Danh sách (ma_cha | tên):
+%s`, keyword, strings.Join(lines, "\n"))
 
 	llmCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -1769,19 +1808,14 @@ Danh sách mã sản phẩm:
 	}
 
 	matched := strings.TrimSpace(resp.Content)
+	matched = strings.Trim(matched, "`'\"")
 	if matched == "" || strings.EqualFold(matched, "NONE") {
 		return "", nil
 	}
 
-	// Clean up markdown quotes or wrappers if any
-	if strings.HasPrefix(matched, "`") && strings.HasSuffix(matched, "`") {
-		matched = strings.Trim(matched, "`")
-	}
-
-	// Validate matched value exists in our list (case-insensitive)
-	for _, mc := range maChaList {
-		if strings.EqualFold(mc, matched) {
-			return mc, nil
+	for _, c := range candidates {
+		if strings.EqualFold(c.MaCha, matched) {
+			return c.MaCha, nil
 		}
 	}
 
