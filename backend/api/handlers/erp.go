@@ -346,13 +346,9 @@ func ERPQuery(c *gin.Context) {
 						log.Printf("[erp_query] embedding fuzzy config load error: %v", cfgErr)
 					} else {
 						embedCfg := engine.ProductEmbeddingConfig{
-							FallbackAPIKey: appCfg.LangflowEmbeddingAPIKey,
-							Model:          appCfg.LangflowEmbeddingModel,
-							BaseURL:        appCfg.LangflowEmbeddingBaseURL,
-							EncryptionKey:  appCfg.EncryptionKey,
-							AstraEndpoint:  appCfg.AstraDBAPIEndpoint,
-							AstraToken:     appCfg.AstraDBToken,
-							AstraKeyspace:  appCfg.AstraDBKeyspace,
+							AstraEndpoint: appCfg.AstraDBAPIEndpoint,
+							AstraToken:    appCfg.AstraDBToken,
+							AstraKeyspace: appCfg.AstraDBKeyspace,
 						}
 						if m, embedErr := engine.FuzzyMatchMaChaWithEmbedding(c.Request.Context(), embedCfg, tenantID, req.Search); embedErr != nil {
 							log.Printf("[erp_query] embedding fuzzy error: %v", embedErr)

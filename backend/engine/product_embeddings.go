@@ -17,39 +17,32 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 )
 
+// product_embeddings.go — server-side vectorize variant.
+//
+// The Astra collection `product_embeddings` MUST be provisioned with a
+// vectorize service attached (e.g. OpenAI ada-002, key paid for and held
+// by Astra). Every document carries a `$vectorize` text field; Astra
+// computes and stores the vector itself on insert/replace. Queries pass
+// the keyword as text via `sort.$vectorize` and Astra embeds it
+// server-side before running the ANN search.
+//
+// This side therefore does NOT need an OpenAI API key and does not call
+// the embeddings API directly.
+
 const (
 	productEmbeddingsCollection = "product_embeddings"
-	embeddingDimension          = 1536
 	similarityThreshold         = 0.75
 	astraHTTPTimeout            = 30 * time.Second
-	embedAPITimeout             = 10 * time.Second
 	insertManyChunk             = 20
 )
 
-// ProductEmbeddingConfig groups the embedding provider settings (used by
-// BuildTenantEmbedder) with the Astra DB Data API coordinates needed to
-// upsert vectors and run vector search against the product_embeddings
-// collection.
+// ProductEmbeddingConfig holds the Astra DB Data API coordinates for the
+// product_embeddings collection. The collection's vectorize service is
+// configured on the Astra side, not here.
 type ProductEmbeddingConfig struct {
-	// Embedding (forwarded to BuildTenantEmbedder).
-	FallbackAPIKey string
-	Model          string
-	BaseURL        string
-	EncryptionKey  string
-
-	// Astra DB Data API.
 	AstraEndpoint string
 	AstraToken    string
 	AstraKeyspace string
-}
-
-func (c ProductEmbeddingConfig) toEmbeddingConfig() EmbeddingConfig {
-	return EmbeddingConfig{
-		FallbackAPIKey: c.FallbackAPIKey,
-		Model:          c.Model,
-		BaseURL:        c.BaseURL,
-		EncryptionKey:  c.EncryptionKey,
-	}
 }
 
 func (c ProductEmbeddingConfig) keyspace() string {
@@ -63,26 +56,16 @@ func (c ProductEmbeddingConfig) configured() bool {
 	return c.AstraEndpoint != "" && c.AstraToken != ""
 }
 
-// SyncProductEmbeddingsToAstraDB rebuilds the product_embeddings collection
-// for a tenant. It diffs the current cached_products grouped by ma_cha
-// against what Astra already stores (compared by label_hash) and:
-//   - embeds + insertMany for new ma_cha
-//   - embeds + findOneAndReplace when the label changed
-//   - deleteMany for ma_cha that disappeared from cached_products
+// SyncProductEmbeddingsToAstraDB upserts a `$vectorize`-bearing document per
+// distinct ma_cha for the tenant, diffing label_hash to skip unchanged rows
+// and pruning ma_cha that disappeared from cached_products. Astra computes
+// the vector via the collection's bound vectorize service.
 //
 // Idempotent and safe to call after every product cache rebuild. Returns
 // counts of inserted, updated, and removed rows.
 func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingConfig, tenantID string) (added, updated, removed int, err error) {
 	if !cfg.configured() {
 		return 0, 0, 0, fmt.Errorf("product embedding sync: astra not configured")
-	}
-	embedder := BuildTenantEmbedder(tenantID, cfg.toEmbeddingConfig())
-	if embedder == nil {
-		return 0, 0, 0, fmt.Errorf("product embedding sync: no embedding api key for tenant %s", tenantID)
-	}
-
-	if err := ensureProductEmbeddingsCollection(ctx, cfg); err != nil {
-		return 0, 0, 0, fmt.Errorf("ensure collection: %w", err)
 	}
 
 	desired, err := loadDesiredProductEmbeddings(ctx, tenantID)
@@ -99,24 +82,23 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 	var toReplace []productEmbeddingDoc
 	var toDelete []string
 
+	now := time.Now().Unix()
 	for maCha, label := range desired {
 		labelHash := shortHash(label)
+		doc := productEmbeddingDoc{
+			ID:        docID(tenantID, maCha),
+			TenantID:  tenantID,
+			MaCha:     maCha,
+			Label:     label,
+			LabelHash: labelHash,
+			Vectorize: label,
+			UpdatedAt: now,
+		}
 		if existingHash, ok := existing[maCha]; ok {
-			if existingHash == labelHash {
-				continue
+			if existingHash != labelHash {
+				toReplace = append(toReplace, doc)
 			}
-			doc, embedErr := makeProductEmbeddingDoc(ctx, embedder, tenantID, maCha, label, labelHash)
-			if embedErr != nil {
-				log.Printf("[product_embed] embed replace tenant=%s ma_cha=%s failed: %v", tenantID, maCha, embedErr)
-				continue
-			}
-			toReplace = append(toReplace, doc)
 		} else {
-			doc, embedErr := makeProductEmbeddingDoc(ctx, embedder, tenantID, maCha, label, labelHash)
-			if embedErr != nil {
-				log.Printf("[product_embed] embed insert tenant=%s ma_cha=%s failed: %v", tenantID, maCha, embedErr)
-				continue
-			}
 			toInsert = append(toInsert, doc)
 		}
 	}
@@ -152,28 +134,17 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 	return added, updated, removed, nil
 }
 
-// FuzzyMatchMaChaWithEmbedding embeds keyword, runs a vector search against
-// the tenant's product_embeddings rows, and returns the top match's ma_cha
-// when similarity is above the threshold. Returns "" (no error) when no row
-// passes the threshold so callers can fallback to the LLM-list matcher.
+// FuzzyMatchMaChaWithEmbedding runs a vectorize query against the tenant's
+// product_embeddings rows. Astra embeds the keyword server-side. Returns the
+// top match's ma_cha when similarity is above the threshold; returns "" (no
+// error) when no row passes the threshold so callers can fallback.
 func FuzzyMatchMaChaWithEmbedding(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, keyword string) (string, error) {
 	keyword = strings.TrimSpace(keyword)
 	if keyword == "" || !cfg.configured() {
 		return "", nil
 	}
-	embedder := BuildTenantEmbedder(tenantID, cfg.toEmbeddingConfig())
-	if embedder == nil {
-		return "", nil
-	}
 
-	embedCtx, cancel := context.WithTimeout(ctx, embedAPITimeout)
-	defer cancel()
-	vec, err := embedder.Embed(embedCtx, keyword)
-	if err != nil {
-		return "", fmt.Errorf("embed keyword: %w", err)
-	}
-
-	results, err := astraVectorFind(ctx, cfg, tenantID, vec, 5)
+	results, err := astraVectorFind(ctx, cfg, tenantID, keyword, 5)
 	if err != nil {
 		return "", fmt.Errorf("astra vector find: %w", err)
 	}
@@ -196,42 +167,18 @@ func FuzzyMatchMaChaWithEmbedding(ctx context.Context, cfg ProductEmbeddingConfi
 // ---------------------------------------------------------------------------
 
 type productEmbeddingDoc struct {
-	ID        string    `json:"_id"`
-	TenantID  string    `json:"tenant_id"`
-	MaCha     string    `json:"ma_cha"`
-	Label     string    `json:"label"`
-	LabelHash string    `json:"label_hash"`
-	Vector    []float32 `json:"$vector"`
-	UpdatedAt int64     `json:"updated_at"`
+	ID        string `json:"_id"`
+	TenantID  string `json:"tenant_id"`
+	MaCha     string `json:"ma_cha"`
+	Label     string `json:"label"`
+	LabelHash string `json:"label_hash"`
+	Vectorize string `json:"$vectorize"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 type productEmbeddingMatch struct {
 	MaCha      string
 	Similarity float32
-}
-
-func makeProductEmbeddingDoc(ctx context.Context, embedder embedClient, tenantID, maCha, label, labelHash string) (productEmbeddingDoc, error) {
-	embedCtx, cancel := context.WithTimeout(ctx, embedAPITimeout)
-	defer cancel()
-	vec, err := embedder.Embed(embedCtx, label)
-	if err != nil {
-		return productEmbeddingDoc{}, err
-	}
-	return productEmbeddingDoc{
-		ID:        docID(tenantID, maCha),
-		TenantID:  tenantID,
-		MaCha:     maCha,
-		Label:     label,
-		LabelHash: labelHash,
-		Vector:    vec,
-		UpdatedAt: time.Now().Unix(),
-	}, nil
-}
-
-// embedClient narrows the BuildTenantEmbedder return type to what we use,
-// keeping makeProductEmbeddingDoc testable with a fake.
-type embedClient interface {
-	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
 func loadDesiredProductEmbeddings(ctx context.Context, tenantID string) (map[string]string, error) {
@@ -329,36 +276,6 @@ func loadExistingProductEmbeddings(ctx context.Context, cfg ProductEmbeddingConf
 	return out, nil
 }
 
-func ensureProductEmbeddingsCollection(ctx context.Context, cfg ProductEmbeddingConfig) error {
-	cmd := map[string]interface{}{
-		"createCollection": map[string]interface{}{
-			"name": productEmbeddingsCollection,
-			"options": map[string]interface{}{
-				"vector": map[string]interface{}{
-					"dimension": embeddingDimension,
-					"metric":    "cosine",
-				},
-			},
-		},
-	}
-	var resp struct {
-		Status map[string]interface{}   `json:"status"`
-		Errors []map[string]interface{} `json:"errors"`
-	}
-	if err := astraNamespaceCall(ctx, cfg, cmd, &resp); err != nil {
-		return err
-	}
-	for _, e := range resp.Errors {
-		code, _ := e["errorCode"].(string)
-		msg, _ := e["message"].(string)
-		if code == "EXISTING_COLLECTION" || strings.Contains(msg, "already exists") {
-			return nil
-		}
-		return fmt.Errorf("create collection error: code=%s msg=%s", code, msg)
-	}
-	return nil
-}
-
 func astraInsertMany(ctx context.Context, cfg ProductEmbeddingConfig, docs []productEmbeddingDoc) error {
 	for i := 0; i < len(docs); i += insertManyChunk {
 		end := i + insertManyChunk
@@ -430,11 +347,11 @@ func astraDeleteMany(ctx context.Context, cfg ProductEmbeddingConfig, docIDs []s
 	return resp.Status.DeletedCount, nil
 }
 
-func astraVectorFind(ctx context.Context, cfg ProductEmbeddingConfig, tenantID string, vector []float32, limit int) ([]productEmbeddingMatch, error) {
+func astraVectorFind(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, keyword string, limit int) ([]productEmbeddingMatch, error) {
 	cmd := map[string]interface{}{
 		"find": map[string]interface{}{
 			"filter": map[string]interface{}{"tenant_id": tenantID},
-			"sort":   map[string]interface{}{"$vector": vector},
+			"sort":   map[string]interface{}{"$vectorize": keyword},
 			"options": map[string]interface{}{
 				"limit":             limit,
 				"includeSimilarity": true,
@@ -461,11 +378,6 @@ func astraVectorFind(ctx context.Context, cfg ProductEmbeddingConfig, tenantID s
 		out = append(out, productEmbeddingMatch{MaCha: d.MaCha, Similarity: d.Similarity})
 	}
 	return out, nil
-}
-
-func astraNamespaceCall(ctx context.Context, cfg ProductEmbeddingConfig, cmd, out interface{}) error {
-	url := fmt.Sprintf("%s/api/json/v1/%s", strings.TrimRight(cfg.AstraEndpoint, "/"), cfg.keyspace())
-	return astraPost(ctx, url, cfg.AstraToken, cmd, out)
 }
 
 func astraCollectionCall(ctx context.Context, cfg ProductEmbeddingConfig, collection string, cmd, out interface{}) error {
