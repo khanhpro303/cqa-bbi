@@ -278,11 +278,23 @@ func ERPQuery(c *gin.Context) {
 			return
 		}
 
-		if strings.TrimSpace(req.Search) != "" {
+		// Resolve product rows via B-driven flow:
+		//   - B (searchProductWebGroupsFromAstraDB) probes via LIKE web/ten
+		//   - >1 group → disambiguation list, return
+		//   - 1 group  → use B's ma_cha directly, no re-LIKE, no LLM
+		//   - 0 group  → LLM fuzzy (name-aware, see fuzzyMatchMaChaWithLLM)
+		// Empty search → list all up to req.Limit.
+		var cachedData []map[string]interface{}
+		search := strings.TrimSpace(req.Search)
+
+		if search != "" {
 			webGroups, err := searchProductWebGroupsFromAstraDB(c.Request.Context(), tenantID, req.Search, productGroups)
 			if err != nil {
 				log.Printf("[erp_query] product web-group search error: %v", err)
-			} else if len(webGroups) > 1 {
+				webGroups = nil
+			}
+
+			if len(webGroups) > 1 {
 				groupPayloads := make([]map[string]interface{}, 0, len(webGroups))
 				for _, g := range webGroups {
 					groupPayloads = append(groupPayloads, map[string]interface{}{
@@ -311,18 +323,48 @@ func ERPQuery(c *gin.Context) {
 				})
 				return
 			}
+
+			if len(webGroups) == 1 && len(webGroups[0].ParentCodes) > 0 {
+				// B already pinpointed the parent SKU(s). Pull rows directly.
+				for _, pc := range webGroups[0].ParentCodes {
+					rows, fetchErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, pc)
+					if fetchErr != nil {
+						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", pc, fetchErr)
+						continue
+					}
+					cachedData = append(cachedData, rows...)
+				}
+			} else {
+				// B proved LIKE returns nothing → ask the LLM, which now sees
+				// ten_dong_bo_web + ten alongside ma_cha and can bridge
+				// La Mã/Ả Rập, dấu tiếng Việt, viết tắt thương hiệu, ...
+				matchedMaCha, llmErr := fuzzyMatchMaChaWithLLM(c.Request.Context(), tenantID, req.Search)
+				if llmErr != nil {
+					log.Printf("[erp_query] LLM fuzzy match failed for '%s': %v", req.Search, llmErr)
+				} else if matchedMaCha != "" {
+					log.Printf("[erp_query] LLM fuzzy matched '%s' → ma_cha '%s'", req.Search, matchedMaCha)
+					rows, fetchErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, matchedMaCha)
+					if fetchErr != nil {
+						log.Printf("[erp_query] fetch by ma_cha=%s (LLM) failed: %v", matchedMaCha, fetchErr)
+					} else {
+						cachedData = rows
+					}
+				}
+			}
+		} else {
+			rows, err := searchProductsFromAstraDB(c.Request.Context(), tenantID, "", req.Limit)
+			if err != nil {
+				log.Printf("[erp_query] product cache search error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":   "product_cache_error",
+					"message": fmt.Sprintf("Không thể lấy dữ liệu sản phẩm từ cache: %s", err.Error()),
+				})
+				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusInternalServerError, 0, c.ClientIP())
+				return
+			}
+			cachedData = rows
 		}
 
-		cachedData, err := searchProductsFromAstraDB(c.Request.Context(), tenantID, req.Search, req.Limit)
-		if err != nil {
-			log.Printf("[erp_query] product cache search error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "product_cache_error",
-				"message": fmt.Sprintf("Không thể lấy dữ liệu sản phẩm từ cache: %s", err.Error()),
-			})
-			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusInternalServerError, 0, c.ClientIP())
-			return
-		}
 		if cachedData == nil {
 			cachedData = []map[string]interface{}{}
 		}
