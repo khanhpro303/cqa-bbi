@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -367,6 +368,32 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 	cachedCount, errRebuild := RebuildCachedProductsFromRaw(job.TenantID)
 	if errRebuild != nil {
 		log.Printf("[erp_cache] warn: failed to rebuild cached_products from raw: %v", errRebuild)
+	}
+
+	// 5.3 Sync product embeddings to Astra DB (feature-flagged). Runs async so
+	//     it does not block the job-run status write below. Idempotent.
+	if errRebuild == nil && os.Getenv("ERP_EMBEDDING_FUZZY_ENABLED") == "true" {
+		appCfg, cfgErr := config.Load()
+		if cfgErr != nil {
+			log.Printf("[erp_cache] embedding sync skipped (config load error): %v", cfgErr)
+		} else {
+			embedCfg := ProductEmbeddingConfig{
+				FallbackAPIKey: appCfg.LangflowEmbeddingAPIKey,
+				Model:          appCfg.LangflowEmbeddingModel,
+				BaseURL:        appCfg.LangflowEmbeddingBaseURL,
+				EncryptionKey:  appCfg.EncryptionKey,
+				AstraEndpoint:  appCfg.AstraDBAPIEndpoint,
+				AstraToken:     appCfg.AstraDBToken,
+				AstraKeyspace:  appCfg.AstraDBKeyspace,
+			}
+			go func(tenantID string, embedCfg ProductEmbeddingConfig) {
+				syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+				defer cancel()
+				if _, _, _, err := SyncProductEmbeddingsToAstraDB(syncCtx, embedCfg, tenantID); err != nil {
+					log.Printf("[erp_cache] embedding sync tenant=%s error: %v", tenantID, err)
+				}
+			}(job.TenantID, embedCfg)
+		}
 	}
 
 	finishedAt := time.Now()

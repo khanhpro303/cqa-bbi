@@ -335,17 +335,45 @@ func ERPQuery(c *gin.Context) {
 					cachedData = append(cachedData, rows...)
 				}
 			} else {
-				// B proved LIKE returns nothing → ask the LLM, which now sees
-				// ten_dong_bo_web + ten alongside ma_cha and can bridge
-				// La Mã/Ả Rập, dấu tiếng Việt, viết tắt thương hiệu, ...
-				matchedMaCha, llmErr := fuzzyMatchMaChaWithLLM(c.Request.Context(), tenantID, req.Search)
-				if llmErr != nil {
-					log.Printf("[erp_query] LLM fuzzy match failed for '%s': %v", req.Search, llmErr)
-				} else if matchedMaCha != "" {
-					log.Printf("[erp_query] LLM fuzzy matched '%s' → ma_cha '%s'", req.Search, matchedMaCha)
+				// B proved LIKE returns nothing. Try embedding fuzzy first
+				// (cheaper + robust against name variations); fall back to the
+				// LLM-list matcher when disabled, unavailable, or below the
+				// similarity threshold.
+				var matchedMaCha string
+				if os.Getenv("ERP_EMBEDDING_FUZZY_ENABLED") == "true" {
+					appCfg, cfgErr := config.Load()
+					if cfgErr != nil {
+						log.Printf("[erp_query] embedding fuzzy config load error: %v", cfgErr)
+					} else {
+						embedCfg := engine.ProductEmbeddingConfig{
+							FallbackAPIKey: appCfg.LangflowEmbeddingAPIKey,
+							Model:          appCfg.LangflowEmbeddingModel,
+							BaseURL:        appCfg.LangflowEmbeddingBaseURL,
+							EncryptionKey:  appCfg.EncryptionKey,
+							AstraEndpoint:  appCfg.AstraDBAPIEndpoint,
+							AstraToken:     appCfg.AstraDBToken,
+							AstraKeyspace:  appCfg.AstraDBKeyspace,
+						}
+						if m, embedErr := engine.FuzzyMatchMaChaWithEmbedding(c.Request.Context(), embedCfg, tenantID, req.Search); embedErr != nil {
+							log.Printf("[erp_query] embedding fuzzy error: %v", embedErr)
+						} else if m != "" {
+							matchedMaCha = m
+						}
+					}
+				}
+				if matchedMaCha == "" {
+					m, llmErr := fuzzyMatchMaChaWithLLM(c.Request.Context(), tenantID, req.Search)
+					if llmErr != nil {
+						log.Printf("[erp_query] LLM fuzzy match failed for '%s': %v", req.Search, llmErr)
+					} else if m != "" {
+						log.Printf("[erp_query] LLM fuzzy matched '%s' → ma_cha '%s'", req.Search, m)
+						matchedMaCha = m
+					}
+				}
+				if matchedMaCha != "" {
 					rows, fetchErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, matchedMaCha)
 					if fetchErr != nil {
-						log.Printf("[erp_query] fetch by ma_cha=%s (LLM) failed: %v", matchedMaCha, fetchErr)
+						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", matchedMaCha, fetchErr)
 					} else {
 						cachedData = rows
 					}
