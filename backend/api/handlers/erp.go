@@ -339,6 +339,11 @@ func ERPQuery(c *gin.Context) {
 				// (cheaper + robust against name variations); fall back to the
 				// LLM-list matcher when disabled, unavailable, or below the
 				// similarity threshold.
+				//
+				// A pinpoint SKU match (e.g. "ff800 trắng L") resolves to a
+				// single MA; a vague family query (e.g. "storm 3") resolves to a
+				// ma_cha and returns all variants so price_range covers the family.
+				var matchedMA string
 				var matchedMaCha string
 				if os.Getenv("ERP_EMBEDDING_FUZZY_ENABLED") == "true" {
 					appCfg, cfgErr := config.Load()
@@ -350,14 +355,17 @@ func ERPQuery(c *gin.Context) {
 							AstraToken:    appCfg.AstraDBToken,
 							AstraKeyspace: appCfg.AstraDBKeyspace,
 						}
-						if m, embedErr := engine.FuzzyMatchMaChaWithEmbedding(c.Request.Context(), embedCfg, tenantID, req.Search); embedErr != nil {
+						if match, embedErr := engine.FuzzyMatchProductWithEmbedding(c.Request.Context(), embedCfg, tenantID, req.Search); embedErr != nil {
 							log.Printf("[erp_query] embedding fuzzy error: %v", embedErr)
-						} else if m != "" {
-							matchedMaCha = m
+						} else if match.MaCha != "" {
+							matchedMaCha = match.MaCha
+							if match.Specific {
+								matchedMA = match.MA
+							}
 						}
 					}
 				}
-				if matchedMaCha == "" {
+				if matchedMA == "" && matchedMaCha == "" {
 					m, llmErr := fuzzyMatchMaChaWithLLM(c.Request.Context(), tenantID, req.Search)
 					if llmErr != nil {
 						log.Printf("[erp_query] LLM fuzzy match failed for '%s': %v", req.Search, llmErr)
@@ -366,7 +374,15 @@ func ERPQuery(c *gin.Context) {
 						matchedMaCha = m
 					}
 				}
-				if matchedMaCha != "" {
+				if matchedMA != "" {
+					// Pinpoint SKU query → return just the matched variant.
+					rows, fetchErr := getProductByMaFromAstraDB(c.Request.Context(), tenantID, matchedMA)
+					if fetchErr != nil {
+						log.Printf("[erp_query] fetch by ma=%s failed: %v", matchedMA, fetchErr)
+					} else {
+						cachedData = rows
+					}
+				} else if matchedMaCha != "" {
 					rows, fetchErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, matchedMaCha)
 					if fetchErr != nil {
 						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", matchedMaCha, fetchErr)
@@ -2770,6 +2786,22 @@ func getProductGroupFromAstra(ctx context.Context, tenantID, sku string) string 
 	return getMapString(products[0], "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
 }
 
+// getProductByMaFromAstraDB fetches a single SKU by its variant code (MA) from
+// the local MySQL product cache. Used when an embedding fuzzy match pinpoints
+// one variant (e.g. "ff800 trắng L"). Returns a one-element slice to stay
+// shape-compatible with getProductsByMaChaFromAstraDB callers.
+func getProductByMaFromAstraDB(ctx context.Context, tenantID, ma string) ([]map[string]interface{}, error) {
+	var products []models.CachedProduct
+	err := db.DB.WithContext(ctx).
+		Where("tenant_id = ? AND ma = ?", tenantID, ma).
+		Limit(1).
+		Find(&products).Error
+	if err != nil {
+		return nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+	}
+	return cachedProductsToMaps(products), nil
+}
+
 func getProductsByMaChaFromAstraDB(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	err := db.DB.WithContext(ctx).
@@ -2779,7 +2811,12 @@ func getProductsByMaChaFromAstraDB(ctx context.Context, tenantID, maCha string) 
 	if err != nil {
 		return nil, fmt.Errorf("local MySQL cache query failed: %w", err)
 	}
+	return cachedProductsToMaps(products), nil
+}
 
+// cachedProductsToMaps converts cached product rows into the loosely-typed map
+// representation the ERP handler and LLM-slimming helpers expect.
+func cachedProductsToMaps(products []models.CachedProduct) []map[string]interface{} {
 	var results []map[string]interface{}
 	for _, p := range products {
 		results = append(results, map[string]interface{}{
@@ -2804,7 +2841,7 @@ func getProductsByMaChaFromAstraDB(ctx context.Context, tenantID, maCha string) 
 			"DVT":                p.DVT,
 		})
 	}
-	return results, nil
+	return results
 }
 
 func detectMaChaFromSearch(ctx context.Context, tenantID, search string, allowedGroups []string) (string, string, bool) {

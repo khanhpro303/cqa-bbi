@@ -32,8 +32,13 @@ import (
 const (
 	defaultEmbeddingCollection = "erp_product_bbi"
 	similarityThreshold        = 0.75
-	astraHTTPTimeout           = 30 * time.Second
-	insertManyChunk            = 20
+	// resolutionMargin is the similarity gap between the top SKU and the next
+	// SKU sharing the same ma_cha that distinguishes a pinpoint SKU query
+	// (e.g. "ff800 trắng L") from a vague family query (e.g. "storm 3"). A gap
+	// above this means one variant clearly dominates → answer that SKU.
+	resolutionMargin = 0.04
+	astraHTTPTimeout = 30 * time.Second
+	insertManyChunk  = 20
 )
 
 // ProductEmbeddingConfig holds the Astra DB Data API coordinates for the
@@ -65,9 +70,10 @@ func (c ProductEmbeddingConfig) configured() bool {
 }
 
 // SyncProductEmbeddingsToAstraDB upserts a `$vectorize`-bearing document per
-// distinct ma_cha for the tenant, diffing label_hash to skip unchanged rows
-// and pruning ma_cha that disappeared from cached_products. Astra computes
-// the vector via the collection's bound vectorize service.
+// SKU (MA) for the tenant, diffing label_hash to skip unchanged rows and
+// pruning SKUs that disappeared from cached_products. Each document carries
+// both MA and its parent MaCha. Astra computes the vector via the collection's
+// bound vectorize service.
 //
 // Idempotent and safe to call after every product cache rebuild. Returns
 // counts of inserted, updated, and removed rows.
@@ -91,18 +97,19 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 	var toDelete []string
 
 	now := time.Now().Unix()
-	for maCha, label := range desired {
-		labelHash := shortHash(label)
+	for ma, d := range desired {
+		labelHash := shortHash(d.Label)
 		doc := productEmbeddingDoc{
-			ID:        docID(tenantID, maCha),
+			ID:        docID(tenantID, ma),
 			TenantID:  tenantID,
-			MaCha:     maCha,
-			Label:     label,
+			MA:        ma,
+			MaCha:     d.MaCha,
+			Label:     d.Label,
 			LabelHash: labelHash,
-			Vectorize: label,
+			Vectorize: d.Label,
 			UpdatedAt: now,
 		}
-		if existingHash, ok := existing[maCha]; ok {
+		if existingHash, ok := existing[ma]; ok {
 			if existingHash != labelHash {
 				toReplace = append(toReplace, doc)
 			}
@@ -110,9 +117,9 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 			toInsert = append(toInsert, doc)
 		}
 	}
-	for maCha := range existing {
-		if _, ok := desired[maCha]; !ok {
-			toDelete = append(toDelete, docID(tenantID, maCha))
+	for ma := range existing {
+		if _, ok := desired[ma]; !ok {
+			toDelete = append(toDelete, docID(tenantID, ma))
 		}
 	}
 
@@ -124,7 +131,7 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 	}
 	for _, doc := range toReplace {
 		if replErr := astraFindOneAndReplace(ctx, cfg, doc); replErr != nil {
-			log.Printf("[product_embed] replace ma_cha=%s failed: %v", doc.MaCha, replErr)
+			log.Printf("[product_embed] replace ma=%s failed: %v", doc.MA, replErr)
 			continue
 		}
 		updated++
@@ -142,32 +149,67 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 	return added, updated, removed, nil
 }
 
-// FuzzyMatchMaChaWithEmbedding runs a vectorize query against the tenant's
-// product_embeddings rows. Astra embeds the keyword server-side. Returns the
-// top match's ma_cha when similarity is above the threshold; returns "" (no
-// error) when no row passes the threshold so callers can fallback.
-func FuzzyMatchMaChaWithEmbedding(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, keyword string) (string, error) {
+// ProductMatch is the result of an embedding fuzzy match. MaCha is always set
+// when a match passes the threshold (used for family/price_range queries).
+// When Specific is true the top SKU dominates its siblings, so MA pinpoints a
+// single variant (e.g. "ff800 trắng L") and callers should return just that SKU.
+type ProductMatch struct {
+	MA       string
+	MaCha    string
+	Specific bool
+}
+
+// FuzzyMatchProductWithEmbedding runs a vectorize query against the tenant's
+// per-SKU product_embeddings rows. Astra embeds the keyword server-side.
+//
+// Returns a ProductMatch with MaCha (and MA) set when the top row passes the
+// similarity threshold; returns a zero-value match (no error) otherwise so
+// callers can fall back to the LLM matcher.
+//
+// Specific is set when the top SKU's similarity beats the next SKU *sharing the
+// same ma_cha* by more than resolutionMargin — i.e. the query pinpoints one
+// variant rather than asking about the whole family.
+func FuzzyMatchProductWithEmbedding(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, keyword string) (ProductMatch, error) {
 	keyword = strings.TrimSpace(keyword)
 	if keyword == "" || !cfg.configured() {
-		return "", nil
+		return ProductMatch{}, nil
 	}
 
 	results, err := astraVectorFind(ctx, cfg, tenantID, keyword, 5)
 	if err != nil {
-		return "", fmt.Errorf("astra vector find: %w", err)
+		return ProductMatch{}, fmt.Errorf("astra vector find: %w", err)
 	}
 	if len(results) == 0 {
-		return "", nil
+		return ProductMatch{}, nil
 	}
 	top := results[0]
 	if top.Similarity < similarityThreshold {
-		log.Printf("[product_embed] match below threshold (%.3f < %.3f) for keyword=%q tenant=%s top_ma_cha=%s",
-			top.Similarity, similarityThreshold, keyword, tenantID, top.MaCha)
-		return "", nil
+		log.Printf("[product_embed] match below threshold (%.3f < %.3f) for keyword=%q tenant=%s top_ma=%s ma_cha=%s",
+			top.Similarity, similarityThreshold, keyword, tenantID, top.MA, top.MaCha)
+		return ProductMatch{}, nil
 	}
-	log.Printf("[product_embed] match keyword=%q tenant=%s ma_cha=%s similarity=%.3f",
-		keyword, tenantID, top.MaCha, top.Similarity)
-	return top.MaCha, nil
+
+	specific := isSpecificSKUMatch(results)
+	log.Printf("[product_embed] match keyword=%q tenant=%s ma=%s ma_cha=%s similarity=%.3f specific=%v",
+		keyword, tenantID, top.MA, top.MaCha, top.Similarity, specific)
+	return ProductMatch{MA: top.MA, MaCha: top.MaCha, Specific: specific}, nil
+}
+
+// isSpecificSKUMatch decides whether the top SKU clearly dominates the other
+// variants of its own ma_cha. If the next result that shares the top's ma_cha
+// trails by more than resolutionMargin, the query pinpoints a single SKU. If no
+// sibling appears in the top-K, the top SKU is unambiguous → also specific.
+func isSpecificSKUMatch(results []productEmbeddingMatch) bool {
+	if len(results) == 0 {
+		return false
+	}
+	top := results[0]
+	for _, r := range results[1:] {
+		if r.MaCha == top.MaCha {
+			return top.Similarity-r.Similarity > resolutionMargin
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +219,7 @@ func FuzzyMatchMaChaWithEmbedding(ctx context.Context, cfg ProductEmbeddingConfi
 type productEmbeddingDoc struct {
 	ID        string `json:"_id"`
 	TenantID  string `json:"tenant_id"`
+	MA        string `json:"ma"`
 	MaCha     string `json:"ma_cha"`
 	Label     string `json:"label"`
 	LabelHash string `json:"label_hash"`
@@ -185,51 +228,73 @@ type productEmbeddingDoc struct {
 }
 
 type productEmbeddingMatch struct {
+	MA         string
 	MaCha      string
 	Similarity float32
 }
 
-func loadDesiredProductEmbeddings(ctx context.Context, tenantID string) (map[string]string, error) {
+// desiredEmbedding is the per-SKU embedding state derived from cached_products,
+// keyed by MA (variant code) so each variant gets its own vectorized document.
+type desiredEmbedding struct {
+	MaCha string
+	Label string
+}
+
+func loadDesiredProductEmbeddings(ctx context.Context, tenantID string) (map[string]desiredEmbedding, error) {
 	type row struct {
+		MA           string `gorm:"column:ma"`
 		MaCha        string `gorm:"column:ma_cha"`
 		TenDongBoWeb string `gorm:"column:ten_dong_bo_web"`
 		Ten          string `gorm:"column:ten"`
+		ThuocTinh1   string `gorm:"column:thuoc_tinh_1"`
+		ThuocTinh2   string `gorm:"column:thuoc_tinh_2"`
 	}
 	var rows []row
 	err := db.DB.WithContext(ctx).
 		Table((&models.CachedProduct{}).TableName()).
-		Select("ma_cha, MAX(ten_dong_bo_web) AS ten_dong_bo_web, MAX(ten) AS ten").
-		Where("tenant_id = ? AND ma_cha != ''", tenantID).
-		Group("ma_cha").
+		Select("ma, ma_cha, ten_dong_bo_web, ten, thuoc_tinh_1, thuoc_tinh_2").
+		Where("tenant_id = ? AND ma != ''", tenantID).
 		Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]string, len(rows))
+	out := make(map[string]desiredEmbedding, len(rows))
 	for _, r := range rows {
-		out[r.MaCha] = buildProductEmbeddingLabel(r.MaCha, r.TenDongBoWeb, r.Ten)
+		out[r.MA] = desiredEmbedding{
+			MaCha: r.MaCha,
+			Label: buildProductEmbeddingLabel(r.MA, r.TenDongBoWeb, r.Ten, r.ThuocTinh1, r.ThuocTinh2),
+		}
 	}
 	return out, nil
 }
 
-func buildProductEmbeddingLabel(maCha, tenDongBoWeb, ten string) string {
-	web := strings.TrimSpace(tenDongBoWeb)
-	n := strings.TrimSpace(ten)
-	label := web
-	if label == "" {
-		label = n
+// buildProductEmbeddingLabel assembles the text fed to Astra's vectorize service
+// for a single SKU. It joins the web-synced name, ERP name, and the two variant
+// attributes (màu/size) so a multilingual model can match queries like
+// "ff800 trắng L" against a stored "FF800 — Gloss White — L".
+func buildProductEmbeddingLabel(ma, tenDongBoWeb, ten, thuocTinh1, thuocTinh2 string) string {
+	parts := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	for _, raw := range []string{tenDongBoWeb, ten, thuocTinh1, thuocTinh2} {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		key := strings.ToLower(v)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		parts = append(parts, v)
 	}
-	if web != "" && n != "" && !strings.EqualFold(web, n) {
-		label = web + " — " + n
+	if len(parts) == 0 {
+		return ma
 	}
-	if label == "" {
-		label = maCha
-	}
-	return label
+	return strings.Join(parts, " — ")
 }
 
-func docID(tenantID, maCha string) string {
-	return tenantID + "_" + maCha
+func docID(tenantID, ma string) string {
+	return tenantID + "_" + ma
 }
 
 func shortHash(s string) string {
@@ -252,7 +317,7 @@ func loadExistingProductEmbeddings(ctx context.Context, cfg ProductEmbeddingConf
 		cmd := map[string]interface{}{
 			"find": map[string]interface{}{
 				"filter":     map[string]interface{}{"tenant_id": tenantID},
-				"projection": map[string]interface{}{"ma_cha": 1, "label_hash": 1},
+				"projection": map[string]interface{}{"ma": 1, "label_hash": 1},
 				"options":    options,
 			},
 		}
@@ -270,10 +335,10 @@ func loadExistingProductEmbeddings(ctx context.Context, cfg ProductEmbeddingConf
 			return nil, fmt.Errorf("find errors: %v", resp.Errors)
 		}
 		for _, d := range resp.Data.Documents {
-			maCha, _ := d["ma_cha"].(string)
+			ma, _ := d["ma"].(string)
 			labelHash, _ := d["label_hash"].(string)
-			if maCha != "" {
-				out[maCha] = labelHash
+			if ma != "" {
+				out[ma] = labelHash
 			}
 		}
 		if resp.Data.NextPageState == "" {
@@ -369,6 +434,7 @@ func astraVectorFind(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, 
 	var resp struct {
 		Data struct {
 			Documents []struct {
+				MA         string  `json:"ma"`
 				MaCha      string  `json:"ma_cha"`
 				Similarity float32 `json:"$similarity"`
 			} `json:"documents"`
@@ -383,7 +449,7 @@ func astraVectorFind(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, 
 	}
 	out := make([]productEmbeddingMatch, 0, len(resp.Data.Documents))
 	for _, d := range resp.Data.Documents {
-		out = append(out, productEmbeddingMatch{MaCha: d.MaCha, Similarity: d.Similarity})
+		out = append(out, productEmbeddingMatch{MA: d.MA, MaCha: d.MaCha, Similarity: d.Similarity})
 	}
 	return out, nil
 }

@@ -5,23 +5,82 @@ import "testing"
 func TestBuildProductEmbeddingLabel(t *testing.T) {
 	cases := []struct {
 		name     string
-		maCha    string
+		ma       string
 		web, ten string
+		tt1, tt2 string
 		want     string
 	}{
-		{"both distinct → joined", "SP1", "LS2 FF818", "Mu fullface FF818", "LS2 FF818 — Mu fullface FF818"},
-		{"only web → web", "SP2", "LS2 FF818", "", "LS2 FF818"},
-		{"only ten → ten", "SP3", "", "Mu fullface", "Mu fullface"},
-		{"both empty → ma_cha", "SP4", "", "", "SP4"},
-		{"equalfold → no merge", "SP5", "Foo", "foo", "Foo"},
-		{"whitespace trimmed", "SP6", "  LS2  ", " Mu  ", "LS2 — Mu"},
+		{"name + both attrs", "FF800", "FF800 Gloss", "FF800", "Gloss White", "L", "FF800 Gloss — FF800 — Gloss White — L"},
+		{"web + ten distinct", "SP1", "LS2 FF818", "Mu fullface FF818", "", "", "LS2 FF818 — Mu fullface FF818"},
+		{"only web", "SP2", "LS2 FF818", "", "", "", "LS2 FF818"},
+		{"only ten", "SP3", "", "Mu fullface", "", "", "Mu fullface"},
+		{"all empty → ma", "FF999", "", "", "", "", "FF999"},
+		{"equalfold web/ten deduped", "SP5", "Foo", "foo", "", "", "Foo"},
+		{"attr equalfold deduped", "SP7", "Storm", "", "storm", "L", "Storm — L"},
+		{"whitespace trimmed", "SP6", "  LS2  ", " Mu  ", "  Đen  ", "", "LS2 — Mu — Đen"},
+		{"only attrs", "SP8", "", "", "Trắng", "XL", "Trắng — XL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildProductEmbeddingLabel(tc.maCha, tc.web, tc.ten)
+			got := buildProductEmbeddingLabel(tc.ma, tc.web, tc.ten, tc.tt1, tc.tt2)
 			if got != tc.want {
-				t.Errorf("buildProductEmbeddingLabel(%q,%q,%q) = %q, want %q",
-					tc.maCha, tc.web, tc.ten, got, tc.want)
+				t.Errorf("buildProductEmbeddingLabel(%q,%q,%q,%q,%q) = %q, want %q",
+					tc.ma, tc.web, tc.ten, tc.tt1, tc.tt2, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsSpecificSKUMatch(t *testing.T) {
+	cases := []struct {
+		name    string
+		results []productEmbeddingMatch
+		want    bool
+	}{
+		{"empty → false", nil, false},
+		{
+			"single result → specific",
+			[]productEmbeddingMatch{{MA: "A1", MaCha: "P", Similarity: 0.9}},
+			true,
+		},
+		{
+			"top dominates sibling → specific",
+			[]productEmbeddingMatch{
+				{MA: "A1", MaCha: "P", Similarity: 0.90},
+				{MA: "A2", MaCha: "P", Similarity: 0.80},
+			},
+			true,
+		},
+		{
+			"siblings clustered → family (not specific)",
+			[]productEmbeddingMatch{
+				{MA: "A1", MaCha: "P", Similarity: 0.90},
+				{MA: "A2", MaCha: "P", Similarity: 0.89},
+			},
+			false,
+		},
+		{
+			"next is different family → specific",
+			[]productEmbeddingMatch{
+				{MA: "A1", MaCha: "P", Similarity: 0.90},
+				{MA: "B1", MaCha: "Q", Similarity: 0.899},
+			},
+			true,
+		},
+		{
+			"different family then close sibling → family",
+			[]productEmbeddingMatch{
+				{MA: "A1", MaCha: "P", Similarity: 0.90},
+				{MA: "B1", MaCha: "Q", Similarity: 0.88},
+				{MA: "A2", MaCha: "P", Similarity: 0.89},
+			},
+			false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSpecificSKUMatch(tc.results); got != tc.want {
+				t.Errorf("isSpecificSKUMatch(%+v) = %v, want %v", tc.results, got, tc.want)
 			}
 		})
 	}
