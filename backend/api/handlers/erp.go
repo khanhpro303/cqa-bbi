@@ -292,6 +292,15 @@ func ERPQuery(c *gin.Context) {
 						"is_fallback":  g.IsFallback,
 					})
 				}
+
+				if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
+					go func(search string, payload []map[string]interface{}) {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						pushFallbackPayloadToZaloOA(ctx, tenantID, "raw_like_groups", search, payload, permCtx)
+					}(req.Search, groupPayloads)
+				}
+
 				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(groupPayloads), c.ClientIP())
 				c.JSON(http.StatusOK, gin.H{
 					"status":   "success",
