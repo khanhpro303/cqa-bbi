@@ -91,43 +91,6 @@ func RankProductWebGroups(products []map[string]interface{}) []WebGroupMatch {
 	return groups
 }
 
-// BuildNumberedWebNameList renders the groups as "1. <WebName>\n2. <WebName>"
-// for embedding in the ERP query tool output. The Langflow agent's
-// DISAMBIGUATION rule scans this exact format to map a follow-up "1/2/3"
-// reply back to a group.
-func BuildNumberedWebNameList(groups []WebGroupMatch) string {
-	if len(groups) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for i, g := range groups {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		fmt.Fprintf(&b, "%d. %s", i+1, g.WebName)
-	}
-	return b.String()
-}
-
-// FlattenWebGroupParentCodes returns the union of all parent codes across
-// the supplied groups (in the order groups appear). Used to keep the legacy
-// `parent_codes` JSON field populated for downstream consumers that still
-// reason in MA_CHA terms.
-func FlattenWebGroupParentCodes(groups []WebGroupMatch) []string {
-	seen := make(map[string]struct{})
-	var out []string
-	for _, g := range groups {
-		for _, code := range g.ParentCodes {
-			if _, ok := seen[code]; ok {
-				continue
-			}
-			seen[code] = struct{}{}
-			out = append(out, code)
-		}
-	}
-	return out
-}
-
 func productGroupingString(m map[string]interface{}, keys ...string) string {
 	for _, k := range keys {
 		val, ok := m[k]

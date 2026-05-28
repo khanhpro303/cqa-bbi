@@ -33,12 +33,12 @@ type ChatMessage struct {
 // Custom fields (role, session_id, zalo_user_id, created_at,
 // is_disambiguation) go inside the metadata map, not at the top level.
 //
-// IsDisambiguation marks ephemeral context like the Zalo option-list push
-// from sendProductRichMessage(). The retriever filter excludes those so they
-// don't leak across question boundaries within the same session, while
-// Memory-zEYL8 still surfaces them as last-turn context for the immediate
-// follow-up. Regular user/assistant Q&A turns leave the flag false so they
-// remain available for cross-session semantic recall.
+// IsDisambiguation marks ephemeral context like disambiguation option-list
+// turns. The retriever filter excludes those so they don't leak across
+// question boundaries within the same session, while Memory-zEYL8 still
+// surfaces them as last-turn context for the immediate follow-up. Regular
+// user/assistant Q&A turns leave the flag false so they remain available for
+// cross-session semantic recall.
 //
 // If embedder is non-nil the function calls it to compute a $vector field in
 // the same embedding space as the EmbeddingModel-OnvoJ node. An embedder

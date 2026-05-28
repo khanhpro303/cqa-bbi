@@ -283,53 +283,24 @@ func ERPQuery(c *gin.Context) {
 			if err != nil {
 				log.Printf("[erp_query] product web-group search error: %v", err)
 			} else if len(webGroups) > 1 {
-				if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
-					payload := make([]map[string]interface{}, 0, len(webGroups))
-					for _, g := range webGroups {
-						payload = append(payload, map[string]interface{}{
-							"web_name":     g.WebName,
-							"parent_codes": g.ParentCodes,
-							"count":        g.Count,
-							"is_fallback":  g.IsFallback,
-						})
-					}
-					go func(s string, p []map[string]interface{}) {
-						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-						defer cancel()
-						pushFallbackPayloadToZaloOA(ctx, tenantID, "raw_like_groups", s, p, permCtx)
-					}(req.Search, payload)
-				}
-				sent, sentGroups := sendProductRichMessage(c, tenantID, req.Search, webGroups, permCtx)
-				if sent {
-					numberedList := engine.BuildNumberedWebNameList(sentGroups)
-					webNames := make([]string, 0, len(sentGroups))
-					groupPayloads := make([]map[string]interface{}, 0, len(sentGroups))
-					for _, g := range sentGroups {
-						webNames = append(webNames, g.WebName)
-						groupPayloads = append(groupPayloads, map[string]interface{}{
-							"web_name":     g.WebName,
-							"parent_codes": g.ParentCodes,
-							"is_fallback":  g.IsFallback,
-						})
-					}
-					c.JSON(http.StatusOK, gin.H{
-						"status":          "success",
-						"is_product_rich": true,
-						"web_names":       webNames,
-						"web_groups":      groupPayloads,
-						"parent_codes":    engine.FlattenWebGroupParentCodes(sentGroups),
-						"numbered_list":   numberedList,
-						"data": []map[string]interface{}{
-							{
-								"message": fmt.Sprintf("Đã gửi danh sách lựa chọn dòng sản phẩm cho từ khóa '%s' trực tiếp qua Zalo cho người dùng. Hãy hướng dẫn người dùng chọn dòng sản phẩm trên Zalo.", req.Search),
-							},
-						},
-						"message": "zalo_rich_message_sent_directly",
-						"count":   1,
+				groupPayloads := make([]map[string]interface{}, 0, len(webGroups))
+				for _, g := range webGroups {
+					groupPayloads = append(groupPayloads, map[string]interface{}{
+						"web_name":     g.WebName,
+						"parent_codes": g.ParentCodes,
+						"count":        g.Count,
+						"is_fallback":  g.IsFallback,
 					})
-					return
 				}
-				log.Printf("[erp_query] product rich message fallback to JSON for search=%q web_groups=%d", req.Search, len(webGroups))
+				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(groupPayloads), c.ClientIP())
+				c.JSON(http.StatusOK, gin.H{
+					"status":   "success",
+					"data":     groupPayloads,
+					"source":   "astradb_cache_web_groups",
+					"resource": req.Resource,
+					"count":    len(groupPayloads),
+				})
+				return
 			}
 		}
 
@@ -775,18 +746,31 @@ func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, lim
 		}
 	}
 
-	// 2. If not a full name or fuzzy matched returned no products, run standard SQL LIKE search
+	// 2. If not a full name or fuzzy matched returned no products, run SQL LIKE
+	//    in two passes: ten_dong_bo_web first, ten as fallback. Drop legacy
+	//    ma/ma_cha LIKE — those keywords are resolved by the LLM fallback below.
 	if len(products) == 0 {
 		likePattern := "%" + search + "%"
+
 		err = db.DB.WithContext(ctx).
-			Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
+			Where("tenant_id = ? AND ten_dong_bo_web LIKE ?", tenantID, likePattern).
 			Limit(limit).
 			Find(&products).Error
 		if err != nil {
-			return nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+			return nil, fmt.Errorf("local MySQL cache web-name query failed: %w", err)
 		}
 
-		// Fallback to LLM fuzzy matching if SQL LIKE returned no results
+		if len(products) == 0 {
+			err = db.DB.WithContext(ctx).
+				Where("tenant_id = ? AND ten LIKE ?", tenantID, likePattern).
+				Limit(limit).
+				Find(&products).Error
+			if err != nil {
+				return nil, fmt.Errorf("local MySQL cache ten query failed: %w", err)
+			}
+		}
+
+		// Fallback to LLM fuzzy matching if both LIKE passes returned no results
 		if len(products) == 0 && search != "" {
 			matchedMaCha, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search)
 			if llmErr != nil {
@@ -883,12 +867,26 @@ func searchProductWebGroupsFromAstraDB(ctx context.Context, tenantID, search str
 
 	var products []models.CachedProduct
 	likePattern := "%" + search + "%"
+	selectCols := []string{"ma", "ten_dong_bo_web", "ten", "nhan_hieu_name", "list_ten_nhom_vthh", "ma_cha"}
+
+	// Pass 1 — match against ten_dong_bo_web (web-synced display name).
 	err := db.DB.WithContext(ctx).
-		Select("ma", "ten_dong_bo_web", "ten", "nhan_hieu_name", "list_ten_nhom_vthh", "ma_cha").
-		Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
+		Select(selectCols).
+		Where("tenant_id = ? AND ten_dong_bo_web LIKE ?", tenantID, likePattern).
 		Find(&products).Error
 	if err != nil {
-		return nil, fmt.Errorf("local MySQL cache parent match query failed: %w", err)
+		return nil, fmt.Errorf("local MySQL cache web-name match query failed: %w", err)
+	}
+
+	// Pass 2 — only if pass 1 returned nothing, fall back to ERP's ten column.
+	if len(products) == 0 {
+		err = db.DB.WithContext(ctx).
+			Select(selectCols).
+			Where("tenant_id = ? AND ten LIKE ?", tenantID, likePattern).
+			Find(&products).Error
+		if err != nil {
+			return nil, fmt.Errorf("local MySQL cache ten match query failed: %w", err)
+		}
 	}
 
 	candidates := make([]map[string]interface{}, 0, len(products))
@@ -2787,15 +2785,28 @@ func detectMaChaFromSearch(ctx context.Context, tenantID, search string, allowed
 func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
+
+	// Pass 1 — ten_dong_bo_web (web-synced display name).
 	err := db.DB.WithContext(ctx).
-		Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
+		Where("tenant_id = ? AND ten_dong_bo_web LIKE ?", tenantID, likePattern).
 		Limit(100).
 		Find(&products).Error
 	if err != nil {
-		return nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+		return nil, fmt.Errorf("local MySQL cache web-name query failed: %w", err)
 	}
 
-	// Fallback to LLM fuzzy matching if SQL LIKE returned no results
+	// Pass 2 — ten (ERP raw name). Only if pass 1 empty.
+	if len(products) == 0 {
+		err = db.DB.WithContext(ctx).
+			Where("tenant_id = ? AND ten LIKE ?", tenantID, likePattern).
+			Limit(100).
+			Find(&products).Error
+		if err != nil {
+			return nil, fmt.Errorf("local MySQL cache ten query failed: %w", err)
+		}
+	}
+
+	// Fallback to LLM fuzzy matching if both LIKE passes returned no results
 	if len(products) == 0 {
 		matchedMaCha, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, keyword)
 		if llmErr != nil {
@@ -2885,146 +2896,6 @@ func loadActiveZaloOAAdapter(tenantID string) (*channels.ZaloOAAdapter, *models.
 	})
 
 	return adapter, activeChannel, nil
-}
-
-// sendProductRichMessage sends the Zalo OA option-list rich message for an
-// ambiguous product search and returns the parent SP codes (in displayed
-// order, max 3) when the push succeeds.
-//
-// The returned codes feed back into the /api/erp/query JSON response as
-// `parent_codes` + `numbered_list` so the Langflow ToolCallingAgent can
-// include the same list inside its final assistant text. That assistant text
-// is then persisted with `is_disambiguation=false` and ends up in the
-// HistoryRetriever scope, which is required by the agent's DISAMBIGUATION
-// FOLLOW-UP rule: when the next user message is "1/2/3" or "SPxxxxxx",
-// the agent scans chat history for the numbered list to resolve the digit
-// to a real parent_code before calling ERP again. Without the list in the
-// retriever-visible turn, that rule has nothing to scan and the follow-up
-// goes silent.
-func sendProductRichMessage(c *gin.Context, tenantID, search string, webGroups []engine.WebGroupMatch, permCtx *engine.GroupPermissionContext) (bool, []engine.WebGroupMatch) {
-	buttons := make([]channels.ZaloOAButton, 0, 3)
-	sentGroups := make([]engine.WebGroupMatch, 0, 3)
-	for i, g := range webGroups {
-		if i >= 3 {
-			break
-		}
-		var payload string
-		if g.IsFallback && len(g.ParentCodes) > 0 {
-			payload = "#show_product_variants:" + g.ParentCodes[0]
-		} else {
-			payload = "#show_web_variants:" + g.WebName
-		}
-		buttons = append(buttons, channels.ZaloOAButton{
-			Title:   g.WebName,
-			Payload: payload,
-		})
-		sentGroups = append(sentGroups, g)
-	}
-
-	if permCtx.ZaloUserID == "" {
-		log.Printf("[erp_query] cannot send Zalo Rich Message for products: missing zalo user id")
-		return false, nil
-	}
-
-	adapter, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
-	if err != nil {
-		log.Printf("[erp_query] cannot send Zalo Rich Message for products: %v", err)
-		return false, nil
-	}
-
-	prompt := fmt.Sprintf("Tôi tìm thấy nhiều sản phẩm khớp với '%s'. Bạn muốn hỏi về dòng sản phẩm nào?", search)
-
-	var matchedGroup models.CRMGroup
-	hasGroup := false
-	if len(permCtx.Groups) > 0 {
-		for _, gp := range permCtx.Groups {
-			if gp.GroupID != "private_bot" {
-				if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
-					hasGroup = true
-					break
-				}
-			}
-		}
-	}
-
-	// Zalo OA list template fallback to plain text — see workers/tasks.go
-	// flow_type prompt for context.
-	text := channels.BuildButtonOptionsAsText(prompt, buttons)
-	var sendErr error
-	if hasGroup {
-		sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, text)
-	} else {
-		sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, text)
-	}
-
-	if sendErr != nil {
-		log.Printf("[erp_query] failed to send Zalo option list for products: %v", sendErr)
-		return false, nil
-	}
-
-	log.Printf("[erp_query] successfully sent Zalo option list for products to %s", permCtx.ZaloUserID)
-
-	// Persist the option-list message into AstraDB chat history so the bot
-	// has context for the user's follow-up reply (e.g. "1" → SP458484).
-	// The Zalo push above bypasses Langflow, so the regular MsgToDoc path in
-	// the flow never sees this message. We mirror the displayed text and
-	// write it under the user's active Langflow session.
-	groupID := ""
-	if hasGroup {
-		groupID = matchedGroup.ZaloGroupID
-	}
-	go persistOptionListToHistory(activeChannel.ID, tenantID, permCtx.ZaloUserID, groupID, text)
-
-	return true, sentGroups
-}
-
-// persistOptionListToHistory asynchronously stores a Zalo OA option-list
-// message as an "assistant" row in the AstraDB conversation history. Failures
-// are logged and never surfaced to the HTTP caller — chat-history persistence
-// must never block product lookup.
-func persistOptionListToHistory(channelID, tenantID, zaloUserID, zaloGroupID, content string) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[erp_query] panic while persisting option list to astra: %v", r)
-		}
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	sessionID := engine.ResolveActiveSessionID(ctx, channelID, zaloUserID, zaloGroupID)
-	if sessionID == "" {
-		log.Printf("[erp_query] no active session for %s, skip astra save", zaloUserID)
-		return
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		log.Printf("[erp_query] config load failed, skip astra save: %v", err)
-		return
-	}
-	apiEndpoint, token, keyspace, collection := resolveAstraCredsForTenant(tenantID, cfg)
-	if apiEndpoint == "" || token == "" {
-		log.Printf("[erp_query] astra not configured for tenant %s, skip save", tenantID)
-		return
-	}
-
-	embedder := engine.BuildTenantEmbedder(tenantID, engine.EmbeddingConfig{
-		FallbackAPIKey: cfg.LangflowEmbeddingAPIKey,
-		Model:          cfg.LangflowEmbeddingModel,
-		BaseURL:        cfg.LangflowEmbeddingBaseURL,
-		EncryptionKey:  cfg.EncryptionKey,
-	})
-
-	if err := engine.SaveChatMessage(ctx, apiEndpoint, token, keyspace, collection, engine.ChatMessage{
-		ZaloUserID:       zaloUserID,
-		SessionID:        sessionID,
-		Role:             "assistant",
-		Content:          content,
-		IsDisambiguation: true,
-	}, embedder); err != nil {
-		log.Printf("[erp_query] failed to persist option list to astra: %v", err)
-	}
 }
 
 // resolveAstraCredsForTenant returns the AstraDB connection settings for a
