@@ -55,7 +55,7 @@ Hai câu hỏi mẫu được trace đầy đủ:
      │           │              │                                                       8. ERPQuery     │
      │           │              │                                                          (erp.go:36)  │
      │           │              │                                          case "orders" (erp.go:1913)  │
-     │           │              │                                          ── sale_document/search ───► │
+     │           │              │                                          ── saorders/search (POST) ──► │
      │           │              │                                                       9. JSON resp  ◄─┤
      │           │              │                                          lọc scope + buildOrdersSummary
      │           │              │           10. Agent đọc orders_summary ◄──────────────│              │
@@ -113,39 +113,53 @@ orders, customers, debt}`. Với đơn hàng:
         │ (erp.go:1914-1928)        │   days > 0                 days == 0
         │ → agent: [RICH_MESSAGE_    │      │                         │
         │   SENT], bot gửi tin text │      ▼                         ▼
-                                  ┌────────────────────┐   ┌──────────────────────┐
-                                  │ Cửa sổ ngày:        │   │ Fallback keyword      │
-                                  │ TU_NGAY = now-days  │   │ search (erp.go:2030)  │
-                                  │ DEN_NGAY = now      │   │ params={keyword,limit,│
-                                  │ limit=200           │   │   partner_id?}        │
-                                  │ SearchCustomEndpoint│   │ → SearchCustomEndpoint│
-                                  │ (ordersEndpoint)    │   └──────────────────────┘
-                                  │ (erp.go:1960-1969)  │
-                                  └─────────┬───────────┘
+                                  ┌─────────────────────────┐   ┌──────────────────────┐
+                                  │ Cửa sổ ngày (JSON body): │   │ Fallback keyword      │
+                                  │ TU_NGAY = now-days       │   │ search (erp.go:2030)  │
+                                  │ DEN_NGAY = now           │   │ params={keyword,limit,│
+                                  │ KHÔNG gửi limit / mã KH  │   │   partner_id?}        │
+                                  │ (saorders/search không   │   │ → SearchCustomEndpoint│
+                                  │  lọc theo MA_KHACH_HANG) │   └──────────────────────┘
+                                  │ SearchCustomEndpointWith │
+                                  │   Body(ordersEndpoint)   │
+                                  │ (erp.go:1960-1972)       │
+                                  └─────────┬────────────────┘
                                             ▼
-                              Lọc theo scope (erp.go:1972-1990) — xem mục D
+                              Lọc theo scope (erp.go:1974-1992) — xem mục D
                                             ▼
-                              Chuẩn hoá field (erp.go:1992-2003)
-                              buildOrdersSummary (erp_orders.go:152)
-                              trimOrdersForLLM(…, 20) (erp_orders.go:200)
+                              Chuẩn hoá field (erp.go:1994-2007)
+                              buildOrdersSummary (erp_orders.go:223)
+                              trimOrdersForLLM(…, 20) (erp_orders.go:271)
                                             ▼
-                              JSON: orders_summary + orders[] (erp.go:2014-2027)
+                              JSON: orders_summary + orders[] (erp.go:2016-2029)
 ```
 
-> `ordersEndpoint` mặc định là `sale_document/search`; tenant có thể override qua
-> setting `erp_global_method_permissions` (key `orders.path`) — xem
-> `erp.go:1931-1949`.
+> `ordersEndpoint` mặc định là `saorders/search` (POST, JSON body
+> `{TU_NGAY, DEN_NGAY}`); tenant có thể override qua setting
+> `erp_global_method_permissions` (key `orders.path`) — xem `erp.go:1931-1949`.
+> Endpoint **không** nhận `MA_KHACH_HANG` làm input và **không** giới hạn
+> `limit`: backend lấy về toàn bộ đơn trong cửa sổ ngày rồi tự lọc theo mã
+> khách ở phía Go (mục D).
 
 ---
 
-## D. Lọc theo scope khách hàng (erp.go:1972-1990)
+## D. Lọc theo scope khách hàng (erp.go:1974-1992)
 
 Định danh khách: **ZaloUserID** (người gửi) → tra `zalo_customers`
 (`status='approved'`) → **CustomerCode**. `scopeType` lấy từ
 `IsResourceAllowed("orders")` (erp.go:202, `permission_context.go:269`).
 
+> ⚠️ **Trích mã khách từ `MA_KHACH_HANG`:** endpoint `saorders/search` trả
+> `MA_KHACH_HANG` dạng **mảng** `[id, "MÃ - Tên"]` (ví dụ
+> `[2273, "S052 - Phượt 4P"]`). Hàm `orderCustomerCode` (erp_orders.go:138) chuẩn
+> hoá về **mã trần** (`S052`) bằng cách lấy phần tử `[1]` rồi cắt trước `" - "`
+> (`leadingCustomerCode`, erp_orders.go:125); vẫn fallback chuỗi phẳng /
+> `MA_KH`/`MA_DT` cho payload kiểu cũ. So khớp với `CustomerCode` cũng được
+> đưa qua `leadingCustomerCode` để cùng dạng.
+
 ```
-   Mỗi đơn ERP → itemCustCode = MA_KH | MA_DT | customer_code | partner_code
+   Mỗi đơn ERP → itemCustCode = orderCustomerCode(item)
+                 (MA_KHACH_HANG[mảng/chuỗi] → mã trần; fallback MA_KH/MA_DT)
                                    │
         ┌──────────────────────────┼───────────────────────────┐
    scope = "own"             scope = "assigned"            scope = "all"
@@ -154,25 +168,27 @@ orders, customers, debt}`. Với đơn hàng:
  giữ đơn nếu             resolveGroupCustomerCodes        giữ tất cả
  itemCustCode ==         (theo CRM group) → allowedCodes  (nội bộ/nhân viên)
  CustomerCode            giữ đơn nếu itemCustCode ∈ allowedCodes
- (khách chỉ thấy         (nhân viên thấy đơn của nhóm
-  đơn của mình)           khách được giao)
+ (khách chỉ thấy         (so khớp qua leadingCustomerCode)
+  đơn của mình)           (nhân viên thấy đơn của nhóm khách được giao)
 ```
 
 ---
 
 ## E. Hình dạng dữ liệu
 
-### Field ERP thô → field chuẩn hoá (erp.go:1992-2003)
+### Field ERP thô → field chuẩn hoá (erp.go:1994-2007)
+
+Theo đúng response chính thức của `saorders/search`:
 
 | Field chuẩn hoá | Khoá ERP thô (thử lần lượt) |
 |---|---|
-| `order_id` | `MA_SO`, `MA`, `order_id`, `name` |
-| `customer_name` | `TEN_KH`, `TEN_DT`, `customer_name` |
-| `customer_code` | `MA_KH`, `MA_DT` |
+| `order_id` | `MA_HOA_DON`, `MA_SO`, `MA`, `order_id`, `name`, `id` |
+| `customer_name` | `TEN_KHACH_HANG`, `TEN_KH`, `TEN_DT`, `customer_name` |
+| `customer_code` | `orderCustomerCode(item)` ← `MA_KHACH_HANG` (mảng `[id,"MÃ - Tên"]`) / fallback `MA_KH`,`MA_DT` |
 | `status` / `trang_thai` | `TRANG_THAI` |
-| `total` | `TONG_TIEN`, `total` |
-| `date` | `NGAY_LAP`, `date` |
-| `don_dat_hang_chi_tiet` | `DON_DAT_HANG_CHI_TIET` (mảng dòng hàng, cộng `SO_LUONG`) |
+| `total` | **tính từ dòng hàng**: `Σ(SO_LUONG × DON_GIA)` − `GIAM_GIA_HOA_DON` (`computeOrderTotal`, erp_orders.go:169). Endpoint **không** trả field tổng. |
+| `date` | `THOI_GIAN_TAO`, `NGAY_LAP`, `date` |
+| `don_dat_hang_chi_tiet` | `DON_DAT_HANG_CHI_TIET` (mảng dòng hàng; `SO_LUONG` cộng cho quantity, `DON_GIA` cho total) |
 
 ### Nhãn trạng thái (erp_orders.go:98-120)
 
@@ -185,7 +201,7 @@ orders, customers, debt}`. Với đơn hàng:
 
 > Mã ngoài tập trên → `"Khác (mã X)"`; rỗng → `"Không xác định"`.
 
-### Ví dụ response JSON (erp.go:2014-2027)
+### Ví dụ response JSON (erp.go:2016-2029)
 
 ```json
 {
@@ -193,7 +209,7 @@ orders, customers, debt}`. Với đơn hàng:
   "source": "cloudify_live",
   "resource": "orders",
   "scope": "own",
-  "customer_code": "CUST-001",
+  "customer_code": "S052",
   "range_days": 7,
   "from": "20/05/2026",
   "to": "27/05/2026",
@@ -242,14 +258,16 @@ Anh không có đơn hàng nào trong 7 ngày gần đây.
 | Nhánh orders | `backend/api/handlers/erp.go:1913` | `case "orders"` |
 | Generic detect | `backend/api/handlers/erp_orders.go:14` | `isGenericOrderSearch` |
 | Prompt khoảng thời gian (plain text) | `backend/api/handlers/erp.go:1914-1928` (mock: `2503-2517`) | `is_orders_prompt`, `zalo_rich_message` (không còn `attachment`/buttons) |
-| Cấu hình endpoint | `backend/api/handlers/erp.go:1931-1949` | mặc định `sale_document/search` |
+| Cấu hình endpoint | `backend/api/handlers/erp.go:1931-1949` | mặc định `saorders/search` (POST body) |
 | Parse cửa sổ ngày | `backend/api/handlers/erp_orders.go:26` | `parseDaysFromSearch` |
-| Gọi ERP | `backend/api/handlers/erp.go:1960-1969` | `SearchCustomEndpoint(TU_NGAY,DEN_NGAY,limit)` |
-| Lọc theo scope | `backend/api/handlers/erp.go:1972-1990` | own / assigned / all |
-| Chuẩn hoá field | `backend/api/handlers/erp.go:1992-2003` | `getMapString` / `getMapFloat` |
-| Tổng hợp | `backend/api/handlers/erp_orders.go:152` | `buildOrdersSummary` |
-| Cộng số lượng | `backend/api/handlers/erp_orders.go:125` | `sumOrderLineQuantity` |
-| Nhãn trạng thái | `backend/api/handlers/erp_orders.go:98-120` | `orderStatusDisplayName` |
-| Cắt cho LLM | `backend/api/handlers/erp_orders.go:200` | `trimOrdersForLLM` (max 20) |
-| Response JSON | `backend/api/handlers/erp.go:2014-2027` | `orders_summary` + `orders[]` |
-| Fallback keyword | `backend/api/handlers/erp.go:2030-2039` | `{keyword,limit,partner_id?}` |
+| Gọi ERP | `backend/api/handlers/erp.go:1960-1972` | `SearchCustomEndpointWithBody(TU_NGAY,DEN_NGAY)` — không limit, không mã KH |
+| Trích mã KH | `backend/api/handlers/erp_orders.go:138`, `:125` | `orderCustomerCode` / `leadingCustomerCode` (mảng `MA_KHACH_HANG`) |
+| Lọc theo scope | `backend/api/handlers/erp.go:1974-1992` | own / assigned / all |
+| Chuẩn hoá field | `backend/api/handlers/erp.go:1994-2007` | `getMapString` + `computeOrderTotal` |
+| Tính total từ dòng hàng | `backend/api/handlers/erp_orders.go:169` | `computeOrderTotal` (Σ `SO_LUONG`×`DON_GIA` − `GIAM_GIA_HOA_DON`) |
+| Tổng hợp | `backend/api/handlers/erp_orders.go:223` | `buildOrdersSummary` |
+| Cộng số lượng | `backend/api/handlers/erp_orders.go:196` | `sumOrderLineQuantity` |
+| Nhãn trạng thái | `backend/api/handlers/erp_orders.go:112-120` | `orderStatusDisplayName` |
+| Cắt cho LLM | `backend/api/handlers/erp_orders.go:271` | `trimOrdersForLLM` (max 20) |
+| Response JSON | `backend/api/handlers/erp.go:2016-2029` | `orders_summary` + `orders[]` |
+| Fallback keyword | `backend/api/handlers/erp.go:2032-2041` | `{keyword,limit,partner_id?}` |

@@ -48,7 +48,7 @@ func formatDate(t time.Time) string {
 // Returns ok=false when nothing parses, so callers can decide whether to
 // hide the row or surface it without a date.
 func parseOrderDate(item map[string]interface{}) (time.Time, bool) {
-	keys := []string{"date", "create_date", "ngay_lap", "ngay_ct", "write_date", "NGAY_LAP", "NGAY_CT"}
+	keys := []string{"date", "create_date", "ngay_lap", "ngay_ct", "write_date", "NGAY_LAP", "NGAY_CT", "THOI_GIAN_TAO", "thoi_gian_tao"}
 	for _, k := range keys {
 		if val, ok := item[k]; ok && val != nil {
 			if str, ok := val.(string); ok && str != "" {
@@ -117,6 +117,77 @@ func orderStatusDisplayName(code string) string {
 		return "Không xác định"
 	}
 	return fmt.Sprintf("Khác (mã %s)", code)
+}
+
+// leadingCustomerCode strips the "<code> - <name>" label Cloudify ships in
+// MA_KHACH_HANG / customer codes down to the bare code (e.g.
+// "S052 - Phượt 4P" → "S052"). A bare code passes through unchanged.
+func leadingCustomerCode(s string) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.Index(s, " - "); idx >= 0 {
+		return strings.TrimSpace(s[:idx])
+	}
+	return s
+}
+
+// orderCustomerCode extracts the customer code from a raw saorders/search
+// row. The official endpoint ships MA_KHACH_HANG as a 2-element array
+// [id, "CODE - Name"]; older/flat payloads use a plain string or the legacy
+// MA_KH / MA_DT aliases. Returns the bare code so it can be compared against
+// the verified customer's CustomerCode.
+func orderCustomerCode(item map[string]interface{}) string {
+	if raw, ok := item["MA_KHACH_HANG"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case string:
+			if code := leadingCustomerCode(v); code != "" {
+				return code
+			}
+		case []interface{}:
+			// Prefer the labelled element ([1] = "CODE - Name"); fall back to
+			// the numeric id ([0]) when no label is present.
+			if len(v) >= 2 {
+				if s, ok := v[1].(string); ok {
+					if code := leadingCustomerCode(s); code != "" {
+						return code
+					}
+				}
+			}
+			if len(v) >= 1 && v[0] != nil {
+				return strings.TrimSpace(fmt.Sprintf("%v", v[0]))
+			}
+		}
+	}
+	// Legacy flat keys from older ERP shapes.
+	return getMapString(item, "MA_KH", "ma_kh", "MA_DT", "ma_dt", "customer_code", "partner_code")
+}
+
+// computeOrderTotal derives an order's value from its line items
+// (Σ SO_LUONG × DON_GIA) minus the invoice-level discount GIAM_GIA_HOA_DON.
+// saorders/search carries no precomputed total field, so summing the lines
+// is the only correct source. Clamps to 0 so a discount that exceeds the
+// line total never yields a negative value.
+func computeOrderTotal(item map[string]interface{}) float64 {
+	raw, ok := item["DON_DAT_HANG_CHI_TIET"]
+	if !ok || raw == nil {
+		raw = item["don_dat_hang_chi_tiet"]
+	}
+	var total float64
+	if lines, ok := raw.([]interface{}); ok {
+		for _, line := range lines {
+			m, ok := line.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			qty := getMapFloat(m, "SO_LUONG", "so_luong", "quantity", "SL", "sl")
+			price := getMapFloat(m, "DON_GIA", "don_gia", "price", "gia")
+			total += qty * price
+		}
+	}
+	total -= getMapFloat(item, "GIAM_GIA_HOA_DON", "giam_gia_hoa_don")
+	if total < 0 {
+		total = 0
+	}
+	return total
 }
 
 // sumOrderLineQuantity walks DON_DAT_HANG_CHI_TIET and totals SO_LUONG.

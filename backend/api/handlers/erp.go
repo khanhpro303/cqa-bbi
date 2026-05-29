@@ -1928,7 +1928,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			return
 		}
 
-		ordersEndpoint := "sale_document/search" // default
+		ordersEndpoint := "saorders/search" // default (official Cloudify endpoint)
 		var globalPermsSetting models.AppSetting
 		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
 			type EndpointConfig struct {
@@ -1961,25 +1961,31 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		if days > 0 {
 			tuNgay := formatDate(time.Now().AddDate(0, 0, -days))
 			denNgay := formatDate(time.Now())
-			params := map[string]string{
+			// saorders/search accepts only the date window as input — it does
+			// NOT support filtering by MA_KHACH_HANG. Per the official docs we
+			// POST {TU_NGAY, DEN_NGAY} as a JSON body (no limit), pull the full
+			// window, then filter by customer code client-side below.
+			body := map[string]interface{}{
 				"TU_NGAY":  tuNgay,
 				"DEN_NGAY": denNgay,
-				"limit":    "200",
 			}
-			data, err = client.SearchCustomEndpoint(ordersEndpoint, params)
+			data, err = client.SearchCustomEndpointWithBody(ordersEndpoint, body)
 			if err == nil {
+				customerCode := leadingCustomerCode(permCtx.CustomerCode)
 				var filteredData []map[string]interface{}
 				for _, item := range data {
-					itemCustCode := getMapString(item, "MA_KH", "ma_kh", "MA_DT", "ma_dt", "customer_code", "partner_code")
+					// MA_KHACH_HANG arrives as [id, "CODE - Name"]; orderCustomerCode
+					// normalizes that (and legacy flat shapes) to the bare code.
+					itemCustCode := orderCustomerCode(item)
 
 					// Filter by customer code match based on scope
-					if scopeType == "own" && !strings.EqualFold(itemCustCode, permCtx.CustomerCode) {
+					if scopeType == "own" && !strings.EqualFold(itemCustCode, customerCode) {
 						continue
 					}
 					if scopeType == "assigned" {
 						matched := false
 						for _, ac := range allowedCodes {
-							if strings.EqualFold(ac, itemCustCode) {
+							if strings.EqualFold(leadingCustomerCode(ac), itemCustCode) {
 								matched = true
 								break
 							}
@@ -1990,15 +1996,17 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					}
 
 					record := map[string]interface{}{
-						"order_id":              getMapString(item, "MA_SO", "ma_so", "MA", "ma", "order_id", "name"),
-						"customer_name":         getMapString(item, "TEN_KH", "ten_kh", "TEN_DT", "ten_dt", "customer_name"),
+						"order_id":              getMapString(item, "MA_HOA_DON", "ma_hoa_don", "MA_SO", "ma_so", "MA", "ma", "order_id", "name", "id"),
+						"customer_name":         getMapString(item, "TEN_KHACH_HANG", "ten_khach_hang", "TEN_KH", "ten_kh", "TEN_DT", "ten_dt", "customer_name"),
 						"customer_code":         itemCustCode,
 						"status":                getMapString(item, "TRANG_THAI", "trang_thai", "status"),
 						"trang_thai":            getMapString(item, "TRANG_THAI", "trang_thai"),
 						"ghi_chu":               getMapString(item, "GHI_CHU", "ghi_chu"),
 						"don_dat_hang_chi_tiet": item["DON_DAT_HANG_CHI_TIET"],
-						"total":                 getMapFloat(item, "TONG_TIEN", "tong_tien", "total"),
-						"date":                  getMapString(item, "NGAY_LAP", "ngay_lap", "date"),
+						// saorders/search has no precomputed total — derive it
+						// from line items (Σ SO_LUONG × DON_GIA) − GIAM_GIA_HOA_DON.
+						"total": computeOrderTotal(item),
+						"date":  getMapString(item, "THOI_GIAN_TAO", "thoi_gian_tao", "NGAY_LAP", "ngay_lap", "date"),
 					}
 					filteredData = append(filteredData, record)
 				}
