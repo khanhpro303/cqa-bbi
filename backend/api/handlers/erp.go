@@ -1484,6 +1484,21 @@ func resolveGroupCustomerCode(tenantID string, groupIDs []string) string {
 	return ""
 }
 
+// resolveOwnCustomerCode returns the customer code bound to the verified
+// caller for scope="own": the worker normally signs it into the permission
+// token (permCtx.CustomerCode); when absent (token-less call) it falls back to
+// the CRM group's CustomerCode (GMF group → exactly one Cloudify code).
+func resolveOwnCustomerCode(permCtx *engine.GroupPermissionContext, tenantID string) string {
+	if code := strings.TrimSpace(permCtx.CustomerCode); code != "" {
+		return code
+	}
+	var groupIDs []string
+	for _, grp := range permCtx.Groups {
+		groupIDs = append(groupIDs, grp.GroupID)
+	}
+	return resolveGroupCustomerCode(tenantID, groupIDs)
+}
+
 func resolveGroupCustomerCodes(tenantID string, groupIDs []string) ([]string, error) {
 	if len(groupIDs) == 0 {
 		return []string{}, nil
@@ -1944,6 +1959,55 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			allowedCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
 		}
 
+		// Specific order code (e.g. "ĐH000016"): saorders/search filters
+		// server-side on SO_DON_HANG and returns just that order. We verify it
+		// belongs to the verified customer before handing it to the LLM, and
+		// reply 400 (with a Vietnamese message the agent relays) when it does
+		// not exist or is not theirs.
+		if code := extractOrderCode(search); code != "" {
+			code = strings.ToUpper(code)
+			data, err = client.SearchCustomEndpointWithBody(ordersEndpoint, map[string]interface{}{
+				"SO_DON_HANG": code,
+			})
+			if err != nil || len(data) == 0 {
+				writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadRequest, 0, c.ClientIP())
+				c.JSON(http.StatusBadRequest, gin.H{
+					"status":   "error",
+					"resource": "orders",
+					"message":  fmt.Sprintf("Không tìm thấy đơn hàng %s.", code),
+				})
+				return
+			}
+
+			item := data[0]
+			itemCustCode := orderCustomerCode(item)
+			ownCode := leadingCustomerCode(resolveOwnCustomerCode(permCtx, tenantID))
+			if !isOrderAuthorized(itemCustCode, scopeType, ownCode, allowedCodes) {
+				writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadRequest, 0, c.ClientIP())
+				c.JSON(http.StatusBadRequest, gin.H{
+					"status":   "error",
+					"resource": "orders",
+					"message":  "Đơn hàng này không thuộc tài khoản của bạn.",
+				})
+				return
+			}
+
+			record := normalizeOrderRecord(item)
+			writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusOK, 1, c.ClientIP())
+			c.JSON(http.StatusOK, gin.H{
+				"status":        "success",
+				"source":        "cloudify_live",
+				"resource":      "orders",
+				"scope":         scopeType,
+				"customer_code": permCtx.CustomerCode,
+				"order_code":    code,
+				"count":         1,
+				"orders":        []map[string]interface{}{record},
+				"data":          []map[string]interface{}{record},
+			})
+			return
+		}
+
 		days := parseDaysFromSearch(search)
 		if days > 0 {
 			tuNgay := formatDate(time.Now().AddDate(0, 0, -days))
@@ -1961,52 +2025,16 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				// Mã KH gán cho group GMF là nguồn chân lý. permCtx.CustomerCode
 				// thường đã mang mã này (worker ký vào token); fallback đọc trực
 				// tiếp CRMGroup.CustomerCode cho các call không có token.
-				ownCode := permCtx.CustomerCode
-				if ownCode == "" {
-					var groupIDs []string
-					for _, grp := range permCtx.Groups {
-						groupIDs = append(groupIDs, grp.GroupID)
-					}
-					ownCode = resolveGroupCustomerCode(tenantID, groupIDs)
-				}
-				customerCode := leadingCustomerCode(ownCode)
+				ownCode := leadingCustomerCode(resolveOwnCustomerCode(permCtx, tenantID))
 				var filteredData []map[string]interface{}
 				for _, item := range data {
 					// MA_KHACH_HANG arrives as [id, "CODE - Name"]; orderCustomerCode
 					// normalizes that (and legacy flat shapes) to the bare code.
 					itemCustCode := orderCustomerCode(item)
-
-					// Filter by customer code match based on scope
-					if scopeType == "own" && !strings.EqualFold(itemCustCode, customerCode) {
+					if !isOrderAuthorized(itemCustCode, scopeType, ownCode, allowedCodes) {
 						continue
 					}
-					if scopeType == "assigned" {
-						matched := false
-						for _, ac := range allowedCodes {
-							if strings.EqualFold(leadingCustomerCode(ac), itemCustCode) {
-								matched = true
-								break
-							}
-						}
-						if !matched {
-							continue
-						}
-					}
-
-					record := map[string]interface{}{
-						"order_id":              getMapString(item, "MA_HOA_DON", "ma_hoa_don", "MA_SO", "ma_so", "MA", "ma", "order_id", "name", "id"),
-						"customer_name":         getMapString(item, "TEN_KHACH_HANG", "ten_khach_hang", "TEN_KH", "ten_kh", "TEN_DT", "ten_dt", "customer_name"),
-						"customer_code":         itemCustCode,
-						"status":                getMapString(item, "TRANG_THAI", "trang_thai", "status"),
-						"trang_thai":            getMapString(item, "TRANG_THAI", "trang_thai"),
-						"ghi_chu":               getMapString(item, "GHI_CHU", "ghi_chu"),
-						"don_dat_hang_chi_tiet": item["DON_DAT_HANG_CHI_TIET"],
-						// saorders/search has no precomputed total — derive it
-						// from line items (Σ SO_LUONG × DON_GIA) − GIAM_GIA_HOA_DON.
-						"total": computeOrderTotal(item),
-						"date":  getMapString(item, "THOI_GIAN_TAO", "thoi_gian_tao", "NGAY_LAP", "ngay_lap", "date"),
-					}
-					filteredData = append(filteredData, record)
+					filteredData = append(filteredData, normalizeOrderRecord(item))
 				}
 				data = filteredData
 

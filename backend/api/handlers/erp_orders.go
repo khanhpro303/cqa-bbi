@@ -2,10 +2,69 @@ package handlers
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
+
+// orderCodeRe matches an ERP order code: the "ĐH"/"DH" prefix followed by
+// digits (e.g. "ĐH000016"). The (?i) flag folds Unicode case, so it also
+// matches "đh"/"dh"/"DH" variants. Used to route a customer message that
+// carries a concrete order code into the single-order lookup branch.
+var orderCodeRe = regexp.MustCompile(`(?i)[ĐD]H\d+`)
+
+// extractOrderCode returns the first order code found anywhere in the search
+// string (so "đơn ĐH000016 sao rồi" still resolves), or "" when none is
+// present — letting the caller fall through to the generic / date-window
+// branches.
+func extractOrderCode(search string) string {
+	return strings.TrimSpace(orderCodeRe.FindString(search))
+}
+
+// isOrderAuthorized reports whether an order with customer code itemCustCode
+// is visible under the given scope. own → only the verified customer's own
+// code; assigned → any code in allowedCodes (compared on the bare code);
+// all → always visible (internal staff). Any other scope denies by default.
+func isOrderAuthorized(itemCustCode, scopeType, ownCode string, allowedCodes []string) bool {
+	switch scopeType {
+	case "own":
+		return strings.EqualFold(itemCustCode, ownCode)
+	case "assigned":
+		for _, ac := range allowedCodes {
+			if strings.EqualFold(leadingCustomerCode(ac), itemCustCode) {
+				return true
+			}
+		}
+		return false
+	case "all":
+		return true
+	default:
+		return false
+	}
+}
+
+// normalizeOrderRecord maps a raw saorders/search row onto the canonical
+// fields the LLM consumes. order_id now also reads SO_DON_HANG (the order
+// code customers quote), and status_name carries the Vietnamese label so a
+// single-order reply (and enumerated orders[]) can render status without the
+// summary. saorders/search has no precomputed total — derive it from the
+// line items via computeOrderTotal.
+func normalizeOrderRecord(item map[string]interface{}) map[string]interface{} {
+	status := getMapString(item, "TRANG_THAI", "trang_thai", "status")
+	return map[string]interface{}{
+		"order_id":              getMapString(item, "SO_DON_HANG", "so_don_hang", "MA_HOA_DON", "ma_hoa_don", "MA_SO", "ma_so", "MA", "ma", "order_id", "name", "id"),
+		"customer_name":         getMapString(item, "TEN_KHACH_HANG", "ten_khach_hang", "TEN_KH", "ten_kh", "TEN_DT", "ten_dt", "customer_name"),
+		"customer_code":         orderCustomerCode(item),
+		"status":                status,
+		"trang_thai":            getMapString(item, "TRANG_THAI", "trang_thai"),
+		"status_name":           orderStatusDisplayName(status),
+		"ghi_chu":               getMapString(item, "GHI_CHU", "ghi_chu"),
+		"don_dat_hang_chi_tiet": item["DON_DAT_HANG_CHI_TIET"],
+		"total":                 computeOrderTotal(item),
+		"date":                  getMapString(item, "THOI_GIAN_TAO", "thoi_gian_tao", "NGAY_LAP", "ngay_lap", "date"),
+	}
+}
 
 // isGenericOrderSearch reports whether the search string is one of the
 // catch-all phrases the bot treats as "show me my orders" (with no

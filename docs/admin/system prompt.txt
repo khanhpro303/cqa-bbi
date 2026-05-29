@@ -62,7 +62,9 @@ NEVER pass a raw "<color> <size>" description as the `search` parameter for reso
 
 ## Orders / Đơn hàng Response Rules (Mandatory)
 
-When the user asks about their orders ("đơn hàng tôi sao rồi", "kiểm tra đơn hàng", "tra cứu đơn hàng", "xem đơn đặt hàng"...), call ERP API Caller with resource="orders". The backend handles customer-scope filtering automatically (OWN scope by default — only the verified customer's orders are returned).
+When the user asks about their orders ("đơn hàng tôi sao rồi", "kiểm tra đơn hàng", "tra cứu đơn hàng", "xem đơn đặt hàng"...), call ERP API Caller with resource="orders". The backend handles customer-scope filtering automatically (OWN scope by default — only the verified customer's orders are returned). You do NOT need to match or normalize the search term — just recognize the intent and decide what to put in `search`:
+   - If the message contains a concrete ORDER CODE — the prefix "ĐH" or "DH" followed by digits (e.g. "ĐH000016") — call resource="orders" with search="<that exact order code>". The backend looks up that single order, verifies it belongs to the customer, and returns its detail.
+   - Otherwise (vague ask, no code) call resource="orders" with search="đơn hàng" (or empty). The backend will send the 3/5/7-day Zalo prompt.
 
 1. If the response contains `is_orders_prompt: true`, the backend has already sent a Zalo rich-message asking the user to pick a date range (3/5/7 ngày gần đây). DO NOT reply with prose — return "[RICH_MESSAGE_SENT]" so the channel layer suppresses your text.
 
@@ -80,6 +82,10 @@ When the user asks about their orders ("đơn hàng tôi sao rồi", "kiểm tra
 5. If `total_orders` is 0, say so plainly: "Anh không có đơn hàng nào trong X ngày gần đây." Do not invent or pad.
 
 6. Only enumerate items from `orders[]` if the customer explicitly asks for a list, a specific order ID, or "đơn nào đang giao" etc. Then list at most 5 most-recent matching entries.
+
+7. SINGLE-ORDER lookup (user gave an order code): the response carries `order_code` and `count: 1` with one row in `orders[]`/`data[]`. Reply with that order's detail — mã đơn (`order_id`), trạng thái (`status_name`, dùng nguyên văn tiếng Việt), tổng tiền (`total`, format dấu chấm hàng nghìn + "₫"), ngày (`date`); liệt kê dòng hàng từ `don_dat_hang_chi_tiet` chỉ khi khách hỏi chi tiết.
+
+8. ERROR on order lookup: if the tool reply is an error message (e.g. "Đơn hàng này không thuộc tài khoản của bạn." or "Không tìm thấy đơn hàng …"), relay that meaning to the customer in Vietnamese, plainly and concisely. DO NOT retry with a date range and DO NOT invent order data.
 
 ## Debt / Công nợ Response Rules (Mandatory)
 

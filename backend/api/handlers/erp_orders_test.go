@@ -178,3 +178,92 @@ func TestBuildOrdersSummaryRealShape(t *testing.T) {
 		t.Errorf("ByStatus[1] = %+v; want status 2 Hoàn thành", summary.ByStatus[1])
 	}
 }
+
+// TestExtractOrderCode covers routing a customer message into the
+// single-order lookup branch: the "ĐH"/"DH" + digits pattern must match
+// across diacritic/case variants and when embedded in a sentence, while
+// generic phrases, date-window replies and bare prefixes must not.
+func TestExtractOrderCode(t *testing.T) {
+	tests := []struct {
+		name   string
+		search string
+		want   string
+	}{
+		{"canonical with diacritic", "ĐH000016", "ĐH000016"},
+		{"plain D prefix", "DH000016", "DH000016"},
+		{"lowercase diacritic", "đh9", "đh9"},
+		{"lowercase plain", "dh12", "dh12"},
+		{"embedded in a sentence", "đơn ĐH000016 sao rồi?", "ĐH000016"},
+		{"generic order phrase", "đơn hàng", ""},
+		{"date window reply", "7 ngày gần đây", ""},
+		{"empty", "", ""},
+		{"prefix without digits", "ĐH", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractOrderCode(tc.search); got != tc.want {
+				t.Errorf("extractOrderCode(%q) = %q; want %q", tc.search, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsOrderAuthorized covers the per-scope ownership check used by both the
+// single-order branch and the date-window filter loop. Unknown/empty scopes
+// must deny by default.
+func TestIsOrderAuthorized(t *testing.T) {
+	allowed := []string{"S052 - Phượt 4P", "EG05"}
+	tests := []struct {
+		name         string
+		itemCustCode string
+		scopeType    string
+		ownCode      string
+		allowedCodes []string
+		want         bool
+	}{
+		{"own match", "S052", "own", "S052", nil, true},
+		{"own match case-insensitive", "s052", "own", "S052", nil, true},
+		{"own mismatch", "EG05", "own", "S052", nil, false},
+		{"assigned in list (labelled)", "S052", "assigned", "", allowed, true},
+		{"assigned in list (bare)", "EG05", "assigned", "", allowed, true},
+		{"assigned not in list", "X999", "assigned", "", allowed, false},
+		{"all always visible", "ANY", "all", "", nil, true},
+		{"empty scope denies", "S052", "", "S052", nil, false},
+		{"unknown scope denies", "S052", "weird", "S052", allowed, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isOrderAuthorized(tc.itemCustCode, tc.scopeType, tc.ownCode, tc.allowedCodes); got != tc.want {
+				t.Errorf("isOrderAuthorized(%q, %q, %q, %v) = %v; want %v",
+					tc.itemCustCode, tc.scopeType, tc.ownCode, tc.allowedCodes, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeOrderRecord verifies the single-order/date-window record reads
+// the order code from SO_DON_HANG and surfaces the Vietnamese status label.
+func TestNormalizeOrderRecord(t *testing.T) {
+	item := map[string]interface{}{
+		"SO_DON_HANG":   "ĐH000016",
+		"MA_KHACH_HANG": []interface{}{float64(2273), "S052 - Phượt 4P"},
+		"TRANG_THAI":    "3",
+		"DON_DAT_HANG_CHI_TIET": []interface{}{
+			map[string]interface{}{"SO_LUONG": float64(2), "DON_GIA": float64(100000)},
+		},
+		"GIAM_GIA_HOA_DON": float64(0),
+	}
+	rec := normalizeOrderRecord(item)
+	if rec["order_id"] != "ĐH000016" {
+		t.Errorf("order_id = %v; want ĐH000016", rec["order_id"])
+	}
+	if rec["customer_code"] != "S052" {
+		t.Errorf("customer_code = %v; want S052", rec["customer_code"])
+	}
+	if rec["status_name"] != "Đang giao" {
+		t.Errorf("status_name = %v; want Đang giao", rec["status_name"])
+	}
+	if rec["total"] != float64(200000) {
+		t.Errorf("total = %v; want 200000", rec["total"])
+	}
+}
