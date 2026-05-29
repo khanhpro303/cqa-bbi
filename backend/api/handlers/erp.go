@@ -24,6 +24,59 @@ import (
 	"gorm.io/gorm"
 )
 
+// resolveGlobalMethodPermission matches a requested resource against the
+// tenant's global HTTP-method config (setting key erp_global_method_permissions).
+// It returns the system resource key to re-route to (empty if no match), whether
+// the HTTP method is permitted, and an error if the config JSON is malformed —
+// in which case the caller MUST fail closed rather than allow the request.
+//
+// Matching order is preserved from the original inline gate: custom Path first,
+// then the system resource key.
+func resolveGlobalMethodPermission(configJSON, reqResource, httpMethod string) (systemResource string, allowed bool, err error) {
+	type endpointConfig struct {
+		Get  bool   `json:"get"`
+		Post bool   `json:"post"`
+		Path string `json:"path"`
+	}
+	var perms map[string]endpointConfig
+	if e := json.Unmarshal([]byte(configJSON), &perms); e != nil {
+		return "", false, e
+	}
+
+	var matched endpointConfig
+	for sysRes, cfg := range perms {
+		path := cfg.Path
+		if path == "" {
+			path = sysRes
+		}
+		if strings.EqualFold(path, reqResource) {
+			systemResource, matched = sysRes, cfg
+			break
+		}
+	}
+	if systemResource == "" {
+		for sysRes, cfg := range perms {
+			if strings.EqualFold(sysRes, reqResource) {
+				systemResource, matched = sysRes, cfg
+				break
+			}
+		}
+	}
+	if systemResource == "" {
+		// Configured but the resource is not listed → treat as blocked.
+		return "", false, nil
+	}
+
+	switch strings.ToLower(httpMethod) {
+	case "get":
+		return systemResource, matched.Get, nil
+	case "post":
+		return systemResource, matched.Post, nil
+	default:
+		return systemResource, false, nil
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ERPQuery — called by Langflow agent to query live Cloudify ERP data
 // ---------------------------------------------------------------------------
@@ -133,54 +186,23 @@ func ERPQuery(c *gin.Context) {
 	methodAllowed := true
 	var globalPermsSetting models.AppSetting
 	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; err == nil && globalPermsSetting.ValuePlain != "" {
-		type EndpointConfig struct {
-			Get  bool   `json:"get"`
-			Post bool   `json:"post"`
-			Path string `json:"path"`
-		}
-		var globalPerms map[string]EndpointConfig
-		if json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms) == nil {
-			matchedSystemResource := ""
-			var matchedPerms EndpointConfig
-
-			// Find system resource key matching req.Resource by looking at custom paths
-			for sysRes, config := range globalPerms {
-				path := config.Path
-				if path == "" {
-					path = sysRes
-				}
-				if strings.EqualFold(path, req.Resource) {
-					matchedSystemResource = sysRes
-					matchedPerms = config
-					break
-				}
-			}
-
-			// If not matched dynamically, check if it matches the default resource keys
-			if matchedSystemResource == "" {
-				for sysRes, config := range globalPerms {
-					if strings.EqualFold(sysRes, req.Resource) {
-						matchedSystemResource = sysRes
-						matchedPerms = config
-						break
-					}
-				}
-			}
-
-			if matchedSystemResource != "" {
-				// Re-route internally to system expected resource
-				req.Resource = matchedSystemResource
-				reqMethod := strings.ToLower(c.Request.Method) // "get" or "post"
-				if reqMethod == "get" {
-					methodAllowed = matchedPerms.Get
-				} else if reqMethod == "post" {
-					methodAllowed = matchedPerms.Post
-				} else {
-					methodAllowed = false
-				}
+		sysRes, ok, perr := resolveGlobalMethodPermission(globalPermsSetting.ValuePlain, req.Resource, c.Request.Method)
+		if perr != nil {
+			// Fail closed: a configured-but-corrupt global config must not
+			// silently open every method/resource. Block and log for the admin.
+			log.Printf("[erp_query] malformed erp_global_method_permissions for tenant %s: %v — blocking (fail-safe)", tenantID, perr)
+			methodAllowed = false
+		} else {
+			if sysRes != "" {
+				// Re-route internally to the system expected resource.
+				req.Resource = sysRes
 			} else {
-				methodAllowed = false
+				// Surface why an otherwise-valid resource is blocked: once a
+				// global config exists it acts as a whitelist, so anything not
+				// listed is denied.
+				log.Printf("[erp_query] resource %q not in global method config for tenant %s — blocked", req.Resource, tenantID)
 			}
+			methodAllowed = ok
 		}
 	}
 	if !methodAllowed {

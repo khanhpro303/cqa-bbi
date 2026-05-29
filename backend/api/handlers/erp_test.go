@@ -1152,3 +1152,95 @@ func TestTrimOrdersForLLM(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveGlobalMethodPermission(t *testing.T) {
+	// orders allows POST only; debt allows GET only; products has a custom path.
+	validConfig := `{
+		"orders":   {"get": false, "post": true,  "path": ""},
+		"debt":     {"get": true,  "post": false, "path": ""},
+		"products": {"get": true,  "post": true,  "path": "danhmucvattuhanghoa/search"}
+	}`
+
+	tests := []struct {
+		name        string
+		config      string
+		resource    string
+		method      string
+		wantSysRes  string
+		wantAllowed bool
+		wantErr     bool
+	}{
+		{
+			name:        "system key match, GET allowed",
+			config:      validConfig,
+			resource:    "debt",
+			method:      "GET",
+			wantSysRes:  "debt",
+			wantAllowed: true,
+		},
+		{
+			name:        "system key match, POST not ticked",
+			config:      validConfig,
+			resource:    "debt",
+			method:      "POST",
+			wantSysRes:  "debt",
+			wantAllowed: false,
+		},
+		{
+			name:        "POST allowed for orders",
+			config:      validConfig,
+			resource:    "orders",
+			method:      "POST",
+			wantSysRes:  "orders",
+			wantAllowed: true,
+		},
+		{
+			name:        "custom path match re-routes to system key",
+			config:      validConfig,
+			resource:    "danhmucvattuhanghoa/search",
+			method:      "GET",
+			wantSysRes:  "products",
+			wantAllowed: true,
+		},
+		{
+			name:        "resource not in map is blocked, no error",
+			config:      validConfig,
+			resource:    "inventory",
+			method:      "GET",
+			wantSysRes:  "",
+			wantAllowed: false,
+		},
+		{
+			name:        "malformed JSON fails closed with error",
+			config:      `{"orders": {"post": true`,
+			resource:    "orders",
+			method:      "POST",
+			wantSysRes:  "",
+			wantAllowed: false,
+			wantErr:     true,
+		},
+		{
+			name:        "unknown HTTP method is blocked",
+			config:      validConfig,
+			resource:    "orders",
+			method:      "PUT",
+			wantSysRes:  "orders",
+			wantAllowed: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sysRes, allowed, err := resolveGlobalMethodPermission(tt.config, tt.resource, tt.method)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if sysRes != tt.wantSysRes {
+				t.Errorf("systemResource = %q, want %q", sysRes, tt.wantSysRes)
+			}
+			if allowed != tt.wantAllowed {
+				t.Errorf("allowed = %v, want %v", allowed, tt.wantAllowed)
+			}
+		})
+	}
+}
