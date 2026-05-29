@@ -66,18 +66,6 @@ func normalizeOrderRecord(item map[string]interface{}) map[string]interface{} {
 	}
 }
 
-// isGenericOrderSearch reports whether the search string is one of the
-// catch-all phrases the bot treats as "show me my orders" (with no
-// specific order code). Matching is accent-insensitive on the common
-// Vietnamese variants ERP customers type into Zalo.
-func isGenericOrderSearch(search string) bool {
-	s := strings.ToLower(strings.TrimSpace(search))
-	if s == "" || s == "đơn hàng" || s == "don hang" || s == "xem đơn hàng" || s == "xem don hang" || s == "check đơn hàng" || s == "check don hang" || s == "tra cứu đơn hàng" || s == "tra cuu don hang" || s == "đơn đặt hàng" || s == "don dat hang" {
-		return true
-	}
-	return false
-}
-
 // parseDaysFromSearch extracts a recent-window in days when the customer
 // includes "3 ngày", "7 ngày", "1 tuần" or accent-stripped equivalents in
 // the search query. Returns 0 when nothing matches so the caller can fall

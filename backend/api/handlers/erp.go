@@ -1913,23 +1913,9 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			}
 		}
 	case "orders":
-		if isGenericOrderSearch(search) {
-			promptMsg := gin.H{
-				"recipient": gin.H{
-					"user_id": permCtx.ZaloUserID,
-				},
-				"message": gin.H{
-					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\".",
-				},
-			}
-			c.JSON(http.StatusOK, gin.H{
-				"status":            "success",
-				"is_orders_prompt":  true,
-				"zalo_rich_message": promptMsg,
-			})
-			return
-		}
-
+		// Định tuyến dựa thẳng vào `search` mà LLM gửi (đã phân loại theo system
+		// prompt): mã đơn → tra 1 đơn; "N ngày gần đây" → cửa sổ ngày; còn lại
+		// (mơ hồ) → hỏi 3/5/7 ngày. Không cần danh sách cụm từ generic cứng.
 		ordersEndpoint := "saorders/search" // default (official Cloudify endpoint)
 		var globalPermsSetting models.AppSetting
 		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
@@ -2062,14 +2048,22 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				return
 			}
 		} else {
-			params := map[string]string{
-				"keyword": search,
-				"limit":   strconv.Itoa(limit),
+			// Không phải mã đơn, không phải khoảng ngày → câu hỏi mơ hồ.
+			// Backend gửi tin text hỏi 3/5/7 ngày; agent trả [RICH_MESSAGE_SENT].
+			promptMsg := gin.H{
+				"recipient": gin.H{
+					"user_id": permCtx.ZaloUserID,
+				},
+				"message": gin.H{
+					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\".",
+				},
 			}
-			if partnerID != "" {
-				params["partner_id"] = partnerID
-			}
-			data, err = client.SearchCustomEndpoint(ordersEndpoint, params)
+			c.JSON(http.StatusOK, gin.H{
+				"status":            "success",
+				"is_orders_prompt":  true,
+				"zalo_rich_message": promptMsg,
+			})
+			return
 		}
 	case "customers":
 		if scopeType == "own" {
@@ -2520,7 +2514,10 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
 
 	case "orders":
-		if isGenericOrderSearch(search) {
+		// Cùng định tuyến như nhánh live: LLM đã phân loại theo system prompt.
+		// Không có khoảng ngày → câu hỏi mơ hồ → hỏi 3/5/7 ngày.
+		days := parseDaysFromSearch(search)
+		if days <= 0 {
 			promptMsg := gin.H{
 				"recipient": gin.H{
 					"user_id": zaloUserID,
@@ -2542,16 +2539,9 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 			{"order_id": "ORD-2026-002", "customer_name": "Trần Thị B", "customer_code": "CUST-002", "status": "Đã hoàn thành", "total": 700000, "date": time.Now().AddDate(0, 0, -4).Format("2006-01-02 15:04:05")},
 			{"order_id": "ORD-2026-003", "customer_name": "Lê Văn C", "customer_code": "CUST-003", "status": "Đã hoàn thành", "total": 1200000, "date": time.Now().AddDate(0, 0, -6).Format("2006-01-02 15:04:05")},
 		}
+		cutoff := time.Now().AddDate(0, 0, -days)
 		var filtered []gin.H
-		days := parseDaysFromSearch(search)
-		var cutoff time.Time
-		if days > 0 {
-			cutoff = time.Now().AddDate(0, 0, -days)
-		}
-
 		for _, o := range allOrders {
-			id := strings.ToLower(o["order_id"].(string))
-			cust := strings.ToLower(o["customer_name"].(string))
 			code := strings.ToLower(o["customer_code"].(string))
 
 			if scopeType == "own" && !strings.EqualFold(code, customerCode) {
@@ -2570,16 +2560,9 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 				}
 			}
 
-			if days > 0 {
-				orderDateStr := o["date"].(string)
-				orderDate, _ := time.Parse("2006-01-02 15:04:05", orderDateStr)
-				if !orderDate.After(cutoff) {
-					continue
-				}
-			} else {
-				if search != "" && !strings.Contains(id, searchLower) && !strings.Contains(cust, searchLower) {
-					continue
-				}
+			orderDate, _ := time.Parse("2006-01-02 15:04:05", o["date"].(string))
+			if !orderDate.After(cutoff) {
+				continue
 			}
 
 			filtered = append(filtered, o)

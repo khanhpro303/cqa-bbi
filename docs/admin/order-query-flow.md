@@ -2,14 +2,17 @@
 
 Tài liệu này mô tả end-to-end luồng xử lý khi khách hàng nhắn cho bot một câu hỏi
 **trạng thái đơn hàng** trên Zalo OA — ví dụ điển hình: **"đơn hàng của tôi tới
-đâu rồi?"**. Tài liệu bám sát **code hiện tại** (handler `ERPQuery` nhánh
-`case "orders"` trong `erp.go` + các hàm helper trong `erp_orders.go`).
+đâu rồi?"**. Tài liệu bám sát **code hiện tại** (nhánh `case "orders"` bên trong
+`respondWithLiveDataV2` của `erp.go` + các hàm helper trong `erp_orders.go`).
 
 > 📎 Tài liệu này là bản song song của [`inventory-query-flow.md`](./inventory-query-flow.md)
 > cho resource **`orders`**. Dùng chung cùng một xương sống vận chuyển
 > (webhook → worker → Langflow → ERP gateway → Cloudify) nhưng nhánh xử lý bên
-> trong handler khác hẳn: orders **không** fuzzy-match mã sản phẩm; nó lọc theo
-> **cửa sổ ngày** + **scope khách hàng** rồi **tổng hợp theo trạng thái**.
+> trong handler khác hẳn: orders **không** fuzzy-match mã sản phẩm. Nó rẽ **3
+> chế độ**: (1) mơ hồ → hỏi khoảng thời gian; (2) có **mã đơn** (`ĐH/DH`+chữ số)
+> → tra đúng 1 đơn (lọc server-side theo `SO_DON_HANG`) + kiểm quyền sở hữu;
+> (3) **cửa sổ ngày** → kéo toàn bộ đơn trong khoảng rồi lọc **scope khách hàng**
+> và **tổng hợp theo trạng thái**.
 
 Ba câu hỏi mẫu được trace đầy đủ:
 
@@ -59,7 +62,8 @@ Ba câu hỏi mẫu được trace đầy đủ:
      │           │              │               Body: {resource:"orders", search, zalo_user_id} ──────► │
      │           │              │                                                       8. ERPQuery     │
      │           │              │                                                          (erp.go:36)  │
-     │           │              │                                          case "orders" (erp.go:1900)  │
+     │           │              │                              respondWithLiveDataV2 → case "orders"     │
+     │           │              │                                                       (erp.go:1915)   │
      │           │              │                                          ── saorders/search (POST) ──► │
      │           │              │                                                       9. JSON resp  ◄─┤
      │           │              │                                          lọc scope + buildOrdersSummary
@@ -70,16 +74,17 @@ Ba câu hỏi mẫu được trace đầy đủ:
    "Anh có 9 đơn từ 20/05–27/05…"
 ```
 
-> Nếu câu hỏi **mơ hồ** (mục C, nhánh trái) thì ở bước 8 handler trả về
-> `is_orders_prompt=true` + `zalo_rich_message`; agent trả `[RICH_MESSAGE_SENT]`
-> và bot gửi **một tin nhắn plain text** hỏi khoảng thời gian. Khách gõ lại
-> (vd: `"7 ngày gần đây"`) → quay lại bước 1 với `search="đơn hàng N ngày gần đây"`.
+> Nếu câu hỏi **mơ hồ** (mục C, nhánh `else` — không phải mã đơn, không phải
+> khoảng ngày) thì ở bước 8 handler trả về `is_orders_prompt=true` +
+> `zalo_rich_message`; agent trả `[RICH_MESSAGE_SENT]` và bot gửi **một tin nhắn
+> plain text** hỏi khoảng thời gian. Khách gõ lại (vd: `"7 ngày gần đây"`) → quay
+> lại bước 1 với `search="đơn hàng N ngày gần đây"`.
 >
 > ⚠️ **Đã bỏ template list + buttons của Zalo.** `zalo_rich_message` giờ chỉ chứa
 > `recipient.user_id` + `message.text` (không còn `attachment.type="template"` /
 > `buttons`), nên webhook bắn về Zalo là tin nhắn văn bản thuần. Phần liệt kê lựa
 > chọn (3 / 5 / 7 ngày) nằm ngay trong nội dung text để khách tự nhắn lại. Text
-> hiện tại (erp.go:1907):
+> hiện tại (nhánh `else`, erp.go:2050):
 >
 > > *Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng
 > > nhắn: "3 ngày gần đây", "5 ngày gần đây" hoặc "7 ngày gần đây".*
@@ -93,13 +98,15 @@ orders, customers, debt}`. Với đơn hàng:
 
 | Kịch bản | Ý định khách | Tool call |
 |---|---|---|
-| **O1** | "đơn của tôi tới đâu / xem đơn hàng" (mơ hồ) | `orders(search="đơn hàng")` → backend tự gửi tin text hỏi khoảng thời gian |
+| **O1** | "đơn của tôi tới đâu / xem đơn hàng" (mơ hồ) | `orders(search="đơn hàng")` → backend rơi vào nhánh `else` → gửi tin text hỏi khoảng thời gian |
 | **O2** | "đơn 3/5/7 ngày gần đây" / "đơn tuần này" | `orders(search="đơn hàng 7 ngày gần đây")` → backend trả `orders_summary` |
 | **O3** | "đơn ĐH000016 sao rồi" (kèm **mã đơn** `ĐH/DH`+chữ số) | `orders(search="ĐH000016")` → backend tra 1 đơn + check quyền sở hữu → trả chi tiết hoặc **400** |
 
 > 🧠 **Agent tự nhận biết, KHÔNG cần match search term.** Chỉ cần phân biệt: có mã
 > đơn (regex `ĐH/DH`+chữ số) → gửi đúng mã vào `search`; không có → gửi generic
-> `"đơn hàng"`. Mọi việc lọc/kiểm quyền do backend lo.
+> `"đơn hàng"`. Backend **không** dò danh sách cụm từ generic nữa: bất cứ `search`
+> nào không phải mã đơn và không phải khoảng ngày đều rơi vào nhánh `else` → hỏi
+> 3/5/7 ngày. Mọi việc lọc/kiểm quyền do backend lo.
 
 > 🔢 **LUẬT CỨNG:** Khi trả lời cho O2, agent **PHẢI** dùng `orders_summary` (đã cộng
 > sẵn count / total / quantity theo từng trạng thái) để nêu con số. **KHÔNG** tự đếm
@@ -108,51 +115,54 @@ orders, customers, debt}`. Với đơn hàng:
 
 ---
 
-## C. Sơ đồ quyết định bên trong `case "orders"` (erp.go:1900)
+## C. Sơ đồ quyết định bên trong `case "orders"` (erp.go:1915)
 
 ```
-                       ERPQuery → respondWithLiveDataV2 → case "orders"
-                                       │
-                       ┌───────────────┴───────────────┐
-              isGenericOrderSearch(search)?      (erp_orders.go:14)
-            "" | "đơn hàng" | "xem đơn hàng" | "tra cứu đơn hàng" | …
-                       │                               │
-                    YES│                            NO │
-                       ▼                               ▼
-        ┌──────────────────────────┐      extractOrderCode(search)?   (erp_orders.go)
-        │ Trả zalo_rich_message     │      regex (?i)[ĐD]H\d+  vd "ĐH000016"
-        │ (PLAIN TEXT, không buttons)│            │                      │
-        │ text: hỏi 3/5/7 ngày      │         CÓ MÃ│                  KHÔNG │
-        │ is_orders_prompt = true   │            ▼                      ▼
-        │ → agent: [RICH_MESSAGE_    │   ┌──────────────────────┐   parseDaysFromSearch(search)
-        │   SENT], bot gửi tin text │   │ 1 ĐƠN (mục D'):       │   "3"→3 "5"→5 "7"/"1 tuần"→7
-        └──────────────────────────┘   │ POST {SO_DON_HANG:mã} │            │
-                                       │ → lọc server-side     │   ┌────────┴─────────┐
-                                       │ data rỗng/err → 400   │ days>0           days==0
-                                       │ "Không tìm thấy…"     │   │                  │
-                                       │ check quyền sở hữu:   │   ▼                  ▼
-                                       │  isOrderAuthorized    │ ┌─────────────────┐ ┌──────────────┐
-                                       │  sai → 400 "không     │ │ Cửa sổ ngày:    │ │ Fallback     │
-                                       │  thuộc tài khoản"     │ │ POST {TU_NGAY,  │ │ keyword      │
-                                       │ đúng → normalizeOrder │ │ DEN_NGAY}       │ │ {keyword,    │
-                                       │  Record → JSON count:1│ │ (không lọc theo │ │  limit,      │
-                                       │ (order_code, orders[])│ │  MA_KHACH_HANG) │ │  partner_id?}│
-                                       └──────────────────────┘ └────────┬────────┘ └──────────────┘
-                                                                          ▼
-                                                    Lọc scope: isOrderAuthorized (mục D)
-                                                    normalizeOrderRecord mỗi đơn
-                                                    buildOrdersSummary (erp_orders.go:223)
-                                                    trimOrdersForLLM(…, 20)
-                                                                          ▼
-                                                    JSON: orders_summary + orders[]
+        ERPQuery → respondWithLiveDataV2 → case "orders" (erp.go:1915)
+                                 │
+                                 ▼
+                  extractOrderCode(search)?   (erp_orders.go:21)
+                  regex (?i)[ĐD]H\d+   vd "ĐH000016"
+                                 │
+                   ┌── CÓ MÃ ────┴──── KHÔNG ──┐
+                   ▼                            ▼
+        ┌──────────────────────┐    parseDaysFromSearch(search)  (erp_orders.go)
+        │ 1 ĐƠN (mục D′):       │    "3"→3  "5"→5  "7"/"1 tuần"→7  else→0
+        │ POST {SO_DON_HANG:mã} │              │
+        │ → lọc server-side     │     ┌────────┴─────────┐
+        │ data rỗng/err → 400   │  days>0            days==0 (else)
+        │ "Không tìm thấy…"     │     │                  │
+        │ check quyền sở hữu:   │     ▼                  ▼
+        │  isOrderAuthorized    │ ┌──────────────┐ ┌──────────────────────────┐
+        │  sai → 400 "không     │ │ Cửa sổ ngày: │ │ MƠ HỒ → zalo_rich_message │
+        │  thuộc tài khoản"     │ │ POST {TU_NGAY│ │ (PLAIN TEXT) hỏi 3/5/7 ngày│
+        │ đúng → normalizeOrder │ │ ,DEN_NGAY}   │ │ is_orders_prompt = true   │
+        │  Record → JSON count:1│ │ (không lọc   │ │ → agent: [RICH_MESSAGE_    │
+        │ (order_code, orders[])│ │  MA_KHACH_   │ │   SENT], bot gửi tin text │
+        └──────────────────────┘ │  HANG)       │ └──────────────────────────┘
+                                  └──────┬───────┘
+                                         ▼
+                       Lọc scope: isOrderAuthorized (mục D)
+                       normalizeOrderRecord mỗi đơn
+                       buildOrdersSummary (erp_orders.go:270)
+                       trimOrdersForLLM(…, 20)
+                                         ▼
+                       JSON: orders_summary + orders[]
 ```
 
-> `ordersEndpoint` mặc định là `saorders/search` (POST, JSON body
-> `{TU_NGAY, DEN_NGAY}`); tenant có thể override qua setting
-> `erp_global_method_permissions` (key `orders.path`) — xem `erp.go:1918-1936`.
-> Endpoint **không** nhận `MA_KHACH_HANG` làm input và **không** giới hạn
-> `limit`: backend lấy về toàn bộ đơn trong cửa sổ ngày rồi tự lọc theo mã
-> khách ở phía Go (mục D).
+> Không còn `isGenericOrderSearch` (danh sách cụm từ cứng) lẫn nhánh keyword
+> fallback. LLM đã phân loại theo system prompt nên backend chỉ cần: mã đơn →
+> 1 đơn; `days > 0` → cửa sổ ngày; **mọi thứ còn lại → hỏi 3/5/7 ngày**.
+
+> `ordersEndpoint` mặc định là `saorders/search` (POST, JSON body); tenant có
+> thể override qua setting `erp_global_method_permissions` (key `orders.path`) —
+> xem `erp.go:1919-1937`.
+>
+> - **Nhánh 1-đơn:** POST body `{SO_DON_HANG: mã}` — endpoint **lọc server-side**,
+>   trả đúng đơn đó (mục D′).
+> - **Nhánh cửa sổ ngày:** POST body `{TU_NGAY, DEN_NGAY}`. Endpoint **không**
+>   nhận `MA_KHACH_HANG` làm input và **không** giới hạn `limit`: backend lấy về
+>   toàn bộ đơn trong cửa sổ ngày rồi tự lọc theo mã khách ở phía Go (mục D).
 
 ---
 
@@ -162,9 +172,9 @@ orders, customers, debt}`. Với đơn hàng:
 `permission_context.go:269`). Việc lọc đơn dựa trên **mã khách hàng**, được
 phân giải khác nhau theo scope.
 
-**Mã khách của chính người hỏi (scope `own`, erp.go:1961-1972):**
-mã KH gán cho **CRM group (GMF)** là nguồn chân lý — mỗi group ứng với đúng
-**một** `CustomerCode` khớp mã trên Cloudify.
+**Mã khách của chính người hỏi (scope `own`, `resolveOwnCustomerCode`,
+erp.go:1491):** mã KH gán cho **CRM group (GMF)** là nguồn chân lý — mỗi group
+ứng với đúng **một** `CustomerCode` khớp mã trên Cloudify.
 
 1. Ưu tiên `permCtx.CustomerCode` — worker đã ký mã này vào permission token
    ở bước 4.
@@ -173,6 +183,7 @@ mã KH gán cho **CRM group (GMF)** là nguồn chân lý — mỗi group ứng 
    (erp.go:1471).
 
 Cuối cùng đưa qua `leadingCustomerCode` để về **mã trần** trước khi so khớp.
+Cả nhánh 1-đơn (mục D′) lẫn nhánh cửa sổ ngày đều gọi `resolveOwnCustomerCode`.
 
 > ⚠️ **Đã bỏ cổng `SearchPartners` cho scope `own`** (commit `e385f3f`).
 > Trước đây handler gọi `SearchPartners` để xác thực partner trước khi trả
@@ -182,9 +193,9 @@ Cuối cùng đưa qua `leadingCustomerCode` để về **mã trần** trước 
 
 > ⚠️ **Trích mã khách từ `MA_KHACH_HANG`:** endpoint `saorders/search` trả
 > `MA_KHACH_HANG` dạng **mảng** `[id, "MÃ - Tên"]` (ví dụ
-> `[2273, "S052 - Phượt 4P"]`). Hàm `orderCustomerCode` (erp_orders.go:138) chuẩn
+> `[2273, "S052 - Phượt 4P"]`). Hàm `orderCustomerCode` (erp_orders.go:185) chuẩn
 > hoá về **mã trần** (`S052`) bằng cách lấy phần tử `[1]` rồi cắt trước `" - "`
-> (`leadingCustomerCode`, erp_orders.go:125); vẫn fallback chuỗi phẳng /
+> (`leadingCustomerCode`, erp_orders.go:172); vẫn fallback chuỗi phẳng /
 > `MA_KH`/`MA_DT` cho payload kiểu cũ.
 
 ```
@@ -195,11 +206,12 @@ Cuối cùng đưa qua `leadingCustomerCode` để về **mã trần** trước 
    scope = "own"             scope = "assigned"            scope = "all"
         │                          │                            │
         ▼                          ▼                            ▼
- ownCode = permCtx.       resolveGroupCustomerCodes        giữ tất cả
-   CustomerCode           (erp.go:1487, join              (không lọc —
-   ?: resolveGroup        crm_group_customers →            nội bộ/nhân viên)
-   CustomerCode (GMF)     zalo_customers approved)
-        │                 → allowedCodes
+ resolveOwnCustomer       resolveGroupCustomerCodes        giữ tất cả
+   Code (erp.go:1491):    (erp.go:1502, join              (không lọc —
+   permCtx.CustomerCode   crm_group_customers →            nội bộ/nhân viên)
+   ?: resolveGroup        zalo_customers approved)
+   CustomerCode (GMF)     → allowedCodes
+        │                          │
         ▼                          │
  giữ đơn nếu                       ▼
  itemCustCode ==          giữ đơn nếu itemCustCode ∈ allowedCodes
@@ -259,11 +271,11 @@ Theo đúng response chính thức của `saorders/search`:
 > 🔎 **`SO_DON_HANG` đứng đầu** danh sách `order_id` vì đó là mã đơn khách quote
 > (vd `ĐH000016`) và là field nhánh 1-đơn lọc server-side.
 
-> `buildOrdersSummary` (erp_orders.go:223) cộng `value` từ field `total` **đã
+> `buildOrdersSummary` (erp_orders.go:282) cộng `value` từ field `total` **đã
 > chuẩn hoá** ở trên (`getMapFloat(item,"total",…)`), tức là tổng từ
 > `computeOrderTotal` — không đọc lại field tổng từ ERP thô.
 
-### Nhãn trạng thái (erp_orders.go:98-120)
+### Nhãn trạng thái (erp_orders.go:145-170)
 
 | `TRANG_THAI` | Nhãn | Thứ tự báo cáo |
 |---|---|---|
@@ -274,7 +286,7 @@ Theo đúng response chính thức của `saorders/search`:
 
 > Mã ngoài tập trên → `"Khác (mã X)"`; rỗng → `"Không xác định"`.
 
-### Ví dụ response JSON (erp.go:2020-2033)
+### Ví dụ response JSON — khoảng ngày (erp.go:2032-2045)
 
 ```json
 {
@@ -302,7 +314,7 @@ Theo đúng response chính thức của `saorders/search`:
 }
 ```
 
-### Ví dụ response 1 đơn — khớp (HTTP 200, nhánh D′)
+### Ví dụ response 1 đơn — khớp (HTTP 200, nhánh D′, erp.go:1981-1992)
 
 ```json
 {
@@ -379,24 +391,23 @@ Anh không có đơn hàng nào trong 7 ngày gần đây.
 | Kiểm tra resource | `backend/engine/permission_context.go:269` | `IsResourceAllowed("orders")` → scope |
 | Gọi Langflow | `backend/engine/langflow_client.go` | `RunFlowWithCustomer` |
 | Handler ERP | `backend/api/handlers/erp.go:36` | `ERPQuery` (auth, ERP active, verify token, method check) |
-| Nhánh orders | `backend/api/handlers/erp.go` `case "orders"` (~1915, trong `respondWithLiveDataV2`) | định tuyến generic / 1-đơn / khoảng-ngày / fallback |
-| Generic detect | `backend/api/handlers/erp_orders.go:73` | `isGenericOrderSearch` |
-| Prompt khoảng thời gian (plain text) | `backend/api/handlers/erp.go` (nhánh `is_orders_prompt`) | `zalo_rich_message` (`recipient.user_id` + `message.text`, không còn `attachment`/buttons) |
-| Cấu hình endpoint | `backend/api/handlers/erp.go` (block `ordersEndpoint`) | mặc định `saorders/search` (POST body) |
+| Nhánh orders | `backend/api/handlers/erp.go:1915` (trong `respondWithLiveDataV2`) | định tuyến: 1-đơn / khoảng-ngày / mơ hồ |
 | **Nhận diện mã đơn** | `backend/api/handlers/erp_orders.go:21` | `extractOrderCode` (regex `(?i)[ĐD]H\d+`) |
-| **Tra 1 đơn (server-side)** | `backend/api/handlers/erp.go:1967` | `SearchCustomEndpointWithBody({SO_DON_HANG: mã})` → 400 nếu rỗng/err |
+| **Tra 1 đơn (server-side)** | `backend/api/handlers/erp.go:1953` | `SearchCustomEndpointWithBody({SO_DON_HANG: mã})` → 400 nếu rỗng/err |
 | **Kiểm quyền sở hữu** | `backend/api/handlers/erp_orders.go:29` | `isOrderAuthorized` (own/assigned/all; mặc định từ chối) |
-| Parse cửa sổ ngày | `backend/api/handlers/erp_orders.go:85` | `parseDaysFromSearch` |
+| Parse cửa sổ ngày | `backend/api/handlers/erp_orders.go:73` | `parseDaysFromSearch` |
 | Gọi ERP (khoảng-ngày) | `backend/api/handlers/erp.go` (nhánh `days > 0`) | `SearchCustomEndpointWithBody(TU_NGAY,DEN_NGAY)` — không limit, không mã KH |
+| Cấu hình endpoint | `backend/api/handlers/erp.go:1919` | mặc định `saorders/search` (POST body) |
+| Câu mơ hồ → prompt 3/5/7 | `backend/api/handlers/erp.go:2050` (nhánh `else`) | `is_orders_prompt=true` + `zalo_rich_message` (`recipient.user_id` + `message.text`) |
 | Mã KH của người hỏi | `backend/api/handlers/erp.go:1491` | `resolveOwnCustomerCode` → `permCtx.CustomerCode` ?: `resolveGroupCustomerCode` (GMF) |
-| Mã KH scope `assigned` | `backend/api/handlers/erp.go:1487` | `resolveGroupCustomerCodes` (join `crm_group_customers`) |
-| Trích mã KH từ đơn | `backend/api/handlers/erp_orders.go:197`, `:184` | `orderCustomerCode` / `leadingCustomerCode` (mảng `MA_KHACH_HANG`) |
+| Mã KH scope `assigned` | `backend/api/handlers/erp.go:1502` | `resolveGroupCustomerCodes` (join `crm_group_customers`) |
+| Trích mã KH từ đơn | `backend/api/handlers/erp_orders.go:185`, `:172` | `orderCustomerCode` / `leadingCustomerCode` (mảng `MA_KHACH_HANG`) |
 | Chuẩn hoá field (chung 2 nhánh) | `backend/api/handlers/erp_orders.go:53` | `normalizeOrderRecord` (order_id ← `SO_DON_HANG`; `status_name`; `computeOrderTotal`) |
-| Tính total từ dòng hàng | `backend/api/handlers/erp_orders.go:228` | `computeOrderTotal` (Σ `SO_LUONG`×`DON_GIA` − `GIAM_GIA_HOA_DON`) |
-| Tổng hợp | `backend/api/handlers/erp_orders.go:282` | `buildOrdersSummary` |
+| Tính total từ dòng hàng | `backend/api/handlers/erp_orders.go:216` | `computeOrderTotal` (Σ `SO_LUONG`×`DON_GIA` − `GIAM_GIA_HOA_DON`) |
+| Tổng hợp | `backend/api/handlers/erp_orders.go:270` | `buildOrdersSummary` |
 | Cộng số lượng | `backend/api/handlers/erp_orders.go:243` | `sumOrderLineQuantity` |
-| Nhãn trạng thái | `backend/api/handlers/erp_orders.go:171` | `orderStatusDisplayName` |
-| Cắt cho LLM | `backend/api/handlers/erp_orders.go:330` | `trimOrdersForLLM` (max 20) |
-| Response JSON 1-đơn | `backend/api/handlers/erp.go:1995` | `count:1` + `order_code` + `orders[]` |
+| Nhãn trạng thái | `backend/api/handlers/erp_orders.go:159` | `orderStatusDisplayName` |
+| Cắt cho LLM | `backend/api/handlers/erp_orders.go:318` | `trimOrdersForLLM` (max 20) |
+| Response JSON 1-đơn | `backend/api/handlers/erp.go:1981` | `count:1` + `order_code` + `orders[]` |
 | Response JSON khoảng-ngày | `backend/api/handlers/erp.go` (nhánh `days > 0`) | `orders_summary` + `orders[]` |
-| Fallback keyword | `backend/api/handlers/erp.go` (nhánh `else`) | `{keyword,limit,partner_id?}` |
+| Mock (dev) | `backend/api/handlers/erp.go:2516` (`respondWithMockDataV2`) | cùng định tuyến: `days<=0` → prompt; `days>0` → lọc theo ngày |
