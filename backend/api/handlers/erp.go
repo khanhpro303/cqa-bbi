@@ -578,20 +578,12 @@ func ERPQuery(c *gin.Context) {
 	partnerFilterID := req.PartnerID
 
 	if permCtx.AgentType != "private" {
-		if scopeType == "own" {
-			if req.Resource == "orders" || req.Resource == "debt" {
-				ownPartnerID, err := resolveOwnPartnerID(client, permCtx.CustomerCode, erpURL == "")
-				if err != nil {
-					c.JSON(http.StatusForbidden, gin.H{
-						"error":   "forbidden_scope",
-						"message": fmt.Sprintf("Không thể xác thực mã khách hàng trên ERP: %v", err),
-					})
-					writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusForbidden, 0, c.ClientIP())
-					return
-				}
-				partnerFilterID = ownPartnerID
-			}
-		} else if scopeType == "assigned" {
+		// scope "own": mỗi group GMF đã được gán sẵn 1 mã khách hàng khớp với mã
+		// trên Cloudify (worker ký vào permCtx.CustomerCode, tasks.go:565-567).
+		// orders/debt lọc client-side bằng chính mã đó (orders: erp.go ~1974,
+		// debt-own: erp.go ~2141) và KHÔNG dùng partner_id, nên không cần vòng
+		// SearchPartners để xác thực mã nữa.
+		if scopeType == "assigned" {
 			var groupIDs []string
 			for _, grp := range permCtx.Groups {
 				groupIDs = append(groupIDs, grp.GroupID)
@@ -1471,30 +1463,25 @@ func checkAndIncrementRateLimit(tenantID, groupID, groupName string) (bool, erro
 	return false, nil
 }
 
-func resolveOwnPartnerID(client *pkg.CloudifyClient, customerCode string, isMock bool) (string, error) {
-	if isMock {
-		return "mock_partner_id", nil
+// resolveGroupCustomerCode returns the first non-empty CustomerCode assigned to
+// any of the customer's CRM groups. Each GMF group is pre-assigned exactly one
+// Cloudify customer code, so this is the source of truth for "own" scope when
+// permCtx.CustomerCode is not carried on the request (e.g. legacy/direct calls
+// without a signed permission token).
+func resolveGroupCustomerCode(tenantID string, groupIDs []string) string {
+	if len(groupIDs) == 0 {
+		return ""
 	}
-	if customerCode == "" {
-		return "", fmt.Errorf("customer code is empty")
+	var groups []models.CRMGroup
+	if err := db.DB.Where("id IN (?) AND tenant_id = ?", groupIDs, tenantID).Find(&groups).Error; err != nil {
+		return ""
 	}
-
-	partners, err := client.SearchPartners(customerCode, 5)
-	if err != nil {
-		return "", fmt.Errorf("failed to search partners on ERP: %w", err)
-	}
-
-	for _, p := range partners {
-		maVal := getMapString(p, "MA", "code", "ma")
-		if strings.EqualFold(maVal, customerCode) {
-			idVal := getMapString(p, "ID", "id")
-			if idVal != "" {
-				return idVal, nil
-			}
+	for _, g := range groups {
+		if code := strings.TrimSpace(g.CustomerCode); code != "" {
+			return code
 		}
 	}
-
-	return "", fmt.Errorf("customer code %s not found on Cloudify ERP", customerCode)
+	return ""
 }
 
 func resolveGroupCustomerCodes(tenantID string, groupIDs []string) ([]string, error) {
@@ -1971,7 +1958,18 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			}
 			data, err = client.SearchCustomEndpointWithBody(ordersEndpoint, body)
 			if err == nil {
-				customerCode := leadingCustomerCode(permCtx.CustomerCode)
+				// Mã KH gán cho group GMF là nguồn chân lý. permCtx.CustomerCode
+				// thường đã mang mã này (worker ký vào token); fallback đọc trực
+				// tiếp CRMGroup.CustomerCode cho các call không có token.
+				ownCode := permCtx.CustomerCode
+				if ownCode == "" {
+					var groupIDs []string
+					for _, grp := range permCtx.Groups {
+						groupIDs = append(groupIDs, grp.GroupID)
+					}
+					ownCode = resolveGroupCustomerCode(tenantID, groupIDs)
+				}
+				customerCode := leadingCustomerCode(ownCode)
 				var filteredData []map[string]interface{}
 				for _, item := range data {
 					// MA_KHACH_HANG arrives as [id, "CODE - Name"]; orderCustomerCode
@@ -2138,8 +2136,16 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 		var targetCustomerCodes []string
 		if scopeType == "own" {
-			if permCtx.CustomerCode != "" {
-				targetCustomerCodes = []string{permCtx.CustomerCode}
+			ownCode := permCtx.CustomerCode
+			if ownCode == "" {
+				var groupIDs []string
+				for _, grp := range permCtx.Groups {
+					groupIDs = append(groupIDs, grp.GroupID)
+				}
+				ownCode = resolveGroupCustomerCode(tenantID, groupIDs)
+			}
+			if ownCode != "" {
+				targetCustomerCodes = []string{ownCode}
 			}
 		} else {
 			if partnerID != "" {
