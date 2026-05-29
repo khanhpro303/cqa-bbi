@@ -38,6 +38,59 @@ func isDisambiguationReply(text string) bool {
 	return disambiguationReplyPattern.MatchString(text)
 }
 
+// pendingOptionsSuffix is appended to a session key to store the ordered list
+// of postback strings most recently presented to the user as a numbered menu
+// (e.g. the ten_dong_bo_web options in the inventory "dongsp" flow). A later
+// bare-number reply ("1"/"2"/"3") is resolved against this list so the worker
+// can replay the chosen postback without round-tripping through Langflow.
+const pendingOptionsSuffix = ":pending_options"
+
+// resolveNumericSelection resolves a bare-number reply against a previously
+// presented numbered option list. It returns:
+//   - payload: the stored postback at index n-1 (only when inRange is true)
+//   - matched: true when text is a canonical positive integer and options is non-empty
+//   - inRange: true when the parsed number falls within [1..len(options)]
+//
+// matched=true with inRange=false means the user typed a number but it is out
+// of range — the caller should ask them to pick again while keeping the menu.
+func resolveNumericSelection(text string, options []string) (payload string, matched bool, inRange bool) {
+	if len(options) == 0 {
+		return "", false, false
+	}
+	trimmed := strings.TrimSpace(text)
+	n, err := strconv.Atoi(trimmed)
+	// Reject non-canonical numeric forms ("01", "+1", "") so only clean menu
+	// picks are treated as selections.
+	if err != nil || strconv.Itoa(n) != trimmed {
+		return "", false, false
+	}
+	if n >= 1 && n <= len(options) {
+		return options[n-1], true, true
+	}
+	return "", true, false
+}
+
+// storePendingOptions persists the postbacks of a numbered menu under the
+// session key so a later bare-number reply can replay the chosen option. TTL
+// follows the session timeout. No-op when Redis is unavailable or the menu is
+// empty.
+func storePendingOptions(ctx context.Context, sessionKey string, buttons []channels.ZaloOAButton, timeoutMinutes int) {
+	if db.RedisClient == nil || len(buttons) == 0 {
+		return
+	}
+	postbacks := make([]string, len(buttons))
+	for i, b := range buttons {
+		postbacks[i] = b.Payload
+	}
+	raw, err := json.Marshal(postbacks)
+	if err != nil {
+		log.Printf("[worker] failed to marshal pending options for %s: %v", sessionKey, err)
+		return
+	}
+	ttl := time.Duration(timeoutMinutes)*time.Minute + 1*time.Minute
+	db.RedisClient.Set(ctx, sessionKey+pendingOptionsSuffix, raw, ttl)
+}
+
 const (
 	TypeZaloWebhook    = "zalo:webhook"
 	TypeSessionTimeout = "session:timeout"
@@ -725,6 +778,34 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		permCtx := engine.ResolvePermissionsWithGroup(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType, matchedGroup.ID)
 
+		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
+		// presented numbered menu (inventory ten_dong_bo_web options). On a valid
+		// pick, rewrite userText to the stored postback and fall through to the
+		// button-intercept handlers below — no Langflow round-trip. An out-of-range
+		// number re-prompts while keeping the menu so the user can pick again.
+		if db.RedisClient != nil {
+			pendingKey := sessionKey + pendingOptionsSuffix
+			if raw, err := db.RedisClient.Get(ctx, pendingKey).Result(); err == nil && raw != "" {
+				var pendingOptions []string
+				if jsonErr := json.Unmarshal([]byte(raw), &pendingOptions); jsonErr == nil {
+					if postback, matched, inRange := resolveNumericSelection(userText, pendingOptions); matched {
+						if inRange {
+							db.RedisClient.Del(ctx, pendingKey)
+							userText = postback
+						} else {
+							msg := "Vui lòng chọn một số trong danh sách."
+							if matchedGroup.ZaloGroupID != "" {
+								_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, msg)
+							} else {
+								_ = adapter.SendMessage(ctx, payload.Sender.ID, msg)
+							}
+							return nil
+						}
+					}
+				}
+			}
+		}
+
 		// Intercept Zalo OA interactive button clicks
 		// A. Choose Flow Type: dongsp or skucuthe
 		if strings.HasPrefix(userText, "#choose_flow_type:dongsp:") {
@@ -745,31 +826,41 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				if i >= 3 {
 					break
 				}
-				var payload string
+				var btnPayload string
 				if g.IsFallback && len(g.ParentCodes) > 0 {
-					payload = "#show_macha_options:" + g.ParentCodes[0]
+					btnPayload = "#show_macha_options:" + g.ParentCodes[0]
 				} else {
-					payload = "#show_macha_options_by_web:" + g.WebName
+					btnPayload = "#show_macha_options_by_web:" + g.WebName
 				}
 				buttons = append(buttons, channels.ZaloOAButton{
 					Title:   g.WebName,
-					Payload: payload,
+					Payload: btnPayload,
 				})
 			}
-			prompt := fmt.Sprintf("Tôi tìm thấy các dòng sản phẩm khớp với '%s'. Bạn muốn kiểm tra tồn kho dòng nào?", keyword)
 
-			// Zalo OA hiện không support template_type "list" trên /message/cs
-			// (luôn trả -233). Fallback về plain text cho cả group lẫn 1:1.
-			// Re-enable channels.BuildV3ListTemplatePayload nếu Zalo confirm hỗ trợ.
-			text := channels.BuildButtonOptionsAsText(prompt, buttons)
-			var sendErr error
-			if matchedGroup.ZaloGroupID != "" {
-				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, text)
+			// Exactly one matching product line → don't ask. Rewrite userText to
+			// that option's postback and fall through to #show_macha_options* below,
+			// which sums inventory directly (sumInventoryByMaChaAndWebName).
+			if len(buttons) == 1 {
+				userText = buttons[0].Payload
 			} else {
-				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, text)
+				prompt := fmt.Sprintf("Tôi tìm thấy các dòng sản phẩm khớp với '%s'. Bạn muốn kiểm tra tồn kho dòng nào?", keyword)
+
+				// Zalo OA hiện không support template_type "list" trên /message/cs
+				// (luôn trả -233). Fallback về plain text đánh số; lưu các postback
+				// để khách gõ "1"/"2"/"3" là resolve được ở intercept phía trên.
+				// Re-enable channels.BuildV3ListTemplatePayload nếu Zalo confirm hỗ trợ.
+				text := channels.BuildButtonOptionsAsText(prompt, buttons)
+				storePendingOptions(ctx, sessionKey, buttons, meta.SessionTimeout)
+				var sendErr error
+				if matchedGroup.ZaloGroupID != "" {
+					sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, text)
+				} else {
+					sendErr = adapter.SendMessage(ctx, payload.Sender.ID, text)
+				}
+				_ = sendErr
+				return nil
 			}
-			_ = sendErr
-			return nil
 		}
 
 		if strings.HasPrefix(userText, "#choose_flow_type:skucuthe:") {

@@ -71,6 +71,49 @@ func TestSessionTimeoutTaskCreation(t *testing.T) {
 	}
 }
 
+func TestResolveNumericSelection(t *testing.T) {
+	opts := []string{
+		"#show_macha_options_by_web:Áo gió",
+		"#show_macha_options_by_web:Áo khoác",
+		"#show_macha_options:FF901",
+	}
+	cases := []struct {
+		name        string
+		in          string
+		options     []string
+		wantPayload string
+		wantMatched bool
+		wantInRange bool
+	}{
+		{"first option", "1", opts, opts[0], true, true},
+		{"last option", "3", opts, opts[2], true, true},
+		{"with surrounding spaces", " 2 ", opts, opts[1], true, true},
+		{"tab and newline", "\t2\n", opts, opts[1], true, true},
+		{"out of range high", "5", opts, "", true, false},
+		{"zero out of range", "0", opts, "", true, false},
+		{"not a number", "áo", opts, "", false, false},
+		{"mixed text", "1 cái", opts, "", false, false},
+		{"leading zero non-canonical", "01", opts, "", false, false},
+		{"empty text", "", opts, "", false, false},
+		{"no pending options", "1", nil, "", false, false},
+		{"empty options slice", "1", []string{}, "", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, matched, inRange := resolveNumericSelection(tc.in, tc.options)
+			if payload != tc.wantPayload {
+				t.Errorf("payload = %q; want %q", payload, tc.wantPayload)
+			}
+			if matched != tc.wantMatched {
+				t.Errorf("matched = %v; want %v", matched, tc.wantMatched)
+			}
+			if inRange != tc.wantInRange {
+				t.Errorf("inRange = %v; want %v", inRange, tc.wantInRange)
+			}
+		})
+	}
+}
+
 func TestIsDisambiguationReply(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -87,12 +130,12 @@ func TestIsDisambiguationReply(t *testing.T) {
 		{"SP123456ab", true},
 
 		// Should NOT match — must still go through intent classifier
-		{"0", false},      // leading zero is not a valid menu pick
-		{"10", false},     // two-digit reply is ambiguous; let LLM decide
-		{"", false},       // empty
-		{"ok", false},     // genuine CASUAL acknowledgment
-		{"dạ", false},     // genuine CASUAL
-		{"FF901", false},  // not an SP code — should hit normal classifier
+		{"0", false},       // leading zero is not a valid menu pick
+		{"10", false},      // two-digit reply is ambiguous; let LLM decide
+		{"", false},        // empty
+		{"ok", false},      // genuine CASUAL acknowledgment
+		{"dạ", false},      // genuine CASUAL
+		{"FF901", false},   // not an SP code — should hit normal classifier
 		{"SP12345", false}, // SP must have 6 digits per agent rule
 		{"hello", false},
 		{"cảm ơn", false},

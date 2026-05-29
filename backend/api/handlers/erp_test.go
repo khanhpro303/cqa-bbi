@@ -149,6 +149,62 @@ func TestFilterProductsByGroupsThenRankWebGroupsAppliesPermissionsBeforeGrouping
 	}
 }
 
+func TestDominantMaCha(t *testing.T) {
+	tests := []struct {
+		name string
+		rows []map[string]interface{}
+		want string
+	}{
+		{
+			name: "empty rows",
+			rows: nil,
+			want: "",
+		},
+		{
+			name: "rows without ma_cha",
+			rows: []map[string]interface{}{
+				{"MA": "SKU1"},
+				{"MA": "SKU2"},
+			},
+			want: "",
+		},
+		{
+			name: "single ma_cha across variants",
+			rows: []map[string]interface{}{
+				{"MA": "FF901-RED-L", "MA_CHA": "FF901"},
+				{"MA": "FF901-BLK-M", "MA_CHA": "FF901"},
+			},
+			want: "FF901",
+		},
+		{
+			name: "dominant wins over minority",
+			rows: []map[string]interface{}{
+				{"MA": "FF901-RED-L", "MA_CHA": "FF901"},
+				{"MA": "FF901-BLK-M", "MA_CHA": "FF901"},
+				{"MA": "FF901-BLK-L", "MA_CHA": "FF901"},
+				{"MA": "FF800-RED-L", "MA_CHA": "FF800"},
+			},
+			want: "FF901",
+		},
+		{
+			name: "lowercase ma_cha key fallback",
+			rows: []map[string]interface{}{
+				{"ma": "FF700-RED-L", "ma_cha": "FF700"},
+				{"ma": "FF700-BLK-M", "ma_cha": "FF700"},
+			},
+			want: "FF700",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dominantMaCha(tc.rows); got != tc.want {
+				t.Fatalf("dominantMaCha() = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFilterProductsByGroupsUsesProductGroupBeforeBrand(t *testing.T) {
 	products := []map[string]interface{}{
 		{

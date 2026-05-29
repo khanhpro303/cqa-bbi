@@ -1704,11 +1704,13 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			}
 		}
 
+		var matchedProducts []map[string]interface{}
 		if search != "" {
-			matchedProducts, errSearch := searchProductsByWebNameAstraDBNonVectorized(c.Request.Context(), tenantID, search)
+			rows, errSearch := searchProductsByWebNameAstraDBNonVectorized(c.Request.Context(), tenantID, search)
 			if errSearch != nil {
 				log.Printf("[inventory_query] Astra DB search error for tenant=%s search=%s: %v", tenantID, search, errSearch)
 			} else {
+				matchedProducts = rows
 				log.Printf("[inventory_query] Astra DB search for tenant=%s search=%s returned %d products", tenantID, search, len(matchedProducts))
 				if len(matchedProducts) > 1 {
 					maChaCounts := make(map[string]int)
@@ -1781,7 +1783,10 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			}
 		}
 
-		maCha, _, isMaCha := detectMaChaFromSearch(c.Request.Context(), tenantID, search, productGroups)
+		// Reuse the rows already fetched above (no second cache/LLM lookup) to
+		// decide whether this is a whole-line query (loop child SKUs) or a
+		// single SKU. On a miss matchedProducts is empty → single-SKU path.
+		maCha, isMaCha := classifyDominantMaCha(c.Request.Context(), tenantID, matchedProducts, productGroups)
 		if isMaCha {
 			// Query for parent product line (ma_cha)
 			childProducts, errVal := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, maCha)
@@ -1912,29 +1917,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					"user_id": permCtx.ZaloUserID,
 				},
 				"message": gin.H{
-					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào dưới đây?",
-					"attachment": gin.H{
-						"type": "template",
-						"payload": gin.H{
-							"buttons": []gin.H{
-								{
-									"title":   "3 ngày gần đây",
-									"type":    "oa.query.show",
-									"payload": "đơn hàng 3 ngày gần đây",
-								},
-								{
-									"title":   "5 ngày gần đây",
-									"type":    "oa.query.show",
-									"payload": "đơn hàng 5 ngày gần đây",
-								},
-								{
-									"title":   "7 ngày gần đây",
-									"type":    "oa.query.show",
-									"payload": "đơn hàng 7 ngày gần đây",
-								},
-							},
-						},
-					},
+					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\".",
 				},
 			}
 			c.JSON(http.StatusOK, gin.H{
@@ -2134,29 +2117,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					"user_id": permCtx.ZaloUserID,
 				},
 				"message": gin.H{
-					"text": "Bạn muốn xem đối chiếu công nợ trong khoảng thời gian nào dưới đây?",
-					"attachment": gin.H{
-						"type": "template",
-						"payload": gin.H{
-							"buttons": []gin.H{
-								{
-									"title":   "Tháng này",
-									"type":    "oa.query.show",
-									"payload": "công nợ tháng này",
-								},
-								{
-									"title":   "Tháng trước",
-									"type":    "oa.query.show",
-									"payload": "công nợ tháng trước",
-								},
-								{
-									"title":   "Quý này",
-									"type":    "oa.query.show",
-									"payload": "công nợ quý này",
-								},
-							},
-						},
-					},
+					"text": "Bạn muốn xem đối chiếu công nợ trong khoảng thời gian nào? Vui lòng nhắn: \"tháng này\", \"tháng trước\" hoặc \"quý này\".",
 				},
 			}
 			c.JSON(http.StatusOK, gin.H{
@@ -2523,29 +2484,7 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 					"user_id": zaloUserID,
 				},
 				"message": gin.H{
-					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào dưới đây?",
-					"attachment": gin.H{
-						"type": "template",
-						"payload": gin.H{
-							"buttons": []gin.H{
-								{
-									"title":   "3 ngày gần đây",
-									"type":    "oa.query.show",
-									"payload": "đơn hàng 3 ngày gần đây",
-								},
-								{
-									"title":   "5 ngày gần đây",
-									"type":    "oa.query.show",
-									"payload": "đơn hàng 5 ngày gần đây",
-								},
-								{
-									"title":   "7 ngày gần đây",
-									"type":    "oa.query.show",
-									"payload": "đơn hàng 7 ngày gần đây",
-								},
-							},
-						},
-					},
+					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\".",
 				},
 			}
 			c.JSON(http.StatusOK, gin.H{
@@ -2916,54 +2855,51 @@ func cachedProductsToMaps(products []models.CachedProduct) []map[string]interfac
 	return results
 }
 
-func detectMaChaFromSearch(ctx context.Context, tenantID, search string, allowedGroups []string) (string, string, bool) {
-	if search == "" {
-		return "", "", false
-	}
-
-	// 1. Search products from Astra DB using the user's search query (fuzzy search)
-	matchedProducts, err := searchProductsFromAstraDB(ctx, tenantID, search, 50)
-	if err != nil || len(matchedProducts) == 0 {
-		return "", "", false
-	}
-
-	// Filter matched products based on allowed product groups
-	matchedProducts = filterProductsByGroups(matchedProducts, allowedGroups)
-	if len(matchedProducts) == 0 {
-		return "", "", false
-	}
-
-	// 2. Group the matched products by MA_CHA
-	maChaCounts := make(map[string]int)
-	for _, p := range matchedProducts {
-		maCha := getMapString(p, "MA_CHA", "ma_cha")
-		if maCha != "" {
-			maChaCounts[maCha]++
+// dominantMaCha returns the MA_CHA that appears most across the given product
+// rows, or "" when none of the rows carry a MA_CHA. Pure helper (no I/O) so the
+// grouping logic stays unit-testable independent of the database.
+func dominantMaCha(rows []map[string]interface{}) string {
+	counts := make(map[string]int)
+	for _, p := range rows {
+		if maCha := getMapString(p, "MA_CHA", "ma_cha"); maCha != "" {
+			counts[maCha]++
 		}
 	}
-
-	// Find the dominant MA_CHA
-	var dominantMaCha string
+	var dominant string
 	maxCount := 0
-	for maCha, count := range maChaCounts {
+	for maCha, count := range counts {
 		if count > maxCount {
 			maxCount = count
-			dominantMaCha = maCha
+			dominant = maCha
 		}
 	}
+	return dominant
+}
 
-	// 3. If the dominant MA_CHA has multiple variants in the search results (> 1)
-	if maxCount > 1 && dominantMaCha != "" {
-		// Confirm it has multiple variants by fetching them
-		allVariants, errVal := getProductsByMaChaFromAstraDB(ctx, tenantID, dominantMaCha)
-		if errVal == nil && len(allVariants) > 1 {
-			// Found the parent product! Return actual parent code (dominantMaCha)
-			// and user's query as friendly name (search)
-			return dominantMaCha, search, true
-		}
+// classifyDominantMaCha decides whether an already-fetched list of product rows
+// collapses to a single product line (MA_CHA) that has more than one variant —
+// i.e. an inventory query should answer for the whole family rather than a
+// single SKU. It applies the permission group filter, picks the dominant MA_CHA
+// via dominantMaCha, then confirms through getProductsByMaChaFromAstraDB that the
+// line truly has >1 variant. Returns (maCha, true) for the family case.
+//
+// It reuses rows already fetched by the caller (no second cache/LLM lookup),
+// replacing the former detectMaChaFromSearch which re-queried on the same
+// keyword that the caller had just searched.
+func classifyDominantMaCha(ctx context.Context, tenantID string, rows []map[string]interface{}, allowedGroups []string) (string, bool) {
+	rows = filterProductsByGroups(rows, allowedGroups)
+	if len(rows) == 0 {
+		return "", false
 	}
-
-	return "", "", false
+	dominant := dominantMaCha(rows)
+	if dominant == "" {
+		return "", false
+	}
+	allVariants, err := getProductsByMaChaFromAstraDB(ctx, tenantID, dominant)
+	if err == nil && len(allVariants) > 1 {
+		return dominant, true
+	}
+	return "", false
 }
 
 func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {

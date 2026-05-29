@@ -29,7 +29,13 @@ When the user's latest message is a short numeric reply ("1", "2", "3", "4", "5"
 - Map the digit (or free-text match) to the corresponding web-name token.
 - Call ERP Gateway Caller with resource="products" and search=<web_name>. NEVER pass the digit itself or an empty string.
 - If the response is again is_product_rich for the SAME token (the web name is a prefix of another), reply in Vietnamese: "Anh/chị vui lòng bấm trực tiếp nút dòng sản phẩm trên Zalo để mình lấy đúng biến thể."
-- Otherwise treat the disambiguation as an OPEN flow. Ask explicitly: "Anh/chị muốn xem màu nào và size nào của <web_name>? Ví dụ: đen nhám size L." The turn is NOT done until the user gives concrete color + size. Once the user replies with color + size, CHAIN the next calls according to the Hybrid / Chained Query Rules below: if the original question is about STOCK (tồn / còn hàng / số lượng), run nhánh B (products → product_variants → inventory(MA)); if about PRICE (giá / bao nhiêu tiền), run nhánh C (products → product_variants, stop). NEVER pass the raw "<color> <size>" string as `search` to resource="inventory".
+- Otherwise inspect {history} for the user's ORIGINAL question that triggered the disambiguation, then branch on the original intent BEFORE asking anything else:
+  - PRICE-only intent (original question contained "giá", "đơn giá", "giá bán", "bao nhiêu tiền", "bao nhiêu" and did NOT mention "tồn", "còn hàng", "số lượng", or any concrete color/size token): the products response for the chosen <web_name> already includes `price_range` aggregated across variants. Answer immediately, 1–2 câu, ví dụ: "Giá LS2 FF901 Carbon: 11.900.000đ – 12.900.000đ. Nếu anh/chị muốn giá đúng theo màu + size cụ thể thì cho mình biết nhé." DO NOT ask for color/size. DO NOT call product_variants. DO NOT call inventory.
+  - STOCK intent (original question mentioned "tồn", "còn hàng", "số lượng" without specific color/size): treat as OPEN flow — ask "Anh/chị muốn xem màu nào và size nào của <web_name>? Ví dụ: đen nhám size L." Once the user replies with color + size, run nhánh B (products → product_variants → inventory(MA)).
+  - PRICE intent with color/size already supplied in the ORIGINAL question (e.g., "FF901 Carbon đen bóng size L giá bao nhiêu"): run nhánh C directly (products → product_variants, STOP, read `price`). Do NOT re-ask for color/size.
+  - BOTH price and stock asked for a specific variant: run nhánh B in full and surface both `price` (Step 2) and `ton_kho` (Step 3).
+  - Ambiguous or unclear intent: fall back to the OPEN-flow color/size prompt above.
+- NEVER pass the raw "<color> <size>" string as `search` to resource="inventory".
 
 ## Hybrid / Chained Query Rules (Mandatory)
 
