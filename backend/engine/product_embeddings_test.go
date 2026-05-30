@@ -108,10 +108,10 @@ func TestPassesRelevanceFloor(t *testing.T) {
 		top  productEmbeddingMatch
 		want bool
 	}{
-		{"exact lexical hit overrides low cosine", productEmbeddingMatch{HasBM25: true, Vector: 0.10}, true},
-		{"semantic above floor", productEmbeddingMatch{HasBM25: false, Vector: 0.60}, true},
-		{"just below floor → fallback", productEmbeddingMatch{HasBM25: false, Vector: 0.54}, false},
-		{"exactly at floor → accept (inclusive)", productEmbeddingMatch{HasBM25: false, Vector: 0.55}, true},
+		{"strong positive rerank → accept", productEmbeddingMatch{Rerank: 9.1, Vector: 0.74}, true},
+		{"small positive rerank → accept", productEmbeddingMatch{Rerank: 0.5, Vector: 0.40}, true},
+		{"negative rerank with high cosine → fallback", productEmbeddingMatch{Rerank: -7.39, Vector: 0.62}, false},
+		{"zero rerank → fallback (strict >)", productEmbeddingMatch{Rerank: 0.0, Vector: 0.80}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

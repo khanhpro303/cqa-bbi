@@ -40,14 +40,16 @@ const (
 	// Bump this again on any future doc-shape change.
 	embeddingSchemaVersion = "v2-lexical"
 
-	// vectorFloor is the absolute relevance gate on the bounded $vector cosine
-	// (still returned by findAndRerank). It decides accept-vs-LLM-fallback for
-	// purely semantic queries (no exact token hit). Deliberately lower than a
-	// pure-vector threshold would be: under hybrid the reranker can promote a
-	// lexically-correct doc whose raw cosine is only moderate, so we let BM25 /
-	// rerank carry borderline-cosine-but-correct matches while still rejecting
-	// obvious noise. Scale-independent because cosine is bounded [0,1].
-	vectorFloor = 0.55
+	// rerankFloor is the accept-vs-LLM-fallback gate, applied to the reranker's
+	// score for the top result. The nvidia cross-encoder reranker emits a
+	// relevance logit whose natural relevant/irrelevant boundary is ~0:
+	// genuine matches score clearly positive (observed +9..+15) while
+	// no-real-match queries score negative (observed −6..−13), regardless of
+	// query length or language. The raw $vector cosine is NOT a usable gate —
+	// off-topic queries routinely land at 0.6+ cosine — so we trust the
+	// reranker's own decision boundary instead. A negative top score routes to
+	// the LLM matcher (which also normalises e.g. "Storm 3" → "Storm III").
+	rerankFloor = 0.0
 
 	// siblingCosineGap is the bounded cosine gap between the top SKU and the
 	// next SKU sharing its ma_cha that distinguishes a pinpoint query
@@ -229,15 +231,13 @@ func FuzzyMatchProductWithEmbedding(ctx context.Context, cfg ProductEmbeddingCon
 
 // passesRelevanceFloor decides whether the top hybrid result is trustworthy
 // enough to answer, or whether the caller should fall back to the LLM matcher.
-// It accepts on either signal, both scale-independent:
-//   - HasBM25: the query shares an exact token with the doc's $lexical (model
-//     code, colour, or size). The strongest, language-agnostic signal.
-//   - Vector >= vectorFloor: bounded [0,1] cosine relevance for purely semantic
-//     queries that produced no exact token hit.
-//
-// The unbounded $rerank logit is never used as a threshold — only for ordering.
+// It trusts the reranker's own relevance boundary: the nvidia cross-encoder
+// scores genuine matches clearly positive and off-topic queries negative, so a
+// top score above rerankFloor (~0) means "real match". The $vector cosine is
+// deliberately NOT used as a gate — unrelated queries routinely sit at 0.6+
+// cosine, so a cosine floor would wrongly accept noise.
 func passesRelevanceFloor(top productEmbeddingMatch) bool {
-	return top.HasBM25 || top.Vector >= vectorFloor
+	return top.Rerank > rerankFloor
 }
 
 // isSpecificSKUMatch decides whether the top SKU clearly dominates the other
@@ -558,7 +558,10 @@ func astraHybridFindAndRerank(ctx context.Context, cfg ProductEmbeddingConfig, t
 			if s.Rerank != nil {
 				m.Rerank = *s.Rerank
 			}
-			if s.Vector != nil {
+			// A lexical-only candidate (no vector leg) comes back with a large
+			// negative sentinel; clamp to 0 so the cosine-gap Specific check
+			// treats it as "no vector signal" rather than a real low score.
+			if s.Vector != nil && *s.Vector >= 0 {
 				m.Vector = *s.Vector
 			}
 			if s.BM25Rank != nil {
