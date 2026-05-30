@@ -77,6 +77,20 @@ func resolveGlobalMethodPermission(configJSON, reqResource, httpMethod string) (
 	}
 }
 
+// methodPermissionResource maps a requested resource to the resource key used
+// for permission checks. product_variants is a finer-grained read against the
+// same cache as products, so it inherits the products grant — both the global
+// HTTP-method gate and the scope check resolve it under products. Centralizing
+// the alias here stops the two gates from drifting: the method gate previously
+// lacked it and blocked every product_variants call once a tenant configured a
+// global method whitelist.
+func methodPermissionResource(resource string) string {
+	if resource == "product_variants" {
+		return "products"
+	}
+	return resource
+}
+
 // ---------------------------------------------------------------------------
 // ERPQuery — called by Langflow agent to query live Cloudify ERP data
 // ---------------------------------------------------------------------------
@@ -186,17 +200,25 @@ func ERPQuery(c *gin.Context) {
 	methodAllowed := true
 	var globalPermsSetting models.AppSetting
 	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; err == nil && globalPermsSetting.ValuePlain != "" {
-		sysRes, ok, perr := resolveGlobalMethodPermission(globalPermsSetting.ValuePlain, req.Resource, c.Request.Method)
+		// product_variants inherits the products method grant (see
+		// methodPermissionResource): same cache, finer-grained read, so tenants
+		// do not configure a second whitelist entry. Resolve the method gate
+		// under the aliased resource but keep req.Resource = product_variants so
+		// the variant dispatch (§6b) still runs.
+		methodResource := methodPermissionResource(req.Resource)
+		variantAlias := methodResource != req.Resource
+		sysRes, ok, perr := resolveGlobalMethodPermission(globalPermsSetting.ValuePlain, methodResource, c.Request.Method)
 		if perr != nil {
 			// Fail closed: a configured-but-corrupt global config must not
 			// silently open every method/resource. Block and log for the admin.
 			log.Printf("[erp_query] malformed erp_global_method_permissions for tenant %s: %v — blocking (fail-safe)", tenantID, perr)
 			methodAllowed = false
 		} else {
-			if sysRes != "" {
-				// Re-route internally to the system expected resource.
+			if sysRes != "" && !variantAlias {
+				// Re-route internally to the system expected resource. Skipped
+				// for the product_variants alias so §6b keeps dispatching it.
 				req.Resource = sysRes
-			} else {
+			} else if sysRes == "" {
 				// Surface why an otherwise-valid resource is blocked: once a
 				// global config exists it acts as a whitelist, so anything not
 				// listed is denied.
@@ -213,15 +235,9 @@ func ERPQuery(c *gin.Context) {
 		return
 	}
 
-	// Enforce permitted resources & scope.
-	// product_variants is a finer-grained read against the same cache as
-	// products, so it inherits the products permission grant — tenants do
-	// not need to configure a second resource entry.
-	permResource := req.Resource
-	if permResource == "product_variants" {
-		permResource = "products"
-	}
-	allowed, scopeType, productGroups := permCtx.IsResourceAllowed(permResource)
+	// Enforce permitted resources & scope. product_variants inherits the
+	// products grant via methodPermissionResource (same cache, finer read).
+	allowed, scopeType, productGroups := permCtx.IsResourceAllowed(methodPermissionResource(req.Resource))
 	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden_scope",
@@ -1652,9 +1668,10 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 	switch resource {
 	case "inventory":
-		// Load custom inventory endpoint config
-		inventoryEndpoint := "inventory_receipt/search"
-		usePostMethod := false
+		// Load custom inventory endpoint config. Default is the official
+		// total-stock endpoint (POST); tenants may override to a custom path.
+		inventoryEndpoint := inventoryTotalStockEndpoint
+		usePostMethod := true
 		var globalPermsSetting models.AppSetting
 		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
 			type EndpointConfig struct {
@@ -1904,9 +1921,9 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					stockCache.Set(c.Request.Context(), tenantID, skuOut, total)
 				}
 			} else if err == nil {
-				// Legacy receipt-search: normalize stock keys per item and
-				// write-through to the stock cache so subsequent parent-loop
-				// queries can serve the same SKU from cache.
+				// Custom (non-total-stock) endpoint: normalize stock keys per
+				// item and write-through to the stock cache so subsequent
+				// parent-loop queries can serve the same SKU from cache.
 				for i, item := range data {
 					stockVal := getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
 					if _, hasTon := item["ton_kho"]; !hasTon {
@@ -2369,15 +2386,12 @@ func normalizeWarehouseName(name string) string {
 }
 
 // inventoryStockRequestBody builds the documented request body for an inventory
-// endpoint. The total-stock endpoint takes only {"MA_HANG": sku}; the legacy
-// receipt-search endpoint takes keyword + limit; any other custom POST endpoint
-// defaults to MA_HANG + limit.
+// endpoint. The total-stock endpoint takes only {"MA_HANG": sku}; any other
+// custom POST endpoint defaults to MA_HANG + limit.
 func inventoryStockRequestBody(inventoryEndpoint, sku string, limit int) map[string]interface{} {
 	switch inventoryEndpoint {
 	case inventoryTotalStockEndpoint:
 		return map[string]interface{}{"MA_HANG": sku}
-	case "inventory_receipt/search":
-		return map[string]interface{}{"limit": limit, "keyword": sku}
 	default:
 		return map[string]interface{}{"limit": limit, "MA_HANG": sku}
 	}
@@ -2449,7 +2463,7 @@ func fetchInventoryStockForSKU(
 		// Official endpoint: take only the KHO-TỔNG row, never sum branches.
 		total = totalStockFromInventoryItems(skuInventory)
 	} else {
-		// Legacy receipt-search: sum stock across returned receipt rows.
+		// Custom (non-total-stock) endpoint: sum stock across returned rows.
 		for _, item := range skuInventory {
 			total += getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
 		}

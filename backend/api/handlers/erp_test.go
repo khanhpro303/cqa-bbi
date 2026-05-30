@@ -1244,3 +1244,28 @@ func TestResolveGlobalMethodPermission(t *testing.T) {
 		})
 	}
 }
+
+// TestMethodPermissionResource guards the alias that both the global HTTP-method
+// gate and the scope check rely on. product_variants must resolve under
+// products so a tenant's method whitelist (which lists products, not the
+// finer-grained product_variants) does not block variant lookups — the bug that
+// surfaced as "HTTP Method POST không được cho phép đối với tài nguyên
+// 'product_variants'" after variant queries shipped.
+func TestMethodPermissionResource(t *testing.T) {
+	tests := []struct {
+		resource string
+		want     string
+	}{
+		{"product_variants", "products"},
+		{"products", "products"},
+		{"inventory", "inventory"},
+		{"orders", "orders"},
+		{"debt", "debt"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := methodPermissionResource(tt.resource); got != tt.want {
+			t.Errorf("methodPermissionResource(%q) = %q; want %q", tt.resource, got, tt.want)
+		}
+	}
+}
