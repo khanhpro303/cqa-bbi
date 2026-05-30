@@ -49,6 +49,22 @@
         class="mb-3"
       />
 
+      <v-textarea
+        v-model="langflow.systemPrompt"
+        :label="$t('langflow_system_prompt')"
+        :placeholder="$t('langflow_system_prompt_placeholder')"
+        :hint="$t('langflow_system_prompt_hint')"
+        persistent-hint
+        auto-grow
+        rows="6"
+        max-rows="20"
+        counter
+        variant="outlined"
+        density="comfortable"
+        prepend-inner-icon="mdi-message-text-outline"
+        class="mb-2"
+      />
+
       <div class="d-flex ga-2 mt-4">
         <v-btn color="primary" :loading="saving" @click="save">{{ $t('save') }}</v-btn>
         <v-btn variant="outlined" :loading="testing" @click="testConnection">
@@ -406,6 +422,7 @@ const langflow = reactive({
   flowId: '',
   publicFlowId: '',
   token: '',
+  systemPrompt: '',
 })
 
 const erp = reactive({
@@ -473,6 +490,7 @@ async function loadSettings() {
     langflow.baseUrl = settings.ai_engine_langflow_url || ''
     langflow.flowId = settings.ai_engine_langflow_flow_id || ''
     langflow.publicFlowId = settings.ai_engine_langflow_public_flow_id || ''
+    langflow.systemPrompt = settings.ai_engine_system_prompt || ''
     
     if (settings.ai_engine_langflow_token) {
       langflow.token = settings.ai_engine_langflow_token
@@ -544,6 +562,7 @@ async function save() {
       langflow_flow_id: langflow.flowId,
       langflow_public_flow_id: langflow.publicFlowId,
       langflow_token: langflow.token,
+      system_prompt: langflow.systemPrompt,
 
       astradb_api_endpoint: astradb.apiEndpoint,
       astradb_token: astradb.token,

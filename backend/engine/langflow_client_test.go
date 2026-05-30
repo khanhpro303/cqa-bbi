@@ -56,6 +56,7 @@ func TestRunFlowWithCustomerPassesPermissionTokenToCustomComponent(t *testing.T)
 		"flow-1",
 		"S084 - Cho Bao Ho",
 		"permission-token-1",
+		"",
 	)
 	if err != nil {
 		t.Fatalf("RunFlowWithCustomer returned error: %v", err)
@@ -142,6 +143,7 @@ func TestRunFlowWithCustomerOmitsZaloUserIDTweaksWhenEmpty(t *testing.T) {
 		"flow-2",
 		"",
 		"",
+		"",
 	); err != nil {
 		t.Fatalf("RunFlowWithCustomer returned error: %v", err)
 	}
@@ -155,6 +157,77 @@ func TestRunFlowWithCustomerOmitsZaloUserIDTweaksWhenEmpty(t *testing.T) {
 		if _, present := tweaks[key]; present {
 			t.Fatalf("expected tweak %q to be absent when zaloUserID is empty, got %#v", key, tweaks[key])
 		}
+	}
+	// An empty systemPrompt must not emit an agent tweak — the flow then falls
+	// back to its SYSTEM_PROMPT global variable.
+	if _, present := tweaks[langflowAgentNodeID]; present {
+		t.Fatalf("expected %q tweak to be absent when systemPrompt is empty, got %#v", langflowAgentNodeID, tweaks[langflowAgentNodeID])
+	}
+}
+
+func TestRunFlowWithCustomerPassesSystemPromptTweak(t *testing.T) {
+	transport := &captureRoundTripper{}
+	client := NewLangflowClient(&config.Config{})
+	client.client = &http.Client{Transport: transport}
+
+	const wantPrompt = "Bạn là trợ lý bán hàng của BBI."
+	if _, err := client.RunFlowWithCustomer(
+		context.Background(),
+		"session-sp",
+		"",
+		"hello",
+		"https://langflow.example",
+		"langflow-key",
+		"flow-sp",
+		"",
+		"",
+		wantPrompt,
+	); err != nil {
+		t.Fatalf("RunFlowWithCustomer returned error: %v", err)
+	}
+
+	tweaks, ok := transport.payload["tweaks"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tweaks object, got %#v", transport.payload["tweaks"])
+	}
+	agentTweaks, ok := tweaks[langflowAgentNodeID].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected %q tweaks object, got %#v", langflowAgentNodeID, tweaks[langflowAgentNodeID])
+	}
+	if got := agentTweaks["system_prompt"]; got != wantPrompt {
+		t.Fatalf("system_prompt = %#v, want %q", got, wantPrompt)
+	}
+}
+
+func TestRunFlowWithOverridesPassesSystemPromptTweak(t *testing.T) {
+	transport := &captureRoundTripper{}
+	client := NewLangflowClient(&config.Config{})
+	client.client = &http.Client{Transport: transport}
+
+	const wantPrompt = "You are a helpful assistant."
+	if _, err := client.RunFlowWithOverrides(
+		context.Background(),
+		"session-sp2",
+		"",
+		"ping",
+		"https://langflow.example",
+		"langflow-key",
+		"flow-sp2",
+		wantPrompt,
+	); err != nil {
+		t.Fatalf("RunFlowWithOverrides returned error: %v", err)
+	}
+
+	tweaks, ok := transport.payload["tweaks"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tweaks object, got %#v", transport.payload["tweaks"])
+	}
+	agentTweaks, ok := tweaks[langflowAgentNodeID].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected %q tweaks object, got %#v", langflowAgentNodeID, tweaks[langflowAgentNodeID])
+	}
+	if got := agentTweaks["system_prompt"]; got != wantPrompt {
+		t.Fatalf("system_prompt = %#v, want %q", got, wantPrompt)
 	}
 }
 
@@ -171,6 +244,7 @@ func TestRunFlowWithOverridesPassesZaloUserIDToHistoryNodes(t *testing.T) {
 		"https://langflow.example",
 		"langflow-key",
 		"flow-3",
+		"",
 	); err != nil {
 		t.Fatalf("RunFlowWithOverrides returned error: %v", err)
 	}

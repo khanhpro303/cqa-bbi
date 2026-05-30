@@ -202,6 +202,7 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		LangflowFlowID       string `json:"langflow_flow_id"`
 		LangflowPublicFlowID string `json:"langflow_public_flow_id"`
 		LangflowToken        string `json:"langflow_token"`
+		SystemPrompt         string `json:"system_prompt"`
 
 		// Astra DB configuration
 		AstraDBAPIEndpoint       string `json:"astradb_api_endpoint"`
@@ -236,6 +237,14 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		upsertSetting(tenantID, "ai_engine_langflow_public_flow_id", req.LangflowPublicFlowID, nil)
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_public_flow_id").Delete(&models.AppSetting{})
+	}
+
+	// System prompt (plain text, optional). Empty clears the override so the
+	// agent falls back to the SYSTEM_PROMPT global variable inside Langflow.
+	if req.SystemPrompt != "" {
+		upsertSetting(tenantID, "ai_engine_system_prompt", req.SystemPrompt, nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_system_prompt").Delete(&models.AppSetting{})
 	}
 
 	// Token
@@ -359,7 +368,7 @@ func TestLangflowConnection(c *gin.Context) {
 	// Try calling run flow with a ping using the actual LangflowClient logic
 	lfClient := engine.NewLangflowClient(cfg)
 	
-	_, err := lfClient.RunFlowWithOverrides(c.Request.Context(), "ping_test_session", "", "ping", baseURL, token, flowID)
+	_, err := lfClient.RunFlowWithOverrides(c.Request.Context(), "ping_test_session", "", "ping", baseURL, token, flowID, "")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

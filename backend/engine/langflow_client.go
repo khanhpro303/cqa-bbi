@@ -12,6 +12,12 @@ import (
 	"github.com/vietbui/chat-quality-agent/config"
 )
 
+// langflowAgentNodeID is the ToolCallingAgent node in BBI_RAG_Bot_Ext.json.
+// Tweaking system_prompt on this node overrides the Langflow global variable
+// SYSTEM_PROMPT on a per-request basis. Only the flow containing this node
+// (the private flow) is affected; Langflow ignores tweaks for unknown node IDs.
+const langflowAgentNodeID = "ToolCallingAgent-zznkZ"
+
 // LangflowClient handles communication with the Langflow API.
 type LangflowClient struct {
 	cfg    *config.Config
@@ -64,11 +70,13 @@ func buildHistoryFilter(zaloUserID string) map[string]interface{} {
 
 // RunFlow sends a message to a Langflow flow using global config.
 func (l *LangflowClient) RunFlow(ctx context.Context, sessionID, zaloUserID, message string) (string, error) {
-	return l.RunFlowWithOverrides(ctx, sessionID, zaloUserID, message, l.cfg.LangflowAPIURL, l.cfg.LangflowAPIKey, l.cfg.LangflowFlowID)
+	return l.RunFlowWithOverrides(ctx, sessionID, zaloUserID, message, l.cfg.LangflowAPIURL, l.cfg.LangflowAPIKey, l.cfg.LangflowFlowID, "")
 }
 
 // RunFlowWithOverrides allows passing specific API URL, Key, and Flow ID.
-func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID string) (string, error) {
+// systemPrompt, when non-empty, overrides the agent's SYSTEM_PROMPT global
+// variable for this request via a tweak; empty means "use the Langflow default".
+func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, systemPrompt string) (string, error) {
 	if apiURL == "" || flowID == "" {
 		return "", fmt.Errorf("langflow integration is not configured")
 	}
@@ -98,6 +106,13 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 		}
 		tweaks["MsgToDoc-Assistant"] = map[string]interface{}{
 			"zalo_user_id": zaloUserID,
+		}
+	}
+
+	if systemPrompt != "" {
+		// Override the agent's SYSTEM_PROMPT global variable for this request.
+		tweaks[langflowAgentNodeID] = map[string]interface{}{
+			"system_prompt": systemPrompt,
 		}
 	}
 
@@ -206,7 +221,9 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 }
 
 // RunFlowWithCustomer allows passing specific API URL, Key, Flow ID, Customer Code, and Permission Token.
-func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken string) (string, error) {
+// systemPrompt, when non-empty, overrides the agent's SYSTEM_PROMPT global
+// variable for this request via a tweak; empty means "use the Langflow default".
+func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, systemPrompt string) (string, error) {
 	if apiURL == "" || flowID == "" {
 		return "", fmt.Errorf("langflow integration is not configured")
 	}
@@ -256,6 +273,13 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 
 	if len(customComponentTweaks) > 0 {
 		tweaks["CustomComponent"] = customComponentTweaks
+	}
+
+	if systemPrompt != "" {
+		// Override the agent's SYSTEM_PROMPT global variable for this request.
+		tweaks[langflowAgentNodeID] = map[string]interface{}{
+			"system_prompt": systemPrompt,
+		}
 	}
 
 	payload := map[string]interface{}{

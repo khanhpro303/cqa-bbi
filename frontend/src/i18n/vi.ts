@@ -372,6 +372,10 @@ export default {
   flow_id: 'Flow ID (Whitelist / Internal Staff)',
   application_token: 'Application Token',
   base_url: 'Base URL',
+  langflow_system_prompt: 'System Prompt (Câu lệnh hệ thống)',
+  langflow_system_prompt_placeholder: 'VD: Bạn là trợ lý bán hàng của BBI...',
+  langflow_system_prompt_hint:
+    'Ghi đè prompt của agent cho mỗi request. Để trống sẽ dùng biến SYSTEM_PROMPT mặc định cấu hình sẵn trong Langflow.',
   
   // ERP Cloudify Configuration
   erp_config_title: 'Tích hợp dữ liệu ERP (Cloudify ERP Integration)',

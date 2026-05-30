@@ -173,6 +173,7 @@ type ChannelMetadata struct {
 	LangflowAPIKey       string `json:"langflow_api_key"`
 	LangflowFlowID       string `json:"langflow_flow_id"`
 	LangflowPublicFlowID string `json:"langflow_public_flow_id"`
+	SystemPrompt         string `json:"system_prompt"`
 
 	AstraDBAPIEndpoint string `json:"astradb_api_endpoint"`
 	AstraDBToken       string `json:"astradb_token"`
@@ -365,6 +366,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				meta.LangflowPublicFlowID = setting.ValuePlain
 			} else {
 				meta.LangflowPublicFlowID = cfg.LangflowPublicFlowID
+			}
+		}
+		// System prompt is optional and per-tenant only — an empty value means
+		// "use the SYSTEM_PROMPT global variable configured inside Langflow",
+		// so there is no env/global fallback here.
+		if meta.SystemPrompt == "" {
+			var setting models.AppSetting
+			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_system_prompt").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+				meta.SystemPrompt = setting.ValuePlain
 			}
 		}
 
@@ -1216,7 +1226,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
-		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken)
+		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, meta.SystemPrompt)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}

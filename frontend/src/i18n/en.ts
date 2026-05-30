@@ -372,6 +372,10 @@ export default {
   flow_id: 'Flow ID (Whitelist / Internal Staff)',
   application_token: 'Application Token',
   base_url: 'Base URL',
+  langflow_system_prompt: 'System Prompt',
+  langflow_system_prompt_placeholder: "e.g. You are BBI's sales assistant...",
+  langflow_system_prompt_hint:
+    'Overrides the agent prompt for every request. Leave empty to use the default SYSTEM_PROMPT configured inside Langflow.',
   
   // ERP Cloudify Configuration
   erp_config_title: 'Cloudify ERP Integration',
