@@ -2,8 +2,13 @@
 
 Tài liệu này mô tả end-to-end luồng xử lý khi khách hàng nhắn cho bot một câu hỏi
 **công nợ** trên Zalo OA — ví dụ điển hình: **"công nợ của tôi bao nhiêu?"**. Tài
-liệu bám sát **code hiện tại** (handler `ERPQuery` nhánh `case "debt"` trong
-`erp.go` + các hàm helper trong `erp_debt.go`).
+liệu bám sát **code hiện tại** (handler `ERPQuery` → hàm `respondWithLiveDataV2`
+nhánh `case "debt"` ở `erp.go:2119` + các hàm helper trong `erp_debt.go`).
+
+> 🗣️ **Hiểu nhanh (không kỹ thuật):** khách nhắn "công nợ" → bot **chưa** trả số
+> ngay mà hỏi lại "xem kỳ nào?" (tháng này / tháng trước / quý này). Khi khách
+> chốt kỳ, bot mới biết khách là ai (qua Zalo), lấy đúng mã khách của họ, gọi báo
+> cáo công nợ phải thu của ERP rồi đọc ra "đầu kỳ – cuối kỳ nợ bao nhiêu".
 
 > 📎 Tài liệu này là bản song song của [`order-query-flow.md`](./order-query-flow.md)
 > và [`inventory-query-flow.md`](./inventory-query-flow.md) cho resource **`debt`**.
@@ -57,7 +62,8 @@ Hai câu hỏi mẫu được trace đầy đủ:
      │           │              │               Body: {resource:"debt", search, zalo_user_id} ────────► │
      │           │              │                                                       8. ERPQuery     │
      │           │              │                                                          (erp.go:36)  │
-     │           │              │                                            case "debt" (erp.go:2113)  │
+     │           │              │                                   respondWithLiveDataV2 / case "debt"   │
+     │           │              │                                            (erp.go:1610 / erp.go:2119) │
      │           │              │                                   ── th_cong_no_phai_thu/search ────► │
      │           │              │                                                       9. JSON resp  ◄─┤
      │           │              │                                   mapDebtItemForLLM (chuẩn hoá số dư)
@@ -99,28 +105,33 @@ orders, customers, debt}`. Với công nợ:
 
 ---
 
-## C. Sơ đồ quyết định bên trong `case "debt"` (erp.go:2113)
+## C. Sơ đồ quyết định bên trong `case "debt"` (erp.go:2119)
+
+> 🗣️ **Hiểu nhanh:** đây là "ngã ba" của handler. Nếu câu hỏi mơ hồ (chỉ có chữ
+> "công nợ", không kèm kỳ) → đi nhánh **TRÁI**: bot hỏi lại kỳ. Nếu đã có kỳ → đi
+> nhánh **PHẢI**: tìm mã khách, chốt khoảng ngày, gọi ERP, chuẩn hoá số liệu rồi
+> trả về.
 
 ```
-                       ERPQuery → case "debt" (erp.go:2113)
+                  respondWithLiveDataV2 → case "debt" (erp.go:2119)
                                        │
                        ┌───────────────┴───────────────┐
                isGenericDebtSearch(search)?      (erp_debt.go:14)
-            "" | "công nợ" | "xem công nợ" | "tra cứu công nợ" |
-            "đối chiếu công nợ" | "nợ" | "no" | … (bỏ dấu)
+            "" | "công nợ" | "xem công nợ" | "check công nợ" |
+            "tra cứu công nợ" | "đối chiếu công nợ" | "nợ" | "no" | … (bỏ dấu)
                        │                               │
                     YES│                            NO │
                        ▼                               ▼
         ┌──────────────────────────┐      1) Resolve targetCustomerCodes (mục D)
-        │ Trả zalo_rich_message     │         (erp.go:2131-2164)
+        │ Trả zalo_rich_message     │         (erp.go:2137-2178)
         │ (PLAIN TEXT, không buttons)│     2) parseDebtPeriodFromSearch(search)
         │ text: hỏi Tháng này /     │         (erp_debt.go:26) — mặc định "tháng này"
-        │ Tháng trước / Quý này     │         (erp.go:2166-2168)
+        │ Tháng trước / Quý này     │         (erp.go:2180-2183)
         │ is_debt_prompt = true     │      3) branchName ← setting erp_branch_name
-        │ (erp.go:2114-2129)        │         (mặc định "BBI NỘI BỘ", erp.go:2170-2175)
+        │ (erp.go:2120-2135)        │         (mặc định "BBI NỘI BỘ", erp.go:2185-2189)
         │ → agent: [RICH_MESSAGE_    │     4) debtEndpoint + GET/POST ←
         │   SENT], bot gửi tin text │         erp_global_method_permissions.debt
-        │                           │         (path/post, erp.go:2177-2220)
+        │                           │         (path/post, erp.go:2191-2213)
         └──────────────────────────┘                  │
                                           ┌────────────┴────────────┐
                                        usePost = true          usePost = false
@@ -130,69 +141,90 @@ orders, customers, debt}`. Với công nợ:
                                 │ SearchCustomEndpoint│   │ SearchCustomEndpoint  │
                                 │ WithBody(endpoint,  │   │ (endpoint, params)    │
                                 │  bodyPayload)       │   │ params: query-string  │
-                                │ (erp.go:2203-2211)  │   │ (erp.go:2212-2220)    │
+                                │ (erp.go:2217-2225)  │   │ (erp.go:2226-2235)    │
                                 └─────────┬───────────┘   └───────────┬──────────┘
                                           └────────────┬──────────────┘
                                                        ▼
                               mapDebtItemForLLM mỗi dòng (erp_debt.go:58)
-                              gấp alias → field chuẩn (erp.go:2223-2229)
+                              gấp alias → field chuẩn (erp.go:2237-2243)
                                                        ▼
                               JSON dùng chung: {status,data,source,resource,count}
-                              (erp.go:2331-2337)
+                              (erp.go:2301-2307)
 ```
 
 > `debtEndpoint` mặc định là `th_cong_no_phai_thu/search`; tenant có thể override
 > qua setting `erp_global_method_permissions` (key `debt.path`) và chọn POST qua
-> `debt.post` — xem `erp.go:2177-2220`. Endpoint sau khi load được strip các tiền
-> tố `/`, `rest_api/private/`.
+> `debt.post` — xem `erp.go:2191-2213`. Endpoint sau khi load được strip các tiền
+> tố `/`, `rest_api/private/`; nếu `path` rỗng hoặc đúng bằng `"debt"` thì giữ
+> nguyên endpoint mặc định.
+>
+> ⚠️ Nhánh `case "debt"` ở `erp.go:2119` nằm trong hàm **`respondWithLiveDataV2`**
+> (đường ERP thật, `source="cloudify_live"`). Còn `case "debt"` ở `erp.go:2611` là
+> đường **mock** (`source="mock_erp"`) dùng khi ERP chưa bật — tài liệu này trace
+> đường thật.
 
 ---
 
-## D. Định danh & xác định danh sách mã khách (erp.go:2131-2164)
+## D. Định danh & xác định danh sách mã khách (erp.go:2137-2178)
+
+> 🗣️ **Hiểu nhanh:** bot phải biết "ai đang hỏi" để chỉ trả nợ của đúng người đó.
+> - **Khách lẻ (own):** chỉ thấy nợ của **chính mình**. Nếu chưa map được mã khách
+>   riêng, bot thử lấy mã khách gắn với **nhóm** của họ.
+> - **Nhân viên (assigned/all):** có thể tra nợ theo **tên khách** họ gõ, hoặc theo
+>   **đối tượng khách (partner)**; nếu không có thì lấy toàn bộ khách trong nhóm
+>   được giao.
 
 Định danh khách: **ZaloUserID** (người gửi) → tra `zalo_customers`
 (`status='approved'`, `workers/tasks.go:526`) → **CustomerCode**, nạp vào
 `permCtx.CustomerCode`. `scopeType` lấy từ `IsResourceAllowed("debt")`
-(`permission_context.go`). Khác với orders (lọc từng đơn sau khi query), debt xác
-định **trước** danh sách mã khách rồi đẩy vào tham số `DS_KHACH_HANG`.
+(`permission_context.go:269`). Khác với orders (lọc từng đơn sau khi query), debt
+xác định **trước** danh sách mã khách rồi đẩy vào tham số `DS_KHACH_HANG`.
 
 ```
                                scope khách cho "debt"
                                        │
         ┌──────────────────────────────┼────────────────────────────────┐
    scope = "own"                  scope = "assigned" / "all"        (đặc biệt)
+   (erp.go:2138-2149)            (erp.go:2150-2178)
         │                              │
         ▼                              ▼
- targetCustomerCodes =        ┌─ partnerID != "" ────────────────────────────┐
- [permCtx.CustomerCode]       │  resolveCustomerCodeFromPartnerID(partnerID)  │
- (khách chỉ thấy nợ           │  (erp_debt.go:84) → SearchPartners, lấy "MA"  │
-  của chính mình)             │  → [code]                                     │
-        │                     ├─ else search != "" & KHÔNG phải kỳ ──────────┤
-        │                     │  SearchPartners(search,5) → gom mọi "MA"      │
-        │                     │  (tra công nợ theo tên/đối tượng khách)       │
-        │                     └───────────────────────────────────────────────┘
-        │                              │
-        │                     nếu vẫn rỗng & scope=="assigned":
-        │                       resolveGroupCustomerCodes(tenantID, groupIDs)
-        │                       (nhân viên thấy nợ của nhóm khách được giao)
+ ownCode = permCtx.CustomerCode  ┌─ partnerID != "" ────────────────────────────┐
+        │                        │  resolveCustomerCodeFromPartnerID(partnerID)  │
+ nếu ownCode == "":              │  (erp_debt.go:84) → SearchPartners, lấy "MA"  │
+   resolveGroupCustomerCode(...) │  → [code]                                     │
+   (erp.go:1471, số ÍT)          ├─ else search != "" & KHÔNG phải kỳ ──────────┤
+   → mã khách của nhóm           │  SearchPartners(search,5) → gom mọi "MA"      │
+        │                        │  (tra công nợ theo tên/đối tượng khách)       │
+ targetCustomerCodes =           └───────────────────────────────────────────────┘
+   [ownCode] (nếu có)                    │
+   (khách chỉ thấy nợ            nếu vẫn rỗng & scope=="assigned":
+    của chính mình)               resolveGroupCustomerCodes(tenantID, groupIDs)
+        │                         (erp.go:1487, số NHIỀU — nhân viên thấy nợ
+        │                          của cả nhóm khách được giao)
         └──────────────┬───────────────┘
                        ▼
-        dsKhachHang = strings.Join(targetCustomerCodes, ",")   (erp.go:2201)
+        dsKhachHang = strings.Join(targetCustomerCodes, ",")   (erp.go:2215)
         → tham số DS_KHACH_HANG gửi Cloudify
 ```
 
-> Với scope `own`, nếu `permCtx.CustomerCode` rỗng (chưa duyệt/chưa map) thì
-> `targetCustomerCodes` rỗng → `DS_KHACH_HANG=""`; báo cáo ERP sẽ không bị giới
-> hạn theo mã khách, nên việc map ZaloUserID → CustomerCode ở worker là điều kiện
-> tiên quyết để khách chỉ thấy nợ của mình.
+> Với scope `own`: ưu tiên `permCtx.CustomerCode`; nếu rỗng (chưa map được mã khách
+> riêng) thì **mới đây bổ sung** bước thử `resolveGroupCustomerCode` (số ít,
+> `erp.go:1471`, lấy 1 mã từ nhóm). Nếu cả hai đều rỗng thì `targetCustomerCodes`
+> rỗng → `DS_KHACH_HANG=""`; báo cáo ERP sẽ không bị giới hạn theo mã khách, nên
+> việc map ZaloUserID → CustomerCode ở worker vẫn là điều kiện tiên quyết để khách
+> chỉ thấy nợ của mình.
 
 ---
 
 ## E. Parse kỳ kế toán (erp_debt.go:26)
 
+> 🗣️ **Hiểu nhanh:** hàm này dịch câu chữ của khách ("tháng này", "quý này"...)
+> thành cặp ngày **TỪ NGÀY – ĐẾN NGÀY** để ERP biết lấy số liệu trong khoảng nào.
+> Nếu khách không nói rõ kỳ, bot mặc định lấy **tháng này** (từ ngày 1 đến hôm nay).
+
 `parseDebtPeriodFromSearch` chuyển ngôn ngữ tự nhiên thành cặp ngày ISO
 (`2006-01-02`). Nếu không khớp kỳ nào → `ok=false`, handler tự áp mặc định
-**"công nợ tháng này"** (erp.go:2166-2168).
+**"công nợ tháng này"** (erp.go:2180-2183).
 
 | Input (có/không dấu) | `TU_NGAY` | `DEN_NGAY` |
 |---|---|---|
@@ -219,7 +251,7 @@ orders, customers, debt}`. Với công nợ:
 > `no_so_du_dau_ky`) để LLM bắt được dù gọi tên nào. Mọi field ERP khác được giữ
 > nguyên (pass-through) phục vụ debug.
 
-### Request gửi Cloudify (erp.go:2203-2220)
+### Request gửi Cloudify (erp.go:2217-2235)
 
 | Tham số | Giá trị | Nguồn |
 |---|---|---|
@@ -232,7 +264,7 @@ orders, customers, debt}`. Với công nợ:
 > POST gửi `bodyPayload` (bool `true`); GET gửi `params` query-string (chuỗi
 > `"true"`). Chọn POST/GET qua `erp_global_method_permissions.debt.post`.
 
-### Ví dụ prompt kỳ (mơ hồ → plain text, erp.go:2114-2129)
+### Ví dụ prompt kỳ (mơ hồ → plain text, erp.go:2120-2135)
 
 ```json
 {
@@ -250,7 +282,7 @@ orders, customers, debt}`. Với công nợ:
 > Đã bỏ `attachment.type="template"` + `buttons`. Payload chỉ còn `recipient` +
 > `message.text` → webhook bắn về Zalo là tin nhắn văn bản thuần.
 
-### Ví dụ response JSON (có kỳ → data, erp.go:2287-2293)
+### Ví dụ response JSON (có kỳ → data, erp.go:2301-2307)
 
 ```json
 {
@@ -274,8 +306,8 @@ orders, customers, debt}`. Với công nợ:
 ```
 
 > Khác với orders, debt **không** có `orders_summary` / `range_days` / `scope` trong
-> response — nó đi qua đúng nhánh response dùng chung ở cuối `ERPQuery`
-> (erp.go:2287-2293): `{status, data, source, resource, count}`.
+> response — nó đi qua đúng nhánh response dùng chung ở cuối `respondWithLiveDataV2`
+> (erp.go:2301-2307): `{status, data, source, resource, count}`.
 
 ### Ví dụ câu trả lời bot
 
@@ -301,24 +333,28 @@ Không có dữ liệu công nợ trong khoảng anh hỏi.
 | Map ZaloUserID → mã khách | `backend/workers/tasks.go:526` | tra `zalo_customers` (`status='approved'`) |
 | Phân loại ý định | `backend/workers/tasks.go` | `classifyMessageIntent` → `IN_SCOPE` |
 | Resolve quyền | `backend/engine/permission_context.go:58` | `ResolvePermissionsWithGroup` |
-| Kiểm tra resource | `backend/engine/permission_context.go` | `IsResourceAllowed("debt")` → scope |
-| Gọi Langflow | `backend/engine/langflow_client.go` | `RunFlowWithCustomer` |
+| Kiểm tra resource | `backend/engine/permission_context.go:269` | `IsResourceAllowed("debt")` → scope |
+| Gọi Langflow | `backend/engine/langflow_client.go:209` | `RunFlowWithCustomer` |
 | Handler ERP | `backend/api/handlers/erp.go:36` | `ERPQuery` (auth, ERP active, verify token, method check) |
-| Nhánh debt | `backend/api/handlers/erp.go:2113` | `case "debt"` |
-| Generic detect | `backend/api/handlers/erp_debt.go:14` | `isGenericDebtSearch` |
-| Prompt kỳ (plain text) | `backend/api/handlers/erp.go:2114-2129` | `is_debt_prompt`, `zalo_rich_message` (không còn `attachment`/buttons) |
-| Resolve mã khách | `backend/api/handlers/erp.go:2131-2164` | own / assigned / all |
-| Partner theo ID | `backend/api/handlers/erp_debt.go:84` | `resolveCustomerCodeFromPartnerID` (erp.go:2138) |
-| Partner theo keyword | `backend/api/handlers/erp.go:2145` | `SearchPartners(search,5)` → gom `MA` |
-| Nhóm khách (assigned) | `backend/api/handlers/erp.go:2162` | `resolveGroupCustomerCodes` |
+| Hàm dữ liệu thật | `backend/api/handlers/erp.go:1610` | `respondWithLiveDataV2` (đường `cloudify_live`) |
+| Nhánh debt (thật) | `backend/api/handlers/erp.go:2119` | `case "debt"` |
+| Nhánh debt (mock) | `backend/api/handlers/erp.go:2611` | `case "debt"` đường `mock_erp` (ERP chưa bật) |
+| Generic detect | `backend/api/handlers/erp_debt.go:14` | `isGenericDebtSearch` (gồm cả "check công nợ") |
+| Prompt kỳ (plain text) | `backend/api/handlers/erp.go:2120-2135` | `is_debt_prompt`, `zalo_rich_message` (không còn `attachment`/buttons) |
+| Resolve mã khách | `backend/api/handlers/erp.go:2137-2178` | own / assigned / all |
+| Own + fallback nhóm | `backend/api/handlers/erp.go:2138-2149` | `permCtx.CustomerCode` → `resolveGroupCustomerCode` (số ít) |
+| Partner theo ID | `backend/api/handlers/erp_debt.go:84` | `resolveCustomerCodeFromPartnerID` (erp.go:2152) |
+| Partner theo keyword | `backend/api/handlers/erp.go:2159` | `SearchPartners(search,5)` → gom `MA` |
+| Nhóm khách (1 mã) | `backend/api/handlers/erp.go:1471` | `resolveGroupCustomerCode` (own fallback) |
+| Nhóm khách (assigned) | `backend/api/handlers/erp.go:1487` / `:2176` | `resolveGroupCustomerCodes` |
 | Parse kỳ kế toán | `backend/api/handlers/erp_debt.go:26` | `parseDebtPeriodFromSearch` (mặc định "tháng này") |
-| Tên chi nhánh | `backend/api/handlers/erp.go:2170-2175` | setting `erp_branch_name` (mặc định `BBI NỘI BỘ`) |
-| Cấu hình endpoint/POST | `backend/api/handlers/erp.go:2177-2220` | `erp_global_method_permissions.debt` (path/post) |
-| Nối DS_KHACH_HANG | `backend/api/handlers/erp.go:2201` | `strings.Join(targetCustomerCodes, ",")` |
-| Gọi ERP (POST) | `backend/api/handlers/erp.go:2203-2211` | `SearchCustomEndpointWithBody(debtEndpoint, bodyPayload)` |
-| Gọi ERP (GET) | `backend/api/handlers/erp.go:2212-2220` | `SearchCustomEndpoint(debtEndpoint, params)` |
-| Chuẩn hoá field | `backend/api/handlers/erp_debt.go:58` | `mapDebtItemForLLM` (gấp alias → chuẩn) |
-| Response JSON | `backend/api/handlers/erp.go:2287-2293` | `{status,data,source,resource,count}` |
+| Tên chi nhánh | `backend/api/handlers/erp.go:2185-2189` | setting `erp_branch_name` (mặc định `BBI NỘI BỘ`) |
+| Cấu hình endpoint/POST | `backend/api/handlers/erp.go:2191-2213` | `erp_global_method_permissions.debt` (path/post; bỏ qua path rỗng / `"debt"`) |
+| Nối DS_KHACH_HANG | `backend/api/handlers/erp.go:2215` | `strings.Join(targetCustomerCodes, ",")` |
+| Gọi ERP (POST) | `backend/api/handlers/erp.go:2217-2225` | `SearchCustomEndpointWithBody(debtEndpoint, bodyPayload)` |
+| Gọi ERP (GET) | `backend/api/handlers/erp.go:2226-2235` | `SearchCustomEndpoint(debtEndpoint, params)` |
+| Chuẩn hoá field | `backend/api/handlers/erp_debt.go:58` | `mapDebtItemForLLM` (gấp alias → chuẩn, erp.go:2237-2243) |
+| Response JSON | `backend/api/handlers/erp.go:2301-2307` | `{status,data,source,resource,count}` |
 | Tests | `backend/api/handlers/erp_test.go:312` | `TestIsGenericDebtSearch` |
 | | `backend/api/handlers/erp_test.go:334` | `TestParseDebtPeriodFromSearch` |
 | | `backend/api/handlers/erp_test.go:383` | `TestMapDebtItemForLLM` |

@@ -226,6 +226,49 @@ Cả nhánh 1-đơn (mục D′) lẫn nhánh cửa sổ ngày đều gọi `res
 > (erp_orders.go) — `own`: khớp `ownCode`; `assigned`: thuộc `allowedCodes`;
 > `all`: luôn thấy; scope rỗng/khác → **từ chối** (an toàn).
 
+### Scope `assigned` chi tiết
+
+`assigned` = người hỏi là **nhân viên / CRM được giao phụ trách một hay nhiều
+nhóm khách hàng**. Khác `own` (chỉ thấy đơn của chính mình, so khớp **1 mã**
+`ownCode`), `assigned` thấy đơn của **mọi khách hàng thuộc các nhóm được giao**,
+so khớp với **một danh sách mã** `allowedCodes`.
+
+**Dựng `allowedCodes`** (`erp.go:1940-1946` → `resolveGroupCustomerCodes`,
+`erp.go:1502`):
+
+```
+permCtx.Groups → [group_id...]            (nhóm CRM người hỏi được giao)
+        │  resolveGroupCustomerCodes(tenantID, groupIDs)
+        ▼
+   SQL JOIN  zalo_customers
+               ⋈ crm_group_customers ON zalo_customer_id = zalo_customers.id
+             WHERE crm_group_customers.group_id IN (groupIDs)
+               AND zalo_customers.tenant_id = tenantID
+               AND zalo_customers.status   = 'approved'   ← chỉ KH đã duyệt
+        │  Pluck zalo_customers.customer_code
+        ▼
+   allowedCodes = ["S052", "S081", "S133", …]   (mã Cloudify của cả nhóm)
+```
+
+`crm_group_customers` là **bảng nối n–n** giữa nhóm CRM và khách
+(`zalo_customers`). Một nhóm có nhiều khách → nhân viên phụ trách nhóm "thừa
+hưởng" toàn bộ mã khách (đã `approved`) trong nhóm.
+
+**So khớp từng đơn** (`isOrderAuthorized`, erp_orders.go:33-39): với mỗi đơn,
+bóc `itemCustCode` từ `MA_KHACH_HANG` rồi quét `allowedCodes`; khớp **bất kỳ**
+mã nào (qua `EqualFold(leadingCustomerCode(ac), itemCustCode)`) là giữ; không
+khớp mã nào → loại.
+
+> ⚠️ **Lưu ý vận hành cho `assigned`:**
+> 1. **Chỉ tính KH `status='approved'`** — khách chưa duyệt trong nhóm không vào
+>    `allowedCodes`, nên đơn của họ bị ẩn với nhân viên cho tới khi được duyệt.
+> 2. **`allowedCodes` rỗng → nhân viên thấy 0 đơn** (vòng lặp không khớp gì →
+>    `false`). Thường do nhóm chưa gán khách hoặc khách chưa `approved`, **không
+>    phải** lỗi ERP.
+> 3. **Lỗi SQL bị nuốt:** `allowedCodes, _ = resolveGroupCustomerCodes(...)`
+>    (erp.go:1945) bỏ qua `error`. Nếu query lỗi, `allowedCodes` rỗng → nhân
+>    viên thấy 0 đơn một cách âm thầm thay vì báo lỗi rõ ràng.
+
 ---
 
 ## D′. Tra cứu một đơn theo mã (nhánh `extractOrderCode`)

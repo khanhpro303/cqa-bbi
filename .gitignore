@@ -56,3 +56,7 @@ THAM-KHAO-MCP/
 
 # Local dev/testing stack (docker-compose, scripts, generated .env.local)
 local-dev/
+
+# Python bytecode cache
+__pycache__/
+*.pyc
