@@ -3,10 +3,14 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 
+	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 )
 
 // searchVariantsByAttributes returns child variants under a parent SKU
@@ -74,6 +78,73 @@ func searchVariantsByAttributes(ctx context.Context, tenantID, parentCode, color
 		}))
 	}
 	return results, nil
+}
+
+// hybridMatchVariant runs the same Astra hybrid search the products flow uses
+// (BM25 lexical + vector via FuzzyMatchProductWithEmbedding, erp.go:396), but
+// scoped to a single parent SKU. It exists because searchVariantsByAttributes
+// matches MySQL with exact size equality + substring colour, which silently
+// misses real variants when the cache stores size as "Size L" / "L (40)" or the
+// colour in another language ("trắng" vs the stored "Gloss White"). The hybrid
+// index embeds each SKU as "<parent> — <colour> — <size>", so a query like
+// "FF901 trắng L" resolves the right SKU regardless of those storage quirks.
+//
+// Returns the pinpointed variant rows (one SKU) belonging to parentCode, or nil
+// when embedding fuzzy is disabled, the config/Astra call errors, no specific
+// SKU is found, or the top match belongs to a different parent. The ma_cha guard
+// matters because the hybrid filter only scopes tenant_id, so a sibling parent's
+// SKU could otherwise leak into a variant answer.
+func hybridMatchVariant(ctx context.Context, tenantID, parentCode, color, size, brand string) []map[string]interface{} {
+	if os.Getenv("ERP_EMBEDDING_FUZZY_ENABLED") != "true" {
+		return nil
+	}
+	keyword := strings.TrimSpace(strings.Join([]string{parentCode, color, size, brand}, " "))
+	if keyword == "" {
+		return nil
+	}
+
+	appCfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		log.Printf("[erp_query] variant embedding config load error: %v", cfgErr)
+		return nil
+	}
+	embedCfg := engine.ProductEmbeddingConfig{
+		AstraEndpoint: appCfg.AstraDBAPIEndpoint,
+		AstraToken:    appCfg.AstraDBToken,
+		AstraKeyspace: appCfg.AstraDBKeyspace,
+	}
+
+	match, embedErr := engine.FuzzyMatchProductWithEmbedding(ctx, embedCfg, tenantID, keyword)
+	if embedErr != nil {
+		log.Printf("[erp_query] variant embedding fuzzy error: %v", embedErr)
+		return nil
+	}
+	// match.MA is only populated when the top SKU dominates its siblings
+	// (Specific). A variant query already names parent + attributes, so the
+	// pinpoint case is exactly what we want; a non-specific result falls through
+	// to the existing bilingual LLM remap.
+	if match.MA == "" {
+		return nil
+	}
+	if match.MaCha != "" && !strings.EqualFold(strings.TrimSpace(match.MaCha), parentCode) {
+		log.Printf("[erp_query] variant embedding matched MA=%s but ma_cha=%s != parent=%s; discarding",
+			match.MA, match.MaCha, parentCode)
+		return nil
+	}
+
+	rows, fetchErr := getProductByMaFromAstraDB(ctx, tenantID, match.MA)
+	if fetchErr != nil {
+		log.Printf("[erp_query] variant embedding fetch MA=%s failed: %v", match.MA, fetchErr)
+		return nil
+	}
+	// Defensive re-check against the fetched row in case the hybrid projection
+	// omitted ma_cha: never return a SKU that does not belong to this parent.
+	for _, r := range rows {
+		if rc := strings.TrimSpace(getFirstNonEmptyMapString(r, "MA_CHA", "ma_cha")); rc != "" && !strings.EqualFold(rc, parentCode) {
+			return nil
+		}
+	}
+	return rows
 }
 
 // filterVariantsByAttributes applies the same case-insensitive substring

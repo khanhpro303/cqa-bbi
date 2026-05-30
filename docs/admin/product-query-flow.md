@@ -82,10 +82,11 @@ Ba câu hỏi mẫu được trace đầy đủ:
    "FF800 Trắng Bóng size L giá 1.290.000đ ạ."
 ```
 
-> 📌 **Điểm DUY NHẤT chạm Astra** là bước B2 (embedding fuzzy). Mọi bước còn lại
-> (B1 LIKE, B-fetch, enrich) đều đọc **MySQL `cached_products`**. Nếu
+> 📌 **Điểm chạm Astra** trong luồng `products` là bước B2 (embedding fuzzy). Mọi
+> bước còn lại (B1 LIKE, B-fetch, enrich) đều đọc **MySQL `cached_products`**. Nếu
 > `ERP_EMBEDDING_FUZZY_ENABLED` không bật, B2 bị bỏ qua và luồng nhảy thẳng xuống
-> B3 (LLM fuzzy).
+> B3 (LLM fuzzy). Nhánh **`product_variants`** cũng dùng chính engine hybrid này ở
+> bước (0) — xem mục G; cùng gate `ERP_EMBEDDING_FUZZY_ENABLED`.
 
 ---
 
@@ -347,14 +348,32 @@ nhiêu?"), agent gọi `product_variants` thay vì `products` để lấy **đú
 giá** (không phải khoảng giá):
 
 1. **Bắt buộc `parent_code`** (`:474`); thiếu → HTTP 400.
-2. **`searchVariantsByAttributes`** (`:483`) — lọc cache theo
-   `parent_code` + `color` + `size` + `brand`.
-3. **Zero-result → fallback song ngữ** (`:512`): nếu cache lưu "Gloss Black" mà
+2. **`searchVariantsByAttributes`** (`:483`) — lọc cache MySQL theo
+   `parent_code` + `color` + `size` + `brand`. Lưu ý: `size` so khớp **bằng
+   chính xác** (`LOWER(thuoc_tinh_2) = LOWER(size)`) còn `color` là substring
+   `LIKE`. Đường này nhanh + chính xác khi kho lưu chuẩn, nhưng trượt khi
+   `thuoc_tinh_2` lưu `"Size L"` / `"L (40)"` / có space thừa, hoặc khi khách
+   gõ màu khác ngôn ngữ với giá trị lưu.
+3. **Zero-result → (0) Astra hybrid** (`:522`, `searchVariantsByAttributes`
+   trả rỗng): chạy **đúng engine của luồng products** —
+   `hybridMatchVariant` (`erp_variants.go`) gọi `FuzzyMatchProductWithEmbedding`
+   (BM25 `$lexical` + vector, mục D) với `keyword = "<parent> <color> <size>
+   <brand>"`, gate bởi `ERP_EMBEDDING_FUZZY_ENABLED`. Index nhúng mỗi SKU dạng
+   `"FF901 — Gloss White — L"` nên bắt được cả lỗi lưu size lẫn màu song ngữ.
+   Có **guard `ma_cha == parent_code`** (vì hybrid filter chỉ scope `tenant_id`)
+   để không rò SKU của dòng cha khác. Pinpoint được → `source =
+   "astradb_hybrid_variants"`, bỏ qua bước 4–5.
+4. **Vẫn rỗng → fallback song ngữ** (`:540`): nếu cache lưu "Gloss Black" mà
    khách gõ "đen bóng", `fuzzyMatchAttributesWithLLM` (`erp_fuzzy.go:192`) map
    color/size/brand về giá trị chuẩn (`collectAvailableAttributes` cung cấp danh
    sách hợp lệ) rồi **thử lại đúng 1 lần**.
-4. **Vẫn rỗng** → trả `available_colors / available_sizes / available_brands` để
+5. **Vẫn rỗng** → trả `available_colors / available_sizes / available_brands` để
    agent hỏi khách chọn tổ hợp có thật.
+
+> 🔌 **Mục 3 là điểm mới đấu Astra vào variant.** Trước đây nhánh
+> `product_variants` chỉ dùng MySQL exact + LLM remap, **không bao giờ** chạm
+> hybrid embedding — nên mọi cải tiến `$lexical`/vector chỉ phục vụ luồng
+> `products`. Giờ variant tái dùng cùng `FuzzyMatchProductWithEmbedding`.
 
 > `product_variants` dùng chung permission grant với `products` (`erp.go:221`:
 > `permResource` map `product_variants → products`), nên tenant không cần cấu hình
@@ -394,6 +413,7 @@ giá** (không phải khoảng giá):
 | Response JSON | `backend/api/handlers/erp.go:458` | `source:"astradb_cache"` + `data[]` + `count` |
 | Ghi audit | `backend/api/handlers/erp.go:457` | `writeAuditLog` |
 | **product_variants** | `backend/api/handlers/erp.go:472` | nhánh variant theo `parent_code` + màu/size/brand |
-| Attr search | `backend/api/handlers/erp.go:483` | `searchVariantsByAttributes` |
-| Attr fuzzy song ngữ | `backend/api/handlers/erp.go:520` → `erp_fuzzy.go:192` | `fuzzyMatchAttributesWithLLM` ("đen bóng"→"Gloss Black") |
+| Attr search | `backend/api/handlers/erp.go:483` | `searchVariantsByAttributes` (MySQL, size exact) |
+| **Variant Astra hybrid** | `backend/api/handlers/erp.go:522` → `erp_variants.go` | `hybridMatchVariant` (reuse `FuzzyMatchProductWithEmbedding`, guard `ma_cha=parent`, gate `ERP_EMBEDDING_FUZZY_ENABLED`) |
+| Attr fuzzy song ngữ | `backend/api/handlers/erp.go:540` → `erp_fuzzy.go:192` | `fuzzyMatchAttributesWithLLM` ("đen bóng"→"Gloss Black") |
 | Quyền dùng chung | `backend/api/handlers/erp.go:221` | `product_variants` → `products` (permResource map) |

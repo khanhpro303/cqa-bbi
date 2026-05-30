@@ -1269,3 +1269,29 @@ func TestMethodPermissionResource(t *testing.T) {
 		}
 	}
 }
+
+// TestHybridMatchVariantGatedOff verifies the variant Astra hybrid path is a
+// no-op (returns nil, makes no config/Astra call) unless ERP_EMBEDDING_FUZZY_ENABLED
+// is "true". This guards the wiring added to the product_variants branch so the
+// MySQL-only behaviour is preserved when the feature flag is off.
+func TestHybridMatchVariantGatedOff(t *testing.T) {
+	t.Setenv("ERP_EMBEDDING_FUZZY_ENABLED", "")
+	if got := hybridMatchVariant(context.Background(), "tenant-1", "FF901", "trắng", "L", ""); got != nil {
+		t.Fatalf("hybridMatchVariant with flag off = %v; want nil", got)
+	}
+
+	t.Setenv("ERP_EMBEDDING_FUZZY_ENABLED", "false")
+	if got := hybridMatchVariant(context.Background(), "tenant-1", "FF901", "trắng", "L", ""); got != nil {
+		t.Fatalf("hybridMatchVariant with flag=false = %v; want nil", got)
+	}
+}
+
+// TestHybridMatchVariantEmptyKeyword verifies that with no parent and no
+// attributes there is nothing to search, so the helper returns nil before any
+// config load or Astra call even when the feature flag is enabled.
+func TestHybridMatchVariantEmptyKeyword(t *testing.T) {
+	t.Setenv("ERP_EMBEDDING_FUZZY_ENABLED", "true")
+	if got := hybridMatchVariant(context.Background(), "tenant-1", "", "", "", ""); got != nil {
+		t.Fatalf("hybridMatchVariant with empty keyword = %v; want nil", got)
+	}
+}

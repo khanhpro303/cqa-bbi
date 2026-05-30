@@ -519,6 +519,29 @@ func ERPQuery(c *gin.Context) {
 			"count":       len(slim),
 		}
 
+		// (0) Astra hybrid (BM25 lexical + vector) scoped to this parent, tried
+		//     BEFORE the bilingual/available_* fallback. searchVariantsByAttributes
+		//     above matches MySQL with exact size equality + substring colour,
+		//     which misses "Size L"/"L (40)" size storage and EN/VI colour
+		//     spelling ("trắng" vs the stored "Gloss White"). The hybrid index
+		//     ("FF901 — Gloss White — L") handles both. Same engine the products
+		//     flow uses (erp.go:396), now wired into the variant path. When it
+		//     pinpoints the SKU, slim becomes non-empty and the bilingual block
+		//     below is skipped by its own len(slim)==0 guard.
+		if len(slim) == 0 && (strings.TrimSpace(req.Color) != "" || strings.TrimSpace(req.Size) != "" || strings.TrimSpace(req.Brand) != "") {
+			if hybridRows := hybridMatchVariant(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand); len(hybridRows) > 0 {
+				hybridSlim := slimVariantsForLLM(filterProductsByGroups(hybridRows, productGroups))
+				if len(hybridSlim) > 0 {
+					slim = hybridSlim
+					response["data"] = hybridSlim
+					response["count"] = len(hybridSlim)
+					response["source"] = "astradb_hybrid_variants"
+					log.Printf("[erp_query] variant hybrid matched parent=%s color=%q size=%q brand=%q → %d SKU",
+						parentCode, req.Color, req.Size, req.Brand, len(hybridSlim))
+				}
+			}
+		}
+
 		// Zero-result fallback. Two passes:
 		//  (1) Bilingual fuzzy match — the cache may store "Gloss Black"
 		//      while the customer typed "đen bóng". Resolve color/size/brand
