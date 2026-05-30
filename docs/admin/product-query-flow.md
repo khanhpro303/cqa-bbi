@@ -354,12 +354,12 @@ giá** (không phải khoảng giá):
    `LIKE`. Đường này nhanh + chính xác khi kho lưu chuẩn, nhưng trượt khi
    `thuoc_tinh_2` lưu `"Size L"` / `"L (40)"` / có space thừa, hoặc khi khách
    gõ màu khác ngôn ngữ với giá trị lưu.
-3. **Zero-result → (0) Astra hybrid** (`:522`, `searchVariantsByAttributes`
+3. **Zero-result → (0) Astra hybrid** (`:522`, khi `searchVariantsByAttributes`
    trả rỗng): chạy **đúng engine của luồng products** —
    `hybridMatchVariant` (`erp_variants.go`) gọi `FuzzyMatchProductWithEmbedding`
-   (BM25 `$lexical` + vector, mục D) với `keyword = "<parent> <color> <size>
-   <brand>"`, gate bởi `ERP_EMBEDDING_FUZZY_ENABLED`. Index nhúng mỗi SKU dạng
-   `"FF901 — Gloss White — L"` nên bắt được cả lỗi lưu size lẫn màu song ngữ.
+   (BM25 `$lexical` + vector, mục D) với keyword ghép từ `parent_code` + `color`
+   + `size` + `brand`, gate bởi `ERP_EMBEDDING_FUZZY_ENABLED`. Index nhúng mỗi
+   SKU dạng `"FF901 — Gloss White — L"` nên bắt được cả lỗi lưu size lẫn màu song ngữ.
    Có **guard `ma_cha == parent_code`** (vì hybrid filter chỉ scope `tenant_id`)
    để không rò SKU của dòng cha khác. Pinpoint được → `source =
    "astradb_hybrid_variants"`, bỏ qua bước 4–5.
