@@ -6,6 +6,8 @@ Patches the ERPGatewayCaller custom component embedded in the Langflow flow:
   * adds color/size/brand input fields after parent_code
   * replaces the embedded Python source with the canonical
     ERPGatewayCaller.component.py file
+  * refreshes the cached tools_metadata so the agent-facing tool schema
+    advertises color/size/brand and the product_variants resource
   * keeps the rest of the flow untouched
 
 Run from the repo root:
@@ -40,6 +42,13 @@ NEW_FIELDS = [
     ),
 ]
 
+# Agent-facing resource enum — must match ERPGatewayCaller.component.py.
+RESOURCE_INFO = (
+    "Loại tài nguyên cần truy vấn: 'products' (tìm dòng SP/giá range), "
+    "'product_variants' (giá/tồn của variant cụ thể theo màu/size), "
+    "'inventory', 'orders', 'debt'."
+)
+
 
 def find_erp_node(flow: dict) -> dict:
     for node in flow["data"]["nodes"]:
@@ -56,6 +65,32 @@ def build_field_block(template: dict, name: str, display_name: str, info: str) -
     block["info"] = info
     block["value"] = ""
     return block
+
+
+def refresh_tools_metadata(template: dict) -> None:
+    """Keep the cached agent-facing tool schema in sync with the inputs.
+
+    Langflow serialises a `tools_metadata` blob that is what the agent actually
+    sees as the tool signature. If we add color/size/brand inputs but leave this
+    stale, the agent never learns it can pass those args.
+    """
+    meta = template.get("tools_metadata")
+    if not meta or not meta.get("value"):
+        return
+    tool = meta["value"][0]
+    args = tool.setdefault("args", {})
+
+    # Fix the resource enum description to advertise product_variants.
+    if "resource" in args:
+        args["resource"]["description"] = RESOURCE_INFO
+
+    for name, display_name, info in NEW_FIELDS:
+        args[name] = {
+            "default": "",
+            "description": info,
+            "title": display_name,
+            "type": "string",
+        }
 
 
 def main() -> int:
@@ -86,6 +121,11 @@ def main() -> int:
     parent_block = template["parent_code"]
     for name, display_name, info in NEW_FIELDS:
         template[name] = build_field_block(parent_block, name, display_name, info)
+
+    # 3b. Refresh the resource field info + cached tools_metadata schema
+    if "resource" in template:
+        template["resource"]["info"] = RESOURCE_INFO
+    refresh_tools_metadata(template)
 
     FLOW_PATH.write_text(
         json.dumps(flow, indent=2, ensure_ascii=False) + "\n",

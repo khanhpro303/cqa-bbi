@@ -757,7 +757,7 @@
           "x": -663.4735641742452,
           "y": -148.1930809908719
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -1060,7 +1060,7 @@
           "x": 670.2121104226219,
           "y": 111.70214873794811
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -1082,7 +1082,7 @@
             ],
             "frozen": false,
             "icon": "calculator",
-            "last_updated": "2026-05-27T11:35:19.657Z",
+            "last_updated": "2026-05-28T07:36:17.631Z",
             "legacy": false,
             "lf_version": "1.9.1",
             "metadata": {
@@ -1230,7 +1230,7 @@
           "x": -241.26794192582645,
           "y": -207.12950841420044
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -1475,7 +1475,7 @@
           "x": -242.3831127110809,
           "y": -781.6641668923028
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -2029,7 +2029,7 @@
           "x": 196.87216843731204,
           "y": -131.99624229399768
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -2440,7 +2440,7 @@
           "x": -663.5816958231009,
           "y": -628.6309908327205
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -2487,7 +2487,7 @@
             ],
             "frozen": false,
             "icon": "AstraDB",
-            "last_updated": "2026-05-27T11:35:20.629Z",
+            "last_updated": "2026-05-28T07:36:17.644Z",
             "legacy": false,
             "lf_version": "1.9.1",
             "metadata": {
@@ -3526,7 +3526,7 @@
           "x": 598.2442875269905,
           "y": -881.0646518539988
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -3727,7 +3727,7 @@
           "x": 972.9932452786309,
           "y": -835.2580574936726
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -4252,7 +4252,7 @@
           "x": 599.1740641917597,
           "y": -1130.958695739952
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -4275,14 +4275,16 @@
               "resource",
               "search",
               "parent_code",
+              "color",
+              "size",
+              "brand",
               "zalo_user_id",
               "permission_token"
             ],
             "frozen": false,
-            "last_updated": "2026-05-27T11:35:20.633Z",
             "legacy": false,
             "metadata": {
-              "code_hash": "5aac1cfbbe35",
+              "code_hash": "f7dc69aee501",
               "dependencies": {
                 "dependencies": [
                   {
@@ -4322,12 +4324,6 @@
             ],
             "pinned": false,
             "template": {
-              "_frontend_node_flow_id": {
-                "value": "7d0fcbd9-2b21-45f5-8157-ea62caeaf528"
-              },
-              "_frontend_node_folder_id": {
-                "value": "4df9384f-06a4-40f1-9900-51fd22813736"
-              },
               "_type": "Component",
               "code": {
                 "advanced": true,
@@ -4345,7 +4341,7 @@
                 "show": true,
                 "title_case": false,
                 "type": "code",
-                "value": "from lfx.custom.custom_component.component import Component\nfrom lfx.inputs.inputs import MessageTextInput\nfrom lfx.io import SecretStrInput, Output\nfrom lfx.schema.message import Message\nimport httpx\nimport json\n\nclass ERPGatewayCaller(Component):\n  display_name = \"ERP Gateway Caller\"\n  description = (\n      \"Truy vấn dữ liệu ERP (sản phẩm, tồn kho, đơn hàng, công nợ) từ hệ thống ERP Gateway.\"\n  )\n\n  inputs = [\n      MessageTextInput(\n          name=\"gateway_endpoint\",\n          display_name=\"Gateway Endpoint\",\n          info=\"Đường dẫn API ERP Query (ví dụ: https://cqa.kariendoan.xyz/api/tenants/{tenant_id}/erp/query)\",\n          required=True,\n          tool_mode=False\n      ),\n      SecretStrInput(\n          name=\"secure_token\",\n          display_name=\"Secure Token\",\n          info=\"Agent Secure Token dùng để xác thực (X-Agent-Token)\",\n      ),\n      MessageTextInput(\n          name=\"resource\",\n          display_name=\"Resource\",\n          info=\"Loại tài nguyên cần truy vấn: 'inventory' (tồn kho), 'products' (sản phẩm), 'orders' (đơn hàng),'debt' (công nợ)\",\n          required=True,\n          tool_mode=True\n      ),\n      MessageTextInput(\n          name=\"search\",\n          display_name=\"Search\",\n          info=\"Từ khóa tìm kiếm (tên sản phẩm, mã SKU, mã đơn hàng, công nợ...)\",\n          required=False,\n          tool_mode=True\n      ),\n      MessageTextInput(\n          name=\"parent_code\",\n          display_name=\"Parent Code\",\n          info=\"Mã cha (dùng khi xem theo dòng sản phẩm cụ thể)\",\n          required=False,\n          tool_mode=True\n      ),\n      MessageTextInput(\n          name=\"zalo_user_id\",\n          display_name=\"Zalo User ID\",\n          info=\"Zalo user ID của khách hàng\",\n          required=False,\n          tool_mode=False\n      ),\n      MessageTextInput(\n          name=\"permission_token\",\n          display_name=\"Permission Token\",\n          info=\"Token phân quyền được cấp\",\n          required=False,\n          tool_mode=False\n      )\n  ]\n\n  outputs = [\n      Output(display_name=\"Output Message\", name=\"output_message\", method=\"call_api\")\n  ]\n\n  async def call_api(self) -> Message:\n      gateway_url = self.gateway_endpoint\n      token = self.secure_token\n\n      if not gateway_url or not token:\n          return Message(text=\"Lỗi cấu hình: Thiếu Gateway Endpoint hoặc Secure Token ở cài đặt node.\")\n\n      res = self.resource or \"inventory\"\n      search_query = self.search or \"\"\n      p_code = self.parent_code or \"\"\n      zalo_id = self.zalo_user_id or \"\"\n      perm_token = self.permission_token or \"\"\n\n      if hasattr(res, \"text\"):\n          res = res.text\n      if hasattr(search_query, \"text\"):\n          search_query = search_query.text\n      if hasattr(p_code, \"text\"):\n          p_code = p_code.text\n      if hasattr(zalo_id, \"text\"):\n          zalo_id = zalo_id.text\n      if hasattr(perm_token, \"text\"):\n          perm_token = perm_token.text\n\n      payload = {\n          \"resource\": str(res).strip(),\n          \"search\": str(search_query).strip(),\n          \"parent_code\": str(p_code).strip(),\n          \"zalo_user_id\": str(zalo_id).strip(),\n          \"limit\": 10\n      }\n\n      headers = {\n          \"Content-Type\": \"application/json\",\n          \"X-Agent-Token\": str(token).strip()\n      }\n      if perm_token:\n          headers[\"X-Permission-Token\"] = str(perm_token).strip()\n\n      async with httpx.AsyncClient(timeout=30.0) as client:\n          try:\n              resp = await client.post(gateway_url, json=payload, headers=headers)\n              status = resp.status_code\n              data = resp.json()\n          except Exception as e:\n              return Message(text=f\"Lỗi kết nối đến gateway: {str(e)}\")\n\n      if status == 200 and data.get(\"status\") == \"success\":\n          if (\n              data.get(\"is_orders_prompt\") or data.get(\"is_inventory_rich\")\n              or data.get(\"is_product_rich\")\n              or data.get(\"message\") == \"zalo_rich_message_sent_directly\"\n          ):\n              items_local = data.get(\"data\") or []\n              hint = \"\"\n              if items_local and isinstance(items_local[0], dict) and items_local[0].get(\"message\"):\n                  hint = items_local[0][\"message\"]\n              # is_product_rich: bot needs the numbered SP list inside its final\n              # assistant text so the agent's DISAMBIGUATION FOLLOW-UP rule can\n              # map a later \"1\"/\"2\"/\"3\" reply back to a parent_code via chat\n              # history. The Zalo rich-message itself is filtered out of recall\n              # (is_disambiguation=true), so without the list embedded here the\n              # next turn goes silent.\n              if data.get(\"is_product_rich\") and data.get(\"numbered_list\"):\n                  return Message(text=(\n                      f\"[RICH_MESSAGE_SENT] {hint}\\n\\n\"\n                      f\"Danh sách tương ứng:\\n{data.get('numbered_list')}\\n\\n\"\n                      \"Agent: Trong câu trả lời cuối cùng, BẮT BUỘC liệt kê danh sách trên \"\n                      \"theo định dạng '1. SP… / 2. SP… / 3. SP…' để user có thể trả lời bằng \"\n                      \"số (1/2/3) hoặc mã SP. KHÔNG nói 'đã gửi danh sách qua Zalo' nếu danh \"\n                      \"sách đã được liệt kê. Nếu user vừa chọn số ở turn trước: kiểm tra ý định gốc trong history. Nếu hỏi giá tổng thể (không kèm màu/size) thì trả lời ngay bằng price_range, KHÔNG hỏi màu/size. Nếu hỏi tồn thì hỏi tiếp màu+size.\"\n                  ))\n              return Message(text=(\n                  f\"[RICH_MESSAGE_SENT] {hint}\\n\"\n                  \"Agent: nếu user vừa chọn số (1/2/3) hoặc mã SP từ danh sách trước, \"\n                  \"hãy bám theo ý định gốc trong history (giá → trả lời price_range ngay, không hỏi màu/size; tồn → hỏi tiếp màu+size), KHÔNG lặp lại câu 'đã gửi danh sách qua Zalo'.\"\n              ))\n\n          if data.get(\"is_ma_cha\"):\n              return Message(text=data.get(\"message\", \"Dòng sản phẩm này có nhiều phân loại kích thước/màu sắc.\"))\n\n          items = data.get(\"data\", [])\n          source = data.get(\"source\", \"unknown\")\n          count = data.get(\"count\", 0)\n\n          if count == 0:\n              return Message(text=f\"Không tìm thấy thông tin '{res}' cho từ khóa '{search_query}'.\")\n\n          lines = [f\"Tìm thấy {count} kết quả {res} (Nguồn: {source}):\"]\n          for item in items[:10]:\n              lines.append(json.dumps(item, ensure_ascii=False))\n          return Message(text=\"\\n\".join(lines))\n      else:\n          err_msg = data.get(\"message\", \"Lỗi phản hồi từ ERP Gateway.\")\n          return Message(text=f\"Không thể lấy dữ liệu ERP: {err_msg}\")"
+                "value": "from lfx.custom.custom_component.component import Component\nfrom lfx.inputs.inputs import MessageTextInput\nfrom lfx.io import SecretStrInput, Output\nfrom lfx.schema.message import Message\nimport httpx\nimport json\n\nclass ERPGatewayCaller(Component):\n    display_name = \"ERP Gateway Caller\"\n    description = (\n        \"Truy vấn dữ liệu ERP (sản phẩm, tồn kho, đơn hàng, công nợ) từ hệ thống ERP Gateway.\"\n    )\n\n    inputs = [\n        MessageTextInput(\n            name=\"gateway_endpoint\",\n            display_name=\"Gateway Endpoint\",\n            info=\"Đường dẫn API ERP Query (ví dụ: https://cqa.kariendoan.xyz/api/tenants/{tenant_id}/erp/query)\",\n            required=True,\n            tool_mode=False\n        ),\n        SecretStrInput(\n            name=\"secure_token\",\n            display_name=\"Secure Token\",\n            info=\"Agent Secure Token dùng để xác thực (X-Agent-Token)\",\n        ),\n        MessageTextInput(\n            name=\"resource\",\n            display_name=\"Resource\",\n            info=(\n                \"Loại tài nguyên cần truy vấn: 'products' (tìm dòng SP/giá range), \"\n                \"'product_variants' (giá/tồn của variant cụ thể theo màu/size), \"\n                \"'inventory', 'orders', 'debt'.\"\n            ),\n            required=True,\n            tool_mode=True\n        ),\n        MessageTextInput(\n            name=\"search\",\n            display_name=\"Search\",\n            info=\"Từ khóa tìm kiếm (tên sản phẩm, mã SKU, mã đơn hàng, công nợ...)\",\n            required=False,\n            tool_mode=True\n        ),\n        MessageTextInput(\n            name=\"parent_code\",\n            display_name=\"Parent Code\",\n            info=\"Mã cha (BẮT BUỘC khi resource=product_variants; dùng để khoá truy vấn vào dòng SP cụ thể)\",\n            required=False,\n            tool_mode=True\n        ),\n        MessageTextInput(\n            name=\"color\",\n            display_name=\"Color\",\n            info=\"Màu sắc/thuộc tính 1 khi resource=product_variants (vd: 'đen bóng', 'xanh navy'). Bỏ trống nếu user không nêu.\",\n            required=False,\n            tool_mode=True\n        ),\n        MessageTextInput(\n            name=\"size\",\n            display_name=\"Size\",\n            info=\"Kích thước/thuộc tính 2 khi resource=product_variants (vd: 'L', 'XL'). Bỏ trống nếu user không nêu.\",\n            required=False,\n            tool_mode=True\n        ),\n        MessageTextInput(\n            name=\"brand\",\n            display_name=\"Brand\",\n            info=\"Thương hiệu (tuỳ chọn, lọc theo nhãn hiệu khi cần).\",\n            required=False,\n            tool_mode=True\n        ),\n        MessageTextInput(\n            name=\"zalo_user_id\",\n            display_name=\"Zalo User ID\",\n            info=\"Zalo user ID của khách hàng\",\n            required=False,\n            tool_mode=False\n        ),\n        MessageTextInput(\n            name=\"permission_token\",\n            display_name=\"Permission Token\",\n            info=\"Token phân quyền được cấp\",\n            required=False,\n            tool_mode=False\n        )\n    ]\n\n    outputs = [\n        Output(display_name=\"Output Message\", name=\"output_message\", method=\"call_api\")\n    ]\n\n    @staticmethod\n    def _coerce_text(value) -> str:\n        if value is None:\n            return \"\"\n        if hasattr(value, \"text\"):\n            value = value.text\n        return str(value).strip()\n\n    @staticmethod\n    def _format_price(value) -> str:\n        try:\n            num = float(value)\n        except (TypeError, ValueError):\n            return \"Liên hệ\"\n        if num <= 0:\n            return \"Liên hệ\"\n        return f\"{int(round(num)):,}đ\".replace(\",\", \".\")\n\n    def _format_variant_response(self, data: dict, parent_code: str, color: str, size: str) -> str:\n        items = data.get(\"data\") or []\n        if items:\n            lines = [f\"Tìm thấy {len(items)} variant khớp parent={parent_code} color='{color}' size='{size}':\"]\n            for v in items:\n                lines.append(\n                    f\"- ma={v.get('ma','')} | màu={v.get('color','')} | size={v.get('size','')} \"\n                    f\"| giá={self._format_price(v.get('price'))} | dvt={v.get('dvt','')} \"\n                    f\"| brand={v.get('nhan_hieu_name','')}\"\n                )\n            lines.append(\n                \"Agent: trả giá CHÍNH XÁC của variant khớp. Nếu user chỉ định màu+size đầy đủ → \"\n                \"chốt giá cụ thể; nếu thiếu thuộc tính → hỏi lại để chọn đúng variant.\"\n            )\n            return \"\\n\".join(lines)\n\n        colors = data.get(\"available_colors\") or []\n        sizes = data.get(\"available_sizes\") or []\n        hint_lines = [\n            f\"Không tìm thấy variant cho parent={parent_code} với color='{color}' size='{size}'.\"\n        ]\n        if colors:\n            hint_lines.append(f\"Các màu có sẵn: {', '.join(colors)}\")\n        if sizes:\n            hint_lines.append(f\"Các size có sẵn: {', '.join(sizes)}\")\n        hint_lines.append(\n            \"Agent: hỏi lại user theo các tuỳ chọn có sẵn ở trên, KHÔNG bịa giá.\"\n        )\n        return \"\\n\".join(hint_lines)\n\n    async def call_api(self) -> Message:\n        gateway_url = self.gateway_endpoint\n        token = self.secure_token\n\n        if not gateway_url or not token:\n            return Message(text=\"Lỗi cấu hình: Thiếu Gateway Endpoint hoặc Secure Token ở cài đặt node.\")\n\n        res = self._coerce_text(getattr(self, \"resource\", \"\")) or \"inventory\"\n        search_query = self._coerce_text(getattr(self, \"search\", \"\"))\n        p_code = self._coerce_text(getattr(self, \"parent_code\", \"\"))\n        color = self._coerce_text(getattr(self, \"color\", \"\"))\n        size = self._coerce_text(getattr(self, \"size\", \"\"))\n        brand = self._coerce_text(getattr(self, \"brand\", \"\"))\n        zalo_id = self._coerce_text(getattr(self, \"zalo_user_id\", \"\"))\n        perm_token = self._coerce_text(getattr(self, \"permission_token\", \"\"))\n\n        if res == \"product_variants\" and not p_code:\n            return Message(text=(\n                \"Lỗi: Resource 'product_variants' yêu cầu parent_code (mã cha). \"\n                \"Agent: hãy gọi lại resource='products' với search=<từ khoá> trước để xác định parent_code, \"\n                \"sau đó mới gọi product_variants với màu/size cụ thể.\"\n            ))\n\n        payload = {\n            \"resource\": res,\n            \"search\": search_query,\n            \"parent_code\": p_code,\n            \"color\": color,\n            \"size\": size,\n            \"brand\": brand,\n            \"zalo_user_id\": zalo_id,\n            \"limit\": 10,\n        }\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"X-Agent-Token\": str(token).strip(),\n        }\n        if perm_token:\n            headers[\"X-Permission-Token\"] = perm_token\n\n        async with httpx.AsyncClient(timeout=30.0) as client:\n            try:\n                resp = await client.post(gateway_url, json=payload, headers=headers)\n                status = resp.status_code\n                data = resp.json()\n            except Exception as e:\n                return Message(text=f\"Lỗi kết nối đến gateway: {str(e)}\")\n\n        if status != 200 or data.get(\"status\") != \"success\":\n            err_msg = data.get(\"message\", \"Lỗi phản hồi từ ERP Gateway.\")\n            return Message(text=f\"Không thể lấy dữ liệu ERP: {err_msg}\")\n\n        if res == \"product_variants\":\n            return Message(text=self._format_variant_response(data, p_code, color, size))\n\n        if (\n            data.get(\"is_orders_prompt\") or data.get(\"is_inventory_rich\")\n            or data.get(\"is_product_rich\")\n            or data.get(\"message\") == \"zalo_rich_message_sent_directly\"\n        ):\n            items_local = data.get(\"data\") or []\n            hint = \"\"\n            if items_local and isinstance(items_local[0], dict) and items_local[0].get(\"message\"):\n                hint = items_local[0][\"message\"]\n            if data.get(\"is_product_rich\") and data.get(\"numbered_list\"):\n                return Message(text=(\n                    f\"[RICH_MESSAGE_SENT] {hint}\\n\\n\"\n                    f\"Danh sách tương ứng:\\n{data.get('numbered_list')}\\n\\n\"\n                    \"Agent: Trong câu trả lời cuối cùng, BẮT BUỘC liệt kê danh sách trên \"\n                    \"theo định dạng '1. SP… / 2. SP… / 3. SP…' để user có thể trả lời bằng \"\n                    \"số (1/2/3) hoặc mã SP. KHÔNG nói 'đã gửi danh sách qua Zalo' nếu danh \"\n                    \"sách đã được liệt kê. Nếu user vừa chọn số ở turn trước → hỏi màu/size cụ thể.\"\n                ))\n            return Message(text=(\n                f\"[RICH_MESSAGE_SENT] {hint}\\n\"\n                \"Agent: nếu user vừa chọn số (1/2/3) hoặc mã SP từ danh sách trước, \"\n                \"hãy hỏi tiếp về màu và size cụ thể, KHÔNG lặp lại câu 'đã gửi danh sách qua Zalo'.\"\n            ))\n\n        if data.get(\"is_ma_cha\"):\n            return Message(text=data.get(\"message\", \"Dòng sản phẩm này có nhiều phân loại kích thước/màu sắc.\"))\n\n        items = data.get(\"data\", [])\n        source = data.get(\"source\", \"unknown\")\n        count = data.get(\"count\", 0)\n\n        if count == 0:\n            return Message(text=f\"Không tìm thấy thông tin '{res}' cho từ khóa '{search_query}'.\")\n\n        lines = [f\"Tìm thấy {count} kết quả {res} (Nguồn: {source}):\"]\n        for item in items[:10]:\n            lines.append(json.dumps(item, ensure_ascii=False))\n        return Message(text=\"\\n\".join(lines))\n"
               },
               "gateway_endpoint": {
                 "_input_type": "MessageTextInput",
@@ -4372,7 +4368,6 @@
                 "type": "str",
                 "value": "BBI_SECURE_CQA_GATEWAY"
               },
-              "is_refresh": false,
               "parent_code": {
                 "_input_type": "MessageTextInput",
                 "advanced": false,
@@ -4428,7 +4423,7 @@
                 "advanced": false,
                 "display_name": "Resource",
                 "dynamic": false,
-                "info": "Loại tài nguyên cần truy vấn: 'inventory' (tồn kho), 'products' (sản phẩm), 'orders' (đơn hàng),'debt' (công nợ)",
+                "info": "Loại tài nguyên cần truy vấn: 'products' (tìm dòng SP/giá range), 'product_variants' (giá/tồn của variant cụ thể theo màu/size), 'inventory', 'orders', 'debt'.",
                 "input_types": [
                   "Message"
                 ],
@@ -4521,7 +4516,7 @@
                         "type": "string"
                       },
                       "resource": {
-                        "description": "Loại tài nguyên cần truy vấn: 'inventory' (tồn kho), 'products' (sản phẩm), 'orders' (đơn hàng), 'debt' (công nợ)",
+                        "description": "Loại tài nguyên cần truy vấn: 'products' (tìm dòng SP/giá range), 'product_variants' (giá/tồn của variant cụ thể theo màu/size), 'inventory', 'orders', 'debt'.",
                         "title": "Resource",
                         "type": "string"
                       },
@@ -4529,6 +4524,24 @@
                         "default": "",
                         "description": "Từ khóa tìm kiếm (tên sản phẩm, mã SKU, mã đơn hàng, công nợ...)",
                         "title": "Search",
+                        "type": "string"
+                      },
+                      "color": {
+                        "default": "",
+                        "description": "Màu sắc/thuộc tính 1 khi resource=product_variants (vd: 'đen bóng', 'xanh navy'). Bỏ trống nếu user không nêu.",
+                        "title": "Color",
+                        "type": "string"
+                      },
+                      "size": {
+                        "default": "",
+                        "description": "Kích thước/thuộc tính 2 khi resource=product_variants (vd: 'L', 'XL'). Bỏ trống nếu user không nêu.",
+                        "title": "Size",
+                        "type": "string"
+                      },
+                      "brand": {
+                        "default": "",
+                        "description": "Thương hiệu (tuỳ chọn, lọc theo nhãn hiệu khi cần).",
+                        "title": "Brand",
                         "type": "string"
                       }
                     },
@@ -4563,6 +4576,81 @@
                 "show": true,
                 "title_case": false,
                 "tool_mode": false,
+                "trace_as_input": true,
+                "trace_as_metadata": true,
+                "track_in_telemetry": false,
+                "type": "str",
+                "value": ""
+              },
+              "color": {
+                "_input_type": "MessageTextInput",
+                "advanced": false,
+                "display_name": "Color",
+                "dynamic": false,
+                "info": "Màu sắc/thuộc tính 1 khi resource=product_variants (vd: 'đen bóng', 'xanh navy'). Bỏ trống nếu user không nêu.",
+                "input_types": [
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "load_from_db": false,
+                "name": "color",
+                "override_skip": false,
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": true,
+                "trace_as_input": true,
+                "trace_as_metadata": true,
+                "track_in_telemetry": false,
+                "type": "str",
+                "value": ""
+              },
+              "size": {
+                "_input_type": "MessageTextInput",
+                "advanced": false,
+                "display_name": "Size",
+                "dynamic": false,
+                "info": "Kích thước/thuộc tính 2 khi resource=product_variants (vd: 'L', 'XL'). Bỏ trống nếu user không nêu.",
+                "input_types": [
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "load_from_db": false,
+                "name": "size",
+                "override_skip": false,
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": true,
+                "trace_as_input": true,
+                "trace_as_metadata": true,
+                "track_in_telemetry": false,
+                "type": "str",
+                "value": ""
+              },
+              "brand": {
+                "_input_type": "MessageTextInput",
+                "advanced": false,
+                "display_name": "Brand",
+                "dynamic": false,
+                "info": "Thương hiệu (tuỳ chọn, lọc theo nhãn hiệu khi cần).",
+                "input_types": [
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "load_from_db": false,
+                "name": "brand",
+                "override_skip": false,
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": true,
                 "trace_as_input": true,
                 "trace_as_metadata": true,
                 "track_in_telemetry": false,
@@ -4632,7 +4720,7 @@
             ],
             "frozen": false,
             "icon": "AstraDB",
-            "last_updated": "2026-05-27T11:35:20.638Z",
+            "last_updated": "2026-05-28T07:36:17.648Z",
             "legacy": false,
             "lf_version": "1.9.1",
             "metadata": {
@@ -5719,7 +5807,7 @@
           "x": -238.26587194283988,
           "y": 68.74163868899944
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -5765,7 +5853,7 @@
             ],
             "frozen": false,
             "icon": "AstraDB",
-            "last_updated": "2026-05-27T11:35:20.644Z",
+            "last_updated": "2026-05-28T07:36:17.649Z",
             "legacy": false,
             "metadata": {
               "code_hash": "62ef40337614",
@@ -6806,7 +6894,7 @@
           "x": 189.18132380085905,
           "y": 398.0548069438913
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -6975,7 +7063,7 @@
           "x": -640.2489766183382,
           "y": 273.6869373011886
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -7143,14 +7231,14 @@
           "x": 654.1713165886412,
           "y": 197.04952567228358
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       }
     ],
     "viewport": {
-      "x": 664.9895224016775,
-      "y": 528.3905397495568,
-      "zoom": 0.4274166170439045
+      "x": 478.75505717881447,
+      "y": 458.5465061977285,
+      "zoom": 0.37096536573621897
     }
   },
   "description": "Chatbot for customer relation management, support query vector database for knowledge only",
