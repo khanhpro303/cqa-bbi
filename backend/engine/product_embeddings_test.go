@@ -40,41 +40,57 @@ func TestIsSpecificSKUMatch(t *testing.T) {
 		{"empty → false", nil, false},
 		{
 			"single result → specific",
-			[]productEmbeddingMatch{{MA: "A1", MaCha: "P", Similarity: 0.9}},
+			[]productEmbeddingMatch{{MA: "A1", MaCha: "P", Vector: 0.9}},
 			true,
 		},
 		{
 			"top dominates sibling → specific",
 			[]productEmbeddingMatch{
-				{MA: "A1", MaCha: "P", Similarity: 0.90},
-				{MA: "A2", MaCha: "P", Similarity: 0.80},
+				{MA: "A1", MaCha: "P", Vector: 0.90},
+				{MA: "A2", MaCha: "P", Vector: 0.80},
 			},
 			true,
 		},
 		{
 			"siblings clustered → family (not specific)",
 			[]productEmbeddingMatch{
-				{MA: "A1", MaCha: "P", Similarity: 0.90},
-				{MA: "A2", MaCha: "P", Similarity: 0.89},
+				{MA: "A1", MaCha: "P", Vector: 0.90},
+				{MA: "A2", MaCha: "P", Vector: 0.89},
 			},
 			false,
 		},
 		{
 			"next is different family → specific",
 			[]productEmbeddingMatch{
-				{MA: "A1", MaCha: "P", Similarity: 0.90},
-				{MA: "B1", MaCha: "Q", Similarity: 0.899},
+				{MA: "A1", MaCha: "P", Vector: 0.90},
+				{MA: "B1", MaCha: "Q", Vector: 0.899},
 			},
 			true,
 		},
 		{
 			"different family then close sibling → family",
 			[]productEmbeddingMatch{
-				{MA: "A1", MaCha: "P", Similarity: 0.90},
-				{MA: "B1", MaCha: "Q", Similarity: 0.88},
-				{MA: "A2", MaCha: "P", Similarity: 0.89},
+				{MA: "A1", MaCha: "P", Vector: 0.90},
+				{MA: "B1", MaCha: "Q", Vector: 0.88},
+				{MA: "A2", MaCha: "P", Vector: 0.89},
 			},
 			false,
+		},
+		{
+			"sibling gap exactly at threshold → family (strict >)",
+			[]productEmbeddingMatch{
+				{MA: "A1", MaCha: "P", Vector: 0.90},
+				{MA: "A2", MaCha: "P", Vector: 0.85}, // gap 0.05, not > 0.05
+			},
+			false,
+		},
+		{
+			"sibling gap just over threshold → specific",
+			[]productEmbeddingMatch{
+				{MA: "A1", MaCha: "P", Vector: 0.90},
+				{MA: "A2", MaCha: "P", Vector: 0.849}, // gap 0.051 > 0.05
+			},
+			true,
 		},
 	}
 	for _, tc := range cases {
@@ -83,6 +99,67 @@ func TestIsSpecificSKUMatch(t *testing.T) {
 				t.Errorf("isSpecificSKUMatch(%+v) = %v, want %v", tc.results, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPassesRelevanceFloor(t *testing.T) {
+	cases := []struct {
+		name string
+		top  productEmbeddingMatch
+		want bool
+	}{
+		{"exact lexical hit overrides low cosine", productEmbeddingMatch{HasBM25: true, Vector: 0.10}, true},
+		{"semantic above floor", productEmbeddingMatch{HasBM25: false, Vector: 0.60}, true},
+		{"just below floor → fallback", productEmbeddingMatch{HasBM25: false, Vector: 0.54}, false},
+		{"exactly at floor → accept (inclusive)", productEmbeddingMatch{HasBM25: false, Vector: 0.55}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := passesRelevanceFloor(tc.top); got != tc.want {
+				t.Errorf("passesRelevanceFloor(%+v) = %v, want %v", tc.top, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildProductLexicalText(t *testing.T) {
+	cases := []struct {
+		name             string
+		ma, maCha, label string
+		want             string
+	}{
+		{"code + parent + label", "SP459780", "SPPARENT", "LS2 FF800 — White — L", "SP459780 SPPARENT LS2 FF800 — White — L"},
+		{"ma == ma_cha deduped", "SP1", "sp1", "Mu fullface", "SP1 Mu fullface"},
+		{"empty label", "SP1", "SPPARENT", "", "SP1 SPPARENT"},
+		{"empty ma_cha", "SP1", "", "Mu fullface", "SP1 Mu fullface"},
+		{"whitespace trimmed", "  SP1 ", " SPPARENT ", "  Label ", "SP1 SPPARENT Label"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := buildProductLexicalText(tc.ma, tc.maCha, tc.label); got != tc.want {
+				t.Errorf("buildProductLexicalText(%q,%q,%q) = %q, want %q", tc.ma, tc.maCha, tc.label, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEmbeddingSchemaVersionForcesRehash proves that folding the schema version
+// and lexical text into the hash basis changes the hash versus the old
+// label-only basis — so existing rows re-push once after the bump — while
+// staying stable across repeated computation (idempotent on later syncs).
+func TestEmbeddingSchemaVersionForcesRehash(t *testing.T) {
+	label := "LS2 FF800 — White — L"
+	lexical := "SP459780 SPPARENT " + label
+
+	oldBasis := shortHash(label)
+	newBasis := shortHash(embeddingSchemaVersion + "\x00" + label + "\x00" + lexical)
+	if oldBasis == newBasis {
+		t.Errorf("new hash basis must differ from the old label-only basis to force a re-push")
+	}
+
+	again := shortHash(embeddingSchemaVersion + "\x00" + label + "\x00" + lexical)
+	if newBasis != again {
+		t.Errorf("hash basis must be stable across calls, got %q then %q", newBasis, again)
 	}
 }
 

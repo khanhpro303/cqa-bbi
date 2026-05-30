@@ -31,12 +31,38 @@ import (
 
 const (
 	defaultEmbeddingCollection = "erp_product_bbi"
-	similarityThreshold        = 0.75
-	// resolutionMargin is the similarity gap between the top SKU and the next
-	// SKU sharing the same ma_cha that distinguishes a pinpoint SKU query
-	// (e.g. "ff800 trắng L") from a vague family query (e.g. "storm 3"). A gap
-	// above this means one variant clearly dominates → answer that SKU.
-	resolutionMargin = 0.04
+
+	// embeddingSchemaVersion is folded into label_hash so a single sync run
+	// replaces every existing row exactly once whenever the stored document
+	// shape changes. Bumped to "v2-lexical" when the $lexical field was added
+	// (BM25 only indexes rows that carry it, and the diff skips rows whose
+	// hash is unchanged — so a version bump is what forces the backfill).
+	// Bump this again on any future doc-shape change.
+	embeddingSchemaVersion = "v2-lexical"
+
+	// vectorFloor is the absolute relevance gate on the bounded $vector cosine
+	// (still returned by findAndRerank). It decides accept-vs-LLM-fallback for
+	// purely semantic queries (no exact token hit). Deliberately lower than a
+	// pure-vector threshold would be: under hybrid the reranker can promote a
+	// lexically-correct doc whose raw cosine is only moderate, so we let BM25 /
+	// rerank carry borderline-cosine-but-correct matches while still rejecting
+	// obvious noise. Scale-independent because cosine is bounded [0,1].
+	vectorFloor = 0.55
+
+	// siblingCosineGap is the bounded cosine gap between the top SKU and the
+	// next SKU sharing its ma_cha that distinguishes a pinpoint query
+	// (e.g. "ff800 trắng L") from a vague family query (e.g. "storm 3"). Same
+	// idea as the old resolutionMargin but expressed on $vector cosine (a
+	// stable [0,1] quantity) instead of an unbounded reranker logit. Slightly
+	// looser than the old 0.04 because hybrid reranking compresses cosine
+	// spreads.
+	siblingCosineGap = 0.05
+
+	// hybridLimit is the number of reranked results requested; hybridCandidates
+	// is how many each leg (lexical + vector) pulls before reranking.
+	hybridLimit      = 5
+	hybridCandidates = 30
+
 	astraHTTPTimeout = 30 * time.Second
 	insertManyChunk  = 20
 )
@@ -98,7 +124,11 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 
 	now := time.Now().Unix()
 	for ma, d := range desired {
-		labelHash := shortHash(d.Label)
+		// Fold the schema version and the lexical text into the hash so a
+		// doc-shape change (e.g. adding $lexical) forces a one-time full
+		// re-push of every row; NUL separators keep the concatenation
+		// unambiguous. Subsequent syncs see an unchanged hash and skip.
+		labelHash := shortHash(embeddingSchemaVersion + "\x00" + d.Label + "\x00" + d.Lexical)
 		doc := productEmbeddingDoc{
 			ID:        docID(tenantID, ma),
 			TenantID:  tenantID,
@@ -107,6 +137,7 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 			Label:     d.Label,
 			LabelHash: labelHash,
 			Vectorize: d.Label,
+			Lexical:   d.Lexical,
 			UpdatedAt: now,
 		}
 		if existingHash, ok := existing[ma]; ok {
@@ -150,7 +181,7 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 }
 
 // ProductMatch is the result of an embedding fuzzy match. MaCha is always set
-// when a match passes the threshold (used for family/price_range queries).
+// when a match passes the relevance floor (used for family/price_range queries).
 // When Specific is true the top SKU dominates its siblings, so MA pinpoints a
 // single variant (e.g. "ff800 trắng L") and callers should return just that SKU.
 type ProductMatch struct {
@@ -159,15 +190,16 @@ type ProductMatch struct {
 	Specific bool
 }
 
-// FuzzyMatchProductWithEmbedding runs a vectorize query against the tenant's
-// per-SKU product_embeddings rows. Astra embeds the keyword server-side.
+// FuzzyMatchProductWithEmbedding runs a hybrid (BM25 lexical + vector) query,
+// reranked server-side, against the tenant's per-SKU product_embeddings rows.
+// Astra embeds the keyword and runs lexical matching server-side.
 //
 // Returns a ProductMatch with MaCha (and MA) set when the top row passes the
-// similarity threshold; returns a zero-value match (no error) otherwise so
-// callers can fall back to the LLM matcher.
+// relevance floor (see passesRelevanceFloor); returns a zero-value match (no
+// error) otherwise so callers can fall back to the LLM matcher.
 //
-// Specific is set when the top SKU's similarity beats the next SKU *sharing the
-// same ma_cha* by more than resolutionMargin — i.e. the query pinpoints one
+// Specific is set when the top SKU's $vector cosine beats the next SKU *sharing
+// the same ma_cha* by more than siblingCosineGap — i.e. the query pinpoints one
 // variant rather than asking about the whole family.
 func FuzzyMatchProductWithEmbedding(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, keyword string) (ProductMatch, error) {
 	keyword = strings.TrimSpace(keyword)
@@ -175,30 +207,46 @@ func FuzzyMatchProductWithEmbedding(ctx context.Context, cfg ProductEmbeddingCon
 		return ProductMatch{}, nil
 	}
 
-	results, err := astraVectorFind(ctx, cfg, tenantID, keyword, 5)
+	results, err := astraHybridFindAndRerank(ctx, cfg, tenantID, keyword, hybridLimit, hybridCandidates)
 	if err != nil {
-		return ProductMatch{}, fmt.Errorf("astra vector find: %w", err)
+		return ProductMatch{}, fmt.Errorf("astra hybrid find: %w", err)
 	}
 	if len(results) == 0 {
 		return ProductMatch{}, nil
 	}
 	top := results[0]
-	if top.Similarity < similarityThreshold {
-		log.Printf("[product_embed] match below threshold (%.3f < %.3f) for keyword=%q tenant=%s top_ma=%s ma_cha=%s",
-			top.Similarity, similarityThreshold, keyword, tenantID, top.MA, top.MaCha)
+	if !passesRelevanceFloor(top) {
+		log.Printf("[product_embed] below relevance floor for keyword=%q tenant=%s top_ma=%s ma_cha=%s vector=%.3f bm25=%v",
+			keyword, tenantID, top.MA, top.MaCha, top.Vector, top.HasBM25)
 		return ProductMatch{}, nil
 	}
 
 	specific := isSpecificSKUMatch(results)
-	log.Printf("[product_embed] match keyword=%q tenant=%s ma=%s ma_cha=%s similarity=%.3f specific=%v",
-		keyword, tenantID, top.MA, top.MaCha, top.Similarity, specific)
+	log.Printf("[product_embed] match keyword=%q tenant=%s ma=%s ma_cha=%s vector=%.3f rerank=%.3f bm25=%v specific=%v",
+		keyword, tenantID, top.MA, top.MaCha, top.Vector, top.Rerank, top.HasBM25, specific)
 	return ProductMatch{MA: top.MA, MaCha: top.MaCha, Specific: specific}, nil
 }
 
+// passesRelevanceFloor decides whether the top hybrid result is trustworthy
+// enough to answer, or whether the caller should fall back to the LLM matcher.
+// It accepts on either signal, both scale-independent:
+//   - HasBM25: the query shares an exact token with the doc's $lexical (model
+//     code, colour, or size). The strongest, language-agnostic signal.
+//   - Vector >= vectorFloor: bounded [0,1] cosine relevance for purely semantic
+//     queries that produced no exact token hit.
+//
+// The unbounded $rerank logit is never used as a threshold — only for ordering.
+func passesRelevanceFloor(top productEmbeddingMatch) bool {
+	return top.HasBM25 || top.Vector >= vectorFloor
+}
+
 // isSpecificSKUMatch decides whether the top SKU clearly dominates the other
-// variants of its own ma_cha. If the next result that shares the top's ma_cha
-// trails by more than resolutionMargin, the query pinpoints a single SKU. If no
-// sibling appears in the top-K, the top SKU is unambiguous → also specific.
+// variants of its own ma_cha. If the first reranked result that shares the
+// top's ma_cha trails by more than siblingCosineGap on the bounded $vector
+// cosine, the query pinpoints a single SKU (Specific). If no sibling appears in
+// the top-K, the top SKU is unambiguous → also specific. The gap is measured on
+// cosine (a stable [0,1] quantity), not on the unbounded reranker logit, so the
+// specific-vs-family call generalises across arbitrary queries.
 func isSpecificSKUMatch(results []productEmbeddingMatch) bool {
 	if len(results) == 0 {
 		return false
@@ -206,7 +254,7 @@ func isSpecificSKUMatch(results []productEmbeddingMatch) bool {
 	top := results[0]
 	for _, r := range results[1:] {
 		if r.MaCha == top.MaCha {
-			return top.Similarity-r.Similarity > resolutionMargin
+			return top.Vector-r.Vector > siblingCosineGap
 		}
 	}
 	return true
@@ -224,20 +272,33 @@ type productEmbeddingDoc struct {
 	Label     string `json:"label"`
 	LabelHash string `json:"label_hash"`
 	Vectorize string `json:"$vectorize"`
+	// Lexical is the BM25-indexed text. The collection has lexical enabled, but
+	// BM25 only indexes documents that carry a $lexical field — without it the
+	// hybrid query degenerates to pure vector. Carries codes + label so exact
+	// tokens (ma, ma_cha, colour/size words) are searchable.
+	Lexical   string `json:"$lexical"`
 	UpdatedAt int64  `json:"updated_at"`
 }
 
+// productEmbeddingMatch holds the per-result signals returned by the hybrid
+// findAndRerank query. Rerank is the (unbounded) ordering logit; Vector is the
+// bounded [0,1] cosine used as an absolute relevance floor; HasBM25 marks an
+// exact lexical token hit (the strongest, scale-free signal for code queries).
 type productEmbeddingMatch struct {
-	MA         string
-	MaCha      string
-	Similarity float32
+	MA       string
+	MaCha    string
+	Rerank   float64 // $rerank logit — ordering only, never a threshold
+	Vector   float32 // $vector cosine 0..1 — bounded relevance floor
+	BM25Rank int     // -1 when $bm25Rank is null
+	HasBM25  bool    // true when $bm25Rank != null (exact token overlap)
 }
 
 // desiredEmbedding is the per-SKU embedding state derived from cached_products,
 // keyed by MA (variant code) so each variant gets its own vectorized document.
 type desiredEmbedding struct {
-	MaCha string
-	Label string
+	MaCha   string
+	Label   string // $vectorize text
+	Lexical string // $lexical text
 }
 
 func loadDesiredProductEmbeddings(ctx context.Context, tenantID string) (map[string]desiredEmbedding, error) {
@@ -260,12 +321,35 @@ func loadDesiredProductEmbeddings(ctx context.Context, tenantID string) (map[str
 	}
 	out := make(map[string]desiredEmbedding, len(rows))
 	for _, r := range rows {
+		label := buildProductEmbeddingLabel(r.MA, r.TenDongBoWeb, r.Ten, r.ThuocTinh1, r.ThuocTinh2)
 		out[r.MA] = desiredEmbedding{
-			MaCha: r.MaCha,
-			Label: buildProductEmbeddingLabel(r.MA, r.TenDongBoWeb, r.Ten, r.ThuocTinh1, r.ThuocTinh2),
+			MaCha:   r.MaCha,
+			Label:   label,
+			Lexical: buildProductLexicalText(r.MA, r.MaCha, label),
 		}
 	}
 	return out, nil
+}
+
+// buildProductLexicalText assembles the BM25-indexed ($lexical) text for a SKU.
+// Codes (ma, ma_cha) lead so exact tokens like "SP459780" and the parent code
+// are directly searchable by the "standard" analyzer (which lowercases and
+// splits on non-alphanumerics, so "FF800" and "ff800" both tokenize to
+// "ff800"). The semantic label follows so colour/size words ("White", "L",
+// "Trắng") also feed BM25 alongside the vector leg. ma_cha is skipped when it
+// equals ma to avoid a duplicate token.
+func buildProductLexicalText(ma, maCha, label string) string {
+	parts := make([]string, 0, 3)
+	if s := strings.TrimSpace(ma); s != "" {
+		parts = append(parts, s)
+	}
+	if s := strings.TrimSpace(maCha); s != "" && !strings.EqualFold(s, strings.TrimSpace(ma)) {
+		parts = append(parts, s)
+	}
+	if s := strings.TrimSpace(label); s != "" {
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, " ")
 }
 
 // buildProductEmbeddingLabel assembles the text fed to Astra's vectorize service
@@ -420,36 +504,69 @@ func astraDeleteMany(ctx context.Context, cfg ProductEmbeddingConfig, docIDs []s
 	return resp.Status.DeletedCount, nil
 }
 
-func astraVectorFind(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, keyword string, limit int) ([]productEmbeddingMatch, error) {
+// astraHybridFindAndRerank runs a hybrid (lexical BM25 + vector) search and
+// reranks with the collection's bound reranker. Astra returns the documents in
+// data.documents and the per-result scores in status.documentResponses, as two
+// parallel arrays aligned by index. Results come back already ordered by
+// $rerank; we keep the rerank/vector/bm25 signals so callers can make
+// scale-robust decisions without depending on the unbounded rerank logit.
+func astraHybridFindAndRerank(ctx context.Context, cfg ProductEmbeddingConfig, tenantID, keyword string, limit, candidates int) ([]productEmbeddingMatch, error) {
 	cmd := map[string]interface{}{
-		"find": map[string]interface{}{
-			"filter": map[string]interface{}{"tenant_id": tenantID},
-			"sort":   map[string]interface{}{"$vectorize": keyword},
+		"findAndRerank": map[string]interface{}{
+			"filter":     map[string]interface{}{"tenant_id": tenantID},
+			"sort":       map[string]interface{}{"$hybrid": keyword},
+			"projection": map[string]interface{}{"ma": 1, "ma_cha": 1},
 			"options": map[string]interface{}{
-				"limit":             limit,
-				"includeSimilarity": true,
+				"limit":         limit,
+				"hybridLimits":  candidates,
+				"includeScores": true,
 			},
 		},
 	}
 	var resp struct {
 		Data struct {
 			Documents []struct {
-				MA         string  `json:"ma"`
-				MaCha      string  `json:"ma_cha"`
-				Similarity float32 `json:"$similarity"`
+				MA    string `json:"ma"`
+				MaCha string `json:"ma_cha"`
 			} `json:"documents"`
 		} `json:"data"`
+		Status struct {
+			DocumentResponses []struct {
+				Scores struct {
+					Rerank   *float64 `json:"$rerank"`
+					Vector   *float32 `json:"$vector"`
+					BM25Rank *int     `json:"$bm25Rank"`
+				} `json:"scores"`
+			} `json:"documentResponses"`
+		} `json:"status"`
 		Errors []map[string]interface{} `json:"errors"`
 	}
 	if err := astraCollectionCall(ctx, cfg, cfg.collection(), cmd, &resp); err != nil {
 		return nil, err
 	}
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("vectorFind errors: %v", resp.Errors)
+		return nil, fmt.Errorf("findAndRerank errors: %v", resp.Errors)
 	}
-	out := make([]productEmbeddingMatch, 0, len(resp.Data.Documents))
-	for _, d := range resp.Data.Documents {
-		out = append(out, productEmbeddingMatch{MA: d.MA, MaCha: d.MaCha, Similarity: d.Similarity})
+
+	docs := resp.Data.Documents
+	scores := resp.Status.DocumentResponses
+	out := make([]productEmbeddingMatch, 0, len(docs))
+	for i, d := range docs {
+		m := productEmbeddingMatch{MA: d.MA, MaCha: d.MaCha, BM25Rank: -1}
+		if i < len(scores) {
+			s := scores[i].Scores
+			if s.Rerank != nil {
+				m.Rerank = *s.Rerank
+			}
+			if s.Vector != nil {
+				m.Vector = *s.Vector
+			}
+			if s.BM25Rank != nil {
+				m.BM25Rank = *s.BM25Rank
+				m.HasBM25 = true
+			}
+		}
+		out = append(out, m)
 	}
 	return out, nil
 }
