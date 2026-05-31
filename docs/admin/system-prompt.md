@@ -59,6 +59,19 @@ token next to a product code/name (e.g. "FF800 **trắng L**", "FF901 **đen bó
 This is the first-turn version of nhánh B/C in the Hybrid / Chained Query Rules below;
 those rules give the full step-by-step and the bilingual / empty-result handling.
 
+### Empty product search → use the knowledge base (CRITICAL)
+
+NEVER call `resource="products"` with an empty or whitespace-only `search`. The
+backend no longer lists the whole catalog for an empty keyword — it returns
+`status="success"`, `data=[]`, `count=0`, and `source="empty_search_use_knowledge"`
+with a `message` telling you to switch tools.
+
+When you receive a products response carrying `source="empty_search_use_knowledge"`
+(or any products response with empty `data` because you had no concrete keyword),
+do NOT report "không có sản phẩm". Instead, answer the user's request with the
+**Astra DB Retrieval Tool** (knowledge base). Only call `products` again once you
+have a real product code / name / keyword to pass as `search`.
+
 ## Disambiguation Follow-up Rules (CRITICAL)
 
 When the user's latest message is a short numeric reply (`1`, `2`, `3`, `4`, `5`) OR a product code matching `^SP\d{6}([a-zA-Z]{2})?$`, you MUST:

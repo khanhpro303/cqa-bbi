@@ -130,8 +130,10 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
      FromCache (erp.go:1004)                        │
    source=astradb_cache_exact_web    ┌── RỖNG ──────┴────── CÓ CHỮ ──┐
                                      ▼                               ▼
-                        searchProductsFromCache          B1. searchProductWebGroupsFromCache
-                        (erp.go:912) — list ≤ limit          (erp.go:1041) LIKE 2-pass + rank
+                   return data:[] + source=          B1. searchProductWebGroupsFromCache
+                   empty_search_use_knowledge            (erp.go:1041) LIKE 2-pass + rank
+                   (erp.go:434, return) → agent
+                   chuyển sang Astra Retrieval (KB)
                                                                           │
                                           ┌───────────────┬──────────────┴──────────────┐
                                      >1 nhóm web      ==1 nhóm (parent_codes)        0 nhóm
@@ -404,7 +406,7 @@ giá** (không phải khoảng giá):
 | Handler ERP | `backend/api/handlers/erp.go:103` | `ERPQuery` (auth, ERP active, verify token, method check) |
 | **Nhánh products** | `backend/api/handlers/erp.go:274` | `if req.Resource == "products"` (cache-only, `return` sớm) |
 | Exact web-name | `backend/api/handlers/erp.go:281` → `:1004` | `searchProductsByExactWebNameFromCache` (MySQL) |
-| Liệt kê (search rỗng) | `backend/api/handlers/erp.go:435` → `:912` | `searchProductsFromCache` |
+| Search rỗng → KB | `backend/api/handlers/erp.go:434` | trả `data:[]` + `source=empty_search_use_knowledge` (return; agent chuyển sang Astra Retrieval) |
 | **B1 web-group LIKE** | `backend/api/handlers/erp.go:329` → `:1041` | `searchProductWebGroupsFromCache` (MySQL 2-pass: `ten_dong_bo_web`→`ten`) |
 | Rank web-group | `backend/engine/product_grouping.go:25` | `RankProductWebGroups` / `WebGroupMatch` (`:14`) |
 | Response >1 nhóm | `backend/api/handlers/erp.go:358` | `source=astradb_cache_web_groups` (disambiguation) |

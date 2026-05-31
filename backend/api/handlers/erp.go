@@ -321,7 +321,8 @@ func ERPQuery(c *gin.Context) {
 		//   - >1 group → disambiguation list, return
 		//   - 1 group  → use B's ma_cha directly, no re-LIKE, no LLM
 		//   - 0 group  → LLM fuzzy (name-aware, see fuzzyMatchMaChaWithLLM)
-		// Empty search → list all up to req.Limit.
+		// Empty search → return empty + source=empty_search_use_knowledge so
+		// the agent falls back to the knowledge base (no catalog dump).
 		var cachedData []map[string]interface{}
 		search := strings.TrimSpace(req.Search)
 
@@ -432,17 +433,21 @@ func ERPQuery(c *gin.Context) {
 				}
 			}
 		} else {
-			rows, err := searchProductsFromCache(c.Request.Context(), tenantID, "", req.Limit)
-			if err != nil {
-				log.Printf("[erp_query] product cache search error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error":   "product_cache_error",
-					"message": fmt.Sprintf("Không thể lấy dữ liệu sản phẩm từ cache: %s", err.Error()),
-				})
-				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusInternalServerError, 0, c.ClientIP())
-				return
-			}
-			cachedData = rows
+			// Empty search → the agent provided no product keyword. Listing the
+			// whole catalog is noisy and meaningless for a price/info question,
+			// so return an empty result with a distinct source. The agent reads
+			// this signal and falls back to the Astra DB Retrieval (knowledge
+			// base) tool instead of dumping products.
+			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, 0, c.ClientIP())
+			c.JSON(http.StatusOK, gin.H{
+				"status":   "success",
+				"data":     []map[string]interface{}{},
+				"source":   "empty_search_use_knowledge",
+				"resource": req.Resource,
+				"count":    0,
+				"message":  "No product keyword provided. Use the Astra DB Retrieval Tool (knowledge base) to answer this request instead of listing products.",
+			})
+			return
 		}
 
 		if cachedData == nil {
