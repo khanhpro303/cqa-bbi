@@ -374,15 +374,18 @@ func ERPQuery(c *gin.Context) {
 					cachedData = append(cachedData, rows...)
 				}
 			} else {
-				// B proved LIKE returns nothing. Try embedding fuzzy first
-				// (cheaper + robust against name variations); fall back to the
-				// LLM-list matcher when disabled, unavailable, or below the
-				// similarity threshold.
+				// B proved LIKE returns nothing. Resolve the product *family*
+				// (ma_cha) via embedding fuzzy first (cheaper + robust against
+				// name variations); fall back to the LLM-list matcher when
+				// disabled, unavailable, or below the similarity threshold.
 				//
-				// A pinpoint SKU match (e.g. "ff800 trắng L") resolves to a
-				// single MA; a vague family query (e.g. "storm 3") resolves to a
-				// ma_cha and returns all variants so price_range covers the family.
-				var matchedMA string
+				// products intentionally resolves at the FAMILY level only and
+				// returns every variant so price_range covers the whole line.
+				// Pinpointing one SKU from a color/size query (e.g. "FF800 trắng
+				// L") is the job of the product_variants resource (erp_variants.go),
+				// where the agent routes SPECIFIC-VARIANT intent. Keeping pinpoint
+				// out of products avoids a duplicate hybrid-search engine and a
+				// second Astra round trip when a color/size query lands here.
 				var matchedMaCha string
 				// Embedding fuzzy is gated by the same config flag as the
 				// product_variants flow (ERP_EMBEDDING_FUZZY_ENABLED, default
@@ -401,12 +404,9 @@ func ERPQuery(c *gin.Context) {
 						log.Printf("[erp_query] embedding fuzzy error: %v", embedErr)
 					} else if match.MaCha != "" {
 						matchedMaCha = match.MaCha
-						if match.Specific {
-							matchedMA = match.MA
-						}
 					}
 				}
-				if matchedMA == "" && matchedMaCha == "" {
+				if matchedMaCha == "" {
 					m, llmErr := fuzzyMatchMaChaWithLLM(c.Request.Context(), tenantID, req.Search)
 					if llmErr != nil {
 						log.Printf("[erp_query] LLM fuzzy match failed for '%s': %v", req.Search, llmErr)
@@ -415,15 +415,7 @@ func ERPQuery(c *gin.Context) {
 						matchedMaCha = m
 					}
 				}
-				if matchedMA != "" {
-					// Pinpoint SKU query → return just the matched variant.
-					rows, fetchErr := getProductByMaFromCache(c.Request.Context(), tenantID, matchedMA)
-					if fetchErr != nil {
-						log.Printf("[erp_query] fetch by ma=%s failed: %v", matchedMA, fetchErr)
-					} else {
-						cachedData = rows
-					}
-				} else if matchedMaCha != "" {
+				if matchedMaCha != "" {
 					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, matchedMaCha)
 					if fetchErr != nil {
 						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", matchedMaCha, fetchErr)
