@@ -210,13 +210,12 @@ class ERPGatewayCaller(Component):
                     "Agent: Trong câu trả lời cuối cùng, BẮT BUỘC liệt kê danh sách trên "
                     "theo định dạng '1. SP… / 2. SP… / 3. SP…' để user có thể trả lời bằng "
                     "số (1/2/3) hoặc mã SP. KHÔNG nói 'đã gửi danh sách qua Zalo' nếu danh "
-                    "sách đã được liệt kê. Nếu user vừa chọn số ở turn trước → hỏi màu/size cụ thể."
+                    "sách đã được liệt kê. KHÔNG tự ý hỏi màu/size — sau khi user chọn số, "
+                    "follow Disambiguation Follow-up Rules trong system prompt (STOCK → gọi "
+                    "inventory với search=<web_name>; PRICE-only → gọi products với "
+                    "exact_web_name=true)."
                 ))
-            return Message(text=(
-                f"[RICH_MESSAGE_SENT] {hint}\n"
-                "Agent: nếu user vừa chọn số (1/2/3) hoặc mã SP từ danh sách trước, "
-                "hãy hỏi tiếp về màu và size cụ thể, KHÔNG lặp lại câu 'đã gửi danh sách qua Zalo'."
-            ))
+            return Message(text=f"[RICH_MESSAGE_SENT] {hint}".rstrip())
 
         if data.get("is_ma_cha"):
             return Message(text=data.get("message", "Dòng sản phẩm này có nhiều phân loại kích thước/màu sắc."))
