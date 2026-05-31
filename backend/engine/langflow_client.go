@@ -6,22 +6,53 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/vietbui/chat-quality-agent/config"
 )
 
-// langflowAgentNodeID is the ToolCallingAgent node in BBI_RAG_Bot_Ext.json.
-// Tweaking system_prompt on this node overrides the Langflow global variable
-// SYSTEM_PROMPT on a per-request basis. Only the flow containing this node
-// (the private flow) is affected; Langflow ignores tweaks for unknown node IDs.
-const langflowAgentNodeID = "ToolCallingAgent-zznkZ"
+// fallbackAgentNodeIDs are the agent node IDs we tweak when live node discovery
+// (resolveAgentNodeIDs) fails — e.g. the GET /flows/{id} call errors or returns
+// an unexpected shape. Each Langflow flow has its own randomly-suffixed node ID:
+//
+//   - ToolCallingAgent-zznkZ — private/internal RAG flow (BBI_RAG_Bot_Ext.json)
+//   - ToolCallingAgent-I68CQ — public/customer-facing flow
+//
+// On the happy path we don't use these at all; the node IDs are read straight
+// from the running flow's definition so re-imports that change node IDs keep
+// working. Langflow ignores tweaks for node IDs absent from the running flow,
+// so sending both as a fallback is safe.
+var fallbackAgentNodeIDs = []string{
+	"ToolCallingAgent-zznkZ",
+	"ToolCallingAgent-I68CQ",
+}
+
+const (
+	// agentNodeCacheTTL is how long a successful node-ID discovery is cached
+	// per flow. Flow structure changes rarely, so this keeps the extra
+	// GET /flows/{id} call to roughly once per flow per interval.
+	agentNodeCacheTTL = 10 * time.Minute
+	// agentNodeCacheNegativeTTL caches the fallback briefly after a failed
+	// discovery so a transient Langflow hiccup doesn't trigger a GET on every
+	// single message, while still self-healing within seconds.
+	agentNodeCacheNegativeTTL = 30 * time.Second
+)
+
+type agentNodeCacheEntry struct {
+	nodeIDs   []string
+	expiresAt time.Time
+}
 
 // LangflowClient handles communication with the Langflow API.
 type LangflowClient struct {
 	cfg    *config.Config
 	client *http.Client
+
+	nodeCacheMu sync.RWMutex
+	nodeCache   map[string]agentNodeCacheEntry // keyed by flow ID
 }
 
 func NewLangflowClient(cfg *config.Config) *LangflowClient {
@@ -30,7 +61,119 @@ func NewLangflowClient(cfg *config.Config) *LangflowClient {
 		client: &http.Client{
 			Timeout: 60 * time.Second, // AI operations can take time
 		},
+		nodeCache: make(map[string]agentNodeCacheEntry),
 	}
+}
+
+// applySystemPromptTweak overrides the agent's SYSTEM_PROMPT global variable for
+// this request by tweaking the system_prompt field of every agent node in the
+// running flow. The node IDs are discovered from the flow definition (cached per
+// flow ID), so the override lands whether the private or the public flow handles
+// the message. A no-op when systemPrompt is empty ("use the Langflow default").
+func (l *LangflowClient) applySystemPromptTweak(ctx context.Context, tweaks map[string]interface{}, apiURL, apiKey, flowID, systemPrompt string) {
+	if systemPrompt == "" {
+		return
+	}
+	for _, nodeID := range l.resolveAgentNodeIDs(ctx, apiURL, apiKey, flowID) {
+		tweaks[nodeID] = map[string]interface{}{
+			"system_prompt": systemPrompt,
+		}
+	}
+}
+
+// resolveAgentNodeIDs returns the IDs of nodes in the given flow whose template
+// exposes a system_prompt field (the agent nodes we can override). Results are
+// cached per flow ID. On any error it falls back to fallbackAgentNodeIDs so a
+// system prompt still ships even when discovery is unavailable.
+func (l *LangflowClient) resolveAgentNodeIDs(ctx context.Context, apiURL, apiKey, flowID string) []string {
+	l.nodeCacheMu.RLock()
+	entry, ok := l.nodeCache[flowID]
+	l.nodeCacheMu.RUnlock()
+	if ok && time.Now().Before(entry.expiresAt) {
+		return entry.nodeIDs
+	}
+
+	nodeIDs, err := l.fetchAgentNodeIDs(ctx, apiURL, apiKey, flowID)
+	ttl := agentNodeCacheTTL
+	if err != nil || len(nodeIDs) == 0 {
+		log.Printf("[langflow] agent node discovery for flow %s failed (err=%v, found=%d); using fallback node IDs", flowID, err, len(nodeIDs))
+		nodeIDs = fallbackAgentNodeIDs
+		ttl = agentNodeCacheNegativeTTL
+	}
+
+	l.nodeCacheMu.Lock()
+	l.nodeCache[flowID] = agentNodeCacheEntry{nodeIDs: nodeIDs, expiresAt: time.Now().Add(ttl)}
+	l.nodeCacheMu.Unlock()
+	return nodeIDs
+}
+
+// fetchAgentNodeIDs GETs the flow definition and extracts agent node IDs.
+func (l *LangflowClient) fetchAgentNodeIDs(ctx context.Context, apiURL, apiKey, flowID string) ([]string, error) {
+	if apiURL == "" || flowID == "" {
+		return nil, fmt.Errorf("langflow integration is not configured")
+	}
+
+	url := fmt.Sprintf("%s/api/v1/flows/%s", apiURL, flowID)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create flow request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("x-api-key", apiKey)
+	}
+
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("flow request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read flow response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("flow api error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return extractAgentNodeIDs(body)
+}
+
+// extractAgentNodeIDs parses a Langflow flow definition and returns the IDs of
+// nodes whose template exposes a "system_prompt" field — the agent nodes we can
+// override per request. Shape (GET /api/v1/flows/{id}):
+//
+//	{ "data": { "nodes": [ { "id": "...",
+//	    "data": { "node": { "template": { "system_prompt": {...} } } } } ] } }
+func extractAgentNodeIDs(flowJSON []byte) ([]string, error) {
+	var flow struct {
+		Data struct {
+			Nodes []struct {
+				ID   string `json:"id"`
+				Data struct {
+					Node struct {
+						Template map[string]json.RawMessage `json:"template"`
+					} `json:"node"`
+				} `json:"data"`
+			} `json:"nodes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(flowJSON, &flow); err != nil {
+		return nil, fmt.Errorf("unmarshal flow definition: %w", err)
+	}
+
+	var ids []string
+	for _, n := range flow.Data.Nodes {
+		if n.ID == "" {
+			continue
+		}
+		if _, ok := n.Data.Node.Template["system_prompt"]; ok {
+			ids = append(ids, n.ID)
+		}
+	}
+	return ids, nil
 }
 
 // buildHistoryFilter returns the metadata filter for the AstraDB
@@ -109,12 +252,7 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 		}
 	}
 
-	if systemPrompt != "" {
-		// Override the agent's SYSTEM_PROMPT global variable for this request.
-		tweaks[langflowAgentNodeID] = map[string]interface{}{
-			"system_prompt": systemPrompt,
-		}
-	}
+	l.applySystemPromptTweak(ctx, tweaks, apiURL, apiKey, flowID, systemPrompt)
 
 	payload := map[string]interface{}{
 		"input_value": message,
@@ -275,12 +413,7 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 		tweaks["CustomComponent"] = customComponentTweaks
 	}
 
-	if systemPrompt != "" {
-		// Override the agent's SYSTEM_PROMPT global variable for this request.
-		tweaks[langflowAgentNodeID] = map[string]interface{}{
-			"system_prompt": systemPrompt,
-		}
-	}
+	l.applySystemPromptTweak(ctx, tweaks, apiURL, apiKey, flowID, systemPrompt)
 
 	payload := map[string]interface{}{
 		"input_value": message,
