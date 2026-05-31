@@ -65,6 +65,11 @@ type Config struct {
 	AstraDBCollection        string
 	AstraDBProductCollection string
 
+	// ERPEmbeddingFuzzyEnabled gates the Astra hybrid (label) search used to
+	// resolve product variants. Defaults ON; set ERP_EMBEDDING_FUZZY_ENABLED
+	// to "false" to disable.
+	ERPEmbeddingFuzzyEnabled bool
+
 	// Session Gateway Defaults
 	ChatbotSessionKeyword        string
 	ChatbotSessionEndKeyword     string
@@ -77,36 +82,37 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		ServerPort:                 getEnv("SERVER_PORT", "8080"),
-		ServerHost:                 getEnv("SERVER_HOST", "127.0.0.1"),
-		AppInternalBaseURL:         getEnv("APP_INTERNAL_BASE_URL", ""),
-		DBHost:                     getEnv("DB_HOST", "localhost"),
-		DBPort:                     getEnv("DB_PORT", "3306"),
-		DBUser:                     getEnv("DB_USER", "cqa"),
-		DBPassword:                 getEnv("DB_PASSWORD", ""),
-		DBName:                     getEnv("DB_NAME", "cqa"),
-		JWTSecret:                  getEnv("JWT_SECRET", ""),
-		EncryptionKey:              getEnv("ENCRYPTION_KEY", ""),
-		InternalImportSecret:       getEnv("INTERNAL_IMPORT_SECRET", ""),
-		RateLimitPerIP:             getEnvInt("RATE_LIMIT_PER_IP", 500),
-		RateLimitPerUser:           getEnvInt("RATE_LIMIT_PER_USER", 1000),
-		AIMaxTokens:                getEnvInt("AI_MAX_TOKENS", 16384),
-		Env:                        getEnv("APP_ENV", "development"),
-		PersonalZaloGatewayBaseURL: strings.TrimRight(getEnv("PERSONAL_ZALO_GATEWAY_BASE_URL", ""), "/"),
-		LangflowAPIURL:             strings.TrimRight(getEnv("LANGFLOW_API_URL", ""), "/"),
-		LangflowAPIKey:             getEnv("LANGFLOW_API_KEY", ""),
-		LangflowFlowID:             getEnv("LANGFLOW_FLOW_ID", ""),
-		LangflowPublicFlowID:       getEnv("LANGFLOW_PUBLIC_FLOW_ID", ""),
-		LangflowEmbeddingAPIKey:    getEnv("LANGFLOW_EMBEDDING_API_KEY", getEnv("OPENAI_API_KEY", "")),
-		LangflowEmbeddingModel:     getEnv("LANGFLOW_EMBEDDING_MODEL", "text-embedding-ada-002"),
-		LangflowEmbeddingBaseURL:   strings.TrimRight(getEnv("LANGFLOW_EMBEDDING_BASE_URL", ""), "/"),
-		RedisURL:                   getEnv("REDIS_URL", "redis://localhost:6379/0"),
-		PostgresURL:                getEnv("POSTGRES_URL", "postgresql://bbikhai:Kdoan4801@103.130.218.163:5432/bbi"),
-		AstraDBAPIEndpoint:         strings.TrimRight(getEnv("ASTRA_DB_API_ENDPOINT", ""), "/"),
-		AstraDBToken:               getEnv("ASTRA_DB_TOKEN", ""),
-		AstraDBKeyspace:            getEnv("ASTRA_DB_KEYSPACE", ""),
-		AstraDBCollection:          getEnv("ASTRA_DB_COLLECTION", "zalo_chat_history"),
-		AstraDBProductCollection:   getEnv("ASTRA_DB_PRODUCT_COLLECTION", "erp_product_bbi"),
+		ServerPort:                   getEnv("SERVER_PORT", "8080"),
+		ServerHost:                   getEnv("SERVER_HOST", "127.0.0.1"),
+		AppInternalBaseURL:           getEnv("APP_INTERNAL_BASE_URL", ""),
+		DBHost:                       getEnv("DB_HOST", "localhost"),
+		DBPort:                       getEnv("DB_PORT", "3306"),
+		DBUser:                       getEnv("DB_USER", "cqa"),
+		DBPassword:                   getEnv("DB_PASSWORD", ""),
+		DBName:                       getEnv("DB_NAME", "cqa"),
+		JWTSecret:                    getEnv("JWT_SECRET", ""),
+		EncryptionKey:                getEnv("ENCRYPTION_KEY", ""),
+		InternalImportSecret:         getEnv("INTERNAL_IMPORT_SECRET", ""),
+		RateLimitPerIP:               getEnvInt("RATE_LIMIT_PER_IP", 500),
+		RateLimitPerUser:             getEnvInt("RATE_LIMIT_PER_USER", 1000),
+		AIMaxTokens:                  getEnvInt("AI_MAX_TOKENS", 16384),
+		Env:                          getEnv("APP_ENV", "development"),
+		PersonalZaloGatewayBaseURL:   strings.TrimRight(getEnv("PERSONAL_ZALO_GATEWAY_BASE_URL", ""), "/"),
+		LangflowAPIURL:               strings.TrimRight(getEnv("LANGFLOW_API_URL", ""), "/"),
+		LangflowAPIKey:               getEnv("LANGFLOW_API_KEY", ""),
+		LangflowFlowID:               getEnv("LANGFLOW_FLOW_ID", ""),
+		LangflowPublicFlowID:         getEnv("LANGFLOW_PUBLIC_FLOW_ID", ""),
+		LangflowEmbeddingAPIKey:      getEnv("LANGFLOW_EMBEDDING_API_KEY", getEnv("OPENAI_API_KEY", "")),
+		LangflowEmbeddingModel:       getEnv("LANGFLOW_EMBEDDING_MODEL", "text-embedding-ada-002"),
+		LangflowEmbeddingBaseURL:     strings.TrimRight(getEnv("LANGFLOW_EMBEDDING_BASE_URL", ""), "/"),
+		RedisURL:                     getEnv("REDIS_URL", "redis://localhost:6379/0"),
+		PostgresURL:                  getEnv("POSTGRES_URL", "postgresql://bbikhai:Kdoan4801@103.130.218.163:5432/bbi"),
+		AstraDBAPIEndpoint:           strings.TrimRight(getEnv("ASTRA_DB_API_ENDPOINT", ""), "/"),
+		AstraDBToken:                 getEnv("ASTRA_DB_TOKEN", ""),
+		AstraDBKeyspace:              getEnv("ASTRA_DB_KEYSPACE", ""),
+		AstraDBCollection:            getEnv("ASTRA_DB_COLLECTION", "zalo_chat_history"),
+		AstraDBProductCollection:     getEnv("ASTRA_DB_PRODUCT_COLLECTION", "erp_product_bbi"),
+		ERPEmbeddingFuzzyEnabled:     !strings.EqualFold(getEnv("ERP_EMBEDDING_FUZZY_ENABLED", "true"), "false"),
 		ChatbotSessionKeyword:        getEnv("CHATBOT_SESSION_KEYWORD", "chào bull"),
 		ChatbotSessionEndKeyword:     getEnv("CHATBOT_SESSION_END_KEYWORD", "tạm biệt"),
 		ChatbotSessionWelcomeMessage: getEnv("CHATBOT_SESSION_WELCOME_MESSAGE", "Chào bạn, tôi đã sẵn sàng!"),

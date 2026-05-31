@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 
 	"github.com/vietbui/chat-quality-agent/config"
@@ -80,6 +79,59 @@ func searchVariantsByAttributes(ctx context.Context, tenantID, parentCode, color
 	return results, nil
 }
 
+// resolveParentMaCha turns the model/parent code the agent supplies (e.g.
+// "FF901") into the internal parent SKU (ma_cha, e.g. "SP458484") via the Astra
+// hybrid (label) search. It exists because the agent passes a *human* model code
+// that only appears in the product label — it is NOT the cache's ma_cha value,
+// so every exact `ma_cha = parent_code` filter returns zero for these queries.
+//
+// Returns the resolved ma_cha when the top hybrid hit's label actually carries
+// parentCode (identity via label, see parentCodeInLabel); returns "" when fuzzy
+// is disabled, the call errors, nothing passes the relevance floor, or the match
+// does not look like the requested model. Callers should fall back to treating
+// parentCode itself as the ma_cha.
+func resolveParentMaCha(ctx context.Context, tenantID, parentCode, brand string) string {
+	parentCode = strings.TrimSpace(parentCode)
+	if parentCode == "" {
+		return ""
+	}
+
+	appCfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		log.Printf("[erp_query] parent resolve config load error: %v", cfgErr)
+		return ""
+	}
+	if !appCfg.ERPEmbeddingFuzzyEnabled {
+		return ""
+	}
+	embedCfg := engine.ProductEmbeddingConfig{
+		AstraEndpoint: appCfg.AstraDBAPIEndpoint,
+		AstraToken:    appCfg.AstraDBToken,
+		AstraKeyspace: appCfg.AstraDBKeyspace,
+	}
+
+	keyword := strings.TrimSpace(strings.Join([]string{parentCode, brand}, " "))
+	match, embedErr := engine.FuzzyMatchProductWithEmbedding(ctx, embedCfg, tenantID, keyword)
+	if embedErr != nil {
+		log.Printf("[erp_query] parent resolve embedding error: %v", embedErr)
+		return ""
+	}
+	resolved := strings.TrimSpace(match.MaCha)
+	if resolved == "" {
+		return ""
+	}
+	// Trust the resolution only when the matched product's label carries the
+	// requested model code — this is the "identity via label" guard that
+	// replaces the broken `ma_cha == parent_code` assumption.
+	if !parentCodeInLabel(parentCode, match.Label) {
+		log.Printf("[erp_query] parent resolve rejected: model=%s not in label=%q (ma_cha=%s)",
+			parentCode, match.Label, resolved)
+		return ""
+	}
+	log.Printf("[erp_query] parent resolved model=%s → ma_cha=%s", parentCode, resolved)
+	return resolved
+}
+
 // hybridMatchVariant runs the same Astra hybrid search the products flow uses
 // (BM25 lexical + vector via FuzzyMatchProductWithEmbedding, erp.go:396), but
 // scoped to a single parent SKU. It exists because searchVariantsByAttributes
@@ -89,15 +141,16 @@ func searchVariantsByAttributes(ctx context.Context, tenantID, parentCode, color
 // index embeds each SKU as "<parent> — <colour> — <size>", so a query like
 // "FF901 trắng L" resolves the right SKU regardless of those storage quirks.
 //
-// Returns the pinpointed variant rows (one SKU) belonging to parentCode, or nil
-// when embedding fuzzy is disabled, the config/Astra call errors, no specific
-// SKU is found, or the top match belongs to a different parent. The ma_cha guard
+// parentCode is the agent-supplied model code (used in the keyword and as the
+// label identity check); effectiveParent is the resolved internal ma_cha (from
+// resolveParentMaCha) used to confine results to the right parent. The guard
 // matters because the hybrid filter only scopes tenant_id, so a sibling parent's
 // SKU could otherwise leak into a variant answer.
-func hybridMatchVariant(ctx context.Context, tenantID, parentCode, color, size, brand string) []map[string]interface{} {
-	if os.Getenv("ERP_EMBEDDING_FUZZY_ENABLED") != "true" {
-		return nil
-	}
+//
+// Returns the pinpointed variant rows (one SKU), or nil when embedding fuzzy is
+// disabled, the config/Astra call errors, no specific SKU is found, or the top
+// match belongs to a different parent.
+func hybridMatchVariant(ctx context.Context, tenantID, parentCode, effectiveParent, color, size, brand string) []map[string]interface{} {
 	keyword := strings.TrimSpace(strings.Join([]string{parentCode, color, size, brand}, " "))
 	if keyword == "" {
 		return nil
@@ -106,6 +159,9 @@ func hybridMatchVariant(ctx context.Context, tenantID, parentCode, color, size, 
 	appCfg, cfgErr := config.Load()
 	if cfgErr != nil {
 		log.Printf("[erp_query] variant embedding config load error: %v", cfgErr)
+		return nil
+	}
+	if !appCfg.ERPEmbeddingFuzzyEnabled {
 		return nil
 	}
 	embedCfg := engine.ProductEmbeddingConfig{
@@ -126,9 +182,13 @@ func hybridMatchVariant(ctx context.Context, tenantID, parentCode, color, size, 
 	if match.MA == "" {
 		return nil
 	}
-	if match.MaCha != "" && !strings.EqualFold(strings.TrimSpace(match.MaCha), parentCode) {
-		log.Printf("[erp_query] variant embedding matched MA=%s but ma_cha=%s != parent=%s; discarding",
-			match.MA, match.MaCha, parentCode)
+	// Identity guard: accept when the match belongs to the resolved parent SKU
+	// OR the matched label carries the requested model code. This replaces the
+	// old `ma_cha == parent_code` check, which always failed because the agent's
+	// parent_code is a model name, not the internal ma_cha.
+	if !variantBelongsToParent(parentCode, effectiveParent, match.MaCha, match.Label) {
+		log.Printf("[erp_query] variant embedding matched MA=%s ma_cha=%s label=%q but does not belong to model=%s parent=%s; discarding",
+			match.MA, match.MaCha, match.Label, parentCode, effectiveParent)
 		return nil
 	}
 
@@ -137,14 +197,51 @@ func hybridMatchVariant(ctx context.Context, tenantID, parentCode, color, size, 
 		log.Printf("[erp_query] variant embedding fetch MA=%s failed: %v", match.MA, fetchErr)
 		return nil
 	}
-	// Defensive re-check against the fetched row in case the hybrid projection
-	// omitted ma_cha: never return a SKU that does not belong to this parent.
+	// Defensive re-check against the fetched row: never return a SKU that does
+	// not belong to this parent. Compare to the resolved ma_cha when we have it,
+	// otherwise fall back to the model-code-in-label check.
 	for _, r := range rows {
-		if rc := strings.TrimSpace(getFirstNonEmptyMapString(r, "MA_CHA", "ma_cha")); rc != "" && !strings.EqualFold(rc, parentCode) {
+		rc := strings.TrimSpace(getFirstNonEmptyMapString(r, "MA_CHA", "ma_cha"))
+		if !variantBelongsToParent(parentCode, effectiveParent, rc, getFirstNonEmptyMapString(r, "TEN_DONG_BO_WEB", "ten_dong_bo_web", "TEN", "ten")) {
 			return nil
 		}
 	}
 	return rows
+}
+
+// variantBelongsToParent reports whether a matched SKU (identified by its ma_cha
+// and label/name) belongs to the requested parent. It accepts either an exact
+// ma_cha match against the resolved internal parent (effectiveParent) or the
+// model code (parentCode) appearing in the label — so it works both when the
+// parent has been resolved to a real ma_cha and when it has not.
+func variantBelongsToParent(parentCode, effectiveParent, candidateMaCha, candidateLabel string) bool {
+	if ep := strings.TrimSpace(effectiveParent); ep != "" {
+		if strings.EqualFold(strings.TrimSpace(candidateMaCha), ep) {
+			return true
+		}
+	}
+	return parentCodeInLabel(parentCode, candidateLabel)
+}
+
+// parentCodeInLabel reports whether the model/parent code the agent supplied
+// (e.g. "FF901") appears in the product label, ignoring case, spaces and
+// dashes. This is the "identity via label" check that lets a human model code
+// resolve to the right product even though it never equals the internal ma_cha.
+func parentCodeInLabel(parentCode, label string) bool {
+	p := normalizeMatchToken(parentCode)
+	if p == "" {
+		return false
+	}
+	return strings.Contains(normalizeMatchToken(label), p)
+}
+
+// normalizeMatchToken lowercases and strips spaces/dashes so codes like
+// "FF 901", "ff-901" and "FF901" all compare equal.
+func normalizeMatchToken(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "-", "")
+	return s
 }
 
 // filterVariantsByAttributes applies the same case-insensitive substring

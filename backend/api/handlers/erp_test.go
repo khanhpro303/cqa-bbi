@@ -598,11 +598,11 @@ func TestFilterVariantsByAttributes(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		color    string
-		size     string
-		brand    string
-		wantMAs  []string
+		name    string
+		color   string
+		size    string
+		brand   string
+		wantMAs []string
 	}{
 		{
 			name:    "exact color and size returns single variant",
@@ -1276,12 +1276,12 @@ func TestMethodPermissionResource(t *testing.T) {
 // MySQL-only behaviour is preserved when the feature flag is off.
 func TestHybridMatchVariantGatedOff(t *testing.T) {
 	t.Setenv("ERP_EMBEDDING_FUZZY_ENABLED", "")
-	if got := hybridMatchVariant(context.Background(), "tenant-1", "FF901", "trắng", "L", ""); got != nil {
+	if got := hybridMatchVariant(context.Background(), "tenant-1", "FF901", "FF901", "trắng", "L", ""); got != nil {
 		t.Fatalf("hybridMatchVariant with flag off = %v; want nil", got)
 	}
 
 	t.Setenv("ERP_EMBEDDING_FUZZY_ENABLED", "false")
-	if got := hybridMatchVariant(context.Background(), "tenant-1", "FF901", "trắng", "L", ""); got != nil {
+	if got := hybridMatchVariant(context.Background(), "tenant-1", "FF901", "FF901", "trắng", "L", ""); got != nil {
 		t.Fatalf("hybridMatchVariant with flag=false = %v; want nil", got)
 	}
 }
@@ -1291,7 +1291,7 @@ func TestHybridMatchVariantGatedOff(t *testing.T) {
 // config load or Astra call even when the feature flag is enabled.
 func TestHybridMatchVariantEmptyKeyword(t *testing.T) {
 	t.Setenv("ERP_EMBEDDING_FUZZY_ENABLED", "true")
-	if got := hybridMatchVariant(context.Background(), "tenant-1", "", "", "", ""); got != nil {
+	if got := hybridMatchVariant(context.Background(), "tenant-1", "", "", "", "", ""); got != nil {
 		t.Fatalf("hybridMatchVariant with empty keyword = %v; want nil", got)
 	}
 }

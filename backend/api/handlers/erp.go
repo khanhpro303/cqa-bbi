@@ -383,23 +383,25 @@ func ERPQuery(c *gin.Context) {
 				// ma_cha and returns all variants so price_range covers the family.
 				var matchedMA string
 				var matchedMaCha string
-				if os.Getenv("ERP_EMBEDDING_FUZZY_ENABLED") == "true" {
-					appCfg, cfgErr := config.Load()
-					if cfgErr != nil {
-						log.Printf("[erp_query] embedding fuzzy config load error: %v", cfgErr)
-					} else {
-						embedCfg := engine.ProductEmbeddingConfig{
-							AstraEndpoint: appCfg.AstraDBAPIEndpoint,
-							AstraToken:    appCfg.AstraDBToken,
-							AstraKeyspace: appCfg.AstraDBKeyspace,
-						}
-						if match, embedErr := engine.FuzzyMatchProductWithEmbedding(c.Request.Context(), embedCfg, tenantID, req.Search); embedErr != nil {
-							log.Printf("[erp_query] embedding fuzzy error: %v", embedErr)
-						} else if match.MaCha != "" {
-							matchedMaCha = match.MaCha
-							if match.Specific {
-								matchedMA = match.MA
-							}
+				// Embedding fuzzy is gated by the same config flag as the
+				// product_variants flow (ERP_EMBEDDING_FUZZY_ENABLED, default
+				// ON). Keeping both flows on one source of truth means a single
+				// env toggle disables every embedding path consistently.
+				appCfg, cfgErr := config.Load()
+				if cfgErr != nil {
+					log.Printf("[erp_query] embedding fuzzy config load error: %v", cfgErr)
+				} else if appCfg.ERPEmbeddingFuzzyEnabled {
+					embedCfg := engine.ProductEmbeddingConfig{
+						AstraEndpoint: appCfg.AstraDBAPIEndpoint,
+						AstraToken:    appCfg.AstraDBToken,
+						AstraKeyspace: appCfg.AstraDBKeyspace,
+					}
+					if match, embedErr := engine.FuzzyMatchProductWithEmbedding(c.Request.Context(), embedCfg, tenantID, req.Search); embedErr != nil {
+						log.Printf("[erp_query] embedding fuzzy error: %v", embedErr)
+					} else if match.MaCha != "" {
+						matchedMaCha = match.MaCha
+						if match.Specific {
+							matchedMA = match.MA
 						}
 					}
 				}
@@ -519,6 +521,34 @@ func ERPQuery(c *gin.Context) {
 			"count":       len(slim),
 		}
 
+		// (0a) Parent resolution. The agent passes a human model code
+		//      ("FF901") as parent_code, but the cache/Astra key it on the
+		//      internal parent SKU (ma_cha, e.g. "SP458484"). The Step-1 exact
+		//      `ma_cha = parent_code` filter therefore returns zero for the
+		//      normal case. When that happens, resolve the model code to its
+		//      real ma_cha via the Astra hybrid label search and retry the exact
+		//      attribute lookup against the resolved parent. effectiveParent is
+		//      then used by every fallback below so they target the right parent.
+		effectiveParent := parentCode
+		if len(slim) == 0 {
+			if resolved := resolveParentMaCha(c.Request.Context(), tenantID, parentCode, req.Brand); resolved != "" && !strings.EqualFold(resolved, parentCode) {
+				effectiveParent = resolved
+				response["resolved_parent"] = resolved
+				resolvedVariants, resolvedErr := searchVariantsByAttributes(c.Request.Context(), tenantID, effectiveParent, req.Color, req.Size, req.Brand, req.Limit)
+				if resolvedErr != nil {
+					log.Printf("[erp_query] variant search after parent resolve error: %v", resolvedErr)
+				} else {
+					resolvedSlim := slimVariantsForLLM(filterProductsByGroups(resolvedVariants, productGroups))
+					if len(resolvedSlim) > 0 {
+						slim = resolvedSlim
+						response["data"] = resolvedSlim
+						response["count"] = len(resolvedSlim)
+						response["source"] = "astradb_cache_variants_resolved"
+					}
+				}
+			}
+		}
+
 		// (0) Astra hybrid (BM25 lexical + vector) scoped to this parent, tried
 		//     BEFORE the bilingual/available_* fallback. searchVariantsByAttributes
 		//     above matches MySQL with exact size equality + substring colour,
@@ -529,7 +559,7 @@ func ERPQuery(c *gin.Context) {
 		//     pinpoints the SKU, slim becomes non-empty and the bilingual block
 		//     below is skipped by its own len(slim)==0 guard.
 		if len(slim) == 0 && (strings.TrimSpace(req.Color) != "" || strings.TrimSpace(req.Size) != "" || strings.TrimSpace(req.Brand) != "") {
-			if hybridRows := hybridMatchVariant(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand); len(hybridRows) > 0 {
+			if hybridRows := hybridMatchVariant(c.Request.Context(), tenantID, parentCode, effectiveParent, req.Color, req.Size, req.Brand); len(hybridRows) > 0 {
 				hybridSlim := slimVariantsForLLM(filterProductsByGroups(hybridRows, productGroups))
 				if len(hybridSlim) > 0 {
 					slim = hybridSlim
@@ -549,7 +579,7 @@ func ERPQuery(c *gin.Context) {
 		//  (2) If still zero, surface available_* lists so the LLM agent can
 		//      ask the customer to pick a real combination.
 		if len(slim) == 0 && (strings.TrimSpace(req.Color) != "" || strings.TrimSpace(req.Size) != "" || strings.TrimSpace(req.Brand) != "") {
-			allVariants, allErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, parentCode)
+			allVariants, allErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, effectiveParent)
 			if allErr != nil {
 				log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
 			} else {
@@ -585,7 +615,7 @@ func ERPQuery(c *gin.Context) {
 						retryBrand = req.Brand
 					}
 
-					retryVariants, retryErr := searchVariantsByAttributes(c.Request.Context(), tenantID, parentCode, retryColor, retrySize, retryBrand, req.Limit)
+					retryVariants, retryErr := searchVariantsByAttributes(c.Request.Context(), tenantID, effectiveParent, retryColor, retrySize, retryBrand, req.Limit)
 					if retryErr != nil {
 						log.Printf("[erp_query] variant retry after bilingual match error: %v", retryErr)
 					} else {

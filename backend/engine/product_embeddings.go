@@ -189,6 +189,7 @@ func SyncProductEmbeddingsToAstraDB(ctx context.Context, cfg ProductEmbeddingCon
 type ProductMatch struct {
 	MA       string
 	MaCha    string
+	Label    string
 	Specific bool
 }
 
@@ -226,7 +227,7 @@ func FuzzyMatchProductWithEmbedding(ctx context.Context, cfg ProductEmbeddingCon
 	specific := isSpecificSKUMatch(results)
 	log.Printf("[product_embed] match keyword=%q tenant=%s ma=%s ma_cha=%s vector=%.3f rerank=%.3f bm25=%v specific=%v",
 		keyword, tenantID, top.MA, top.MaCha, top.Vector, top.Rerank, top.HasBM25, specific)
-	return ProductMatch{MA: top.MA, MaCha: top.MaCha, Specific: specific}, nil
+	return ProductMatch{MA: top.MA, MaCha: top.MaCha, Label: top.Label, Specific: specific}, nil
 }
 
 // passesRelevanceFloor decides whether the top hybrid result is trustworthy
@@ -287,6 +288,7 @@ type productEmbeddingDoc struct {
 type productEmbeddingMatch struct {
 	MA       string
 	MaCha    string
+	Label    string
 	Rerank   float64 // $rerank logit — ordering only, never a threshold
 	Vector   float32 // $vector cosine 0..1 — bounded relevance floor
 	BM25Rank int     // -1 when $bm25Rank is null
@@ -515,7 +517,7 @@ func astraHybridFindAndRerank(ctx context.Context, cfg ProductEmbeddingConfig, t
 		"findAndRerank": map[string]interface{}{
 			"filter":     map[string]interface{}{"tenant_id": tenantID},
 			"sort":       map[string]interface{}{"$hybrid": keyword},
-			"projection": map[string]interface{}{"ma": 1, "ma_cha": 1},
+			"projection": map[string]interface{}{"ma": 1, "ma_cha": 1, "label": 1},
 			"options": map[string]interface{}{
 				"limit":         limit,
 				"hybridLimits":  candidates,
@@ -528,6 +530,7 @@ func astraHybridFindAndRerank(ctx context.Context, cfg ProductEmbeddingConfig, t
 			Documents []struct {
 				MA    string `json:"ma"`
 				MaCha string `json:"ma_cha"`
+				Label string `json:"label"`
 			} `json:"documents"`
 		} `json:"data"`
 		Status struct {
@@ -552,7 +555,7 @@ func astraHybridFindAndRerank(ctx context.Context, cfg ProductEmbeddingConfig, t
 	scores := resp.Status.DocumentResponses
 	out := make([]productEmbeddingMatch, 0, len(docs))
 	for i, d := range docs {
-		m := productEmbeddingMatch{MA: d.MA, MaCha: d.MaCha, BM25Rank: -1}
+		m := productEmbeddingMatch{MA: d.MA, MaCha: d.MaCha, Label: d.Label, BM25Rank: -1}
 		if i < len(scores) {
 			s := scores[i].Scores
 			if s.Rerank != nil {
