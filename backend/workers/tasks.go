@@ -820,7 +820,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// A. Choose Flow Type: dongsp or skucuthe
 		if strings.HasPrefix(userText, "#choose_flow_type:dongsp:") {
 			keyword := strings.TrimPrefix(userText, "#choose_flow_type:dongsp:")
-			matchedProducts, errSearch := searchProductsByWebNameAstraDBNonVectorized(ctx, matchedChannel.TenantID, keyword)
+			matchedProducts, errSearch := searchProductsByWebNameFromCache(ctx, matchedChannel.TenantID, keyword)
 			if errSearch != nil || len(matchedProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy dòng sản phẩm nào khớp với từ khóa '%s'.", keyword))
 				return nil
@@ -890,7 +890,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if strings.HasPrefix(userText, "#show_macha_options:") {
 			maCha := strings.TrimPrefix(userText, "#show_macha_options:")
 			// Fetch variants
-			childProducts, err := getProductsByMaChaFromAstraDB(ctx, matchedChannel.TenantID, maCha)
+			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Không tìm thấy thông tin chi tiết của dòng sản phẩm.")
 				return nil
@@ -978,7 +978,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// totals across all parent SKUs.
 		if strings.HasPrefix(userText, "#show_macha_options_by_web:") {
 			webName := strings.TrimPrefix(userText, "#show_macha_options_by_web:")
-			childProducts, err := getProductsByWebNameFromAstraDB(ctx, matchedChannel.TenantID, webName)
+			childProducts, err := getProductsByWebNameFromCache(ctx, matchedChannel.TenantID, webName)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy sản phẩm nào trong dòng '%s'.", webName))
 				return nil
@@ -1104,7 +1104,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// 3. Show Product Variants Selection (#show_product_variants:<MA_CHA>)
 		if strings.HasPrefix(userText, "#show_product_variants:") {
 			maCha := strings.TrimPrefix(userText, "#show_product_variants:")
-			childProducts, err := getProductsByMaChaFromAstraDB(ctx, matchedChannel.TenantID, maCha)
+			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Không tìm thấy thông tin chi tiết của dòng sản phẩm.")
 				return nil
@@ -1160,7 +1160,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// the line so the user sees the full catalog for that product line.
 		if strings.HasPrefix(userText, "#show_web_variants:") {
 			webName := strings.TrimPrefix(userText, "#show_web_variants:")
-			childProducts, err := getProductsByWebNameFromAstraDB(ctx, matchedChannel.TenantID, webName)
+			childProducts, err := getProductsByWebNameFromCache(ctx, matchedChannel.TenantID, webName)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy sản phẩm nào trong dòng '%s'.", webName))
 				return nil
@@ -1369,7 +1369,7 @@ func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
 
 func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string) (float64, error) {
 	// 1. Fetch child products from Astra DB
-	childProducts, err := getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
+	childProducts, err := getProductsByMaChaFromCache(ctx, tenantID, maCha)
 	if err != nil {
 		return 0, err
 	}
@@ -1451,7 +1451,7 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 	return totalStock, nil
 }
 
-func getProductsByMaChaFromAstraDB(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
+func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha).
@@ -1973,8 +1973,8 @@ CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`
 	return parsed.IsInventoryQuery, parsed.Keyword, nil
 }
 
-// searchProductsByWebNameAstraDBNonVectorized finds products in Astra DB with filter on TEN_DONG_BO_WEB column
-func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
+// searchProductsByWebNameFromCache finds products in Astra DB with filter on TEN_DONG_BO_WEB column
+func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
 	err := db.DB.WithContext(ctx).
@@ -2156,11 +2156,11 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	return totalStock, details, nil
 }
 
-// getProductsByWebNameFromAstraDB returns every cached product whose
+// getProductsByWebNameFromCache returns every cached product whose
 // ten_dong_bo_web equals webName for the given tenant. Used by the web-name
 // option flow to expand a single "product line" selection into the underlying
 // MA_CHA list / variant SKUs.
-func getProductsByWebNameFromAstraDB(ctx context.Context, tenantID, webName string) ([]map[string]interface{}, error) {
+func getProductsByWebNameFromCache(ctx context.Context, tenantID, webName string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).

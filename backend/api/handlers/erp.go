@@ -278,7 +278,7 @@ func ERPQuery(c *gin.Context) {
 		// names like "FF901" vs "FF901 Carbon").
 		if req.ExactWebName && strings.TrimSpace(req.Search) != "" {
 			search := strings.TrimSpace(req.Search)
-			cachedData, err := searchProductsByExactWebNameFromAstraDB(c.Request.Context(), tenantID, search, req.Limit)
+			cachedData, err := searchProductsByExactWebNameFromCache(c.Request.Context(), tenantID, search, req.Limit)
 			if err != nil {
 				log.Printf("[erp_query] exact web-name search error: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{
@@ -302,7 +302,7 @@ func ERPQuery(c *gin.Context) {
 
 			filteredCached := filterProductsByGroups(cachedData, productGroups)
 			filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
-				return getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
+				return getProductsByMaChaFromCache(ctx, tenantID, maCha)
 			})
 			slim := slimProductsForLLM(filteredCached)
 			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, search, http.StatusOK, len(slim), c.ClientIP())
@@ -317,7 +317,7 @@ func ERPQuery(c *gin.Context) {
 		}
 
 		// Resolve product rows via B-driven flow:
-		//   - B (searchProductWebGroupsFromAstraDB) probes via LIKE web/ten
+		//   - B (searchProductWebGroupsFromCache) probes via LIKE web/ten
 		//   - >1 group → disambiguation list, return
 		//   - 1 group  → use B's ma_cha directly, no re-LIKE, no LLM
 		//   - 0 group  → LLM fuzzy (name-aware, see fuzzyMatchMaChaWithLLM)
@@ -326,7 +326,7 @@ func ERPQuery(c *gin.Context) {
 		search := strings.TrimSpace(req.Search)
 
 		if search != "" {
-			webGroups, err := searchProductWebGroupsFromAstraDB(c.Request.Context(), tenantID, req.Search, productGroups)
+			webGroups, err := searchProductWebGroupsFromCache(c.Request.Context(), tenantID, req.Search, productGroups)
 			if err != nil {
 				log.Printf("[erp_query] product web-group search error: %v", err)
 				webGroups = nil
@@ -365,7 +365,7 @@ func ERPQuery(c *gin.Context) {
 			if len(webGroups) == 1 && len(webGroups[0].ParentCodes) > 0 {
 				// B already pinpointed the parent SKU(s). Pull rows directly.
 				for _, pc := range webGroups[0].ParentCodes {
-					rows, fetchErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, pc)
+					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, pc)
 					if fetchErr != nil {
 						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", pc, fetchErr)
 						continue
@@ -416,14 +416,14 @@ func ERPQuery(c *gin.Context) {
 				}
 				if matchedMA != "" {
 					// Pinpoint SKU query → return just the matched variant.
-					rows, fetchErr := getProductByMaFromAstraDB(c.Request.Context(), tenantID, matchedMA)
+					rows, fetchErr := getProductByMaFromCache(c.Request.Context(), tenantID, matchedMA)
 					if fetchErr != nil {
 						log.Printf("[erp_query] fetch by ma=%s failed: %v", matchedMA, fetchErr)
 					} else {
 						cachedData = rows
 					}
 				} else if matchedMaCha != "" {
-					rows, fetchErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, matchedMaCha)
+					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, matchedMaCha)
 					if fetchErr != nil {
 						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", matchedMaCha, fetchErr)
 					} else {
@@ -432,7 +432,7 @@ func ERPQuery(c *gin.Context) {
 				}
 			}
 		} else {
-			rows, err := searchProductsFromAstraDB(c.Request.Context(), tenantID, "", req.Limit)
+			rows, err := searchProductsFromCache(c.Request.Context(), tenantID, "", req.Limit)
 			if err != nil {
 				log.Printf("[erp_query] product cache search error: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{
@@ -459,7 +459,7 @@ func ERPQuery(c *gin.Context) {
 
 		filteredCached := filterProductsByGroups(cachedData, productGroups)
 		filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
-			return getProductsByMaChaFromAstraDB(ctx, tenantID, maCha)
+			return getProductsByMaChaFromCache(ctx, tenantID, maCha)
 		})
 
 		slim := slimProductsForLLM(filteredCached)
@@ -579,7 +579,7 @@ func ERPQuery(c *gin.Context) {
 		//  (2) If still zero, surface available_* lists so the LLM agent can
 		//      ask the customer to pick a real combination.
 		if len(slim) == 0 && (strings.TrimSpace(req.Color) != "" || strings.TrimSpace(req.Size) != "" || strings.TrimSpace(req.Brand) != "") {
-			allVariants, allErr := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, effectiveParent)
+			allVariants, allErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, effectiveParent)
 			if allErr != nil {
 				log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
 			} else {
@@ -900,11 +900,16 @@ func isFullName(search string) bool {
 	return strings.Contains(search, " ")
 }
 
-// searchProductsFromAstraDB — queries the cached product collection in Astra DB.
-// Uses vector search ($vectorize) if query is non-empty, with a text-regex search fallback.
-// Returns (nil, nil) if Astra DB is not configured, allowing live fallback.
+// searchProductsFromCache — queries the local MySQL product cache
+// (models.CachedProduct, which mirrors the Astra-synced catalog). No vector
+// search here; it resolves a search string as follows:
+//   1. Full name (contains a space) → LLM fuzzy match to a ma_cha, fetch that group.
+//   2. Otherwise → SQL LIKE in two passes: ten_dong_bo_web, then ten.
+//   3. Still empty (and search != "") → LLM fuzzy match as a fallback.
+// Empty search lists all rows up to limit. Embedding/vector fuzzy lives in the
+// ERPQuery products orchestration (FuzzyMatchProductWithEmbedding), not here.
 // ---------------------------------------------------------------------------
-func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, limit int) ([]map[string]interface{}, error) {
+func searchProductsFromCache(ctx context.Context, tenantID, search string, limit int) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	var err error
 
@@ -991,12 +996,12 @@ func searchProductsFromAstraDB(ctx context.Context, tenantID, search string, lim
 	return results, nil
 }
 
-// searchProductsByExactWebNameFromAstraDB queries the local MySQL cache for
+// searchProductsByExactWebNameFromCache queries the local MySQL cache for
 // products whose ten_dong_bo_web equals webName exactly. Used by the agent's
 // disambiguation-resolution path to skip the LIKE-based fuzzy lookup that
 // would otherwise re-trigger the option-list disambiguation push for
 // prefix-overlapping web names (e.g. "FF901" matching "FF901 Carbon").
-func searchProductsByExactWebNameFromAstraDB(ctx context.Context, tenantID, webName string, limit int) ([]map[string]interface{}, error) {
+func searchProductsByExactWebNameFromCache(ctx context.Context, tenantID, webName string, limit int) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
@@ -1033,7 +1038,7 @@ func searchProductsByExactWebNameFromAstraDB(ctx context.Context, tenantID, webN
 	return results, nil
 }
 
-func searchProductWebGroupsFromAstraDB(ctx context.Context, tenantID, search string, allowedGroups []string) ([]engine.WebGroupMatch, error) {
+func searchProductWebGroupsFromCache(ctx context.Context, tenantID, search string, allowedGroups []string) ([]engine.WebGroupMatch, error) {
 	search = strings.TrimSpace(search)
 	if search == "" {
 		return nil, nil
@@ -1085,8 +1090,8 @@ func searchProductWebGroupsFromAstraDB(ctx context.Context, tenantID, search str
 	return engine.RankProductWebGroups(filtered), nil
 }
 
-// searchProductsFromAstraDBWithFilter — queries the cached product collection in the local MySQL database with a parent code filter.
-func searchProductsFromAstraDBWithFilter(ctx context.Context, tenantID, search, parentCode string, limit int) ([]map[string]interface{}, error) {
+// searchProductsFromCacheWithFilter — queries the cached product collection in the local MySQL database with a parent code filter.
+func searchProductsFromCacheWithFilter(ctx context.Context, tenantID, search, parentCode string, limit int) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + search + "%"
 	err := db.DB.WithContext(ctx).
@@ -1748,7 +1753,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		stockCache := engine.DefaultInventoryStockCache()
 
 		if parentCode != "" && search != "" {
-			matchedProducts, errSearch := searchProductsFromAstraDBWithFilter(c.Request.Context(), tenantID, search, parentCode, 20)
+			matchedProducts, errSearch := searchProductsFromCacheWithFilter(c.Request.Context(), tenantID, search, parentCode, 20)
 			if errSearch == nil && len(matchedProducts) > 0 {
 				matchedProducts = filterProductsByGroups(matchedProducts, productGroups)
 				var variantData []map[string]interface{}
@@ -1800,7 +1805,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 		var matchedProducts []map[string]interface{}
 		if search != "" {
-			rows, errSearch := searchProductsByWebNameAstraDBNonVectorized(c.Request.Context(), tenantID, search)
+			rows, errSearch := searchProductsByWebNameFromCache(c.Request.Context(), tenantID, search)
 			if errSearch != nil {
 				log.Printf("[inventory_query] Astra DB search error for tenant=%s search=%s: %v", tenantID, search, errSearch)
 			} else {
@@ -1883,7 +1888,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		maCha, isMaCha := classifyDominantMaCha(c.Request.Context(), tenantID, matchedProducts, productGroups)
 		if isMaCha {
 			// Query for parent product line (ma_cha)
-			childProducts, errVal := getProductsByMaChaFromAstraDB(c.Request.Context(), tenantID, maCha)
+			childProducts, errVal := getProductsByMaChaFromCache(c.Request.Context(), tenantID, maCha)
 			if errVal != nil {
 				err = fmt.Errorf("failed to fetch variants from cache: %w", errVal)
 			} else if len(childProducts) > 0 {
@@ -2896,7 +2901,7 @@ func getProductGroupFromAstra(ctx context.Context, tenantID, sku string) string 
 	}
 
 	// Fallback to searching
-	products, err := searchProductsFromAstraDB(ctx, tenantID, sku, 5)
+	products, err := searchProductsFromCache(ctx, tenantID, sku, 5)
 	if err != nil || len(products) == 0 {
 		return ""
 	}
@@ -2911,11 +2916,11 @@ func getProductGroupFromAstra(ctx context.Context, tenantID, sku string) string 
 	return getMapString(products[0], "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
 }
 
-// getProductByMaFromAstraDB fetches a single SKU by its variant code (MA) from
+// getProductByMaFromCache fetches a single SKU by its variant code (MA) from
 // the local MySQL product cache. Used when an embedding fuzzy match pinpoints
 // one variant (e.g. "ff800 trắng L"). Returns a one-element slice to stay
-// shape-compatible with getProductsByMaChaFromAstraDB callers.
-func getProductByMaFromAstraDB(ctx context.Context, tenantID, ma string) ([]map[string]interface{}, error) {
+// shape-compatible with getProductsByMaChaFromCache callers.
+func getProductByMaFromCache(ctx context.Context, tenantID, ma string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND ma = ?", tenantID, ma).
@@ -2927,7 +2932,7 @@ func getProductByMaFromAstraDB(ctx context.Context, tenantID, ma string) ([]map[
 	return cachedProductsToMaps(products), nil
 }
 
-func getProductsByMaChaFromAstraDB(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
+func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha).
@@ -2994,7 +2999,7 @@ func dominantMaCha(rows []map[string]interface{}) string {
 // collapses to a single product line (MA_CHA) that has more than one variant —
 // i.e. an inventory query should answer for the whole family rather than a
 // single SKU. It applies the permission group filter, picks the dominant MA_CHA
-// via dominantMaCha, then confirms through getProductsByMaChaFromAstraDB that the
+// via dominantMaCha, then confirms through getProductsByMaChaFromCache that the
 // line truly has >1 variant. Returns (maCha, true) for the family case.
 //
 // It reuses rows already fetched by the caller (no second cache/LLM lookup),
@@ -3009,14 +3014,14 @@ func classifyDominantMaCha(ctx context.Context, tenantID string, rows []map[stri
 	if dominant == "" {
 		return "", false
 	}
-	allVariants, err := getProductsByMaChaFromAstraDB(ctx, tenantID, dominant)
+	allVariants, err := getProductsByMaChaFromCache(ctx, tenantID, dominant)
 	if err == nil && len(allVariants) > 1 {
 		return dominant, true
 	}
 	return "", false
 }
 
-func searchProductsByWebNameAstraDBNonVectorized(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
+func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
 

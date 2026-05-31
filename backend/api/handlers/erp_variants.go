@@ -192,7 +192,7 @@ func hybridMatchVariant(ctx context.Context, tenantID, parentCode, effectivePare
 		return nil
 	}
 
-	rows, fetchErr := getProductByMaFromAstraDB(ctx, tenantID, match.MA)
+	rows, fetchErr := getProductByMaFromCache(ctx, tenantID, match.MA)
 	if fetchErr != nil {
 		log.Printf("[erp_query] variant embedding fetch MA=%s failed: %v", match.MA, fetchErr)
 		return nil
