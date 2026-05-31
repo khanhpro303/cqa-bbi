@@ -1236,6 +1236,16 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
+		// The Agent returns the [RICH_MESSAGE_SENT] sentinel when the backend
+		// already pushed a Zalo rich/disambiguation message during a tool call
+		// (orders/debt date-range prompts, inventory dòng-vs-SKU). Suppress the
+		// Agent's prose so the customer doesn't receive a duplicate — often
+		// hallucinated — answer alongside the backend-pushed prompt.
+		if strings.Contains(replyText, "[RICH_MESSAGE_SENT]") {
+			log.Printf("[worker] suppressing Langflow reply: backend already sent rich message (sentinel)")
+			return nil
+		}
+
 		// Save assistant reply to Astra DB asynchronously
 		go func() {
 			err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, engine.ChatMessage{
