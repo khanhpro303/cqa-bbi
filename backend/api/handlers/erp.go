@@ -386,35 +386,11 @@ func ERPQuery(c *gin.Context) {
 				// where the agent routes SPECIFIC-VARIANT intent. Keeping pinpoint
 				// out of products avoids a duplicate hybrid-search engine and a
 				// second Astra round trip when a color/size query lands here.
-				var matchedMaCha string
-				// Embedding fuzzy is gated by the same config flag as the
-				// product_variants flow (ERP_EMBEDDING_FUZZY_ENABLED, default
-				// ON). Keeping both flows on one source of truth means a single
-				// env toggle disables every embedding path consistently.
-				appCfg, cfgErr := config.Load()
-				if cfgErr != nil {
-					log.Printf("[erp_query] embedding fuzzy config load error: %v", cfgErr)
-				} else if appCfg.ERPEmbeddingFuzzyEnabled {
-					embedCfg := engine.ProductEmbeddingConfig{
-						AstraEndpoint: appCfg.AstraDBAPIEndpoint,
-						AstraToken:    appCfg.AstraDBToken,
-						AstraKeyspace: appCfg.AstraDBKeyspace,
-					}
-					if match, embedErr := engine.FuzzyMatchProductWithEmbedding(c.Request.Context(), embedCfg, tenantID, req.Search); embedErr != nil {
-						log.Printf("[erp_query] embedding fuzzy error: %v", embedErr)
-					} else if match.MaCha != "" {
-						matchedMaCha = match.MaCha
-					}
-				}
-				if matchedMaCha == "" {
-					m, llmErr := fuzzyMatchMaChaWithLLM(c.Request.Context(), tenantID, req.Search)
-					if llmErr != nil {
-						log.Printf("[erp_query] LLM fuzzy match failed for '%s': %v", req.Search, llmErr)
-					} else if m != "" {
-						log.Printf("[erp_query] LLM fuzzy matched '%s' → ma_cha '%s'", req.Search, m)
-						matchedMaCha = m
-					}
-				}
+				// Resolve the family code via the shared embedding→LLM matcher
+				// (resolveMaChaFuzzy). The same helper backs the inventory
+				// web-name fallback, so both resources resolve identically and a
+				// single env toggle (ERP_EMBEDDING_FUZZY_ENABLED) governs both.
+				matchedMaCha := resolveMaChaFuzzy(c.Request.Context(), tenantID, req.Search)
 				if matchedMaCha != "" {
 					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, matchedMaCha)
 					if fetchErr != nil {
@@ -900,9 +876,10 @@ func isFullName(search string) bool {
 // searchProductsFromCache — queries the local MySQL product cache
 // (models.CachedProduct, which mirrors the Astra-synced catalog). No vector
 // search here; it resolves a search string as follows:
-//   1. Full name (contains a space) → LLM fuzzy match to a ma_cha, fetch that group.
-//   2. Otherwise → SQL LIKE in two passes: ten_dong_bo_web, then ten.
-//   3. Still empty (and search != "") → LLM fuzzy match as a fallback.
+//  1. Full name (contains a space) → LLM fuzzy match to a ma_cha, fetch that group.
+//  2. Otherwise → SQL LIKE in two passes: ten_dong_bo_web, then ten.
+//  3. Still empty (and search != "") → LLM fuzzy match as a fallback.
+//
 // Empty search lists all rows up to limit. Embedding/vector fuzzy lives in the
 // ERPQuery products orchestration (FuzzyMatchProductWithEmbedding), not here.
 // ---------------------------------------------------------------------------
@@ -3018,6 +2995,45 @@ func classifyDominantMaCha(ctx context.Context, tenantID string, rows []map[stri
 	return "", false
 }
 
+// resolveMaChaFuzzy maps a free-text product query to a parent product code
+// (ma_cha) using the two-stage matcher shared by the products and inventory
+// resources: embedding fuzzy first (cheap, robust to name variations), then the
+// LLM list matcher as a fallback. Embedding is gated by
+// ERP_EMBEDDING_FUZZY_ENABLED (default ON); when disabled, unavailable, or below
+// the similarity threshold it falls through to the LLM. Returns "" when neither
+// stage resolves a parent code.
+func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) string {
+	var matchedMaCha string
+
+	appCfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		log.Printf("[resolve_macha_fuzzy] embedding fuzzy config load error: %v", cfgErr)
+	} else if appCfg.ERPEmbeddingFuzzyEnabled {
+		embedCfg := engine.ProductEmbeddingConfig{
+			AstraEndpoint: appCfg.AstraDBAPIEndpoint,
+			AstraToken:    appCfg.AstraDBToken,
+			AstraKeyspace: appCfg.AstraDBKeyspace,
+		}
+		if match, embedErr := engine.FuzzyMatchProductWithEmbedding(ctx, embedCfg, tenantID, search); embedErr != nil {
+			log.Printf("[resolve_macha_fuzzy] embedding fuzzy error: %v", embedErr)
+		} else if match.MaCha != "" {
+			matchedMaCha = match.MaCha
+		}
+	}
+
+	if matchedMaCha == "" {
+		m, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search)
+		if llmErr != nil {
+			log.Printf("[resolve_macha_fuzzy] LLM fuzzy match failed for '%s': %v", search, llmErr)
+		} else if m != "" {
+			log.Printf("[resolve_macha_fuzzy] LLM fuzzy matched '%s' → ma_cha '%s'", search, m)
+			matchedMaCha = m
+		}
+	}
+
+	return matchedMaCha
+}
+
 func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
@@ -3042,20 +3058,19 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 		}
 	}
 
-	// Fallback to LLM fuzzy matching if both LIKE passes returned no results
+	// Fallback to the shared embedding→LLM matcher if both LIKE passes returned
+	// nothing. This mirrors the products resource (resolveMaChaFuzzy), giving
+	// inventory the same embedding-first resolution instead of LLM-only.
 	if len(products) == 0 {
-		matchedMaCha, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, keyword)
-		if llmErr != nil {
-			log.Printf("[handler] LLM fuzzy matching failed for keyword '%s': %v", keyword, llmErr)
-		} else if matchedMaCha != "" {
-			log.Printf("[handler] LLM fuzzy matched keyword '%s' to ma_cha '%s'", keyword, matchedMaCha)
+		if matchedMaCha := resolveMaChaFuzzy(ctx, tenantID, keyword); matchedMaCha != "" {
+			log.Printf("[handler] fuzzy matched keyword '%s' to ma_cha '%s'", keyword, matchedMaCha)
 			// Query again using the matched parent product code
 			err = db.DB.WithContext(ctx).
 				Where("tenant_id = ? AND ma_cha = ?", tenantID, matchedMaCha).
 				Limit(100).
 				Find(&products).Error
 			if err != nil {
-				return nil, fmt.Errorf("local MySQL cache query (LLM fallback) failed: %w", err)
+				return nil, fmt.Errorf("local MySQL cache query (fuzzy fallback) failed: %w", err)
 			}
 		}
 	}
