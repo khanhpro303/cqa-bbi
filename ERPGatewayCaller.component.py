@@ -71,6 +71,18 @@ class ERPGatewayCaller(Component):
             tool_mode=True
         ),
         MessageTextInput(
+            name="exact_web_name",
+            display_name="Exact Web Name",
+            info=(
+                "Đặt 'true' khi 'search' là MỘT tên web khách đã chọn từ danh sách trước "
+                "(vd: 'LS2 FF901'). Backend khớp CHÍNH XÁC tên web và KHÔNG đẩy lại danh sách — "
+                "dùng để cắt vòng lặp khi tên ngắn là tiền tố của tên dài "
+                "('LS2 FF901' vs 'LS2 FF901 Carbon'). Bỏ trống cho tìm kiếm thường."
+            ),
+            required=False,
+            tool_mode=True
+        ),
+        MessageTextInput(
             name="zalo_user_id",
             display_name="Zalo User ID",
             info="Zalo user ID của khách hàng",
@@ -151,6 +163,8 @@ class ERPGatewayCaller(Component):
         color = self._coerce_text(getattr(self, "color", ""))
         size = self._coerce_text(getattr(self, "size", ""))
         brand = self._coerce_text(getattr(self, "brand", ""))
+        exact_web_raw = self._coerce_text(getattr(self, "exact_web_name", ""))
+        exact_web = exact_web_raw.lower() in ("true", "1", "yes", "có", "co")
         zalo_id = self._coerce_text(getattr(self, "zalo_user_id", ""))
         perm_token = self._coerce_text(getattr(self, "permission_token", ""))
 
@@ -168,6 +182,7 @@ class ERPGatewayCaller(Component):
             "color": color,
             "size": size,
             "brand": brand,
+            "exact_web_name": exact_web,
             "zalo_user_id": zalo_id,
             "limit": 10,
         }
