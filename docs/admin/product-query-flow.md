@@ -19,12 +19,15 @@ trong `engine/product_embeddings.go` + LLM fuzzy trong `erp_fuzzy.go`).
 > vận chuyển (webhook → worker → Langflow → ERP gateway) nhưng nhánh handler khác
 > hẳn ở **hai điểm cốt lõi**:
 > 1. **Products phục vụ HOÀN TOÀN từ cache cục bộ.** Nó xử lý ngay trong `ERPQuery`
->    (`erp.go:258`) rồi `return` — **không** đi qua `respondWithLiveDataV2`, **không**
+>    (`erp.go:274`) rồi `return` — **không** đi qua `respondWithLiveDataV2`, **không**
 >    bao giờ chạm Cloudify live. `source` trong response luôn là `astradb_cache*`.
-> 2. **Tên hàm gây hiểu nhầm.** Mọi helper `...FromAstraDB`
->    (`searchProductWebGroupsFromAstraDB`, `getProductsByMaChaFromAstraDB`, …) thực
->    ra query **MySQL `cached_products`**. **Chỉ** `FuzzyMatchProductWithEmbedding`
->    mới gọi Astra Data API thật (collection `erp_product_bbi`, keyspace `cqa_bbi`).
+> 2. **Tên hàm phản ánh đúng nguồn dữ liệu.** Các helper đọc cache giờ mang hậu tố
+>    `...FromCache` (`searchProductWebGroupsFromCache`, `getProductsByMaChaFromCache`,
+>    `searchProductsFromCache`, …) → query **MySQL `cached_products`**. Hậu tố
+>    `...FromAstraDB` chỉ còn ở các hàm **thật sự** gọi Astra Data API:
+>    `getProductBySkuFromAstraDB`, `fetchUniqueGroupsFromAstraDB`,
+>    `SyncProductEmbeddingsToAstraDB`. Ngoài ra **chỉ** `FuzzyMatchProductWithEmbedding`
+>    chạm Astra hybrid (collection `erp_product_bbi`, keyspace `cqa_bbi`).
 
 Ba câu hỏi mẫu được trace đầy đủ:
 
@@ -62,18 +65,18 @@ Ba câu hỏi mẫu được trace đầy đủ:
      │           │              │            7. POST {gateway}/erp/query                                  │
      │           │              │               Headers: X-Agent-Token, X-Permission-Token               │
      │           │              │               Body: {resource:"products", search:"FF800 trắng L"} ──►   │
-     │           │              │                                            8. ERPQuery (erp.go:89)      │
-     │           │              │                                     if Resource=="products" (erp.go:258)│
+     │           │              │                                            8. ERPQuery (erp.go:103)     │
+     │           │              │                                     if Resource=="products" (erp.go:274)│
      │           │              │                                     │                                   │
-     │           │              │                       B1. searchProductWebGroups ──── LIKE 2-pass ───►  │ MySQL cached_products
-     │           │              │                          (erp.go:967)  ◄── 0 nhóm ──────────────────┤   │
+     │           │              │                       B1. searchProductWebGroupsFromCache ─ LIKE 2-pass►  │ MySQL cached_products
+     │           │              │                          (erp.go:1041) ◄── 0 nhóm ──────────────────┤   │
      │           │              │                       B2. FuzzyMatchProductWithEmbedding ───────────►  │ ◄── ĐIỂM DUY NHẤT
-     │           │              │                          (product_embeddings.go:204)                   │     chạm Astra:
+     │           │              │                          (product_embeddings.go:207)                   │     chạm Astra:
      │           │              │                          findAndRerank $hybrid="FF800 trắng L" ─────►  │ Astra erp_product_bbi
      │           │              │                          ◄── top SKU (BM25+vector+rerank) ───────────┤   │ (server-side vectorize)
      │           │              │                       Specific? → matchedMA  (pinpoint 1 variant)      │
-     │           │              │                       B-fetch: getProductByMaFromAstraDB ───────────►  │ MySQL cached_products
-     │           │              │                          (erp.go:2849)   ◄── 1 row ──────────────────┤   │
+     │           │              │                       B-fetch: getProductByMaFromCache ─────────────►  │ MySQL cached_products
+     │           │              │                          (erp.go:2923)   ◄── 1 row ──────────────────┤   │
      │           │              │                       filterByGroups → enrichPriceRanges → slim(≤5)    │
      │           │              │           9. Agent đọc data[] (name + price_range) ◄──────────────────│
      │           │              │               format text reply                       │                │
@@ -113,29 +116,29 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
 
 ---
 
-## C. Sơ đồ quyết định bên trong `case "products"` (erp.go:258)
+## C. Sơ đồ quyết định bên trong `case "products"` (erp.go:274)
 
 ```
-        ERPQuery → if req.Resource == "products" (erp.go:258)   [cache-only, return sớm]
+        ERPQuery → if req.Resource == "products" (erp.go:274)   [cache-only, return sớm]
                                  │
                                  ▼
-                    exact_web_name == true ?  (erp.go:263)
+                    exact_web_name == true ?  (erp.go:279)
                                  │
                    ┌── CÓ ───────┴───────── KHÔNG ──┐
                    ▼                                ▼
    searchProductsByExactWebName      strings.TrimSpace(search) == "" ? ◄── check khách có hỏi gì không
-     FromAstraDB (erp.go:930)                       │
+     FromCache (erp.go:1004)                        │
    source=astradb_cache_exact_web    ┌── RỖNG ──────┴────── CÓ CHỮ ──┐
                                      ▼                               ▼
-                        searchProductsFromAstraDB        B1. searchProductWebGroupsFromAstraDB
-                        (erp.go:838) — list ≤ limit          (erp.go:967) LIKE 2-pass + rank
+                        searchProductsFromCache          B1. searchProductWebGroupsFromCache
+                        (erp.go:912) — list ≤ limit          (erp.go:1041) LIKE 2-pass + rank
                                                                           │
                                           ┌───────────────┬──────────────┴──────────────┐
                                      >1 nhóm web      ==1 nhóm (parent_codes)        0 nhóm
                                           │                  │                          │
                                           ▼                  ▼                          ▼
                               source=astradb_cache_  getProductsByMaChaFrom    ── FUZZY (B2 → B3) ──
-                                web_groups (return)   AstraDB(parent) trực tiếp          │
+                                web_groups (return)   Cache(parent) trực tiếp            │
                               agent hỏi khách chọn    (KHÔNG fuzzy/LLM)                   │
                                                                           ┌──────────────┴──────────────┐
                                                                   B2. embedding fuzzy          (nếu B2 trống/tắt)
@@ -149,13 +152,13 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
                                                   ┌────────────────────────────────────┴────────┐
                                           matchedMA != ""                              matchedMaCha != ""
                                                   ▼                                            ▼
-                                   getProductByMaFromAstraDB              getProductsByMaChaFromAstraDB
-                                     (erp.go:2849) đúng 1 SKU                (erp.go:2861) cả họ, LIMIT 100
+                                   getProductByMaFromCache                getProductsByMaChaFromCache
+                                     (erp.go:2923) đúng 1 SKU                (erp.go:2935) cả họ, LIMIT 100
                                                   └────────────────────┬───────────────────────┘
                                                                        ▼
-                                            filterProductsByGroups (erp.go:1593)  — lọc quyền nhóm
-                                            enrichProductsWithPriceRanges (erp.go:1142) — price_range
-                                            slimProductsForLLM (erp.go:1067) — gộp theo tên, ≤ 5 dòng
+                                            filterProductsByGroups (erp.go:1667)  — lọc quyền nhóm
+                                            enrichProductsWithPriceRanges (erp.go:1216) — price_range
+                                            slimProductsForLLM (erp.go:1141) — gộp theo tên, ≤ 5 dòng
                                                                        ▼
                                             JSON: { source:"astradb_cache", data[], count }
 ```
@@ -163,30 +166,30 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
 > Câu mẫu **"FF800 trắng L"** đi nhánh: `exact_web_name=false` → có chữ → B1 LIKE
 > trả **0 nhóm** (chuỗi "FF800 trắng L" hiếm khi khớp nguyên văn cột tên) → **B2
 > hybrid** bắt đúng SKU "FF800 — Trắng Bóng — L", `Specific=true` → `matchedMA` →
-> `getProductByMaFromAstraDB` → **count=1**.
+> `getProductByMaFromCache` → **count=1**.
 
 ---
 
 ## D. Hybrid search trên Astra (B2 — `product_embeddings.go`)
 
-`FuzzyMatchProductWithEmbedding` (`product_embeddings.go:204`) chạy **một** query
+`FuzzyMatchProductWithEmbedding` (`product_embeddings.go:207`) chạy **một** query
 hybrid lên collection vector của tenant rồi đọc tín hiệu để quyết định.
 
-### Document mỗi SKU (`productEmbeddingDoc`, `:267`)
+### Document mỗi SKU (`productEmbeddingDoc`, `:268`)
 
 Mỗi biến thể (MA) là **một** document, đồng bộ qua
-`SyncProductEmbeddingsToAstraDB` (`:106`). Các field then chốt:
+`SyncProductEmbeddingsToAstraDB` (`:108`). Các field then chốt:
 
 | Field | Vai trò |
 |---|---|
 | `$vectorize` | Text label được Astra **tự embed server-side** (collection gắn sẵn service OpenAI — **phía Go KHÔNG giữ API key**). Nội dung = `buildProductEmbeddingLabel`: `"FF800 — Gloss White — L"` (web name — ten — màu — size). |
-| `$lexical` | Text cho BM25 (`buildProductLexicalText`, `:341`): **mã đứng trước** (`ma`, `ma_cha`) rồi tới label, để token chính xác như `FF800` / `trắng` / `L` tra được. BM25 **chỉ** index document có `$lexical`. |
-| `$vector` | Cosine bounded `[0,1]` — dùng làm **sàn liên quan tuyệt đối**. |
-| `$rerank` | Logit rerank **không bị chặn** — **chỉ** dùng để xếp thứ tự, **không bao giờ** làm ngưỡng. |
-| `$bm25Rank` | `null` khi không có token khớp; khác `null` = có overlap token chính xác (`HasBM25`). |
+| `$lexical` | Text cho BM25 (`buildProductLexicalText`, `:343`): **mã đứng trước** (`ma`, `ma_cha`) rồi tới label, để token chính xác như `FF800` / `trắng` / `L` tra được. BM25 **chỉ** index document có `$lexical`. |
+| `$rerank` | Logit của reranker nvidia cross-encoder, **không bị chặn**. Đây là **cổng relevance**: top score > `rerankFloor` (≈0) = match thật; âm = không khớp → rơi xuống B3. |
+| `$vector` | Cosine bounded `[0,1]`. **KHÔNG** dùng làm sàn relevance (query lạc đề vẫn hay đạt 0.6+ cosine), **chỉ** dùng đo gap anh em cùng `ma_cha` để phân biệt pinpoint vs cả họ. |
+| `$bm25Rank` | `null` khi không có token khớp; khác `null` = có overlap token chính xác (`HasBM25`). Chỉ để log/quan sát, **không** còn là cổng nhận. |
 | `label_hash` | Gập `embeddingSchemaVersion` (hiện `"v2-lexical"`, `:41`) + label + lexical → khi đổi shape doc, một lần sync sẽ backfill lại toàn bộ. |
 
-### Truy vấn (`astraHybridFindAndRerank`, `:513`)
+### Truy vấn (`astraHybridFindAndRerank`, `:515`)
 
 ```
 POST {AstraEndpoint}/api/json/v1/cqa_bbi/erp_product_bbi
@@ -206,21 +209,25 @@ mỗi chân kéo `hybridLimits=30` ứng viên, rerank, trả về `limit=5` đ�
 
 ### Hai cổng quyết định (đều scale-independent)
 
-1. **`passesRelevanceFloor`** (`:239`) — nhận top nếu **một trong hai**:
-   - `HasBM25 == true` (có token chính xác, vd "FF800" — tín hiệu mạnh nhất,
-     không phụ thuộc ngôn ngữ); **hoặc**
-   - `Vector >= vectorFloor` (= **0.55**, `:50`) cho truy vấn thuần ngữ nghĩa.
-   - Không đạt → trả zero-match (không lỗi) để rơi xuống B3 (LLM).
-2. **`isSpecificSKUMatch`** (`:250`) — phân biệt **pinpoint 1 SKU** vs **cả họ**:
+1. **`passesRelevanceFloor`** (`:240`) — nhận top **chỉ khi** `top.Rerank >
+   rerankFloor` (= **0.0**, `:52`):
+   - Reranker nvidia cross-encoder cho điểm match thật **dương rõ** (quan sát
+     +9..+15) còn query lạc đề **âm** (−6..−13), bất kể độ dài / ngôn ngữ truy vấn.
+   - **Không** dùng cosine `$vector` làm sàn: query lạc đề vẫn hay đạt 0.6+ cosine
+     nên sàn cosine sẽ nhận nhầm nhiễu. `HasBM25` cũng **không** còn là cổng nhận.
+   - Top score âm → trả zero-match (không lỗi) để rơi xuống B3 (LLM).
+2. **`isSpecificSKUMatch`** (`:251`) — phân biệt **pinpoint 1 SKU** vs **cả họ**:
    - Tìm SKU đầu tiên **cùng `ma_cha`** với top; nếu `top.Vector − r.Vector >
-     siblingCosineGap` (= **0.05**, `:59`) → **Specific** (top vượt trội hẳn anh em
+     siblingCosineGap` (= **0.05**, `:61`) → **Specific** (top vượt trội hẳn anh em
      → khách hỏi đúng 1 biến thể, vd "FF800 **trắng L**").
    - Không có sibling nào trong top-K → cũng coi là Specific (top đơn nhất).
    - Ngược lại → **không** Specific (vd "storm 3" — cả họ ngang nhau) → chỉ trả
      `ma_cha`, caller kéo toàn bộ biến thể để `price_range` phủ cả họ.
 
-> 🔎 Gap đo trên **cosine `$vector`** (đại lượng `[0,1]` ổn định), **không** đo trên
-> logit `$rerank` (không bị chặn) — nên ngưỡng tổng quát hoá được cho mọi truy vấn.
+> 🔎 **Hai tín hiệu, hai vai trò khác nhau:** cổng *relevance* (nhận/loại) đo trên
+> **logit `$rerank`** (boundary tự nhiên ≈0 của cross-encoder); còn cổng *specific*
+> (pinpoint vs cả họ) đo trên **cosine `$vector`** `[0,1]` ổn định. Cosine **không**
+> dùng để chặn relevance, rerank **không** dùng để đo gap anh em.
 
 ---
 
@@ -229,8 +236,9 @@ mỗi chân kéo `hybridLimits=30` ứng viên, rerank, trả về `limit=5` đ�
 Chỉ chạy khi **B2 không ra** (`matchedMA == "" && matchedMaCha == ""`) — do
 embedding tắt, Astra lỗi, hoặc dưới sàn liên quan.
 
-1. **Nạp ứng viên** (`:101`): `SELECT ma_cha, MAX(ten_dong_bo_web), MAX(ten) …
-   GROUP BY ma_cha` từ `cached_products`. Cap **1500** dòng cho prompt (`:111`).
+1. **Nạp ứng viên** (`:105`): `SELECT ma_cha, MAX(ten_dong_bo_web), MAX(ten) …
+   GROUP BY ma_cha` từ `cached_products`. Cap **1500** dòng cho prompt
+   (`fuzzyCandidateCap`, `:111`).
 2. **Prompt** (`:141`): mỗi dòng `ma_cha | tên`. Quy tắc khớp:
    - Khớp cả **mã** lẫn **tên** (web/ERP).
    - Bỏ gạch ngang / dấu chấm / số 0 đầu khi so mã (`E05 = E-5 = E.5`).
@@ -244,26 +252,26 @@ embedding tắt, Astra lỗi, hoặc dưới sàn liên quan.
    ngược lại trả `""`.
 
 > 📌 B3 **chỉ** ra `ma_cha` (không pinpoint MA) → luôn kéo **cả họ** qua
-> `getProductsByMaChaFromAstraDB`. Pinpoint 1 SKU **chỉ** đến từ B2 (Specific).
+> `getProductsByMaChaFromCache`. Pinpoint 1 SKU **chỉ** đến từ B2 (Specific).
 
 ---
 
-## F. Hậu xử lý & hình dạng dữ liệu (erp.go:442-465)
+## F. Hậu xử lý & hình dạng dữ liệu (erp.go:460-484)
 
 Sau khi có `cachedData` (1 SKU hoặc cả họ), ba bước chung:
 
-1. **`filterProductsByGroups`** (`:1593`) — lọc theo `productGroups` mà permission
+1. **`filterProductsByGroups`** (`:1667`) — lọc theo `productGroups` mà permission
    token cho phép (ẩn nhóm sản phẩm ngoài quyền).
-2. **`enrichProductsWithPriceRanges`** (`:1142`) — với mỗi sản phẩm có `ma_cha`,
-   nạp lại toàn bộ biến thể (`getProductsByMaChaFromAstraDB`),
-   `calculateProductPriceRange` (`:1194`) lấy min/max, `formatProductPriceRange`
-   (`:1218`) ra nhãn `"x đ – y đ"`. Thêm field `price_min`, `price_max`,
+2. **`enrichProductsWithPriceRanges`** (`:1216`) — với mỗi sản phẩm có `ma_cha`,
+   nạp lại toàn bộ biến thể (`getProductsByMaChaFromCache`),
+   `calculateProductPriceRange` (`:1268`) lấy min/max, `formatProductPriceRange`
+   (`:1292`) ra nhãn `"x đ – y đ"`. Thêm field `price_min`, `price_max`,
    `price_range`.
-3. **`slimProductsForLLM`** (`:1067`) — gộp các biến thể cùng `ten_dong_bo_web` về
-   **một** dòng, cắt còn **tối đa 5** (const `slimProductsForLLMLimit`, `:1065`),
+3. **`slimProductsForLLM`** (`:1141`) — gộp các biến thể cùng `ten_dong_bo_web` về
+   **một** dòng, cắt còn **tối đa 5** (const `slimProductsForLLMLimit`, `:1139`),
    chỉ giữ field LLM cần.
 
-### Ví dụ response — P1 (nhiều nhóm web, `astradb_cache_web_groups`, erp.go:339)
+### Ví dụ response — P1 (nhiều nhóm web, `astradb_cache_web_groups`, erp.go:358)
 
 ```json
 {
@@ -278,7 +286,7 @@ Sau khi có `cachedData` (1 SKU hoặc cả họ), ba bước chung:
 }
 ```
 
-### Ví dụ response — P3 pinpoint 1 SKU (`astradb_cache`, count=1, erp.go:458)
+### Ví dụ response — P3 pinpoint 1 SKU (`astradb_cache`, count=1, erp.go:479)
 
 ```json
 {
@@ -341,43 +349,48 @@ Anh/chị muốn xem dòng nào ạ?
 
 ---
 
-## G. Resource chị em `product_variants` (erp.go:472-583)
+## G. Resource chị em `product_variants` (erp.go:490-660)
 
 Khi khách đã rõ **mã cha + thuộc tính cụ thể** ("FF901 đen bóng size L giá bao
 nhiêu?"), agent gọi `product_variants` thay vì `products` để lấy **đúng 1 SKU +
 giá** (không phải khoảng giá):
 
-1. **Bắt buộc `parent_code`** (`:474`); thiếu → HTTP 400.
-2. **`searchVariantsByAttributes`** (`:483`) — lọc cache MySQL theo
-   `parent_code` + `color` + `size` + `brand`. Lưu ý: `size` so khớp **bằng
-   chính xác** (`LOWER(thuoc_tinh_2) = LOWER(size)`) còn `color` là substring
+1. **Bắt buộc `parent_code`** (`:493`); thiếu → HTTP 400 (`missing_parent_code`).
+2. **`searchVariantsByAttributes`** (`:501` → `erp_variants.go:25`) — lọc cache
+   MySQL theo `parent_code` + `color` + `size` + `brand`. Lưu ý: `size` so khớp
+   **bằng chính xác** (`LOWER(thuoc_tinh_2) = LOWER(size)`) còn `color` là substring
    `LIKE`. Đường này nhanh + chính xác khi kho lưu chuẩn, nhưng trượt khi
    `thuoc_tinh_2` lưu `"Size L"` / `"L (40)"` / có space thừa, hoặc khi khách
    gõ màu khác ngôn ngữ với giá trị lưu.
-3. **Zero-result → (0) Astra hybrid** (`:522`, khi `searchVariantsByAttributes`
+3. **Zero-result → (0) Astra hybrid** (`:562`, khi `searchVariantsByAttributes`
    trả rỗng): chạy **đúng engine của luồng products** —
-   `hybridMatchVariant` (`erp_variants.go`) gọi `FuzzyMatchProductWithEmbedding`
+   `hybridMatchVariant` (`erp_variants.go:153`) gọi `FuzzyMatchProductWithEmbedding`
    (BM25 `$lexical` + vector, mục D) với keyword ghép từ `parent_code` + `color`
    + `size` + `brand`, gate bởi `ERP_EMBEDDING_FUZZY_ENABLED`. Index nhúng mỗi
    SKU dạng `"FF901 — Gloss White — L"` nên bắt được cả lỗi lưu size lẫn màu song ngữ.
-   Có **guard `ma_cha == parent_code`** (vì hybrid filter chỉ scope `tenant_id`)
-   để không rò SKU của dòng cha khác. Pinpoint được → `source =
-   "astradb_hybrid_variants"`, bỏ qua bước 4–5.
-4. **Vẫn rỗng → fallback song ngữ** (`:540`): nếu cache lưu "Gloss Black" mà
+   **Guard nhận diện qua label** (`variantBelongsToParent`, `erp_variants.go:217`)
+   thay cho giả định cũ `ma_cha == parent_code`: vì agent gửi **tên mã cha**
+   ("FF901") chứ không phải `ma_cha` nội bộ, filter hybrid chỉ scope `tenant_id`
+   nên phải xác nhận **label của SKU có chứa mã cha** (qua `resolveParentMaCha` +
+   `parentCodeInLabel`, `:93`) mới nhận — tránh rò SKU dòng cha khác. Pinpoint được
+   → `source = "astradb_hybrid_variants"`, bỏ qua bước 4–5.
+4. **Vẫn rỗng → fallback song ngữ** (`:589`): nếu cache lưu "Gloss Black" mà
    khách gõ "đen bóng", `fuzzyMatchAttributesWithLLM` (`erp_fuzzy.go:192`) map
    color/size/brand về giá trị chuẩn (`collectAvailableAttributes` cung cấp danh
    sách hợp lệ) rồi **thử lại đúng 1 lần**.
 5. **Vẫn rỗng** → trả `available_colors / available_sizes / available_brands` để
    agent hỏi khách chọn tổ hợp có thật.
 
-> 🔌 **Mục 3 là điểm mới đấu Astra vào variant.** Trước đây nhánh
-> `product_variants` chỉ dùng MySQL exact + LLM remap, **không bao giờ** chạm
-> hybrid embedding — nên mọi cải tiến `$lexical`/vector chỉ phục vụ luồng
-> `products`. Giờ variant tái dùng cùng `FuzzyMatchProductWithEmbedding`.
+> 🔌 **Mục 3 là điểm đấu Astra vào variant.** Trước đây nhánh `product_variants`
+> chỉ dùng MySQL exact + LLM remap, **không bao giờ** chạm hybrid embedding — nên
+> mọi cải tiến `$lexical`/vector chỉ phục vụ luồng `products`. Giờ variant tái dùng
+> cùng `FuzzyMatchProductWithEmbedding`, và mã cha được khớp qua **label identity**
+> (hybrid search trên label) chứ không còn so `ma_cha == parent_code` (vốn luôn
+> trượt vì `parent_code` là tên model, không phải `ma_cha`).
 
-> `product_variants` dùng chung permission grant với `products` (`erp.go:221`:
-> `permResource` map `product_variants → products`), nên tenant không cần cấu hình
-> resource thứ hai.
+> `product_variants` dùng chung permission grant với `products`:
+> `methodPermissionResource` (`erp.go:87`, áp dụng ở `:208`) map `product_variants
+> → products`, nên tenant không cần cấu hình resource thứ hai.
 
 ---
 
@@ -388,32 +401,33 @@ giá** (không phải khoảng giá):
 | Webhook nhận tin | `backend/api/handlers/webhooks.go:17` | `ZaloWebhookHandler` |
 | Worker xử lý | `backend/workers/tasks.go` | `HandleZaloWebhookTask` (resolve KH + quyền, ký token) |
 | Gọi Langflow | `backend/engine/langflow_client.go` | `RunFlowWithCustomer` |
-| Handler ERP | `backend/api/handlers/erp.go:89` | `ERPQuery` (auth, ERP active, verify token, method check) |
-| **Nhánh products** | `backend/api/handlers/erp.go:258` | `if req.Resource == "products"` (cache-only, `return` sớm) |
-| Exact web-name | `backend/api/handlers/erp.go:263` → `:930` | `searchProductsByExactWebNameFromAstraDB` (MySQL) |
-| Liệt kê (search rỗng) | `backend/api/handlers/erp.go:417` → `:838` | `searchProductsFromAstraDB` |
-| **B1 web-group LIKE** | `backend/api/handlers/erp.go:313` → `:967` | `searchProductWebGroupsFromAstraDB` (MySQL 2-pass: `ten_dong_bo_web`→`ten`) |
+| Handler ERP | `backend/api/handlers/erp.go:103` | `ERPQuery` (auth, ERP active, verify token, method check) |
+| **Nhánh products** | `backend/api/handlers/erp.go:274` | `if req.Resource == "products"` (cache-only, `return` sớm) |
+| Exact web-name | `backend/api/handlers/erp.go:281` → `:1004` | `searchProductsByExactWebNameFromCache` (MySQL) |
+| Liệt kê (search rỗng) | `backend/api/handlers/erp.go:435` → `:912` | `searchProductsFromCache` |
+| **B1 web-group LIKE** | `backend/api/handlers/erp.go:329` → `:1041` | `searchProductWebGroupsFromCache` (MySQL 2-pass: `ten_dong_bo_web`→`ten`) |
 | Rank web-group | `backend/engine/product_grouping.go:25` | `RankProductWebGroups` / `WebGroupMatch` (`:14`) |
-| Response >1 nhóm | `backend/api/handlers/erp.go:339` | `source=astradb_cache_web_groups` (disambiguation) |
-| **B2 embedding fuzzy** | `backend/api/handlers/erp.go:380` → `engine/product_embeddings.go:204` | `FuzzyMatchProductWithEmbedding` (gated bởi `ERP_EMBEDDING_FUZZY_ENABLED`) |
-| Astra hybrid call | `backend/engine/product_embeddings.go:513` | `astraHybridFindAndRerank` (`findAndRerank`, `sort.$hybrid`) |
-| Build `$lexical` | `backend/engine/product_embeddings.go:341` | `buildProductLexicalText` (mã trước, label sau) |
-| Build `$vectorize` | `backend/engine/product_embeddings.go:359` | `buildProductEmbeddingLabel` |
-| Sàn liên quan | `backend/engine/product_embeddings.go:239` | `passesRelevanceFloor` (`HasBM25 \|\| Vector>=0.55`) |
-| Pinpoint SKU | `backend/engine/product_embeddings.go:250` | `isSpecificSKUMatch` (gap cosine > 0.05) |
-| Sync embeddings | `backend/engine/product_embeddings.go:106` | `SyncProductEmbeddingsToAstraDB` (diff `label_hash`, schema `v2-lexical`) |
-| **B3 LLM fuzzy** | `backend/api/handlers/erp.go:391` → `erp_fuzzy.go:94` | `fuzzyMatchMaChaWithLLM` (chỉ khi B2 trống) |
-| AI client | `backend/api/handlers/erp_fuzzy.go:20` | `getAIClient` (mặc định `claude-haiku-4-5`) |
-| Fetch 1 SKU | `backend/api/handlers/erp.go:401` → `:2849` | `getProductByMaFromAstraDB` (MySQL `ma=`) |
-| Fetch cả họ | `backend/api/handlers/erp.go:408` → `:2861` | `getProductsByMaChaFromAstraDB` (MySQL `ma_cha=`, LIMIT 100) |
-| Lọc quyền nhóm | `backend/api/handlers/erp.go:442` → `:1593` | `filterProductsByGroups` |
-| Enrich khoảng giá | `backend/api/handlers/erp.go:443` → `:1142` | `enrichProductsWithPriceRanges` |
-| Tính / format giá | `backend/api/handlers/erp.go:1194`, `:1218` | `calculateProductPriceRange` / `formatProductPriceRange` |
-| Slim cho LLM | `backend/api/handlers/erp.go:447` → `:1067` | `slimProductsForLLM` (gộp theo tên, max 5 — const `:1065`) |
-| Response JSON | `backend/api/handlers/erp.go:458` | `source:"astradb_cache"` + `data[]` + `count` |
-| Ghi audit | `backend/api/handlers/erp.go:457` | `writeAuditLog` |
-| **product_variants** | `backend/api/handlers/erp.go:472` | nhánh variant theo `parent_code` + màu/size/brand |
-| Attr search | `backend/api/handlers/erp.go:483` | `searchVariantsByAttributes` (MySQL, size exact) |
-| **Variant Astra hybrid** | `backend/api/handlers/erp.go:522` → `erp_variants.go` | `hybridMatchVariant` (reuse `FuzzyMatchProductWithEmbedding`, guard `ma_cha=parent`, gate `ERP_EMBEDDING_FUZZY_ENABLED`) |
-| Attr fuzzy song ngữ | `backend/api/handlers/erp.go:540` → `erp_fuzzy.go:192` | `fuzzyMatchAttributesWithLLM` ("đen bóng"→"Gloss Black") |
-| Quyền dùng chung | `backend/api/handlers/erp.go:221` | `product_variants` → `products` (permResource map) |
+| Response >1 nhóm | `backend/api/handlers/erp.go:358` | `source=astradb_cache_web_groups` (disambiguation) |
+| **B2 embedding fuzzy** | `backend/api/handlers/erp.go:399` → `engine/product_embeddings.go:207` | `FuzzyMatchProductWithEmbedding` (gated bởi `ERP_EMBEDDING_FUZZY_ENABLED`) |
+| Astra hybrid call | `backend/engine/product_embeddings.go:515` | `astraHybridFindAndRerank` (`findAndRerank`, `sort.$hybrid`) |
+| Build `$lexical` | `backend/engine/product_embeddings.go:343` | `buildProductLexicalText` (mã trước, label sau) |
+| Build `$vectorize` | `backend/engine/product_embeddings.go:361` | `buildProductEmbeddingLabel` |
+| Sàn liên quan | `backend/engine/product_embeddings.go:240` | `passesRelevanceFloor` (`Rerank > rerankFloor≈0`, `:52`) |
+| Pinpoint SKU | `backend/engine/product_embeddings.go:251` | `isSpecificSKUMatch` (gap cosine > `siblingCosineGap` 0.05) |
+| Sync embeddings | `backend/engine/product_embeddings.go:108` | `SyncProductEmbeddingsToAstraDB` (diff `label_hash`, schema `v2-lexical`) |
+| **B3 LLM fuzzy** | `backend/api/handlers/erp.go:409` → `erp_fuzzy.go:94` | `fuzzyMatchMaChaWithLLM` (chỉ khi B2 trống) |
+| AI client | `backend/api/handlers/erp_fuzzy.go:20` | `getAIClient` (mặc định `claude-haiku-4-5`, `:60`) |
+| Fetch 1 SKU | `backend/api/handlers/erp.go:419` → `:2923` | `getProductByMaFromCache` (MySQL `ma=`) |
+| Fetch cả họ | `backend/api/handlers/erp.go:426` → `:2935` | `getProductsByMaChaFromCache` (MySQL `ma_cha=`, LIMIT 100) |
+| Lọc quyền nhóm | `backend/api/handlers/erp.go:460` → `:1667` | `filterProductsByGroups` |
+| Enrich khoảng giá | `backend/api/handlers/erp.go:461` → `:1216` | `enrichProductsWithPriceRanges` |
+| Tính / format giá | `backend/api/handlers/erp.go:1268`, `:1292` | `calculateProductPriceRange` / `formatProductPriceRange` |
+| Slim cho LLM | `backend/api/handlers/erp.go:465` → `:1141` | `slimProductsForLLM` (gộp theo tên, max 5 — const `:1139`) |
+| Response JSON | `backend/api/handlers/erp.go:479` | `source:"astradb_cache"` + `data[]` + `count` |
+| Ghi audit | `backend/api/handlers/erp.go:475` | `writeAuditLog` |
+| **product_variants** | `backend/api/handlers/erp.go:490` | nhánh variant theo `parent_code` + màu/size/brand |
+| Attr search | `backend/api/handlers/erp.go:501` → `erp_variants.go:25` | `searchVariantsByAttributes` (MySQL, size exact) |
+| **Variant Astra hybrid** | `backend/api/handlers/erp.go:562` → `erp_variants.go:153` | `hybridMatchVariant` (reuse `FuzzyMatchProductWithEmbedding`, guard label identity `variantBelongsToParent` `:217`, gate `ERP_EMBEDDING_FUZZY_ENABLED`) |
+| Resolve parent qua label | `backend/api/handlers/erp_variants.go:93` | `resolveParentMaCha` / `parentCodeInLabel` (model name → `ma_cha`) |
+| Attr fuzzy song ngữ | `backend/api/handlers/erp.go:589` → `erp_fuzzy.go:192` | `fuzzyMatchAttributesWithLLM` ("đen bóng"→"Gloss Black") |
+| Quyền dùng chung | `backend/api/handlers/erp.go:87` → `:208` | `methodPermissionResource`: `product_variants` → `products` |
