@@ -390,7 +390,10 @@ func ERPQuery(c *gin.Context) {
 				// (resolveMaChaFuzzy). The same helper backs the inventory
 				// web-name fallback, so both resources resolve identically and a
 				// single env toggle (ERP_EMBEDDING_FUZZY_ENABLED) governs both.
-				matchedMaCha := resolveMaChaFuzzy(c.Request.Context(), tenantID, req.Search)
+				// products answers at the family level only, so the specific-SKU
+				// signal is intentionally ignored here (price_range must cover the
+				// whole line). Pinpointing is product_variants' job.
+				_, matchedMaCha, _ := resolveMaChaFuzzy(c.Request.Context(), tenantID, req.Search)
 				if matchedMaCha != "" {
 					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, matchedMaCha)
 					if fetchErr != nil {
@@ -1779,9 +1782,17 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 		var matchedProducts []map[string]interface{}
 		if search != "" {
-			rows, errSearch := searchProductsByWebNameFromCache(c.Request.Context(), tenantID, search)
+			rows, specificSKU, errSearch := searchProductsByWebNameFromCache(c.Request.Context(), tenantID, search)
 			if errSearch != nil {
 				log.Printf("[inventory_query] Astra DB search error for tenant=%s search=%s: %v", tenantID, search, errSearch)
+			} else if specificSKU != "" {
+				// Embedding pinpointed one SKU (e.g. the agent passed an already
+				// resolved child SKU code). Read that SKU's live stock directly:
+				// leave matchedProducts nil so classifyDominantMaCha returns false
+				// and we take the single-SKU path below — never the family loop or
+				// the dòng-vs-SKU disambiguation prompt.
+				log.Printf("[inventory_query] fuzzy pinpointed specific SKU for tenant=%s search=%s → %s", tenantID, search, specificSKU)
+				search = specificSKU
 			} else {
 				matchedProducts = rows
 				log.Printf("[inventory_query] Astra DB search for tenant=%s search=%s returned %d products", tenantID, search, len(matchedProducts))
@@ -2995,16 +3006,21 @@ func classifyDominantMaCha(ctx context.Context, tenantID string, rows []map[stri
 	return "", false
 }
 
-// resolveMaChaFuzzy maps a free-text product query to a parent product code
-// (ma_cha) using the two-stage matcher shared by the products and inventory
-// resources: embedding fuzzy first (cheap, robust to name variations), then the
-// LLM list matcher as a fallback. Embedding is gated by
-// ERP_EMBEDDING_FUZZY_ENABLED (default ON); when disabled, unavailable, or below
-// the similarity threshold it falls through to the LLM. Returns "" when neither
-// stage resolves a parent code.
-func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) string {
-	var matchedMaCha string
-
+// resolveMaChaFuzzy maps a free-text product query to a product match using the
+// two-stage matcher shared by the products and inventory resources: embedding
+// fuzzy first (cheap, robust to name variations), then the LLM list matcher as a
+// fallback. Embedding is gated by ERP_EMBEDDING_FUZZY_ENABLED (default ON); when
+// disabled, unavailable, or below the relevance floor it falls through to the
+// LLM. Returns the matched variant code (ma), its parent family (maCha), and
+// whether the embedding pinpointed a single specific SKU. The LLM stage only
+// resolves a family, so it never reports specific=true. An all-empty return
+// means neither stage matched.
+//
+// Callers decide how to use `specific`: the products resource ignores it (it
+// always answers at the family level so price_range covers the whole line),
+// while the inventory resource honours it to read one SKU's live stock instead
+// of collapsing an already-resolved SKU back into a whole-line query.
+func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) (ma, maCha string, specific bool) {
 	appCfg, cfgErr := config.Load()
 	if cfgErr != nil {
 		log.Printf("[resolve_macha_fuzzy] embedding fuzzy config load error: %v", cfgErr)
@@ -3017,24 +3033,31 @@ func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) string {
 		if match, embedErr := engine.FuzzyMatchProductWithEmbedding(ctx, embedCfg, tenantID, search); embedErr != nil {
 			log.Printf("[resolve_macha_fuzzy] embedding fuzzy error: %v", embedErr)
 		} else if match.MaCha != "" {
-			matchedMaCha = match.MaCha
+			return match.MA, match.MaCha, match.Specific
 		}
 	}
 
-	if matchedMaCha == "" {
-		m, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search)
-		if llmErr != nil {
-			log.Printf("[resolve_macha_fuzzy] LLM fuzzy match failed for '%s': %v", search, llmErr)
-		} else if m != "" {
-			log.Printf("[resolve_macha_fuzzy] LLM fuzzy matched '%s' → ma_cha '%s'", search, m)
-			matchedMaCha = m
-		}
+	m, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search)
+	if llmErr != nil {
+		log.Printf("[resolve_macha_fuzzy] LLM fuzzy match failed for '%s': %v", search, llmErr)
+	} else if m != "" {
+		log.Printf("[resolve_macha_fuzzy] LLM fuzzy matched '%s' → ma_cha '%s'", search, m)
+		return "", m, false
 	}
 
-	return matchedMaCha
+	return "", "", false
 }
 
-func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
+// searchProductsByWebNameFromCache resolves an inventory search keyword to cached
+// product rows. It probes the local MySQL cache by LIKE (ten_dong_bo_web, then
+// ten); on a miss it falls back to the shared embedding→LLM matcher.
+//
+// When the embedding pinpoints a single specific SKU (the agent already resolved
+// a child SKU and passed its code), the function returns that code as specificSKU
+// and does NOT expand to the family. The inventory caller answers that one SKU's
+// live stock directly, instead of collapsing the resolved SKU back into a
+// whole-line query or a dòng-vs-SKU disambiguation prompt.
+func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, string, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
 
@@ -3044,7 +3067,7 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 		Limit(100).
 		Find(&products).Error
 	if err != nil {
-		return nil, fmt.Errorf("local MySQL cache web-name query failed: %w", err)
+		return nil, "", fmt.Errorf("local MySQL cache web-name query failed: %w", err)
 	}
 
 	// Pass 2 — ten (ERP raw name). Only if pass 1 empty.
@@ -3054,7 +3077,7 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 			Limit(100).
 			Find(&products).Error
 		if err != nil {
-			return nil, fmt.Errorf("local MySQL cache ten query failed: %w", err)
+			return nil, "", fmt.Errorf("local MySQL cache ten query failed: %w", err)
 		}
 	}
 
@@ -3062,7 +3085,15 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 	// nothing. This mirrors the products resource (resolveMaChaFuzzy), giving
 	// inventory the same embedding-first resolution instead of LLM-only.
 	if len(products) == 0 {
-		if matchedMaCha := resolveMaChaFuzzy(ctx, tenantID, keyword); matchedMaCha != "" {
+		matchedMA, matchedMaCha, specific := resolveMaChaFuzzy(ctx, tenantID, keyword)
+		if specific && matchedMA != "" {
+			// Embedding pinpointed one SKU — surface it as specificSKU and stop.
+			// Expanding to ma_cha here would turn an already-resolved SKU into a
+			// whole-line query (the regression this guard prevents).
+			log.Printf("[handler] fuzzy pinpointed keyword '%s' to specific SKU '%s' (ma_cha '%s')", keyword, matchedMA, matchedMaCha)
+			return nil, matchedMA, nil
+		}
+		if matchedMaCha != "" {
 			log.Printf("[handler] fuzzy matched keyword '%s' to ma_cha '%s'", keyword, matchedMaCha)
 			// Query again using the matched parent product code
 			err = db.DB.WithContext(ctx).
@@ -3070,7 +3101,7 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 				Limit(100).
 				Find(&products).Error
 			if err != nil {
-				return nil, fmt.Errorf("local MySQL cache query (fuzzy fallback) failed: %w", err)
+				return nil, "", fmt.Errorf("local MySQL cache query (fuzzy fallback) failed: %w", err)
 			}
 		}
 	}
@@ -3099,7 +3130,7 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 			"DVT":                p.DVT,
 		})
 	}
-	return results, nil
+	return results, "", nil
 }
 
 // loadActiveZaloOAAdapter looks up the tenant's active Zalo OA channel,

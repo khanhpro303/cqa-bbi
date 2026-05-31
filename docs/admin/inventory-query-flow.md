@@ -2,7 +2,7 @@
 
 Tài liệu này mô tả end-to-end luồng xử lý khi khách hàng nhắn cho bot một câu
 hỏi **tồn kho** trên Zalo OA. Tài liệu bám sát **code hiện tại** (nhánh
-`respondWithLiveDataV2`, erp.go:1695 + resource `product_variants`).
+`respondWithLiveDataV2`, erp.go:1698 + resource `product_variants`).
 
 > ⚠️ **Tài liệu này thay thế mô hình cũ.** Bản trước mô tả nhánh tồn kho theo
 > "Phase B web-groups / Phase C1-embedding/LLM". Mô hình web-group đó **vẫn còn
@@ -10,10 +10,16 @@ hỏi **tồn kho** trên Zalo OA. Tài liệu bám sát **code hiện tại** (
 > `dongsp`** trong `tasks.go` — KHÔNG nằm trong nhánh `inventory`.
 >
 > ✅ **Cập nhật:** Embedding fuzzy (`FuzzyMatchProductWithEmbedding`) **giờ phục vụ
-> CẢ `inventory`** thông qua helper dùng chung `resolveMaChaFuzzy` (erp.go:3005).
+> CẢ `inventory`** thông qua helper dùng chung `resolveMaChaFuzzy` (erp.go:3023).
 > Trước đây nhánh `inventory` chỉ có LLM fuzzy; nay nó resolve dòng sản phẩm bằng
 > **embedding trước → LLM sau**, giống hệt resource `products`. Cùng một cờ
 > `ERP_EMBEDDING_FUZZY_ENABLED` bật/tắt cả hai.
+>
+> 🛡️ **Guard SKU cụ thể:** `resolveMaChaFuzzy` trả `(ma, ma_cha, specific)`. Khi
+> embedding pinpoint đúng **một** SKU (`specific=true`, vd Agent truyền mã SKU con
+> đã resolve), `inventory` đọc tồn của **đúng SKU đó** — KHÔNG mở rộng về cả dòng,
+> KHÔNG hỏi lại dòng-vs-SKU. Resource `products` thì cố tình bỏ qua `specific`
+> (luôn trả cả dòng cho `price_range`).
 
 > 📌 **Lưu ý đặt tên:** Các helper đọc cache giờ mang hậu tố `...FromCache`
 > (`searchProductsByWebNameFromCache`, `getProductsByMaChaFromCache`,
@@ -105,14 +111,15 @@ Tại backend, "FF901" thường LIKE-match nhiều dòng ⇒ rơi vào **disamb
 Agent → ERPQuery: resource="inventory", search="FF901", parent_code="", no màu/size
                                   │
                                   ▼
-        respondWithLiveDataV2 → case "inventory" (erp.go:1702)
+        respondWithLiveDataV2 → case "inventory" (erp.go:1705)
                                   │  parentCode=="" → bỏ qua Branch-1 (filtered)
                                   ▼
  ┌──────────────────────────────────────────────────────────────────────────┐
- │ ⮕ TRA CỨU MỘT LẦN  (erp.go:1782)                                          │
- │   searchProductsByWebNameFromCache (:3037, đọc MySQL cache)                │
- │   LIKE ten_dong_bo_web "%FF901%" → LIKE ten → resolveMaChaFuzzy (:3005):   │
+ │ ⮕ TRA CỨU MỘT LẦN  (erp.go:1785)                                          │
+ │   searchProductsByWebNameFromCache (:3060, đọc MySQL cache)                │
+ │   LIKE ten_dong_bo_web "%FF901%" → LIKE ten → resolveMaChaFuzzy (:3023):   │
  │       embedding fuzzy → LLM fuzzy (fuzzyMatchMaChaWithLLM)                 │
+ │   • specific=true → trả specificSKU → single-SKU (bỏ qua phân loại dưới)   │
  │   ⇒ matchedProducts   (dùng lại cho CẢ disambiguation LẪN phân loại dưới)  │
  └──────────────────────────────────────────────────────────────────────────┘
                                   │
@@ -123,10 +130,10 @@ Agent → ERPQuery: resource="inventory", search="FF901", parent_code="", no mà
         ▼                  collapse: search = SKU đó             │
  ╔═══════════════╗                 │                             │
  ║ DISAMBIGUATION║                 └──────────────┬──────────────┘
- ║ (erp.go:1801) ║                                ▼
- ║ Đẩy Zalo nút: ║   classifyDominantMaCha(matchedProducts)  (erp.go:1862 → :2982)
- ║ 📦 dòng SP    ║     • filterProductsByGroups → dominantMaCha (:2954)
- ║   dongsp:FF901║     • xác nhận dòng có >1 biến thể (getProductsByMaChaFromCache :2909)
+ ║ (erp.go:1812) ║                                ▼
+ ║ Đẩy Zalo nút: ║   classifyDominantMaCha(matchedProducts)  (erp.go:1873 → :2993)
+ ║ 📦 dòng SP    ║     • filterProductsByGroups → dominantMaCha (:2965)
+ ║   dongsp:FF901║     • xác nhận dòng có >1 biến thể (getProductsByMaChaFromCache :2920)
  ║ 🔍 SKU cụ thể ║     *** DÙNG LẠI matchedProducts — KHÔNG tra cứu/LLM lại ***
  ║   skucuthe:.. ║                                │
  ║ → is_inventory║                     ┌──────────┴──────────┐
@@ -134,7 +141,7 @@ Agent → ERPQuery: resource="inventory", search="FF901", parent_code="", no mà
  ║   data=[]     ║                     │                     │
  ║ → return      ║                     ▼                     ▼
  ╚══════╤════════╝          getProductsByMaCha       single-SKU live call
-        │                   FromCache (:2909)        (erp.go:1913, xem mục F)
+        │                   FromCache (:2920)        (erp.go:1924, xem mục F)
         │                   loop mỗi con →                   │
         │                   fetchInventoryStockForSKU        ▼
         │                          │              lay_ton_kho_san_pham
@@ -200,16 +207,16 @@ Bước 1 — resolve MA_CHA (nếu history chưa có)
                                   ▼
 Bước 2 — resolve 1 SKU theo thuộc tính
    resource="product_variants", parent_code="FF901", color="đỏ đen", size="L"
-   → erp.go:474 → searchVariantsByAttributes (erp_variants.go:25)
+   → erp.go:477 → searchVariantsByAttributes (erp_variants.go:25)
         WHERE tenant_id=? AND ma_cha="FF901"
           AND LOWER(thuoc_tinh_1) LIKE LOWER('%đỏ đen%')   ← màu: substring
           AND LOWER(thuoc_tinh_2) = LOWER('L')             ← size: KHỚP CHÍNH XÁC
                                                              (normalizeSizeFilter bỏ "size ")
    → slimVariantsForLLM → data=[{ma, name, color, size, price}]  (KHÔNG có tồn)
-        source="astradb_cache_variants"  (erp.go:491)
+        source="astradb_cache_variants"  (erp.go:494)
                                   │
             ┌──────────────────────┴───────────────────────┐
-       data có kết quả                            data rỗng (erp.go:560)
+       data có kết quả                            data rỗng (erp.go:563)
             │                                               │
             ▼                                               ▼
    đọc data[0].ma = MA biến thể         collectAvailableAttributes +
@@ -226,7 +233,10 @@ Bước 2 — resolve 1 SKU theo thuộc tính
 Bước 3 — đọc tồn live của đúng SKU đó
    resource="inventory", search="FF901-RED-L"
    → respondWithLiveDataV2 case "inventory"
-   → classifyDominantMaCha=false (1 SKU) → single-SKU live call (erp.go:1913)
+   → search là mã SKU con → LIKE miss → resolveMaChaFuzzy: embedding BM25 trúng
+     đúng SKU đó, specific=true → searchProductsByWebNameFromCache trả specificSKU
+   → matchedProducts=nil → classifyDominantMaCha=false → single-SKU live call
+     (erp.go:1924).  🛡️ Guard: KHÔNG collapse về cả dòng dù embedding khớp.
    → lay_ton_kho_san_pham → totalStockFromInventoryItems (chỉ "Kho Tổng")
    → data=[{MA:"FF901-RED-L", TON_KHO: 12, ton_kho: 12}]
 ```
@@ -237,35 +247,37 @@ Bước 3 — đọc tồn live của đúng SKU đó
 
 ---
 
-## E. Chi tiết nhánh `inventory` backend (`respondWithLiveDataV2`, erp.go:1695)
+## E. Chi tiết nhánh `inventory` backend (`respondWithLiveDataV2`, erp.go:1698)
 
-Cấu hình endpoint (đầu `case "inventory"`, erp.go:1702):
+Cấu hình endpoint (đầu `case "inventory"`, erp.go:1705):
 - Mặc định `danhmucvattuhanghoa/lay_ton_kho_san_pham` (POST) — đường tồn kho chính.
 - Tenant có thể override qua setting `erp_global_method_permissions` sang một
   endpoint tùy biến khác (custom path).
-- Hằng số: `inventoryTotalStockEndpoint` (erp.go:2408),
-  `inventoryTotalWarehouseName = "Kho Tổng"` (erp.go:2412).
+- Hằng số: `inventoryTotalStockEndpoint` (erp.go:2419),
+  `inventoryTotalWarehouseName = "Kho Tổng"` (erp.go:2423).
 
 Cây quyết định 3 nhánh:
 
 ```
 case "inventory":
- ├─ Branch-1  parentCode != "" && search != ""        (erp.go:1730)
- │     searchProductsFromCacheWithFilter (erp.go:1068)
+ ├─ Branch-1  parentCode != "" && search != ""        (erp.go:1732)
+ │     searchProductsFromCacheWithFilter (erp.go:1071)
  │     → loop con → fetchInventoryStockForSKU
  │     → source = "cloudify_live_filtered"
  │
- ├─ Branch-2  search != ""                             (erp.go:1782)
- │     searchProductsByWebNameFromCache (erp.go:3037)  ← tra cứu MỘT lần
- │       LIKE ten_dong_bo_web → LIKE ten → resolveMaChaFuzzy (:3005)
+ ├─ Branch-2  search != ""                             (erp.go:1785)
+ │     searchProductsByWebNameFromCache (erp.go:3060)  ← tra cứu MỘT lần
+ │       LIKE ten_dong_bo_web → LIKE ten → resolveMaChaFuzzy (:3023)
  │                                          (embedding fuzzy → LLM fuzzy)
+ │       • specific=true → trả specificSKU → search=SKU đó, matchedProducts=nil
+ │                          → single-SKU (🛡️ guard, bỏ qua phân loại dưới)
  │       • len>1  → disambiguation buttons, is_inventory_rich, return (mục C)
  │       • len==1 → search = SKU đó
  │
- └─ classifyDominantMaCha(matchedProducts) (erp.go:2982) ← dùng lại rows trên, KHÔNG query lại
+ └─ classifyDominantMaCha(matchedProducts) (erp.go:2993) ← dùng lại rows trên, KHÔNG query lại
        • true  → getProductsByMaChaFromCache → loop con →
                  fetchInventoryStockForSKU → tồn từng biến thể (Kịch bản D)
-       • false → single-SKU live call (erp.go:1913, mục F)
+       • false → single-SKU live call (erp.go:1924, mục F)
 ```
 
 ---
@@ -273,25 +285,25 @@ case "inventory":
 ## F. Đọc tồn kho thực — Cloudify ERP
 
 ```
-fetchInventoryStockForSKU(sku)  (erp.go:2467)
+fetchInventoryStockForSKU(sku)  (erp.go:2478)
    │
    ├─ cache.Get(tenant, sku) HIT → return        ← InventoryStockCache (in-process)
    │
-   └─ MISS → inventoryStockRequestBody(endpoint, sku)  (erp.go:2423)
+   └─ MISS → inventoryStockRequestBody(endpoint, sku)  (erp.go:2434)
               • lay_ton_kho_san_pham (default) → {"MA_HANG": sku}
               • custom endpoint                → {"limit": n, "MA_HANG": sku}
          → client.SearchCustomEndpoint[WithBody]  → POST {Cloudify}/api/v1/…
          → parse:
-              • lay_ton_kho_san_pham → totalStockFromInventoryItems (erp.go:2437)
+              • lay_ton_kho_san_pham → totalStockFromInventoryItems (erp.go:2448)
                   CHỈ cộng SO_LUONG_TON của các dòng kho == "Kho Tổng"
                   (trong mảng TON_KHO_CHI_TIET, hoặc dòng phẳng);
                   BỎ QUA SO_LUONG_TON_TONG và mọi kho chi nhánh khác
               • custom endpoint → cộng stock/ton/ton_kho/SO_LUONG_TON_* các dòng
          → cache.Set(tenant, sku, total) → return total
 
-Single-SKU call trực tiếp (erp.go:1913) dùng cùng inventoryStockRequestBody;
+Single-SKU call trực tiếp (erp.go:1924) dùng cùng inventoryStockRequestBody;
 nếu endpoint == lay_ton_kho_san_pham thì gộp về 1 record qua
-totalStockFromInventoryItems (erp.go:1935).
+totalStockFromInventoryItems (erp.go:1946).
 
 Response cuối (Backend → Langflow tool):
   {
@@ -325,21 +337,23 @@ Response cuối (Backend → Langflow tool):
 | ERPQuery entry | `backend/api/handlers/erp.go:103` | `ERPQuery` |
 | product_variants inherit grant | `backend/api/handlers/erp.go:208` | `methodPermissionResource` → products |
 | products resource path | `backend/api/handlers/erp.go:274` | products (web-group/embedding/LLM) |
-| Embedding fuzzy (products) | `backend/api/handlers/erp.go:393` | gọi `resolveMaChaFuzzy` → `engine.FuzzyMatchProductWithEmbedding` |
-| product_variants resource | `backend/api/handlers/erp.go:463` | attribute lookup |
+| Embedding fuzzy (products) | `backend/api/handlers/erp.go:396` | gọi `resolveMaChaFuzzy` (bỏ qua `specific`) → `engine.FuzzyMatchProductWithEmbedding` |
+| product_variants resource | `backend/api/handlers/erp.go:466` | attribute lookup |
 | Variant attr search | `backend/api/handlers/erp_variants.go:25` | `searchVariantsByAttributes` |
-| Bilingual attr fallback | `backend/api/handlers/erp.go:562` | `fuzzyMatchAttributesWithLLM` (def `erp_fuzzy.go:192`) |
-| Live data dispatch | `backend/api/handlers/erp.go:1695` | `respondWithLiveDataV2` |
-| Inventory Branch-1 (filtered) | `backend/api/handlers/erp.go:1730` | `searchProductsFromCacheWithFilter` (:1068) |
-| Inventory Branch-2 (web-name) | `backend/api/handlers/erp.go:1782` | `searchProductsByWebNameFromCache` (:3037, MySQL cache) |
-| Resolver fuzzy dùng chung (embedding→LLM) | `backend/api/handlers/erp.go:3005` | `resolveMaChaFuzzy` (products + inventory) |
-| Disambiguation push | `backend/api/handlers/erp.go:1801` | flow-type buttons, `is_inventory_rich` |
-| Phân loại dòng/SKU (dùng lại rows) | `backend/api/handlers/erp.go:2982` | `classifyDominantMaCha` (gọi `dominantMaCha` :2954) |
-| Fetch by ma_cha | `backend/api/handlers/erp.go:2909` | `getProductsByMaChaFromCache` |
-| Single-SKU live | `backend/api/handlers/erp.go:1913` | `inventoryStockRequestBody` (:2423) |
-| Stock per SKU | `backend/api/handlers/erp.go:2467` | `fetchInventoryStockForSKU` |
-| Kho Tổng aggregate | `backend/api/handlers/erp.go:2437` | `totalStockFromInventoryItems` |
-| Endpoint constants | `backend/api/handlers/erp.go:2408,2412` | `inventoryTotalStockEndpoint`, `inventoryTotalWarehouseName` |
+| Bilingual attr fallback | `backend/api/handlers/erp.go:565` | `fuzzyMatchAttributesWithLLM` (def `erp_fuzzy.go:192`) |
+| Live data dispatch | `backend/api/handlers/erp.go:1698` | `respondWithLiveDataV2` |
+| Inventory Branch-1 (filtered) | `backend/api/handlers/erp.go:1732` | `searchProductsFromCacheWithFilter` (:1071) |
+| Inventory Branch-2 (web-name) | `backend/api/handlers/erp.go:1785` | `searchProductsByWebNameFromCache` (:3060, MySQL cache) |
+| Specific-SKU guard (inventory) | `backend/api/handlers/erp.go:1788` | `specificSKU != ""` → single-SKU, bỏ qua family/disambiguation |
+| Resolver fuzzy dùng chung (embedding→LLM, trả `specific`) | `backend/api/handlers/erp.go:3023` | `resolveMaChaFuzzy` (products + inventory) |
+| Disambiguation push | `backend/api/handlers/erp.go:1812` | flow-type buttons, `is_inventory_rich` |
+| Phân loại dòng/SKU (dùng lại rows) | `backend/api/handlers/erp.go:2993` | `classifyDominantMaCha` (gọi `dominantMaCha` :2965) |
+| Fetch by ma_cha | `backend/api/handlers/erp.go:2920` | `getProductsByMaChaFromCache` |
+| Single-SKU live | `backend/api/handlers/erp.go:1924` | `inventoryStockRequestBody` (:2434) |
+| Stock per SKU | `backend/api/handlers/erp.go:2478` | `fetchInventoryStockForSKU` |
+| Kho Tổng aggregate | `backend/api/handlers/erp.go:2448` | `totalStockFromInventoryItems` |
+| Endpoint constants | `backend/api/handlers/erp.go:2419,2423` | `inventoryTotalStockEndpoint`, `inventoryTotalWarehouseName` |
+| Specific-SKU decision (đã có test) | `backend/engine/product_embeddings.go:251` | `isSpecificSKUMatch` (`TestIsSpecificSKUMatch`) |
 | Embedding sync (offline) | `backend/engine/product_embeddings.go:108` | `SyncProductEmbeddingsToAstraDB` |
 | Embedding matcher | `backend/engine/product_embeddings.go:207` | `FuzzyMatchProductWithEmbedding` |
 
@@ -351,12 +365,12 @@ Response cuối (Backend → Langflow tool):
   erp.go:208) — tenant không cần cấu hình resource thứ hai.
 - **Helper cache giờ là `searchProductsByWebNameFromCache`** (đổi tên từ
   `…AstraDBNonVectorized` cho khớp nguồn dữ liệu) — đọc cache MySQL nội bộ
-  (`models.CachedProduct` qua `db.DB`), không gọi Astra. Bản `erp.go` (:3037)
+  (`models.CachedProduct` qua `db.DB`), không gọi Astra. Bản `erp.go` (:3060)
   tra tuần tự `ten_dong_bo_web` → `ten` → `resolveMaChaFuzzy` (embedding→LLM);
   bản `tasks.go` (:1976) gộp `ten_dong_bo_web OR ma OR ten OR ma_cha` trong một LIKE.
 - **Tồn kho `lay_ton_kho_san_pham` chỉ lấy "Kho Tổng"** —
   `totalStockFromInventoryItems` bỏ qua `SO_LUONG_TON_TONG` và mọi kho chi nhánh.
-  Đổi kho gốc → sửa hằng `inventoryTotalWarehouseName` (erp.go:2412).
+  Đổi kho gốc → sửa hằng `inventoryTotalWarehouseName` (erp.go:2423).
 - **Size khớp chính xác, màu/brand khớp substring** (erp_variants.go:38–44) — nên
   "L" không dính "XL"/"XXL"; `normalizeSizeFilter` (erp_variants.go:288) cắt tiền
   tố "size "/"cỡ ".
@@ -366,13 +380,19 @@ Response cuối (Backend → Langflow tool):
 - **Cache tồn kho in-process** (`InventoryStockCache`): mỗi pod có cache riêng →
   burst traffic có thể nhân theo số pod. Cân nhắc khi scale.
 - **Embedding fuzzy** (`ERP_EMBEDDING_FUZZY_ENABLED=true`) phục vụ **cả `products`
-  lẫn `inventory`** qua helper dùng chung `resolveMaChaFuzzy` (erp.go:3005):
-  embedding trước → LLM (`fuzzyMatchMaChaWithLLM`) sau. Nhánh `inventory` gọi nó
-  trong `searchProductsByWebNameFromCache` khi cả hai LIKE pass đều rỗng.
-  ⚠️ **Hệ quả:** một query trước đây "miss → single-SKU" giờ có thể resolve ra
-  MA_CHA và rơi vào nhánh `classifyDominantMaCha=true` (tồn **cả dòng**). Job sync
-  embedding (`SyncProductEmbeddingsToAstraDB`) chỉ chạy theo chain sau khi rebuild
-  product cache, không có schedule mặc định → có thể stale.
+  lẫn `inventory`** qua helper dùng chung `resolveMaChaFuzzy` (erp.go:3023):
+  embedding trước → LLM (`fuzzyMatchMaChaWithLLM`) sau, chỉ chạy khi cả hai LIKE
+  pass của `searchProductsByWebNameFromCache` đều rỗng (vd query là mã SKU con).
+  `resolveMaChaFuzzy` trả `(ma, ma_cha, specific)`; `specific` do
+  `FuzzyMatchProductWithEmbedding`/`isSpecificSKUMatch` tự tính.
+  🛡️ **Guard chống "kéo SKU rõ về cả dòng":** khi embedding pinpoint đúng 1 SKU
+  (`specific=true`), `searchProductsByWebNameFromCache` trả thẳng `specificSKU` và
+  KHÔNG mở rộng theo `ma_cha`; nhánh `inventory` để `matchedProducts=nil` → đi
+  single-SKU live call với đúng SKU đó (bỏ qua `classifyDominantMaCha` và
+  disambiguation). Resource `products` cố tình bỏ qua `specific` (luôn trả cả dòng
+  cho `price_range`). Job sync embedding (`SyncProductEmbeddingsToAstraDB`) chỉ
+  chạy theo chain sau khi rebuild product cache, không có schedule mặc định → có
+  thể stale.
 - **Zalo OA list template** trả `-233` trên `/message/cs` → tất cả nút disambiguation
   fallback về plain text đánh số (`channels.BuildButtonOptionsAsText`). Riêng bộ
   option `TEN_DONG_BO_WEB` của nhánh `dongsp` được lưu `pending_options` trong Redis
