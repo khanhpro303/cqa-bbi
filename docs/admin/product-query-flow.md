@@ -307,11 +307,17 @@ Sau khi có `cachedData` (luôn ở mức **cả họ** với products), ba bư�
   "resource": "products",
   "count": 2,
   "data": [
-    { "web_name": "Mũ LS2 FF800 Storm II", "parent_codes": ["FF800"], "count": 12, "is_fallback": false },
-    { "web_name": "Mũ LS2 FF800 Carbon",   "parent_codes": ["FF800C"], "count": 6, "is_fallback": false }
+    { "web_name": "Mũ LS2 FF800 Storm II", "parent_codes": ["FF800"], "variant_count": 12, "is_fallback": false },
+    { "web_name": "Mũ LS2 FF800 Carbon",   "parent_codes": ["FF800C"], "variant_count": 6, "is_fallback": false }
   ]
 }
 ```
+
+> ⚠️ **`variant_count` ≠ tồn kho.** Đây là số biến thể (màu×size) của dòng,
+> đếm từ cache `models.CachedProduct`. LLM tuyệt đối KHÔNG được trả như SL còn
+> ("FF901: 32 con"). Muốn biết tồn → gọi `resource="inventory"` với
+> `search=<web_name>` + `exact_web_name=true`. Field đổi tên từ `count` cũ
+> (commit này) để tránh ngộ nhận; field `count` cấp top-level vẫn = số nhóm trả về.
 
 > ℹ️ **Không còn ví dụ "P3 pinpoint 1 SKU" cho `products`.** Pinpoint 1 biến thể +
 > giá đơn nay **chỉ** đến từ `product_variants` (mục G), với response mang `ma` +

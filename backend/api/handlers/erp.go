@@ -339,8 +339,10 @@ func ERPQuery(c *gin.Context) {
 					groupPayloads = append(groupPayloads, map[string]interface{}{
 						"web_name":     g.WebName,
 						"parent_codes": g.ParentCodes,
-						"count":        g.Count,
-						"is_fallback":  g.IsFallback,
+						// variant_count = số biến thể (màu×size) thuộc dòng này, KHÔNG phải tồn kho.
+						// Đổi tên từ "count" để LLM không nhầm với SL tồn khi đọc danh sách disambiguation.
+						"variant_count": g.Count,
+						"is_fallback":   g.IsFallback,
 					})
 				}
 

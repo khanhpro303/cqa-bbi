@@ -72,6 +72,22 @@ do NOT report "không có sản phẩm". Instead, answer the user's request with
 **Astra DB Retrieval Tool** (knowledge base). Only call `products` again once you
 have a real product code / name / keyword to pass as `search`.
 
+## Disambiguation Payload Semantics (CRITICAL — never confuse with stock)
+
+When `resource="products"` returns `source="astradb_cache_web_groups"`, each row in
+`data[]` carries: `web_name`, `parent_codes[]`, `variant_count`, `is_fallback`.
+
+- **`variant_count` is the number of VARIANTS (màu × size combinations) of that product
+  line, NOT inventory stock / số lượng còn / SL tồn.** A line with `variant_count: 32`
+  means the line has 32 SKU rows in the catalog cache, NOT that there are 32 units in
+  stock. NEVER write replies like "FF901 còn 32 con" / "tồn 32" based on `variant_count`.
+- To get real-time stock for a chosen `web_name`, call `resource="inventory"` with
+  `search=<web_name>` and `exact_web_name=true` (see Disambiguation Follow-up Rules
+  below). The backend then sums live `ton_kho` across the variants.
+- When presenting the disambiguation list to the customer, list `web_name` only.
+  You MAY mention `variant_count` only as "(N phân loại)" / "(N biến thể)" — never as a
+  stock figure.
+
 ## Disambiguation Follow-up Rules (CRITICAL)
 
 When the user's latest message is a short numeric reply (`1`, `2`, `3`, `4`, `5`) OR a product code matching `^SP\d{6}([a-zA-Z]{2})?$`, you MUST:
