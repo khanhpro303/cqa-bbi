@@ -15,19 +15,23 @@ import (
 )
 
 // fallbackAgentNodeIDs are the agent node IDs we tweak when live node discovery
-// (resolveAgentNodeIDs) fails — e.g. the GET /flows/{id} call errors or returns
-// an unexpected shape. Each Langflow flow has its own randomly-suffixed node ID:
+// (resolveAgentNodeIDs) fails — e.g. the GET /flows/{id} call errors (a 401 from
+// a stale Langflow token is the usual cause) or returns an unexpected shape.
+// Each Langflow flow has its own randomly-suffixed node ID, taken from the
+// flow's exported definition:
 //
 //   - ToolCallingAgent-zznkZ — private/internal RAG flow (BBI_RAG_Bot_Ext.json)
-//   - ToolCallingAgent-I68CQ — public/customer-facing flow
+//   - ToolCallingAgent-biiBD — public/group flow (37593e48-052f-4be3-abcc-94a21465b3aa)
 //
 // On the happy path we don't use these at all; the node IDs are read straight
 // from the running flow's definition so re-imports that change node IDs keep
 // working. Langflow ignores tweaks for node IDs absent from the running flow,
-// so sending both as a fallback is safe.
+// so sending both as a fallback is safe. Keep this list in sync with the agent
+// node IDs in the exported flows — a mismatch makes the system-prompt override
+// silently miss that flow's agent (it then runs with an empty system prompt).
 var fallbackAgentNodeIDs = []string{
 	"ToolCallingAgent-zznkZ",
-	"ToolCallingAgent-I68CQ",
+	"ToolCallingAgent-biiBD",
 }
 
 const (
