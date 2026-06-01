@@ -833,6 +833,30 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
+		// Stock disambiguation pick (deterministic, no Agent round-trip). When the
+		// customer picks a product line from the `products` web-groups list by
+		// number, the numeric-reply intercept above rewrote "1"/"2" to
+		// #stockpick_web:<web_name>. Present the EXACT-web dòng-vs-SKU picker
+		// (mirrors inventory Branch-0) so the follow-up sums by the exact web name
+		// — it never re-LIKEs ("LS2 FF901" vs "LS2 FF901 Carbon") and never
+		// re-enters Langflow. Fixes the prefix-collision loop + duplicate prose.
+		if strings.HasPrefix(userText, engine.StockPickWebPrefix) {
+			webName := strings.TrimPrefix(userText, engine.StockPickWebPrefix)
+			prompt, buttons := engine.BuildExactWebStockPicker(webName)
+			text := channels.BuildButtonOptionsAsText(prompt, buttons)
+			engine.StorePendingOptions(ctx, sessionKey, buttons, meta.SessionTimeout)
+			var sendErr error
+			if matchedGroup.ZaloGroupID != "" {
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, text)
+			} else {
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, text)
+			}
+			if sendErr != nil {
+				log.Printf("[worker] failed to send stockpick_web picker: %v", sendErr)
+			}
+			return nil
+		}
+
 		// 1. Parent Code Options Selection (#show_macha_options:<MA_CHA>)
 		if strings.HasPrefix(userText, "#show_macha_options:") {
 			maCha := strings.TrimPrefix(userText, "#show_macha_options:")

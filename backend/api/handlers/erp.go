@@ -354,6 +354,19 @@ func ERPQuery(c *gin.Context) {
 					}(req.Search, groupPayloads)
 				}
 
+				// Persist the picks under the shared worker session key so a later
+				// bare-number reply ("1"/"2") is intercepted by the worker and routed
+				// deterministically to the exact-web stock picker — no Agent
+				// round-trip. This removes the LLM from the disambiguation pick loop,
+				// which had been dropping exact_web_name=true (→ LIKE prefix-collision
+				// re-disambiguation) and the [RICH_MESSAGE_SENT] sentinel (→ duplicate
+				// prose). Order matches groupPayloads, i.e. the numbered list shown.
+				webNames := make([]string, 0, len(webGroups))
+				for _, g := range webGroups {
+					webNames = append(webNames, g.WebName)
+				}
+				storePendingDisambiguationOptions(c.Request.Context(), tenantID, permCtx, engine.BuildStockPickPendingButtons(webNames))
+
 				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(groupPayloads), c.ClientIP())
 				c.JSON(http.StatusOK, gin.H{
 					"status":   "success",
@@ -3203,6 +3216,49 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 		})
 	}
 	return results, "", nil
+}
+
+// resolveZaloGroupID returns the Zalo group ID for the customer's active group
+// chat (empty for 1:1 DMs) so the session key matches the one the worker builds
+// in workers/tasks.go. Returns "" when no group is resolvable.
+func resolveZaloGroupID(tenantID string, permCtx *engine.GroupPermissionContext) string {
+	if permCtx == nil {
+		return ""
+	}
+	for _, gp := range permCtx.Groups {
+		if gp.GroupID == "private_bot" {
+			continue
+		}
+		var g models.CRMGroup
+		if err := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&g).Error; err == nil && g.ZaloGroupID != "" {
+			return g.ZaloGroupID
+		}
+	}
+	return ""
+}
+
+// storePendingDisambiguationOptions persists a numbered menu under the SAME
+// Redis session key the worker uses (engine.BuildSessionKey) so a later
+// "1"/"2" reply is resolved by the worker's numeric-reply intercept instead of
+// round-tripping through Langflow. Store-only: the message itself is sent by
+// whoever owns the surface (here, the Agent renders the products list). No-op
+// when the menu is empty or no active OA channel exists.
+func storePendingDisambiguationOptions(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, buttons []channels.ZaloOAButton) {
+	if len(buttons) == 0 || permCtx == nil {
+		return
+	}
+	_, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
+	if err != nil || activeChannel == nil {
+		log.Printf("[erp_query] cannot store pending options (no active OA channel): %v", err)
+		return
+	}
+	groupID := resolveZaloGroupID(tenantID, permCtx)
+	sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
+	timeoutMinutes := 30
+	if cfg, cfgErr := config.Load(); cfgErr == nil && cfg.ChatbotSessionTimeout > 0 {
+		timeoutMinutes = cfg.ChatbotSessionTimeout
+	}
+	engine.StorePendingOptions(ctx, sessionKey, buttons, timeoutMinutes)
 }
 
 // loadActiveZaloOAAdapter looks up the tenant's active Zalo OA channel,
