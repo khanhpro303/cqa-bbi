@@ -2245,19 +2245,43 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			}
 		} else {
 			// Không phải mã đơn, không phải khoảng ngày → câu hỏi mơ hồ.
-			// Backend gửi tin text hỏi 3/5/7 ngày; agent trả [RICH_MESSAGE_SENT].
-			promptMsg := gin.H{
-				"recipient": gin.H{
-					"user_id": permCtx.ZaloUserID,
-				},
-				"message": gin.H{
-					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\".",
-				},
+			// Backend TỰ gửi tin text hỏi 3/5/7 ngày (giống debt/inventory); agent
+			// trả [RICH_MESSAGE_SENT]. KHÔNG chỉ trả zalo_rich_message trong JSON —
+			// worker không đọc field đó nên khách sẽ không nhận được câu hỏi.
+			promptText := "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\"."
+
+			if adapter, _, adapterErr := loadActiveZaloOAAdapter(tenantID); adapterErr != nil {
+				log.Printf("[orders_query] cannot send date-range prompt: %v", adapterErr)
+			} else {
+				var matchedGroup models.CRMGroup
+				hasGroup := false
+				for _, gp := range permCtx.Groups {
+					if gp.GroupID != "private_bot" {
+						if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
+							hasGroup = true
+							break
+						}
+					}
+				}
+				var sendErr error
+				if hasGroup {
+					sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, promptText)
+				} else {
+					sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, promptText)
+				}
+				if sendErr != nil {
+					log.Printf("[orders_query] failed to send date-range prompt to %s: %v", permCtx.ZaloUserID, sendErr)
+				} else {
+					log.Printf("[orders_query] sent đơn hàng date-range prompt to %s", permCtx.ZaloUserID)
+				}
 			}
+
 			c.JSON(http.StatusOK, gin.H{
-				"status":            "success",
-				"is_orders_prompt":  true,
-				"zalo_rich_message": promptMsg,
+				"status":           "success",
+				"is_orders_prompt": true,
+				"data":             []map[string]interface{}{},
+				"message":          "zalo_rich_message_sent_directly",
+				"count":            0,
 			})
 			return
 		}
@@ -2336,18 +2360,45 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		}
 	case "debt":
 		if isGenericDebtSearch(search) {
-			promptMsg := gin.H{
-				"recipient": gin.H{
-					"user_id": permCtx.ZaloUserID,
-				},
-				"message": gin.H{
-					"text": "Bạn muốn xem đối chiếu công nợ trong khoảng thời gian nào? Vui lòng nhắn: \"tháng này\", \"tháng trước\" hoặc \"quý này\".",
-				},
+			promptText := "Bạn muốn xem đối chiếu công nợ trong khoảng thời gian nào? Vui lòng nhắn: \"tháng này\", \"tháng trước\" hoặc \"quý này\"."
+
+			// Deliver the period question to the customer ourselves, exactly like
+			// the inventory dòng-vs-SKU picker above. The Langflow agent only ever
+			// gets a [RICH_MESSAGE_SENT] sentinel back, so if we merely return the
+			// rich payload (the old behaviour) nobody sends it and the customer
+			// never sees the "tháng này / tháng trước / quý này" question.
+			if adapter, _, adapterErr := loadActiveZaloOAAdapter(tenantID); adapterErr != nil {
+				log.Printf("[debt_query] cannot send period prompt: %v", adapterErr)
+			} else {
+				var matchedGroup models.CRMGroup
+				hasGroup := false
+				for _, gp := range permCtx.Groups {
+					if gp.GroupID != "private_bot" {
+						if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
+							hasGroup = true
+							break
+						}
+					}
+				}
+				var sendErr error
+				if hasGroup {
+					sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, promptText)
+				} else {
+					sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, promptText)
+				}
+				if sendErr != nil {
+					log.Printf("[debt_query] failed to send period prompt to %s: %v", permCtx.ZaloUserID, sendErr)
+				} else {
+					log.Printf("[debt_query] sent công nợ period prompt to %s", permCtx.ZaloUserID)
+				}
 			}
+
 			c.JSON(http.StatusOK, gin.H{
-				"status":            "success",
-				"is_debt_prompt":    true,
-				"zalo_rich_message": promptMsg,
+				"status":         "success",
+				"is_debt_prompt": true,
+				"data":           []map[string]interface{}{},
+				"message":        "zalo_rich_message_sent_directly",
+				"count":          0,
 			})
 			return
 		}
@@ -2682,18 +2733,40 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 		// Không có khoảng ngày → câu hỏi mơ hồ → hỏi 3/5/7 ngày.
 		days := parseDaysFromSearch(search)
 		if days <= 0 {
-			promptMsg := gin.H{
-				"recipient": gin.H{
-					"user_id": zaloUserID,
-				},
-				"message": gin.H{
-					"text": "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\".",
-				},
+			// Same as the live branch: deliver the prompt ourselves so the
+			// customer actually receives the date-range question.
+			promptText := "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\"."
+
+			if adapter, _, adapterErr := loadActiveZaloOAAdapter(tenantID); adapterErr != nil {
+				log.Printf("[orders_query_mock] cannot send date-range prompt: %v", adapterErr)
+			} else {
+				var matchedGroup models.CRMGroup
+				hasGroup := false
+				for _, gp := range groups {
+					if gp.GroupID != "private_bot" {
+						if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
+							hasGroup = true
+							break
+						}
+					}
+				}
+				var sendErr error
+				if hasGroup {
+					sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, promptText)
+				} else {
+					sendErr = adapter.SendMessage(c.Request.Context(), zaloUserID, promptText)
+				}
+				if sendErr != nil {
+					log.Printf("[orders_query_mock] failed to send date-range prompt to %s: %v", zaloUserID, sendErr)
+				}
 			}
+
 			c.JSON(http.StatusOK, gin.H{
-				"status":            "success",
-				"is_orders_prompt":  true,
-				"zalo_rich_message": promptMsg,
+				"status":           "success",
+				"is_orders_prompt": true,
+				"data":             []map[string]interface{}{},
+				"message":          "zalo_rich_message_sent_directly",
+				"count":            0,
 			})
 			return
 		}

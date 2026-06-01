@@ -214,7 +214,8 @@ class ERPGatewayCaller(Component):
             return Message(text=self._format_variant_response(data, p_code, color, size))
 
         if (
-            data.get("is_orders_prompt") or data.get("is_inventory_rich")
+            data.get("is_orders_prompt") or data.get("is_debt_prompt")
+            or data.get("is_inventory_rich")
             or data.get("is_product_rich")
             or data.get("message") == "zalo_rich_message_sent_directly"
         ):
