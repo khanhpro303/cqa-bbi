@@ -698,7 +698,7 @@ func ERPQuery(c *gin.Context) {
 	}
 
 	// ── 10. Execute live Cloudify call with filters ───────────────────────
-	respondWithLiveDataV2(c, client, req.Resource, req.Search, req.ParentCode, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx)
+	respondWithLiveDataV2(c, client, req.Resource, req.Search, req.ParentCode, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx, req.ExactWebName)
 }
 
 // ---------------------------------------------------------------------------
@@ -1697,7 +1697,7 @@ func getFirstNonEmptyMapString(m map[string]interface{}, keys ...string) string 
 	return ""
 }
 
-func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource, search, parentCode, partnerID string, limit int, productGroups []string, scopeType string, tenantID string, permCtx *engine.GroupPermissionContext) {
+func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource, search, parentCode, partnerID string, limit int, productGroups []string, scopeType string, tenantID string, permCtx *engine.GroupPermissionContext, exactWebName bool) {
 	var (
 		data []map[string]interface{}
 		err  error
@@ -1779,6 +1779,93 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					"count":    len(variantData),
 				})
 				return
+			}
+		}
+
+		// Exact-web inventory: the agent resolved a single web-name line from a
+		// prior disambiguation list (numbered "1. LS2 FF901 / 2. LS2 FF901 Carbon")
+		// and passes exact_web_name=true so we DON'T re-LIKE — a LIKE on
+		// "LS2 FF901" would also pull the prefix-overlapping "LS2 FF901 Carbon"
+		// and re-trigger disambiguation. Match the line exactly and push the
+		// dòng-vs-SKU Level-1 picker. The "dòng" button routes straight to the
+		// exact by-web sum (#show_macha_options_by_web, which matches
+		// ten_dong_bo_web exactly) so no second disambiguation fires.
+		if exactWebName && search != "" {
+			exactRows, errExact := searchProductsByExactWebNameFromCache(c.Request.Context(), tenantID, search, 100)
+			if errExact != nil {
+				log.Printf("[inventory_query] exact web-name search error for tenant=%s search=%s: %v", tenantID, search, errExact)
+			}
+			exactRows = filterProductsByGroups(exactRows, productGroups)
+			if len(exactRows) > 1 {
+				buttons := []channels.ZaloOAButton{
+					{Title: "📦 Xem theo dòng sản phẩm", Payload: "#show_macha_options_by_web:" + search},
+					{Title: "🔍 Xem theo mã SKU cụ thể", Payload: "#choose_flow_type:skucuthe:" + search},
+				}
+				prompt := fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search)
+
+				adapter, activeChannel, adapterErr := loadActiveZaloOAAdapter(tenantID)
+				if adapterErr != nil {
+					log.Printf("[inventory_query] cannot send exact-web Zalo Rich Message: %v", adapterErr)
+				} else {
+					var matchedGroup models.CRMGroup
+					hasGroup := false
+					if len(permCtx.Groups) > 0 {
+						for _, gp := range permCtx.Groups {
+							if gp.GroupID != "private_bot" {
+								if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
+									hasGroup = true
+									break
+								}
+							}
+						}
+					}
+
+					// Store the dòng-vs-SKU postbacks under the same session key the
+					// worker uses so a "1"/"2" reply is resolved by the numeric-reply
+					// intercept (workers/tasks.go) without a Langflow round-trip.
+					if activeChannel != nil {
+						groupID := ""
+						if hasGroup {
+							groupID = matchedGroup.ZaloGroupID
+						}
+						sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
+						timeoutMinutes := 30
+						if cfg, cfgErr := config.Load(); cfgErr == nil && cfg.ChatbotSessionTimeout > 0 {
+							timeoutMinutes = cfg.ChatbotSessionTimeout
+						}
+						engine.StorePendingOptions(c.Request.Context(), sessionKey, buttons, timeoutMinutes)
+					}
+
+					text := channels.BuildButtonOptionsAsText(prompt, buttons)
+					var sendErr error
+					if hasGroup {
+						sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, text)
+					} else {
+						sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, text)
+					}
+					if sendErr != nil {
+						log.Printf("[inventory_query] failed to send exact-web dòng-vs-SKU picker: %v", sendErr)
+					} else {
+						log.Printf("[inventory_query] sent exact-web dòng-vs-SKU picker for '%s' to %s", search, permCtx.ZaloUserID)
+					}
+				}
+
+				c.JSON(http.StatusOK, gin.H{
+					"status":            "success",
+					"is_inventory_rich": true,
+					"data":              []map[string]interface{}{},
+					"message":           "zalo_rich_message_sent_directly",
+					"count":             0,
+				})
+				return
+			}
+			if len(exactRows) == 1 {
+				// Single-SKU line: skip the picker and let the generic path read
+				// that SKU's live stock. SKU codes don't prefix-collide like web
+				// names, so the LIKE lookup below resolves it cleanly.
+				if sku := getMapString(exactRows[0], "MA", "ma", "ma_hang"); sku != "" {
+					search = sku
+				}
 			}
 		}
 
