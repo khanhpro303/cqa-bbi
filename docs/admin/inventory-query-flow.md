@@ -237,12 +237,15 @@ trước (theo Product Intent Routing trong system-prompt). Khi đó luồng là
 > **cũ** `inventory_receipt/search`, vốn trả **HTTP 500** từ Cloudify. Vòng lặp
 > `#show_macha_options_by_web` lại **nuốt lỗi** (`continue`) → `totalStock=0`, chi tiết rỗng →
 > bot báo "0.0" như thể hết hàng. **Đã sửa:** (a) cả hai hàm sum giờ lặp từng SKU con và gọi
-> endpoint chính thức `lay_ton_kho_san_pham` qua `pkg.CloudifyClient.TotalStockForSKU` —
-> đúng đường mà luồng theo-SKU vẫn dùng; (b) giữ **nguyên dạng (case) của MA_HANG** vì ERP
-> phân biệt hoa/thường; (c) khi **mọi** SKU/mã cha đều lỗi, worker trả thông báo "Hệ thống
-> tồn kho đang tạm thời gặp sự cố… thử lại sau" thay vì "0.0". Logic chọn "Kho Tổng" được
-> rút về **một nguồn chung** trong `backend/pkg/inventory_stock.go` (`TotalStockFromInventoryItems`,
-> hằng `InventoryTotalStockEndpoint`/`InventoryTotalWarehouseName`); `erp.go` chỉ còn alias mỏng.
+> `pkg.CloudifyClient.InventoryStock(endpoint, usePost, sku)` với **endpoint lấy từ cấu hình
+> Global HTTP Method** (`erp_global_method_permissions`) qua `engine.ResolveInventoryEndpoint`
+> — đúng nguồn mà luồng theo-SKU dùng, KHÔNG hardcode đường nào; (b) giữ **nguyên dạng (case)
+> của MA_HANG** vì ERP phân biệt hoa/thường; (c) khi **mọi** SKU/mã cha đều lỗi, worker trả
+> thông báo "Hệ thống tồn kho đang tạm thời gặp sự cố… thử lại sau" thay vì "0.0". Logic chọn
+> "Kho Tổng" + hằng endpoint rút về **một nguồn chung** trong `backend/pkg/inventory_stock.go`;
+> việc đọc cấu hình endpoint per-tenant rút về `engine.ResolveInventoryEndpoint`
+> (`backend/engine/inventory_endpoint.go`), dùng chung cho cả handler lẫn worker; `erp.go`
+> chỉ còn alias mỏng.
 
 ---
 
@@ -370,17 +373,25 @@ Single-SKU call trực tiếp (erp.go:2032) dùng cùng inventoryStockRequestBod
 nếu endpoint == lay_ton_kho_san_pham thì gộp về 1 record qua
 totalStockFromInventoryItems (erp.go:2548).
 
-> 📦 **Nguồn chung (single source of truth):** logic chọn "Kho Tổng" + hằng endpoint
-> nằm ở `backend/pkg/inventory_stock.go`: `pkg.InventoryTotalStockEndpoint`,
-> `pkg.InventoryTotalWarehouseName`, `pkg.TotalStockFromInventoryItems`, và method
-> `pkg.CloudifyClient.TotalStockForSKU(sku)` (POST `lay_ton_kho_san_pham`, body
-> `{"MA_HANG": sku}`, cộng `SO_LUONG_TON` của các dòng "Kho Tổng"). `erp.go` để
-> `inventoryTotalStockEndpoint`/`totalStockFromInventoryItems` làm **alias mỏng** trỏ về
-> pkg. **Luồng worker theo-dòng** (`sumInventoryByMaCha`,
-> `sumInventoryByMaChaAndWebName`) gọi thẳng `client.TotalStockForSKU(sku)` cho từng SKU
-> con — KHÔNG còn `client.SearchInventory` (`inventory_receipt/search`, đã hỏng 500).
-> ERP lỗi luôn được trả lên dưới dạng `error`, không bao giờ biến thành tồn 0. Worker
-> không dùng `InventoryStockCache` (cache chỉ ở luồng handler erp.go).
+> 📦 **Nguồn chung (single source of truth):**
+> - **Chọn endpoint theo cấu hình:** `engine.ResolveInventoryEndpoint(ctx, tenantID)`
+>   (`backend/engine/inventory_endpoint.go`) đọc setting `erp_global_method_permissions`
+>   → trả `(endpoint, usePost)`; mặc định `lay_ton_kho_san_pham` + POST, có override thì
+>   theo `path`/`post` của admin. **Cả handler lẫn worker đều gọi hàm này** — không nơi
+>   nào hardcode đường dẫn.
+> - **Gọi + parse:** `pkg.CloudifyClient.InventoryStock(endpoint, usePost, sku)` dựng body
+>   `{"MA_HANG": sku}` (official) hoặc `{limit, MA_HANG}` (custom), gọi POST/GET theo
+>   `usePost`. Endpoint official → `pkg.TotalStockFromInventoryItems` (chỉ "Kho Tổng");
+>   custom → cộng `stock/ton/SO_LUONG_TON_*` các dòng.
+> - **Hằng + parse "Kho Tổng":** `pkg.InventoryTotalStockEndpoint`,
+>   `pkg.InventoryTotalWarehouseName`, `pkg.TotalStockFromInventoryItems` trong
+>   `backend/pkg/inventory_stock.go`; `erp.go` để
+>   `inventoryTotalStockEndpoint`/`totalStockFromInventoryItems` làm **alias mỏng**.
+> - **Luồng worker theo-dòng** (`sumInventoryByMaCha`, `sumInventoryByMaChaAndWebName`)
+>   resolve endpoint qua `engine.ResolveInventoryEndpoint` rồi gọi
+>   `client.InventoryStock(...)` cho từng SKU con — KHÔNG còn `client.SearchInventory`
+>   (`inventory_receipt/search`, đã hỏng 500). ERP lỗi luôn trả `error`, không bao giờ
+>   biến thành tồn 0. Worker không dùng `InventoryStockCache` (cache chỉ ở luồng handler).
 
 Response cuối (Backend → Langflow tool):
   {
@@ -411,8 +422,8 @@ Response cuối (Backend → Langflow tool):
 | Web-name ranking | `backend/workers/tasks.go:779` | `engine.RankProductWebGroups` |
 | `#show_macha_options` | `backend/workers/tasks.go:837` | parent-code options |
 | `#show_macha_options_by_web` | `backend/workers/tasks.go:926` | aggregate theo web name; mọi mã cha lỗi → báo "hệ thống tồn kho gặp sự cố" (tasks.go:967) |
-| Aggregate tồn theo dòng (web) | `backend/workers/tasks.go:2008` | `sumInventoryByMaChaAndWebName` → loop SKU con `client.TotalStockForSKU` |
-| Aggregate tồn theo dòng (mã cha) | `backend/workers/tasks.go:1342` | `sumInventoryByMaCha` → loop SKU con `client.TotalStockForSKU` |
+| Aggregate tồn theo dòng (web) | `backend/workers/tasks.go:2008` | `sumInventoryByMaChaAndWebName` → `engine.ResolveInventoryEndpoint` + loop SKU con `client.InventoryStock` |
+| Aggregate tồn theo dòng (mã cha) | `backend/workers/tasks.go:1342` | `sumInventoryByMaCha` → `engine.ResolveInventoryEndpoint` + loop SKU con `client.InventoryStock` |
 | ERPQuery entry | `backend/api/handlers/erp.go:103` | `ERPQuery` |
 | product_variants inherit grant | `backend/api/handlers/erp.go:208` | `methodPermissionResource` → products |
 | products resource path | `backend/api/handlers/erp.go:274` | products (web-group/embedding/LLM) |
@@ -431,11 +442,12 @@ Response cuối (Backend → Langflow tool):
 | Level-1 store pending_options | `backend/api/handlers/erp.go:1935-1940` | `engine.BuildSessionKey` + `engine.StorePendingOptions` cho dongsp/skucuthe |
 | Phân loại dòng/SKU (dùng lại rows) | `backend/api/handlers/erp.go:3101` | `classifyDominantMaCha` (gọi `dominantMaCha`) |
 | Fetch by ma_cha | `backend/api/handlers/erp.go:3028` | `getProductsByMaChaFromCache` |
-| Single-SKU live | `backend/api/handlers/erp.go:2032` | `inventoryStockRequestBody` (:2537) |
-| Stock per SKU | `backend/api/handlers/erp.go:2557` | `fetchInventoryStockForSKU` |
-| Kho Tổng aggregate (alias) | `backend/api/handlers/erp.go:2548` | `totalStockFromInventoryItems` → `pkg.TotalStockFromInventoryItems` |
-| Endpoint constants (alias) | `backend/api/handlers/erp.go:2526,2527` | `inventoryTotalStockEndpoint`, `inventoryTotalWarehouseName` → trỏ pkg |
-| **Nguồn chung tồn kho** | `backend/pkg/inventory_stock.go:13,17,30,59` | `InventoryTotalStockEndpoint`, `InventoryTotalWarehouseName`, `TotalStockFromInventoryItems`, `CloudifyClient.TotalStockForSKU` |
+| Single-SKU live | `backend/api/handlers/erp.go:2014` | `inventoryStockRequestBody` |
+| Stock per SKU | `backend/api/handlers/erp.go:2539` | `fetchInventoryStockForSKU` |
+| Kho Tổng aggregate (alias) | `backend/api/handlers/erp.go:2530` | `totalStockFromInventoryItems` → `pkg.TotalStockFromInventoryItems` |
+| Endpoint constants (alias) | `backend/api/handlers/erp.go:2508,2509` | `inventoryTotalStockEndpoint`, `inventoryTotalWarehouseName` → trỏ pkg |
+| **Resolve endpoint theo config** | `backend/engine/inventory_endpoint.go:29` | `engine.ResolveInventoryEndpoint` (đọc `erp_global_method_permissions`; handler erp.go:1712 + worker dùng chung) |
+| **Nguồn chung tồn kho** | `backend/pkg/inventory_stock.go:13,17,30,58,73` | `InventoryTotalStockEndpoint`, `InventoryTotalWarehouseName`, `TotalStockFromInventoryItems`, `InventoryStockRequestBody`, `CloudifyClient.InventoryStock` |
 | Specific-SKU decision (đã có test) | `backend/engine/product_embeddings.go:251` | `isSpecificSKUMatch` (`TestIsSpecificSKUMatch`) |
 | Embedding sync (offline) | `backend/engine/product_embeddings.go:108` | `SyncProductEmbeddingsToAstraDB` |
 | Embedding matcher | `backend/engine/product_embeddings.go:207` | `FuzzyMatchProductWithEmbedding` |
@@ -455,11 +467,13 @@ Response cuối (Backend → Langflow tool):
   `pkg.TotalStockFromInventoryItems` bỏ qua `SO_LUONG_TON_TONG` và mọi kho chi nhánh.
   Đổi kho gốc → sửa hằng `pkg.InventoryTotalWarehouseName`
   (`backend/pkg/inventory_stock.go`), KHÔNG còn ở erp.go (giờ chỉ là alias).
-- **Luồng "theo dòng" và "theo SKU" giờ đọc CÙNG endpoint** `lay_ton_kho_san_pham`
-  qua `pkg.CloudifyClient.TotalStockForSKU` → số liệu nhất quán. Endpoint cũ
-  `inventory_receipt/search` (`client.SearchInventory`) đã ngừng dùng cho tồn kho
-  (Cloudify trả HTTP 500); nếu mọi SKU lỗi, worker báo "hệ thống tồn kho gặp sự cố",
-  không trả "0.0" gây hiểu nhầm hết hàng.
+- **Luồng "theo dòng" và "theo SKU" giờ đọc CÙNG endpoint** — được resolve từ cấu hình
+  Global HTTP Method (`erp_global_method_permissions`) qua `engine.ResolveInventoryEndpoint`,
+  rồi gọi `pkg.CloudifyClient.InventoryStock(endpoint, usePost, sku)`. Mặc định
+  `lay_ton_kho_san_pham` + POST; admin đổi `path`/`post` thì cả hai luồng đều theo — KHÔNG
+  nơi nào hardcode. Endpoint cũ `inventory_receipt/search` (`client.SearchInventory`) đã
+  ngừng dùng cho tồn kho (Cloudify trả HTTP 500); nếu mọi SKU lỗi, worker báo "hệ thống tồn
+  kho gặp sự cố", không trả "0.0" gây hiểu nhầm hết hàng.
 - **Size khớp chính xác, màu/brand khớp substring** (erp_variants.go:38–44) — nên
   "L" không dính "XL"/"XXL"; `normalizeSizeFilter` (erp_variants.go:288) cắt tiền
   tố "size "/"cỡ ".

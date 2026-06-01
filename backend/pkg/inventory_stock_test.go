@@ -64,12 +64,33 @@ func TestTotalStockForSKU_SumsKhoTong(t *testing.T) {
 	c := &CloudifyClient{BaseURL: srv.URL, DB: "db", Login: "u", Password: "p"}
 	seedSession(c)
 
-	stock, err := c.TotalStockForSKU("SP458484")
+	stock, err := c.InventoryStock(InventoryTotalStockEndpoint, true, "SP458484")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if stock != 20.0 {
 		t.Fatalf("expected 20.0 (Kho Tổng only), got %v", stock)
+	}
+}
+
+func TestInventoryStock_CustomEndpointSumsRows(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"ma_hang":"X","ton":4},{"ma_hang":"X","so_luong_ton_tong":6}]`))
+	}))
+	defer srv.Close()
+
+	c := &CloudifyClient{BaseURL: srv.URL, DB: "db", Login: "u", Password: "p"}
+	seedSession(c)
+
+	// A custom (non-official) endpoint sums stock across rows rather than reading
+	// only "Kho Tổng".
+	stock, err := c.InventoryStock("danhmucvattuhanghoa/custom_ton", true, "X")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stock != 10.0 {
+		t.Fatalf("expected 10.0 (4 + 6), got %v", stock)
 	}
 }
 
@@ -86,7 +107,7 @@ func TestTotalStockForSKU_HTTP500PropagatesError(t *testing.T) {
 	c := &CloudifyClient{BaseURL: srv.URL, DB: "db", Login: "u", Password: "p"}
 	seedSession(c)
 
-	stock, err := c.TotalStockForSKU("SP458484")
+	stock, err := c.InventoryStock(InventoryTotalStockEndpoint, true, "SP458484")
 	if err == nil {
 		t.Fatal("expected error on HTTP 500, got nil (silent-zero regression)")
 	}

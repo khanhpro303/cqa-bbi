@@ -52,19 +52,54 @@ func TotalStockFromInventoryItems(items []map[string]interface{}) float64 {
 	return total
 }
 
-// TotalStockForSKU returns the live "Kho Tổng" stock for a single SKU from the
-// official inventory endpoint. It is the shared path used by both the HTTP
-// handler and the Zalo worker so the line-level (theo dòng) and SKU-level flows
-// read identical numbers. An ERP error is propagated, never swallowed into 0.
-func (c *CloudifyClient) TotalStockForSKU(sku string) (float64, error) {
-	items, err := c.SearchCustomEndpointWithBody(
-		InventoryTotalStockEndpoint,
-		map[string]interface{}{"MA_HANG": sku},
-	)
-	if err != nil {
-		return 0, fmt.Errorf("lay_ton_kho_san_pham MA_HANG=%s: %w", sku, err)
+// InventoryStockRequestBody builds the documented request body for an inventory
+// endpoint. The official total-stock endpoint takes only {"MA_HANG": sku}; any
+// other custom POST endpoint defaults to MA_HANG + limit.
+func InventoryStockRequestBody(endpoint, sku string, limit int) map[string]interface{} {
+	if endpoint == InventoryTotalStockEndpoint {
+		return map[string]interface{}{"MA_HANG": sku}
 	}
-	return TotalStockFromInventoryItems(items), nil
+	return map[string]interface{}{"limit": limit, "MA_HANG": sku}
+}
+
+// InventoryStock returns live ERP stock for a single SKU from the given
+// endpoint, honoring the tenant's Global HTTP Method config (endpoint + POST vs
+// GET) instead of hardcoding one path. The official total-stock endpoint reads
+// only the "Kho Tổng" warehouse row; any custom endpoint sums stock across the
+// returned rows — identical semantics to the HTTP handler's per-SKU fetch. This
+// is the shared path used by both the handler and the Zalo worker so line-level
+// (theo dòng) and SKU-level flows read identical numbers. An ERP error is
+// propagated, never swallowed into 0.
+func (c *CloudifyClient) InventoryStock(endpoint string, usePost bool, sku string) (float64, error) {
+	body := InventoryStockRequestBody(endpoint, sku, 100)
+
+	var items []map[string]interface{}
+	var err error
+	if usePost {
+		items, err = c.SearchCustomEndpointWithBody(endpoint, body)
+	} else {
+		params := make(map[string]string, len(body))
+		for k, v := range body {
+			params[k] = fmt.Sprintf("%v", v)
+		}
+		items, err = c.SearchCustomEndpoint(endpoint, params)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("inventory stock %s MA_HANG=%s: %w", endpoint, sku, err)
+	}
+
+	if endpoint == InventoryTotalStockEndpoint {
+		return TotalStockFromInventoryItems(items), nil
+	}
+	// Custom endpoint: sum stock across the returned rows.
+	var total float64
+	for _, item := range items {
+		total += inventoryMapFloat(item,
+			"stock", "ton", "ton_kho",
+			"SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung",
+			"SO_LUONG_TON_TONG", "so_luong_ton_tong")
+	}
+	return total, nil
 }
 
 // inventoryMapString returns the first non-empty string value among keys.

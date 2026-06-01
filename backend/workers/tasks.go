@@ -1401,14 +1401,17 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 		Password: erpPassword,
 	}
 
-	// 4. Read live "Kho Tổng" stock per allowed SKU from the official endpoint
-	// (lay_ton_kho_san_pham), matching the SKU-level handler. The legacy
-	// inventory_receipt/search keyword search is gone (it returns HTTP 500 from
-	// Cloudify). All SKUs failing propagates an error instead of answering 0.
+	// 4. Read live stock per allowed SKU from the inventory endpoint resolved
+	// from the tenant's Global HTTP Method config (erp_global_method_permissions),
+	// matching the SKU-level handler. The legacy inventory_receipt/search keyword
+	// search is gone (it returns HTTP 500 from Cloudify). All SKUs failing
+	// propagates an error instead of answering 0.
+	invEndpoint, invUsePost := engine.ResolveInventoryEndpoint(ctx, tenantID)
+
 	var totalStock float64
 	var okCount, errCount int
 	for _, sku := range allowedSKUs {
-		stock, stockErr := client.TotalStockForSKU(sku)
+		stock, stockErr := client.InventoryStock(invEndpoint, invUsePost, sku)
 		if stockErr != nil {
 			errCount++
 			log.Printf("[zalo_webhook] stock lookup failed ma_cha=%s sku=%s: %v", maCha, sku, stockErr)
@@ -2102,16 +2105,19 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		Password: erpPassword,
 	}
 
-	// 4. Read live "Kho Tổng" stock per allowed SKU from the official endpoint
-	// (lay_ton_kho_san_pham) — the same path the SKU-level handler uses, instead
-	// of the legacy inventory_receipt/search keyword search (which returns HTTP
-	// 500 from Cloudify). An ERP failure is surfaced as an error, never silently
-	// reported as 0 stock.
+	// 4. Read live stock per allowed SKU from the inventory endpoint resolved
+	// from the tenant's Global HTTP Method config (erp_global_method_permissions),
+	// the same source the SKU-level handler uses — instead of the legacy
+	// inventory_receipt/search keyword search (which returns HTTP 500 from
+	// Cloudify). An ERP failure is surfaced as an error, never silently reported
+	// as 0 stock.
+	invEndpoint, invUsePost := engine.ResolveInventoryEndpoint(ctx, tenantID)
+
 	var totalStock float64
 	var details []string
 	var okCount, errCount int
 	for _, s := range allowedSKUs {
-		stock, stockErr := client.TotalStockForSKU(s.Code)
+		stock, stockErr := client.InventoryStock(invEndpoint, invUsePost, s.Code)
 		if stockErr != nil {
 			errCount++
 			log.Printf("[zalo_webhook] stock lookup failed ma_cha=%s sku=%s: %v", maCha, s.Code, stockErr)

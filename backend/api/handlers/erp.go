@@ -1705,29 +1705,11 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 	switch resource {
 	case "inventory":
-		// Load custom inventory endpoint config. Default is the official
-		// total-stock endpoint (POST); tenants may override to a custom path.
-		inventoryEndpoint := inventoryTotalStockEndpoint
-		usePostMethod := true
-		var globalPermsSetting models.AppSetting
-		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
-			type EndpointConfig struct {
-				Get  bool   `json:"get"`
-				Post bool   `json:"post"`
-				Path string `json:"path"`
-			}
-			var globalPerms map[string]EndpointConfig
-			if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
-				if invConfig, exists := globalPerms["inventory"]; exists && invConfig.Path != "" && invConfig.Path != "inventory" {
-					path := invConfig.Path
-					path = strings.TrimPrefix(path, "/")
-					path = strings.TrimPrefix(path, "rest_api/private/")
-					path = strings.TrimPrefix(path, "/")
-					inventoryEndpoint = path
-					usePostMethod = invConfig.Post
-				}
-			}
-		}
+		// Resolve the inventory endpoint + HTTP method from the tenant's Global
+		// HTTP Method config (erp_global_method_permissions). Shared with the Zalo
+		// worker via engine.ResolveInventoryEndpoint so both honor the same
+		// admin-configured endpoint. Default: official total-stock endpoint (POST).
+		inventoryEndpoint, usePostMethod := engine.ResolveInventoryEndpoint(c.Request.Context(), tenantID)
 
 		stockCache := engine.DefaultInventoryStockCache()
 
