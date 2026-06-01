@@ -123,8 +123,12 @@ func (l *LangflowClient) fetchAgentNodeIDs(ctx context.Context, apiURL, apiKey, 
 		return nil, fmt.Errorf("create flow request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	// Authenticate with x-api-key ONLY. The /api/v1/flows/{id} endpoint runs the
+	// Bearer/JWT auth dependency first and rejects a Langflow API key ("sk-...")
+	// sent as "Authorization: Bearer" with 401 "Invalid token" — even when a valid
+	// x-api-key is also present. (The /run endpoint uses api-key auth, which is why
+	// it tolerated both headers.) Sending only x-api-key lets discovery succeed.
 	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("x-api-key", apiKey)
 	}
 
