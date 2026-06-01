@@ -199,7 +199,7 @@ không còn bắn Zalo list-template button, cũng không round-trip qua Langflo
 ra khi `search` thu hẹp về một `MA_CHA` rõ ràng (nhánh `classifyDominantMaCha=true`,
 Kịch bản D) backend trả danh sách tồn từng biến thể ngay trong lượt đầu.
 
-### C.1 — Lối vào THAY THẾ: products disambiguation → gõ số → inventory exact-web
+### C.1 — Lối vào THAY THẾ: products disambiguation → gõ số → exact-web (worker chặn)
 
 Thực tế Agent thường KHÔNG gọi `inventory("FF901")` ngay mà gọi `products("FF901")`
 trước (theo Product Intent Routing trong system-prompt). Khi đó luồng là:
@@ -207,21 +207,34 @@ trước (theo Product Intent Routing trong system-prompt). Khi đó luồng là
 ```
 1. Agent → products(search="FF901")
    → erp.go:336 trả source="astradb_cache_web_groups", data=[{web_name, parent_codes,
-     variant_count}, …]  (KHÔNG lưu pending_options — đây là disambiguation do AGENT
-     tự dựng, khác hẳn Level-1 picker của nhánh inventory)
+     variant_count}, …]
+   ✅ MỚI (2026-06-01): backend ĐỒNG THỜI lưu pending_options dưới session key dùng
+     chung (storePendingDisambiguationOptions, erp.go) với postback
+     #stockpick_web:<web_name> cho TỪNG dòng — đúng thứ tự webGroups để index khớp.
+     Cú "1" của khách KHÔNG còn do Agent xử lý.
 2. Agent tự liệt kê "1. LS2 FF901 / 2. LS2 FF901 Carbon" rồi chờ khách
 3. Khách gõ "1"
-   ⚠️ Vì products KHÔNG lưu pending_options → numeric-intercept của worker KHÔNG bắt
-   được → "1" lên thẳng Langflow, Agent tự quyết.
-   ✅ Quy tắc đúng (system-prompt "Disambiguation Follow-up Rules"): map 1→"LS2 FF901",
-   ý định STOCK → gọi inventory(search="LS2 FF901", exact_web_name=true), TUYỆT ĐỐI
-   không gọi product_variants, không tự hỏi màu/size.
-4. inventory(exact_web_name=true) → Branch-0 (erp.go:1793) → khớp web CHÍNH XÁC
-   → đẩy Level-1 picker "theo DÒNG hay theo MÃ SKU cụ thể?" → is_inventory_rich
-   → Agent trả "[RICH_MESSAGE_SENT]"
-5. Khách gõ "1" (dòng) → #show_macha_options_by_web:LS2 FF901 → tổng tồn cả dòng
+   → numeric-intercept của worker (tasks.go:744) GET pending_options → resolve thành
+     #stockpick_web:LS2 FF901 → handler #stockpick_web (tasks.go) →
+     engine.BuildExactWebStockPicker → đẩy EXACT-web dòng-vs-SKU picker + lưu pending
+     mới [#show_macha_options_by_web:LS2 FF901, #choose_flow_type:skucuthe:LS2 FF901].
+     KHÔNG lên Langflow; KHÔNG phụ thuộc Agent set exact_web_name hay trả
+     [RICH_MESSAGE_SENT]; KHÔNG re-LIKE (nên "LS2 FF901" không dính "LS2 FF901 Carbon").
+4. Khách gõ "1" (dòng) → #show_macha_options_by_web:LS2 FF901 → tổng tồn cả dòng
    Khách gõ "2" (SKU)  → #choose_flow_type:skucuthe:LS2 FF901 → hỏi màu/size (Kịch bản 2)
 ```
+
+> 🔁 **Fallback Agent (chỉ khi worker KHÔNG chặn được số):** nếu pending_options hết
+> hạn (TTL), Redis lỗi, hoặc khách trả bằng FREE-TEXT/mã `SP\d{6}` thay vì số trần →
+> "1"/web-name lên thẳng Langflow và Agent dùng "Disambiguation Follow-up Rules"
+> (map digit→web_name, gọi `inventory(exact_web_name=true)` → Branch-0 erp.go:1793,
+> trả `[RICH_MESSAGE_SENT]`). Đường này giờ là DỰ PHÒNG, không phải đường chính.
+
+> ⚖️ **Đánh đổi intent GIÁ:** mọi cú gõ-số trên danh sách products giờ deterministic
+> rơi vào picker TỒN KHO. Câu hỏi GIÁ rõ ràng ("FF901 *giá* bao nhiêu") mà bị
+> disambiguation rồi gõ "1" cũng ra picker tồn — khớp default "ambiguous → STOCK" của
+> system-prompt, nhưng khác đường `price_range` cũ. Nếu cần giữ giá: thêm nút thứ 3
+> hoặc nhận diện "giá" ở handler `#stockpick_web`.
 
 > 🐞 **Bug đã sửa (2026-06-01):** trước đây Agent map "1" xong lại gọi
 > `product_variants(parent_code)` → trả 10 biến thể KHÔNG kèm tồn → hỏi màu/size, KHÔNG
@@ -434,6 +447,9 @@ Response cuối (Backend → Langflow tool):
 | Build session key (dùng chung worker + handler) | `backend/engine/session_options.go:28` | `engine.BuildSessionKey` |
 | Shortcut `dongsp` | `backend/workers/tasks.go:768` | `#choose_flow_type:dongsp:` (len==1 → sum ngay; len>1 → lưu pending) |
 | Shortcut `skucuthe` | `backend/workers/tasks.go:823` | `#choose_flow_type:skucuthe:` |
+| Shortcut `#stockpick_web` (MỚI) | `backend/workers/tasks.go` (sau `skucuthe`) | resolve cú gõ-số trên danh sách products → `engine.BuildExactWebStockPicker` (exact-web dòng-vs-SKU, không LIKE) |
+| Products lưu pending (MỚI) | `backend/api/handlers/erp.go:336` | `storePendingDisambiguationOptions` + `engine.BuildStockPickPendingButtons` → postback `#stockpick_web:<web>` |
+| Helper stockpick (MỚI) | `backend/engine/stock_disambiguation.go` | `StockPickWebPrefix`, `BuildStockPickPendingButtons`, `BuildExactWebStockPicker` (có `stock_disambiguation_test.go`) |
 | Web-name ranking | `backend/workers/tasks.go:779` | `engine.RankProductWebGroups` |
 | `#show_macha_options` | `backend/workers/tasks.go:837` | parent-code options |
 | `#show_macha_options_by_web` | `backend/workers/tasks.go:926` | aggregate theo web name; mọi mã cha lỗi → báo "hệ thống tồn kho gặp sự cố" (tasks.go:967) |
@@ -512,10 +528,16 @@ Response cuối (Backend → Langflow tool):
   chạy theo chain sau khi rebuild product cache, không có schedule mặc định → có
   thể stale.
 - **Zalo OA list template** trả `-233` trên `/message/cs` → tất cả nút disambiguation
-  fallback về plain text đánh số (`channels.BuildButtonOptionsAsText`). Hai cấp
+  fallback về plain text đánh số (`channels.BuildButtonOptionsAsText`). Các cấp
   menu CÙNG lưu `pending_options` trong Redis qua `engine.StorePendingOptions`
   để numeric intercept (tasks.go:744) → `engine.ResolveNumericSelection` nuốt số
   trần:
+    P. **Products disambiguation** (erp.go:336, MỚI 2026-06-01) — khi `products`
+       trả >1 web-group, backend lưu `[#stockpick_web:<web1>, #stockpick_web:<web2>, …]`
+       (đúng thứ tự danh sách Agent hiển thị). "1"/"2" → handler `#stockpick_web`
+       (tasks.go) → `engine.BuildExactWebStockPicker` → đẩy picker dòng-vs-SKU EXACT-web
+       (giống Branch-0). Đây là lý do cú gõ-số sau danh sách products KHÔNG còn lên
+       Langflow — gỡ hẳn Agent khỏi vòng chọn.
     0. **Branch-0 exact-web** (erp.go:1793, sau khi khách chọn web-name từ danh
        sách products) — backend lưu `[#show_macha_options_by_web:<web>,
        #choose_flow_type:skucuthe:<web>]`. "1" → tổng tồn cả dòng (khớp web CHÍNH

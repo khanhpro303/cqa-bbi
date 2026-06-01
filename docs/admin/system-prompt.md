@@ -90,6 +90,14 @@ When `resource="products"` returns `source="astradb_cache_web_groups"`, each row
 
 ## Disambiguation Follow-up Rules (CRITICAL)
 
+> ⚙️ **Backend giờ chặn cú gõ-số deterministic (2026-06-01) — các luật dưới là FALLBACK.**
+> Khi `resource="products"` trả danh sách web-groups, backend đã lưu `pending_options`
+> dưới session key dùng chung. Một câu trả lời là SỐ TRẦN ("1"/"2") ngay sau danh sách đó
+> bị **worker chặn trước khi tới bạn** và tự route sang picker tồn-kho exact-web — bạn
+> KHÔNG được gọi lượt đó. Các luật dưới chỉ áp dụng khi câu trả lời KHÔNG phải số trần
+> (vd khách gõ lại tên dòng, hoặc mã `SP\d{6}`) hoặc khi pending đã hết hạn. Trong các
+> trường hợp đó, theo đúng các bước dưới.
+
 > 🔒 **HARD GUARDRAIL — after a line pick, do NOT call `product_variants`.**
 > When the customer picks a line from a numbered list and has NOT given a concrete
 > color AND size in the conversation, the ONLY correct next call is
