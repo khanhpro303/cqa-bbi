@@ -3,6 +3,9 @@ package pkg
 import (
 	"fmt"
 	"strings"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // InventoryTotalStockEndpoint is the official Cloudify endpoint that returns a
@@ -16,10 +19,27 @@ const InventoryTotalStockEndpoint = "danhmucvattuhanghoa/lay_ton_kho_san_pham"
 // the reportable stock. Matching is case- and space-insensitive.
 const InventoryTotalWarehouseName = "Kho Tổng"
 
-// NormalizeWarehouseName upper-cases and strips spaces so warehouse names match
-// regardless of casing or incidental spacing (e.g. "1. KHO-TONG").
+// NormalizeWarehouseName folds a warehouse name to a comparison key so the
+// configured "Kho Tổng" matches whatever the ERP actually returns. The BBI
+// Cloudify response labels the total warehouse "KHO-TONG" (ASCII, hyphenated,
+// no diacritics) inside TON_KHO_CHI_TIET, while the constant carries Vietnamese
+// diacritics and a space. Folding strips diacritics (Tổng→TONG, đ→D), upper-cases
+// letters, and drops every non-alphanumeric rune (spaces, hyphens, dots) so both
+// reduce to "KHOTONG". Equality is still required after folding, so a different
+// warehouse like "KHO-TONG-HN" ("KHOTONGHN") will NOT match.
 func NormalizeWarehouseName(name string) string {
-	return strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(name)), " ", "")
+	var b strings.Builder
+	for _, r := range norm.NFD.String(name) {
+		switch {
+		case unicode.Is(unicode.Mn, r): // combining diacritic mark from NFD
+			continue
+		case r == 'đ' || r == 'Đ': // đ does not decompose under NFD
+			b.WriteRune('D')
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(unicode.ToUpper(r))
+		}
+	}
+	return b.String()
 }
 
 // TotalStockFromInventoryItems sums SO_LUONG_TON across the "Kho Tổng" warehouse

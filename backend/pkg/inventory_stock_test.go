@@ -43,6 +43,27 @@ func TestTotalStockFromInventoryItems_KhoTongOnly(t *testing.T) {
 	}
 }
 
+// TestTotalStockFromInventoryItems_AsciiHyphenWarehouse is the regression guard
+// for the real BBI ERP response: the total warehouse is returned as the ASCII,
+// hyphenated "KHO-TONG" (no diacritics), not the configured "Kho Tổng". Warehouse
+// matching must fold diacritics and drop separators, otherwise live stock (here
+// 6 units of SP458495) is silently reported as 0 — read by the customer as out
+// of stock.
+func TestTotalStockFromInventoryItems_AsciiHyphenWarehouse(t *testing.T) {
+	items := []map[string]interface{}{
+		{
+			"MA_HANG":           "SP458495",
+			"SO_LUONG_TON_TONG": 6.0, // aggregate still ignored
+			"TON_KHO_CHI_TIET": []interface{}{
+				map[string]interface{}{"TEN_CHI_NHANH": "CN NỘI BỘ", "TEN_KHO": "KHO-TONG", "SO_LUONG_TON": 6.0},
+			},
+		},
+	}
+	if got := TotalStockFromInventoryItems(items); got != 6.0 {
+		t.Fatalf("expected 6.0 from KHO-TONG (real BBI shape), got %v", got)
+	}
+}
+
 func TestTotalStockFromInventoryItems_NoMatchReturnsZero(t *testing.T) {
 	items := []map[string]interface{}{
 		{"TEN_KHO": "Kho Chi Nhánh", "SO_LUONG_TON": 99.0},
