@@ -949,14 +949,29 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			var totalStock float64
 			var details []string
+			var okCount, errCount int
 			for _, mc := range maChas {
 				stock, lines, sumErr := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, mc, webName)
 				if sumErr != nil {
+					errCount++
 					log.Printf("[zalo_webhook] inventory error ma_cha=%s web=%s: %v", mc, webName, sumErr)
 					continue
 				}
+				okCount++
 				totalStock += stock
 				details = append(details, lines...)
+			}
+
+			// Every mã cha failed → the ERP is down for this line. Do NOT report
+			// "0.0" (the customer would read it as out of stock). Surface the error.
+			if okCount == 0 && errCount > 0 {
+				errMsg := fmt.Sprintf("Hệ thống tồn kho đang tạm thời gặp sự cố nên em chưa lấy được số liệu cho dòng %s. Anh/chị vui lòng thử lại sau ít phút giúp em ạ.", webName)
+				if matchedGroup.ZaloGroupID != "" {
+					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, errMsg)
+				} else {
+					_ = adapter.SendMessage(ctx, payload.Sender.ID, errMsg)
+				}
+				return nil
 			}
 
 			reply := fmt.Sprintf("Tổng tồn kho của dòng %s: %.1f\n\nChi tiết:\n%s", webName, totalStock, strings.Join(details, "\n"))
@@ -1334,7 +1349,10 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 	// 2. Fetch allowed product groups for "inventory" resource
 	_, _, allowedProductGroups := permCtx.IsResourceAllowed("inventory")
 
-	childCodes := make(map[string]bool)
+	// Collect original-case SKUs (ERP MA_HANG is case-sensitive). Dedup, preserve
+	// first-seen order.
+	var allowedSKUs []string
+	seen := make(map[string]struct{})
 	for _, p := range childProducts {
 		sku := getMapString(p, "MA", "code", "ma")
 		group := getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
@@ -1351,12 +1369,16 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 		}
 
 		if isAllowed && sku != "" {
-			childCodes[strings.ToLower(sku)] = true
+			if _, dup := seen[sku]; dup {
+				continue
+			}
+			seen[sku] = struct{}{}
+			allowedSKUs = append(allowedSKUs, sku)
 		}
 	}
 
 	// If the user has permission to see none of the variants, return 0 stock
-	if len(childCodes) == 0 && len(childProducts) > 0 {
+	if len(allowedSKUs) == 0 && len(childProducts) > 0 {
 		return 0, nil
 	}
 
@@ -1379,30 +1401,25 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 		Password: erpPassword,
 	}
 
-	// 4. Search live inventory on ERP using the maCha code as keyword
-	inventoryList, err := client.SearchInventory(maCha, 100)
-	if err != nil {
-		return 0, err
+	// 4. Read live "Kho Tổng" stock per allowed SKU from the official endpoint
+	// (lay_ton_kho_san_pham), matching the SKU-level handler. The legacy
+	// inventory_receipt/search keyword search is gone (it returns HTTP 500 from
+	// Cloudify). All SKUs failing propagates an error instead of answering 0.
+	var totalStock float64
+	var okCount, errCount int
+	for _, sku := range allowedSKUs {
+		stock, stockErr := client.TotalStockForSKU(sku)
+		if stockErr != nil {
+			errCount++
+			log.Printf("[zalo_webhook] stock lookup failed ma_cha=%s sku=%s: %v", maCha, sku, stockErr)
+			continue
+		}
+		okCount++
+		totalStock += stock
 	}
 
-	// 5. Sum stock of matching items
-	var totalStock float64
-	for _, item := range inventoryList {
-		code := getMapString(item, "code", "ma_hang", "ma", "product_code")
-		codeLower := strings.ToLower(code)
-
-		isMatch := false
-		if len(childCodes) > 0 {
-			isMatch = childCodes[codeLower]
-		} else {
-			// fallback to prefix matching if child list was empty
-			isMatch = strings.HasPrefix(codeLower, strings.ToLower(maCha))
-		}
-
-		if isMatch {
-			stock := getMapFloat(item, "stock", "ton", "ton_kho")
-			totalStock += stock
-		}
+	if okCount == 0 && errCount > 0 {
+		return 0, fmt.Errorf("all %d SKU stock lookups failed for ma_cha=%s", errCount, maCha)
 	}
 
 	return totalStock, nil
@@ -2027,8 +2044,13 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	// 2. Fetch allowed product groups for "inventory" resource
 	_, _, allowedProductGroups := permCtx.IsResourceAllowed("inventory")
 
-	childCodes := make(map[string]bool)
-	skuToName := make(map[string]string)
+	// allowedSKU pairs an original-case SKU with its display name. Original case
+	// matters: the ERP MA_HANG lookup is case-sensitive, so the code we send must
+	// not be lowercased. Dedup on the SKU; preserve first-seen order so replies
+	// are stable.
+	type allowedSKU struct{ Code, Name string }
+	var allowedSKUs []allowedSKU
+	seen := make(map[string]struct{})
 	for _, p := range childProducts {
 		sku := getMapString(p, "MA", "code", "ma")
 		group := getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
@@ -2046,17 +2068,19 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		}
 
 		if isAllowed && sku != "" {
-			skuLower := strings.ToLower(sku)
-			childCodes[skuLower] = true
-			if name != "" {
-				skuToName[skuLower] = name
-			} else {
-				skuToName[skuLower] = sku
+			if _, dup := seen[sku]; dup {
+				continue
 			}
+			seen[sku] = struct{}{}
+			if name == "" {
+				name = sku
+			}
+			allowedSKUs = append(allowedSKUs, allowedSKU{Code: sku, Name: name})
 		}
 	}
 
-	if len(childCodes) == 0 && len(childProducts) > 0 {
+	// User may be permitted to see none of the variants → genuine 0 stock.
+	if len(allowedSKUs) == 0 && len(childProducts) > 0 {
 		return 0, nil, nil
 	}
 
@@ -2078,36 +2102,30 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		Password: erpPassword,
 	}
 
-	// 4. Search live inventory on ERP using the maCha code as keyword
-	inventoryList, err := client.SearchInventory(maCha, 100)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	// 5. Sum stock of matching items
+	// 4. Read live "Kho Tổng" stock per allowed SKU from the official endpoint
+	// (lay_ton_kho_san_pham) — the same path the SKU-level handler uses, instead
+	// of the legacy inventory_receipt/search keyword search (which returns HTTP
+	// 500 from Cloudify). An ERP failure is surfaced as an error, never silently
+	// reported as 0 stock.
 	var totalStock float64
 	var details []string
-	for _, item := range inventoryList {
-		code := getMapString(item, "code", "ma_hang", "ma", "product_code")
-		codeLower := strings.ToLower(code)
-
-		isMatch := false
-		if len(childCodes) > 0 {
-			isMatch = childCodes[codeLower]
-		} else {
-			isMatch = strings.HasPrefix(codeLower, strings.ToLower(maCha))
+	var okCount, errCount int
+	for _, s := range allowedSKUs {
+		stock, stockErr := client.TotalStockForSKU(s.Code)
+		if stockErr != nil {
+			errCount++
+			log.Printf("[zalo_webhook] stock lookup failed ma_cha=%s sku=%s: %v", maCha, s.Code, stockErr)
+			continue
 		}
+		okCount++
+		totalStock += stock
+		details = append(details, fmt.Sprintf("- %s: %.1f", s.Name, stock))
+	}
 
-		if isMatch {
-			stock := getMapFloat(item, "stock", "ton", "ton_kho")
-			totalStock += stock
-
-			displayName := skuToName[codeLower]
-			if displayName == "" {
-				displayName = code
-			}
-			details = append(details, fmt.Sprintf("- %s: %.1f", displayName, stock))
-		}
+	// Every SKU lookup errored → propagate so the caller tells the user the ERP
+	// is failing rather than answering "0".
+	if okCount == 0 && errCount > 0 {
+		return 0, nil, fmt.Errorf("all %d SKU stock lookups failed for ma_cha=%s web=%s", errCount, maCha, webName)
 	}
 
 	return totalStock, details, nil

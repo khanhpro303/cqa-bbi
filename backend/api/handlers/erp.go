@@ -2519,21 +2519,16 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	})
 }
 
-// inventoryTotalStockEndpoint is the official Cloudify endpoint that returns a
-// product's stock. Each data item carries product fields plus a nested
-// TON_KHO_CHI_TIET array of per-warehouse rows (TEN_KHO/SO_LUONG_TON). We read
-// stock only from the "Kho Tổng" warehouse row, not the SO_LUONG_TON_TONG
-// aggregate. The documented request body is {"MA_HANG": <sku>}.
-const inventoryTotalStockEndpoint = "danhmucvattuhanghoa/lay_ton_kho_san_pham"
+// inventoryTotalStockEndpoint / inventoryTotalWarehouseName are aliases of the
+// canonical definitions in package pkg, the single source of truth shared with
+// the Zalo worker's line-level stock flow. To change the reportable warehouse,
+// edit pkg.InventoryTotalWarehouseName (backend/pkg/inventory_stock.go).
+const inventoryTotalStockEndpoint = pkg.InventoryTotalStockEndpoint
+const inventoryTotalWarehouseName = pkg.InventoryTotalWarehouseName
 
-// inventoryTotalWarehouseName is the warehouse whose SO_LUONG_TON is treated as
-// the reportable stock. Matching is case- and space-insensitive.
-const inventoryTotalWarehouseName = "Kho Tổng"
-
-// normalizeWarehouseName upper-cases and strips spaces so warehouse names match
-// regardless of casing or incidental spacing (e.g. "1. KHO-TONG").
+// normalizeWarehouseName delegates to the shared pkg implementation.
 func normalizeWarehouseName(name string) string {
-	return strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(name)), " ", "")
+	return pkg.NormalizeWarehouseName(name)
 }
 
 // inventoryStockRequestBody builds the documented request body for an inventory
@@ -2548,34 +2543,10 @@ func inventoryStockRequestBody(inventoryEndpoint, sku string, limit int) map[str
 	}
 }
 
-// totalStockFromInventoryItems sums SO_LUONG_TON across the "Kho Tổng"
-// warehouse rows in a lay_ton_kho_san_pham response. Warehouse rows live in the
-// nested TON_KHO_CHI_TIET array; older/flat responses expose the warehouse on
-// the item itself. The SO_LUONG_TON_TONG aggregate and every other warehouse
-// are ignored. Returns 0 when no matching warehouse row is found.
+// totalStockFromInventoryItems delegates to the shared pkg implementation so
+// the handler and the Zalo worker compute "Kho Tổng" stock identically.
 func totalStockFromInventoryItems(items []map[string]interface{}) float64 {
-	target := normalizeWarehouseName(inventoryTotalWarehouseName)
-	var total float64
-
-	addIfMatch := func(row map[string]interface{}) {
-		if normalizeWarehouseName(getMapString(row, "TEN_KHO", "ten_kho")) == target {
-			total += getMapFloat(row, "SO_LUONG_TON", "so_luong_ton")
-		}
-	}
-
-	for _, item := range items {
-		if details, ok := item["TON_KHO_CHI_TIET"].([]interface{}); ok {
-			for _, d := range details {
-				if row, ok := d.(map[string]interface{}); ok {
-					addIfMatch(row)
-				}
-			}
-			continue
-		}
-		// Flat shape: the item itself is a warehouse row.
-		addIfMatch(item)
-	}
-	return total
+	return pkg.TotalStockFromInventoryItems(items)
 }
 
 // fetchInventoryStockForSKU returns the live ERP stock for a single SKU,
