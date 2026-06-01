@@ -1,6 +1,11 @@
 package engine
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/vietbui/chat-quality-agent/db"
+)
 
 func TestResolveNumericSelection(t *testing.T) {
 	opts := []string{
@@ -65,5 +70,33 @@ func TestBuildSessionKey(t *testing.T) {
 					tc.channelID, tc.zaloUserID, tc.zaloGroupID, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestAwaitingVariantLineNilRedisSafe verifies the variant-line lock helpers are
+// nil-safe: with no Redis configured (db.RedisClient == nil) Store is a no-op and
+// Take returns "" without panicking. The Redis round-trip itself is exercised at
+// runtime; this guards the degraded path that fires in unit/local contexts.
+func TestAwaitingVariantLineNilRedisSafe(t *testing.T) {
+	if db.RedisClient != nil {
+		t.Skip("Redis configured; this test only covers the nil-Redis contract")
+	}
+	ctx := context.Background()
+	const sessionKey = "zalo_session:ch1:u123"
+
+	// Must not panic with Redis unavailable.
+	StoreAwaitingVariantLine(ctx, sessionKey, "LS2 FF901", 10)
+	StoreAwaitingVariantLine(ctx, sessionKey, "", 10) // empty line is a no-op
+
+	if got := TakeAwaitingVariantLine(ctx, sessionKey); got != "" {
+		t.Errorf("TakeAwaitingVariantLine with nil Redis = %q; want \"\"", got)
+	}
+}
+
+// TestAwaitingVariantLineSuffixStable pins the Redis key suffix so a rename can't
+// silently split writer (skucuthe handler) from reader (Langflow fall-through).
+func TestAwaitingVariantLineSuffixStable(t *testing.T) {
+	if AwaitingVariantLineSuffix != ":awaiting_variant_line" {
+		t.Errorf("AwaitingVariantLineSuffix = %q; want \":awaiting_variant_line\"", AwaitingVariantLineSuffix)
 	}
 }

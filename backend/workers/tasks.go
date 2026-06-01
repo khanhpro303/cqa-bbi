@@ -823,6 +823,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		if strings.HasPrefix(userText, "#choose_flow_type:skucuthe:") {
 			keyword := strings.TrimPrefix(userText, "#choose_flow_type:skucuthe:")
+			// Lock the chosen line so the follow-up color/size free-text turn is
+			// scoped to exactly this line. Without the lock the Agent re-derives a
+			// bare model code from prose history ("FF901") that spans sibling lines
+			// ("LS2 FF901" vs "LS2 FF901 Carbon") and answers for both. Consumed
+			// (single-use) on the next free-text turn before Langflow (see below).
+			engine.StoreAwaitingVariantLine(ctx, sessionKey, keyword, meta.SessionTimeout)
 			reply := fmt.Sprintf("Bạn muốn xem tồn kho cụ thể của màu và size nào cho dòng sản phẩm %s?\nVui lòng nhập thông tin (Ví dụ: %s màu đỏ size L).", keyword, keyword)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
@@ -1219,6 +1225,20 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			sku := strings.TrimPrefix(userText, "#show_product_detail:")
 			sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID)
 			return nil
+		}
+
+		// STOCK-pick continuation lock. The customer chose "🔍 xem theo mã SKU
+		// cụ thể" for a specific line at the skucuthe step, then typed color/size
+		// as free text. That reply matches no #postback above and reaches Langflow.
+		// Inject the locked line as a hard input constraint so the Agent scopes
+		// resolution to the EXACT line the customer picked (exact_web_name=true)
+		// instead of re-deriving a bare model code that spans sibling lines.
+		// Single-use: consumed here so it never leaks into unrelated later turns.
+		if !strings.HasPrefix(userText, "#") {
+			if lockedLine := engine.TakeAwaitingVariantLine(ctx, sessionKey); lockedLine != "" {
+				log.Printf("[stock-pick] variant-line lock active: scoping %q to chosen line %q (sessionKey=%s)", userText, lockedLine, sessionKey)
+				userText = fmt.Sprintf("%s [DÒNG ĐÃ CHỌN: %s — chỉ tra tồn kho đúng dòng này bằng exact_web_name=true; KHÔNG mở rộng sang dòng khác]", userText, lockedLine)
+			}
 		}
 
 		permissionToken, err := engine.SignPermissionToken(permCtx, cfg.EncryptionKey)

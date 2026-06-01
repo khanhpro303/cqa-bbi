@@ -329,6 +329,33 @@ Bước 3 — đọc tồn live của đúng SKU đó
 `bilingual_match`, Agent nêu cả tên chuẩn lẫn cách khách gọi: *"Gloss Black –
 đỏ đen, size L: còn 12 cái."*
 
+> 🐞 **Bug đã sửa (2026-06-01) — sau `skucuthe`, Agent dừng ở `product_variants` trả giá thay vì
+> tồn:** khách bấm "🔍 xem theo mã SKU cụ thể" (nút nằm dưới luồng tồn kho) rồi nhập "nardo grey
+> size XL". Agent chạy `products` → `product_variants` → resolve đúng `ma=SP458493`, đọc `price`
+> rồi **DỪNG**, báo giá — bỏ Bước 3 `inventory`. Hai nguyên nhân cộng dồn: (a) hint của tool
+> `product_variants` (`ERPGatewayCaller.component.py` `_format_variant_response`) hard-code "chốt
+> giá cụ thể", không nhắc bước inventory; (b) tin nhắn màu/size không có chữ "tồn"/"còn" nên Agent
+> đọc nhầm thành nhánh C (giá) dù history rõ là STOCK. **Đã siết hai tầng:** (a) **tool** — hint
+> đổi thành intent-aware: "BƯỚC GIỮA, nếu intent là tồn → BẮT BUỘC gọi tiếp `inventory(search=<ma>)`,
+> KHÔNG dừng ở giá vì `product_variants` không có tồn"; (b) **prompt** (`system-prompt.md`) — thêm
+> HARD GUARDRAIL "STOCK-pick continuation": sau nhánh `skucuthe` + màu/size, intent MẶC ĐỊNH là
+> STOCK, phải hoàn tất nhánh B 3 bước; chỉ chốt giá khi khách hỏi GIÁ rõ ràng.
+
+> 🐞 **Bug đã sửa (2026-06-01) — sau `skucuthe`, đáp án trả tồn của CẢ HAI dòng anh em:** khách chọn
+> dòng "LS2 FF901" (KHÔNG phải "LS2 FF901 Carbon") → bấm "🔍 mã SKU cụ thể" → nhập "nardo grey size XL".
+> Bot trả "LS2 FF901: 25 / LS2 FF901 Carbon: 0" — tồn của cả hai dòng. **Root cause là quản lý context:**
+> handler `#choose_flow_type:skucuthe:` (`tasks.go:824`) chỉ gửi câu hỏi màu/size rồi `return nil`,
+> **KHÔNG lưu state** (khác `dongsp` và `#stockpick_web` đều `StorePendingOptions`). Tên dòng đã chọn chỉ
+> nằm trong prose; lượt free-text màu/size kế tiếp rơi thẳng lên Langflow (tasks.go:~1230) không kèm
+> ràng buộc dòng. Agent re-derive bare model code "FF901" → LIKE-trùng cả hai dòng. **Đã siết hai tầng:**
+> (a) **backend** — skucuthe gọi `engine.StoreAwaitingVariantLine(sessionKey, web_name)` (single-use,
+> TTL = session); ngay trước khi gọi Langflow, nếu userText là free-text (không bắt đầu `#`) và lock tồn
+> tại → `engine.TakeAwaitingVariantLine` (GET+DEL) rồi **chèn cứng** `[DÒNG ĐÃ CHỌN: <web> …]` vào
+> userText để Agent buộc scope đúng dòng dù bỏ qua prose history; (b) **prompt** (`system-prompt.md`) —
+> "KHÓA ĐÚNG DÒNG ĐÃ CHỌN": Bước 1 phải `products(search=<tên dòng đã chọn>, exact_web_name=true)` để lấy
+> `parent_codes[0]` DUY NHẤT, cấm search bare "FF901". Helpers ở `engine/session_options.go`
+> (`StoreAwaitingVariantLine`/`TakeAwaitingVariantLine`, có test nil-safe + suffix-stable).
+
 ---
 
 ## E. Chi tiết nhánh `inventory` backend (`respondWithLiveDataV2`, erp.go:1700)

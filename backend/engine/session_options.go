@@ -78,3 +78,41 @@ func StorePendingOptions(ctx context.Context, sessionKey string, buttons []chann
 	ttl := time.Duration(timeoutMinutes)*time.Minute + 1*time.Minute
 	db.RedisClient.Set(ctx, sessionKey+PendingOptionsSuffix, raw, ttl)
 }
+
+// AwaitingVariantLineSuffix is appended to a session key to remember the exact
+// product line (TEN_DONG_BO_WEB) the customer just picked when they chose
+// "🔍 xem theo mã SKU cụ thể". The follow-up color/size reply arrives as free
+// text and is routed to Langflow; without this lock the Agent re-derives a bare
+// model code ("FF901") that LIKE-spans sibling lines ("LS2 FF901" vs
+// "LS2 FF901 Carbon") and answers for both. The worker reads this on the next
+// free-text turn to scope resolution to the chosen line.
+const AwaitingVariantLineSuffix = ":awaiting_variant_line"
+
+// StoreAwaitingVariantLine records the product line the customer chose at the
+// skucuthe step so the next free-text (color/size) turn can be scoped to it.
+// TTL follows the session timeout plus a 1-minute grace. No-op when Redis is
+// unavailable or the line is empty.
+func StoreAwaitingVariantLine(ctx context.Context, sessionKey, webName string, timeoutMinutes int) {
+	if db.RedisClient == nil || strings.TrimSpace(webName) == "" {
+		return
+	}
+	ttl := time.Duration(timeoutMinutes)*time.Minute + 1*time.Minute
+	db.RedisClient.Set(ctx, sessionKey+AwaitingVariantLineSuffix, webName, ttl)
+}
+
+// TakeAwaitingVariantLine returns and deletes (single-use) the product line
+// stored by StoreAwaitingVariantLine. Returns "" when no lock is set or Redis
+// is unavailable. Single-use semantics keep the lock from leaking into
+// unrelated later turns.
+func TakeAwaitingVariantLine(ctx context.Context, sessionKey string) string {
+	if db.RedisClient == nil {
+		return ""
+	}
+	key := sessionKey + AwaitingVariantLineSuffix
+	val, err := db.RedisClient.Get(ctx, key).Result()
+	if err != nil || strings.TrimSpace(val) == "" {
+		return ""
+	}
+	db.RedisClient.Del(ctx, key)
+	return val
+}

@@ -131,8 +131,12 @@ class ERPGatewayCaller(Component):
                     f"| brand={v.get('nhan_hieu_name','')}"
                 )
             lines.append(
-                "Agent: trả giá CHÍNH XÁC của variant khớp. Nếu user chỉ định màu+size đầy đủ → "
-                "chốt giá cụ thể; nếu thiếu thuộc tính → hỏi lại để chọn đúng variant."
+                "Agent: ĐÂY LÀ BƯỚC GIỮA, chưa chắc là câu trả lời cuối. Đọc `ma` của data[0]. "
+                "Nếu intent là TỒN/CÒN HÀNG/SỐ LƯỢNG (kể cả khi khách đã bấm 'xem theo mã SKU "
+                "cụ thể' rồi mới nhập màu/size) → BẮT BUỘC gọi tiếp resource='inventory', "
+                "search=<ma> để đọc ton_kho/TON_KHO; TUYỆT ĐỐI KHÔNG dừng ở giá vì response "
+                "product_variants KHÔNG chứa tồn kho. Chỉ khi khách hỏi GIÁ rõ ràng mới chốt "
+                "`price` của variant khớp và dừng tại đây."
             )
             return "\n".join(lines)
 
