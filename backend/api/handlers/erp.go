@@ -508,7 +508,18 @@ func ERPQuery(c *gin.Context) {
 		//      attribute lookup against the resolved parent. effectiveParent is
 		//      then used by every fallback below so they target the right parent.
 		effectiveParent := parentCode
-		if len(slim) == 0 {
+		// A legitimate product_variants call always carries at least one
+		// attribute (color/size/brand) — it resolves ONE specific SKU. When the
+		// agent passes a parent_code that does not exact-match a ma_cha AND gives
+		// no attribute, embedding parent-resolution has only the bare code to go
+		// on and can misfire: a hallucinated code like "LS2-FF901" (the web_name
+		// with a dash) resolves via the lenient parentCodeInLabel guard to an
+		// unrelated accessory line whose label happens to contain "FF901",
+		// returning a confidently-wrong SKU + price. Skip resolution in that case
+		// so the response stays empty (count=0) and the agent re-evaluates instead
+		// of getting garbage. Legit specific-variant calls always have attributes,
+		// so this never blocks them.
+		if len(slim) == 0 && hasVariantAttribute(req.Color, req.Size, req.Brand) {
 			if resolved := resolveParentMaCha(c.Request.Context(), tenantID, parentCode, req.Brand); resolved != "" && !strings.EqualFold(resolved, parentCode) {
 				effectiveParent = resolved
 				response["resolved_parent"] = resolved

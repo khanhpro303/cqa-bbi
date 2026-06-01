@@ -231,6 +231,21 @@ trước (theo Product Intent Routing trong system-prompt). Khi đó luồng là
 > → inventory". Đã nới anchor + ép STOCK-pick gọi `inventory(exact_web_name=true)` + thêm
 > Branch-0 exact-web (tránh LIKE "LS2 FF901" dính "LS2 FF901 Carbon").
 
+> 🐞 **Bug tái phát + đã siết (2026-06-01) — sau khi chọn dòng, Agent gọi `product_variants`
+> với `parent_code` bịa:** Agent map "1" → "LS2 FF901" nhưng KHÔNG gọi `inventory(exact_web_name=true)`;
+> thay vào đó gọi `product_variants(parent_code="LS2-FF901", exact_web_name=true)` — `parent_code`
+> bị **chế ra từ web_name** (thay space bằng gạch nối) thay vì copy `parent_codes[0]="SP458484"`
+> từ response `products` trước đó (giá trị đúng NẰM sẵn trong history). Backend nhận `ma_cha="LS2-FF901"`
+> → 0 dòng → rơi vào (0a) `resolveParentMaCha` chạy embedding fuzzy trên chuỗi bịa; guard
+> `parentCodeInLabel` (normalize bỏ space/dash) khớp NHẦM một dòng phụ kiện FF900 có token "FF901"
+> trong label → trả SKU sai SP458323 + giá 990k. **Root cause chính là tầng Agent/prompt** (sai tool
+> + bịa parent_code), backend chỉ "đoán bừa" thay vì trả rỗng. **Đã siết hai tầng:**
+> (a) **prompt** — HARD GUARDRAIL cấm gọi `product_variants` sau bước chọn dòng khi chưa có màu+size,
+> bắt copy `parent_codes[]` VERBATIM, không bịa từ web_name (`system-prompt.md`);
+> (b) **backend** — `product_variants` chỉ chạy embedding parent-resolution (erp.go:511) khi có
+> **ít nhất một thuộc tính** color/size/brand; truy vấn variant không thuộc tính + parent_code không
+> khớp ma_cha giờ trả `count=0` thay vì resolve sang dòng khác.
+
 > 🐞 **Bug đã sửa (2026-06-01) — "Tổng tồn kho của dòng LS2 FF901: 0.0":** khi khách chọn
 > **theo dòng**, worker gọi `sumInventoryByMaChaAndWebName` (và bản song sinh
 > `sumInventoryByMaCha`). Trước đây hai hàm này gọi `client.SearchInventory(maCha)` → endpoint

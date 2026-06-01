@@ -223,6 +223,22 @@ func variantBelongsToParent(parentCode, effectiveParent, candidateMaCha, candida
 	return parentCodeInLabel(parentCode, candidateLabel)
 }
 
+// hasVariantAttribute reports whether a product_variants request carries at
+// least one concrete attribute filter (color, size, or brand) after trimming.
+//
+// It gates embedding-based parent resolution (erp.go) so that a parent_code
+// which does not exact-match a ma_cha is only fuzzy-resolved when the agent has
+// also supplied an attribute. Without an attribute the embedding keyword is just
+// the bare parent_code, which misfires on hallucinated codes like "LS2-FF901"
+// (the web_name with a dash) and resolves to an unrelated line. A legitimate
+// specific-variant lookup always names at least a color or size, so this never
+// blocks a real query.
+func hasVariantAttribute(color, size, brand string) bool {
+	return strings.TrimSpace(color) != "" ||
+		strings.TrimSpace(size) != "" ||
+		strings.TrimSpace(brand) != ""
+}
+
 // parentCodeInLabel reports whether the model/parent code the agent supplied
 // (e.g. "FF901") appears in the product label, ignoring case, spaces and
 // dashes. This is the "identity via label" check that lets a human model code

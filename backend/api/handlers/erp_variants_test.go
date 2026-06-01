@@ -49,6 +49,40 @@ func TestParentCodeInLabel(t *testing.T) {
 	}
 }
 
+func TestHasVariantAttribute(t *testing.T) {
+	tests := []struct {
+		name               string
+		color, size, brand string
+		want               bool
+	}{
+		{
+			// Regression: the FF901 bug. Agent picked a line then called
+			// product_variants with a hallucinated parent_code and NO color/size.
+			// Resolution must be skipped so the backend returns empty instead of
+			// fuzzy-resolving to a wrong accessory SKU.
+			name: "no attribute - resolution must be skipped",
+			want: false,
+		},
+		{
+			name:  "whitespace-only attributes count as empty",
+			color: "  ", size: "\t", brand: " ",
+			want: false,
+		},
+		{name: "color present", color: "đỏ đen", want: true},
+		{name: "size present", size: "L", want: true},
+		{name: "brand present", brand: "LS2", want: true},
+		{name: "all present", color: "trắng", size: "M", brand: "LS2", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasVariantAttribute(tt.color, tt.size, tt.brand); got != tt.want {
+				t.Errorf("hasVariantAttribute(%q,%q,%q) = %v, want %v",
+					tt.color, tt.size, tt.brand, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestVariantBelongsToParent(t *testing.T) {
 	tests := []struct {
 		name            string
