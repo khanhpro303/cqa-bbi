@@ -1815,7 +1815,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						}
 						prompt := fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search)
 
-						adapter, _, adapterErr := loadActiveZaloOAAdapter(tenantID)
+						adapter, activeChannel, adapterErr := loadActiveZaloOAAdapter(tenantID)
 						if adapterErr != nil {
 							log.Printf("[inventory_query] cannot send Zalo Rich Message: %v", adapterErr)
 						} else {
@@ -1830,6 +1830,25 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 										}
 									}
 								}
+							}
+
+							// Store the dòng-vs-SKU postbacks in Redis under the same session
+							// key the worker uses (engine.BuildSessionKey). When the customer
+							// replies with "1" or "2", the numeric-reply intercept in
+							// workers/tasks.go reads pending_options and rewrites userText to
+							// the matching #choose_flow_type:dongsp:/skucuthe: postback —
+							// no Langflow round-trip, no LLM hallucination of the menu.
+							if activeChannel != nil {
+								groupID := ""
+								if hasGroup {
+									groupID = matchedGroup.ZaloGroupID
+								}
+								sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
+								timeoutMinutes := 30
+								if cfg, cfgErr := config.Load(); cfgErr == nil && cfg.ChatbotSessionTimeout > 0 {
+									timeoutMinutes = cfg.ChatbotSessionTimeout
+								}
+								engine.StorePendingOptions(c.Request.Context(), sessionKey, buttons, timeoutMinutes)
 							}
 
 							// Zalo OA list template fallback to plain text — see

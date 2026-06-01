@@ -139,10 +139,10 @@ Agent → ERPQuery: resource="inventory", search="FF901", parent_code="", no mà
  ║ → is_inventory║                     ┌──────────┴──────────┐
  ║   _rich,      ║                isMaCha=true          isMaCha=false
  ║   data=[]     ║                     │                     │
- ║ → return      ║                     ▼                     ▼
- ╚══════╤════════╝          getProductsByMaCha       single-SKU live call
-        │                   FromCache (:2920)        (erp.go:1924, xem mục F)
-        │                   loop mỗi con →                   │
+ ║ + Redis pend  ║                     ▼                     ▼
+ ║   ing_options ║          getProductsByMaCha       single-SKU live call
+ ║ → return      ║          FromCache (:2920)        (erp.go:1924, xem mục F)
+ ╚══════╤════════╝          loop mỗi con →                   │
         │                   fetchInventoryStockForSKU        ▼
         │                          │              lay_ton_kho_san_pham
         │                          ▼              → totalStockFromInventoryItems
@@ -164,13 +164,13 @@ Agent → ERPQuery: resource="inventory", search="FF901", parent_code="", no mà
        │
        └─ len > 1 (nhiều dòng, còn mơ hồ)
              BuildButtonOptionsAsText → tin nhắn đánh số "1. … / 2. …"
-             + storePendingOptions → Redis <sessionKey>:pending_options
-                                     (TTL = session timeout)
+             + engine.StorePendingOptions → Redis <sessionKey>:pending_options
+                                            (TTL = session timeout)
              → return, CHỜ khách gõ số
 
    ────────── Khách gõ số "1"/"2"/"3" ────────────────────────────────────
    numeric-reply intercept (tasks.go:797, ngay sau permCtx, trước các handler #…)
-       Redis GET <sessionKey>:pending_options → resolveNumericSelection (:56)
+       Redis GET <sessionKey>:pending_options → engine.ResolveNumericSelection
        • số hợp lệ  → DEL pending; userText ← postback đã lưu → fall-through
                        #show_macha_options_by_web → sumInventoryByMaChaAndWebName
        • số ngoài khoảng → "Vui lòng chọn một số trong danh sách."
@@ -180,6 +180,14 @@ Agent → ERPQuery: resource="inventory", search="FF901", parent_code="", no mà
    #choose_flow_type:skucuthe:FF901  (tasks.go:876)
        Bot hỏi: "… màu và size nào? (Ví dụ: FF901 màu đỏ size L)"
        → khách trả lời màu+size → chuyển sang KỊCH BẢN 2
+
+   ────────── ⚠️ Level-1 cũng có pending_options ──────────────────────────
+   Khi disambiguation đầu tiên ở erp.go:1812 đẩy 2 nút "📦 dòng SP / 🔍 SKU
+   cụ thể", backend dùng chính sessionKey của worker (engine.BuildSessionKey)
+   để engine.StorePendingOptions với 2 postback `#choose_flow_type:dongsp:<kw>`
+   và `#choose_flow_type:skucuthe:<kw>`. Khách gõ "1" hay "2" trên message
+   này được numeric-reply intercept (tasks.go:797) nuốt thẳng — không lên
+   Langflow, không cần Agent đoán.
 ```
 
 **Tóm tắt Kịch bản 1:** một mã/keyword trần như "FF901" gần như luôn kích hoạt
@@ -325,9 +333,10 @@ Response cuối (Backend → Langflow tool):
 |---|---|---|
 | Webhook entry | `backend/api/handlers/webhooks.go:17` | `ZaloWebhookHandler` |
 | Worker entry | `backend/workers/tasks.go:185` | `HandleZaloWebhookTask` |
-| Numeric-reply intercept | `backend/workers/tasks.go:797` | resolve "1/2/3" từ `pending_options` (sau `permCtx`) |
-| Resolve số → postback | `backend/workers/tasks.go:56` | `resolveNumericSelection` |
-| Lưu menu vào Redis | `backend/workers/tasks.go:77` | `storePendingOptions` (`<sessionKey>:pending_options`) |
+| Numeric-reply intercept | `backend/workers/tasks.go:797` | resolve "1/2/3" từ `pending_options` (sau `permCtx`) — phục vụ cả Level-1 (dongsp/skucuthe) lẫn Level-2 (web-name) |
+| Resolve số → postback | `backend/engine/session_options.go:43` | `engine.ResolveNumericSelection` |
+| Lưu menu vào Redis | `backend/engine/session_options.go:65` | `engine.StorePendingOptions` (`<sessionKey>:pending_options`) |
+| Build session key (dùng chung worker + handler) | `backend/engine/session_options.go:28` | `engine.BuildSessionKey` |
 | Shortcut `dongsp` | `backend/workers/tasks.go:821` | `#choose_flow_type:dongsp:` (len==1 → sum ngay; len>1 → lưu pending) |
 | Shortcut `skucuthe` | `backend/workers/tasks.go:876` | `#choose_flow_type:skucuthe:` |
 | Web-name ranking | `backend/workers/tasks.go:832` | `engine.RankProductWebGroups` |
@@ -346,7 +355,8 @@ Response cuối (Backend → Langflow tool):
 | Inventory Branch-2 (web-name) | `backend/api/handlers/erp.go:1785` | `searchProductsByWebNameFromCache` (:3060, MySQL cache) |
 | Specific-SKU guard (inventory) | `backend/api/handlers/erp.go:1788` | `specificSKU != ""` → single-SKU, bỏ qua family/disambiguation |
 | Resolver fuzzy dùng chung (embedding→LLM, trả `specific`) | `backend/api/handlers/erp.go:3023` | `resolveMaChaFuzzy` (products + inventory) |
-| Disambiguation push | `backend/api/handlers/erp.go:1812` | flow-type buttons, `is_inventory_rich` |
+| Disambiguation push (Level-1) | `backend/api/handlers/erp.go:1812` | flow-type buttons, `is_inventory_rich` |
+| Level-1 store pending_options | `backend/api/handlers/erp.go:1846-1851` | `engine.BuildSessionKey` + `engine.StorePendingOptions` cho dongsp/skucuthe |
 | Phân loại dòng/SKU (dùng lại rows) | `backend/api/handlers/erp.go:2993` | `classifyDominantMaCha` (gọi `dominantMaCha` :2965) |
 | Fetch by ma_cha | `backend/api/handlers/erp.go:2920` | `getProductsByMaChaFromCache` |
 | Single-SKU live | `backend/api/handlers/erp.go:1924` | `inventoryStockRequestBody` (:2434) |
@@ -394,10 +404,19 @@ Response cuối (Backend → Langflow tool):
   chạy theo chain sau khi rebuild product cache, không có schedule mặc định → có
   thể stale.
 - **Zalo OA list template** trả `-233` trên `/message/cs` → tất cả nút disambiguation
-  fallback về plain text đánh số (`channels.BuildButtonOptionsAsText`). Riêng bộ
-  option `TEN_DONG_BO_WEB` của nhánh `dongsp` được lưu `pending_options` trong Redis
-  để khách **gõ số** (`1`/`2`/`3`) chọn lại; chỉ 1 dòng khớp thì bỏ qua bước chọn,
-  cộng tồn ngay (`resolveNumericSelection` + `storePendingOptions`).
+  fallback về plain text đánh số (`channels.BuildButtonOptionsAsText`). Hai cấp
+  menu CÙNG lưu `pending_options` trong Redis qua `engine.StorePendingOptions`
+  để numeric intercept (tasks.go:797) → `engine.ResolveNumericSelection` nuốt số
+  trần:
+    1. **Level-1** (erp.go:1812, dòng SP vs SKU cụ thể) — backend lưu
+       `[#choose_flow_type:dongsp:<kw>, #choose_flow_type:skucuthe:<kw>]`. "1"/"2"
+       fall-through thẳng handler `#choose_flow_type:*` ở tasks.go:821/876.
+    2. **Level-2** (tasks.go:864, danh sách `TEN_DONG_BO_WEB`) — worker lưu
+       `[#show_macha_options_by_web:<web1>, …]`. "1"/"2"/"3" fall-through
+       `#show_macha_options_by_web` → `sumInventoryByMaChaAndWebName`.
+  Cả hai cấp dùng chung `engine.BuildSessionKey(channelID, zaloUserID, groupID)`
+  nên handler và worker đọc/ghi cùng một key Redis. Chỉ 1 option khớp ở Level-2
+  thì bỏ bước chọn, cộng tồn ngay.
 - **`DEBUG_PUSH_FALLBACK_TO_ZALO=true`**: push payload trung gian
   (`exact_web`/`raw_like_groups`/`raw_like`/`slim`) của resource `products` tới
   admin Zalo để soi từng giai đoạn.
