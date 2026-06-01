@@ -748,6 +748,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					if postback, matched, inRange := engine.ResolveNumericSelection(userText, pendingOptions); matched {
 						if inRange {
 							db.RedisClient.Del(ctx, pendingKey)
+							log.Printf("[stock-pick] numeric reply %q resolved to postback %q (sessionKey=%s, %d pending options)", userText, postback, sessionKey, len(pendingOptions))
 							userText = postback
 						} else {
 							msg := "Vui lòng chọn một số trong danh sách."
@@ -949,6 +950,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// totals across all parent SKUs.
 		if strings.HasPrefix(userText, "#show_macha_options_by_web:") {
 			webName := strings.TrimPrefix(userText, "#show_macha_options_by_web:")
+			log.Printf("[stock-pick] entering inventory-by-web for web=%q (tenant=%s)", webName, matchedChannel.TenantID)
 			childProducts, err := getProductsByWebNameFromCache(ctx, matchedChannel.TenantID, webName)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy sản phẩm nào trong dòng '%s'.", webName))
@@ -998,6 +1000,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return nil
 			}
 
+			log.Printf("[stock-pick] inventory-by-web web=%q done: %d ma_cha ok, %d failed, total=%.1f, %d detail lines", webName, okCount, errCount, totalStock, len(details))
 			reply := fmt.Sprintf("Tổng tồn kho của dòng %s: %.1f\n\nChi tiết:\n%s", webName, totalStock, strings.Join(details, "\n"))
 			if matchedGroup.ZaloGroupID != "" {
 				_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
@@ -2136,6 +2139,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	// Cloudify). An ERP failure is surfaced as an error, never silently reported
 	// as 0 stock.
 	invEndpoint, invUsePost := engine.ResolveInventoryEndpoint(ctx, tenantID)
+	log.Printf("[stock-pick] querying Cloudify for ma_cha=%s web=%q: %d allowed SKU(s) via endpoint=%s (post=%t)", maCha, webName, len(allowedSKUs), invEndpoint, invUsePost)
 
 	var totalStock float64
 	var details []string
@@ -2150,6 +2154,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		okCount++
 		totalStock += stock
 		details = append(details, fmt.Sprintf("- %s: %.1f", s.Name, stock))
+		log.Printf("[stock-pick] Cloudify stock ma_cha=%s sku=%s → %.1f", maCha, s.Code, stock)
 	}
 
 	// Every SKU lookup errored → propagate so the caller tells the user the ERP
