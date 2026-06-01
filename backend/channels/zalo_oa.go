@@ -13,13 +13,75 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
 	zaloAPIBaseV2 = "https://openapi.zalo.me/v2.0/oa"
 	zaloAPIBaseV3 = "https://openapi.zalo.me/v3.0/oa"
 	zaloOAuthURL  = "https://oauth.zaloapp.com/v4/oa/access_token"
+
+	// zaloMaxTextRunes is the conservative per-message text cap. Zalo OA rejects
+	// over-long text payloads with HTTP 200 + a non-zero error code (e.g. a long
+	// stock breakdown across 30+ variants), so plain-text replies are split into
+	// ordered chunks before sending. Kept under the documented /message/cs limit
+	// with margin so a single under-cap GMF group message is never rejected.
+	zaloMaxTextRunes = 1800
 )
+
+// chunkMessageText splits text into ordered pieces, each at most maxRunes long,
+// preferring to break on newline boundaries so a stock breakdown stays readable.
+// A single line longer than the cap is hard-split on rune boundaries so a chunk
+// is never emitted that exceeds maxRunes and never cuts a multibyte rune.
+func chunkMessageText(text string, maxRunes int) []string {
+	if maxRunes <= 0 || utf8.RuneCountInString(text) <= maxRunes {
+		return []string{text}
+	}
+
+	var chunks []string
+	var b strings.Builder
+	bRunes := 0
+	flush := func() {
+		if b.Len() > 0 {
+			chunks = append(chunks, b.String())
+			b.Reset()
+			bRunes = 0
+		}
+	}
+
+	for _, line := range strings.Split(text, "\n") {
+		lineRunes := utf8.RuneCountInString(line)
+		if lineRunes > maxRunes {
+			flush()
+			runes := []rune(line)
+			for len(runes) > 0 {
+				n := maxRunes
+				if n > len(runes) {
+					n = len(runes)
+				}
+				chunks = append(chunks, string(runes[:n]))
+				runes = runes[n:]
+			}
+			continue
+		}
+
+		need := lineRunes
+		if bRunes > 0 {
+			need++ // rejoined '\n'
+		}
+		if bRunes+need > maxRunes {
+			flush()
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+			bRunes++
+		}
+		b.WriteString(line)
+		bRunes += lineRunes
+	}
+	flush()
+	return chunks
+}
 
 // ZaloOACredentials holds the credentials needed for Zalo OA API.
 type ZaloOACredentials struct {
@@ -363,50 +425,58 @@ func (z *ZaloOAAdapter) HealthCheck(ctx context.Context) error {
 }
 
 func (z *ZaloOAAdapter) SendMessage(ctx context.Context, conversationID string, content string) error {
-	var payload map[string]interface{}
 	trimmedContent := strings.TrimSpace(content)
+
+	// JSON template payloads (list templates, attachments) are sent verbatim and
+	// are never chunked.
 	if strings.HasPrefix(trimmedContent, "{") && strings.HasSuffix(trimmedContent, "}") {
-		if err := json.Unmarshal([]byte(trimmedContent), &payload); err != nil {
-			payload = nil
-		}
-	}
-
-	if payload == nil {
-		payload = map[string]interface{}{
-			"recipient": map[string]interface{}{
-				"user_id": conversationID,
-			},
-			"message": map[string]interface{}{
-				"text": content,
-			},
-		}
-	} else {
-		// Ensure recipient user_id matches conversationID
-		if recipient, ok := payload["recipient"].(map[string]interface{}); ok {
-			recipient["user_id"] = conversationID
-		} else {
-			payload["recipient"] = map[string]interface{}{
-				"user_id": conversationID,
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(trimmedContent), &payload); err == nil && payload != nil {
+			if recipient, ok := payload["recipient"].(map[string]interface{}); ok {
+				recipient["user_id"] = conversationID
+			} else {
+				payload["recipient"] = map[string]interface{}{"user_id": conversationID}
 			}
+			return z.sendCSPayload(ctx, payload)
 		}
+		// Not valid JSON after all — fall through and treat as plain text.
 	}
 
-	// /v3.0/oa/message/cs expects the payload as a JSON request body. The
-	// legacy doRequest helper passes params via ?data=<JSON> query string
-	// (Zalo V2 pattern), which Zalo accepts for trivial text replies but
-	// rejects with -233 ("message type is invalid or not support") for
-	// template attachments. Use the JSON-body variant for V3.
+	// Plain text: split over-long replies so Zalo doesn't silently reject them
+	// (HTTP 200 + non-zero error code). Each chunk is an ordered, under-cap send.
+	chunks := chunkMessageText(content, zaloMaxTextRunes)
+	for i, chunk := range chunks {
+		payload := map[string]interface{}{
+			"recipient": map[string]interface{}{"user_id": conversationID},
+			"message":   map[string]interface{}{"text": chunk},
+		}
+		if err := z.sendCSPayload(ctx, payload); err != nil {
+			if len(chunks) > 1 {
+				return fmt.Errorf("zalo send message chunk %d/%d failed: %w", i+1, len(chunks), err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// sendCSPayload posts a prepared /message/cs payload and surfaces a non-zero
+// Zalo application error (HTTP 200 with error != 0) as a real Go error.
+//
+// /v3.0/oa/message/cs expects the payload as a JSON request body. The legacy
+// doRequest helper passes params via ?data=<JSON> query string (Zalo V2
+// pattern), which Zalo accepts for trivial text replies but rejects with -233
+// ("message type is invalid or not support") for template attachments. Use the
+// JSON-body variant for V3.
+func (z *ZaloOAAdapter) sendCSPayload(ctx context.Context, payload map[string]interface{}) error {
 	result, err := z.doRequestJSON(ctx, "POST", zaloAPIBaseV3+"/message/cs", payload)
 	if err != nil {
 		return fmt.Errorf("zalo send message failed: %w", err)
 	}
-
-	// Zalo API returns error code in "error" field
 	if errCode, ok := result["error"].(float64); ok && errCode != 0 {
 		msg, _ := result["message"].(string)
 		return fmt.Errorf("zalo send message api error %v: %s", errCode, msg)
 	}
-
 	return nil
 }
 
@@ -500,6 +570,10 @@ func (z *ZaloOAAdapter) doRequestJSON(ctx context.Context, method, apiURL string
 
 		if errCode, ok := result["error"].(float64); ok && errCode != 0 {
 			msg, _ := result["message"].(string)
+			// Log the full body: Zalo returns HTTP 200 even for rejections, so
+			// without this the actual error code (e.g. over-length text) is
+			// invisible and the failure looks like a successful send.
+			log.Printf("[zalo] JSON API %s rejected: error=%v message=%q body=%s", apiURL, errCode, msg, string(respBody))
 			return nil, fmt.Errorf("zalo api json error %v: %s", errCode, msg)
 		}
 
@@ -803,48 +877,53 @@ func (z *ZaloOAAdapter) RemoveGMFGroupMembers(ctx context.Context, groupID strin
 
 // SendGroupMessage sends a text or custom JSON message to a GMF group chat
 func (z *ZaloOAAdapter) SendGroupMessage(ctx context.Context, groupID string, content string) error {
-	var payload map[string]interface{}
 	trimmedContent := strings.TrimSpace(content)
+
+	// JSON template payloads are sent verbatim and are never chunked.
 	if strings.HasPrefix(trimmedContent, "{") && strings.HasSuffix(trimmedContent, "}") {
-		if err := json.Unmarshal([]byte(trimmedContent), &payload); err != nil {
-			payload = nil
-		}
-	}
-
-	if payload == nil {
-		payload = map[string]interface{}{
-			"recipient": map[string]interface{}{
-				"group_id": groupID,
-			},
-			"message": map[string]interface{}{
-				"text": content,
-			},
-		}
-	} else {
-		// Ensure recipient group_id matches groupID
-		if recipient, ok := payload["recipient"].(map[string]interface{}); ok {
-			recipient["group_id"] = groupID
-		} else {
-			payload["recipient"] = map[string]interface{}{
-				"group_id": groupID,
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(trimmedContent), &payload); err == nil && payload != nil {
+			if recipient, ok := payload["recipient"].(map[string]interface{}); ok {
+				recipient["group_id"] = groupID
+			} else {
+				payload["recipient"] = map[string]interface{}{"group_id": groupID}
 			}
+			return z.sendGroupPayload(ctx, payload)
 		}
+		// Not valid JSON after all — fall through and treat as plain text.
 	}
 
+	// Plain text: split over-long replies (e.g. a 30+ variant stock breakdown)
+	// so Zalo doesn't reject them with HTTP 200 + a non-zero error code.
+	chunks := chunkMessageText(content, zaloMaxTextRunes)
+	for i, chunk := range chunks {
+		payload := map[string]interface{}{
+			"recipient": map[string]interface{}{"group_id": groupID},
+			"message":   map[string]interface{}{"text": chunk},
+		}
+		if err := z.sendGroupPayload(ctx, payload); err != nil {
+			if len(chunks) > 1 {
+				return fmt.Errorf("zalo send group message chunk %d/%d failed: %w", i+1, len(chunks), err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// sendGroupPayload posts a prepared group/message payload and surfaces a
+// non-zero Zalo application error (HTTP 200 with error != 0) as a real error.
+func (z *ZaloOAAdapter) sendGroupPayload(ctx context.Context, payload map[string]interface{}) error {
 	result, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/message", payload)
 	if err != nil {
 		return fmt.Errorf("zalo send group message failed: %w", err)
 	}
-
-	// Zalo API returns error code in "error" field
 	if errCode, ok := result["error"].(float64); ok && errCode != 0 {
 		msg, _ := result["message"].(string)
 		return fmt.Errorf("zalo send group message api error %v: %s", errCode, msg)
 	}
-
 	return nil
 }
-
 
 type GMFGroupMember struct {
 	OAID   string `json:"oa_id,omitempty"`
@@ -1017,4 +1096,3 @@ func (z *ZaloOAAdapter) RejectGMFGroupPendingInvites(ctx context.Context, groupI
 	_, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/rejectpendinginvite", payload)
 	return err
 }
-

@@ -1,8 +1,11 @@
 package channels
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestParseGMFQuotaAssetsFromZaloDocsShape(t *testing.T) {
@@ -116,5 +119,62 @@ func TestCreateGMFGroupValidatesRequiredFieldsBeforeRequest(t *testing.T) {
 	}
 	if _, _, err := adapter.CreateGMFGroup(t.Context(), "Group", "desc", "asset-1", []string{"  "}); err == nil {
 		t.Fatal("expected missing member_user_ids to fail")
+	}
+}
+
+func TestChunkMessageTextShortStaysSingle(t *testing.T) {
+	got := chunkMessageText("Tổng tồn kho: 208.0", 1800)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 chunk for short text, got %d", len(got))
+	}
+	if got[0] != "Tổng tồn kho: 208.0" {
+		t.Fatalf("content altered: %q", got[0])
+	}
+}
+
+func TestChunkMessageTextSplitsLongBreakdownUnderCap(t *testing.T) {
+	// Reproduces the real bug: a 32-line stock breakdown rejected by Zalo.
+	var b strings.Builder
+	b.WriteString("Tổng tồn kho của dòng LS2 FF901: 208.0\n\nChi tiết:\n")
+	for i := 0; i < 200; i++ {
+		b.WriteString(fmt.Sprintf("- LS2 FF901 Nón bảo hiểm Gloss Black Size XL biến thể %d: 12.0\n", i))
+	}
+	text := b.String()
+	cap := 1800
+
+	chunks := chunkMessageText(text, cap)
+	if len(chunks) < 2 {
+		t.Fatalf("expected long text to split, got %d chunk(s)", len(chunks))
+	}
+	for i, c := range chunks {
+		if n := utf8.RuneCountInString(c); n > cap {
+			t.Fatalf("chunk %d exceeds cap: %d > %d", i, n, cap)
+		}
+		if !utf8.ValidString(c) {
+			t.Fatalf("chunk %d split a multibyte rune (invalid UTF-8)", i)
+		}
+	}
+	// No content is lost: rejoining on '\n' reproduces the original lines.
+	if rejoined := strings.Join(chunks, "\n"); rejoined != text {
+		t.Fatalf("rejoined chunks differ from original\n got: %q", rejoined)
+	}
+}
+
+func TestChunkMessageTextHardSplitsOverlongLine(t *testing.T) {
+	line := strings.Repeat("á", 5000) // single line, no newline, multibyte
+	chunks := chunkMessageText(line, 1800)
+	if len(chunks) < 3 {
+		t.Fatalf("expected an overlong single line to hard-split, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if n := utf8.RuneCountInString(c); n > 1800 {
+			t.Fatalf("chunk %d exceeds cap: %d", i, n)
+		}
+		if !utf8.ValidString(c) {
+			t.Fatalf("chunk %d is invalid UTF-8 (rune cut)", i)
+		}
+	}
+	if strings.Join(chunks, "") != line {
+		t.Fatalf("hard-split lost content")
 	}
 }

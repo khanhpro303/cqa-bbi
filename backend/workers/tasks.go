@@ -1001,11 +1001,18 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 
 			log.Printf("[stock-pick] inventory-by-web web=%q done: %d ma_cha ok, %d failed, total=%.1f, %d detail lines", webName, okCount, errCount, totalStock, len(details))
-			reply := fmt.Sprintf("Tổng tồn kho của dòng %s: %.1f\n\nChi tiết:\n%s", webName, totalStock, strings.Join(details, "\n"))
+			// Concise customer reply: chỉ tổng tồn cả dòng + gợi ý hỏi tiếp theo
+			// màu/size. Chi tiết từng biến thể (details) chỉ dùng cho log nội bộ —
+			// không đẩy lên Zalo để tránh tin nhắn dài bị từ chối.
+			reply := fmt.Sprintf("Dòng %s hiện còn %.0f cái. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", webName, totalStock)
+			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
-				_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
 			} else {
-				_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			}
+			if sendErr != nil {
+				log.Printf("[stock-pick] FAILED to deliver inventory-by-web reply web=%q (%d chars): %v", webName, len(reply), sendErr)
 			}
 			return nil
 		}
@@ -1022,17 +1029,22 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return nil
 			}
 
-			stock, details, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, parsed.MaCha, parsed.WebName)
+			stock, _, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, parsed.MaCha, parsed.WebName)
 			if err != nil {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi tính toán tồn kho sản phẩm.")
 				return nil
 			}
 
-			reply := fmt.Sprintf("Tổng tồn kho thực tế của '%s' (Mã cha: %s) là: %.1f\n\nChi tiết:\n%s", parsed.WebName, parsed.MaCha, stock, strings.Join(details, "\n"))
+			// Concise reply: chỉ tổng tồn cả dòng, bỏ liệt kê biến thể (tránh tin dài).
+			reply := fmt.Sprintf("Dòng %s hiện còn %.0f cái. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", parsed.WebName, stock)
+			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
-				_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
 			} else {
-				_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+				sendErr = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+			}
+			if sendErr != nil {
+				log.Printf("[stock-pick] FAILED to deliver check_stock_webname reply web=%q ma_cha=%q (%d chars): %v", parsed.WebName, parsed.MaCha, len(reply), sendErr)
 			}
 			return nil
 		}
