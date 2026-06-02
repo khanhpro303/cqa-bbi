@@ -681,11 +681,23 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
-		// Real-time intent classification for active sessions
-		intent, err := classifyMessageIntent(ctx, matchedChannel.TenantID, payload.Message.Text)
-		if err != nil {
-			log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
+		// Real-time intent classification for active sessions. Skip it when the
+		// previous turn was a backend-pushed prompt awaiting this reply: the
+		// answer ("tháng này", "quý 2", "3 ngày", a tapped option) is ordinary
+		// short text the classifier would mislabel CASUAL and drop, silencing
+		// the bot mid-flow. The marker is single-use, so only this one
+		// continuation turn bypasses classification.
+		var intent string
+		if engine.TakeAwaitingFollowup(ctx, sessionKey) {
+			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
 			intent = "IN_SCOPE"
+		} else {
+			var err error
+			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, payload.Message.Text)
+			if err != nil {
+				log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
+				intent = "IN_SCOPE"
+			}
 		}
 
 		if intent == "HANDOVER" {
@@ -1264,6 +1276,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// hallucinated — answer alongside the backend-pushed prompt.
 		if strings.Contains(replyText, "[RICH_MESSAGE_SENT]") {
 			log.Printf("[worker] suppressing Langflow reply: backend already sent rich message (sentinel)")
+			// The backend just pushed a prompt expecting the customer's next
+			// message as the answer (debt period, orders date range, inventory
+			// dòng-vs-SKU). Mark the session so that reply — which arrives as
+			// ordinary short text — bypasses the CASUAL classifier once instead
+			// of being dropped as small talk.
+			engine.StoreAwaitingFollowup(ctx, sessionKey, meta.SessionTimeout)
 			return nil
 		}
 

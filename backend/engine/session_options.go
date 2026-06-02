@@ -116,3 +116,44 @@ func TakeAwaitingVariantLine(ctx context.Context, sessionKey string) string {
 	db.RedisClient.Del(ctx, key)
 	return val
 }
+
+// AwaitingFollowupSuffix is appended to a session key to mark that the backend
+// just pushed a Zalo prompt that expects the customer's next message as an
+// answer — e.g. the debt period question (Tháng này / Tháng trước / Quý này),
+// the orders date-range prompt (3/5/7 ngày), or the inventory dòng-vs-SKU
+// picker. Those answers arrive as ordinary short text ("tháng này", "quý 2",
+// "tuần qua") that the CASUAL/HANDOVER intent classifier would otherwise drop
+// as small talk, closing the session and silencing the bot mid-flow. The
+// worker sets this marker whenever it suppresses on the [RICH_MESSAGE_SENT]
+// sentinel and consumes it on the next turn to force IN_SCOPE exactly once.
+const AwaitingFollowupSuffix = ":awaiting_followup"
+
+// StoreAwaitingFollowup records that a backend-pushed prompt is awaiting the
+// customer's reply on the next turn. TTL follows the session timeout plus a
+// 1-minute grace so the marker outlives the on-screen prompt. No-op when Redis
+// is unavailable.
+func StoreAwaitingFollowup(ctx context.Context, sessionKey string, timeoutMinutes int) {
+	if db.RedisClient == nil {
+		return
+	}
+	ttl := time.Duration(timeoutMinutes)*time.Minute + 1*time.Minute
+	db.RedisClient.Set(ctx, sessionKey+AwaitingFollowupSuffix, "1", ttl)
+}
+
+// TakeAwaitingFollowup reports whether a follow-up marker was set and deletes it
+// (single-use). Returns false when no marker is set or Redis is unavailable.
+// Single-use semantics bypass the intent classifier for only the one
+// continuation turn, so genuinely casual chatter on later turns is still
+// classified normally.
+func TakeAwaitingFollowup(ctx context.Context, sessionKey string) bool {
+	if db.RedisClient == nil {
+		return false
+	}
+	key := sessionKey + AwaitingFollowupSuffix
+	val, err := db.RedisClient.Get(ctx, key).Result()
+	if err != nil || strings.TrimSpace(val) == "" {
+		return false
+	}
+	db.RedisClient.Del(ctx, key)
+	return true
+}

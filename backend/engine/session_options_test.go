@@ -100,3 +100,30 @@ func TestAwaitingVariantLineSuffixStable(t *testing.T) {
 		t.Errorf("AwaitingVariantLineSuffix = %q; want \":awaiting_variant_line\"", AwaitingVariantLineSuffix)
 	}
 }
+
+// TestAwaitingFollowupNilRedisSafe verifies the follow-up marker helpers are
+// nil-safe: with no Redis configured Store is a no-op and Take returns false
+// without panicking. This guards the degraded path in unit/local contexts.
+func TestAwaitingFollowupNilRedisSafe(t *testing.T) {
+	if db.RedisClient != nil {
+		t.Skip("Redis configured; this test only covers the nil-Redis contract")
+	}
+	ctx := context.Background()
+	const sessionKey = "zalo_session:ch1:u123"
+
+	// Must not panic with Redis unavailable.
+	StoreAwaitingFollowup(ctx, sessionKey, 10)
+
+	if got := TakeAwaitingFollowup(ctx, sessionKey); got {
+		t.Errorf("TakeAwaitingFollowup with nil Redis = %v; want false", got)
+	}
+}
+
+// TestAwaitingFollowupSuffixStable pins the Redis key suffix so a rename can't
+// silently split writer (worker sentinel suppression) from reader (worker
+// pre-classification bypass) — they share the session key and must agree.
+func TestAwaitingFollowupSuffixStable(t *testing.T) {
+	if AwaitingFollowupSuffix != ":awaiting_followup" {
+		t.Errorf("AwaitingFollowupSuffix = %q; want \":awaiting_followup\"", AwaitingFollowupSuffix)
+	}
+}
