@@ -359,6 +359,23 @@ func ERPQuery(c *gin.Context) {
 			}
 
 			if len(webGroups) > 1 {
+				// A variant-specific PRICE question ("FF901 Nardo grey XL giá bao
+				// nhiêu") whose keyword LIKE-collides into several lines must not be
+				// dropped into the disambiguation list: the pick path loses the
+				// color/size and only ever returns a family price_range, trapping the
+				// customer in a loop. Resolve the exact SKU across the colliding lines
+				// first; answer directly when exactly one line carries that variant.
+				// Stock/vague questions (isVariantPriceIntent=false) skip this and
+				// disambiguate as before.
+				if isVariantPriceIntent(req.Intent, req.Color, req.Size, req.Brand) {
+					if vResp, ok := pivotVariantAcrossGroups(c.Request.Context(), tenantID, webGroups, req.Color, req.Size, req.Brand, req.Limit, productGroups); ok {
+						cnt, _ := vResp["count"].(int)
+						writeAuditLog(tenantID, permCtx, "product_variants", scopeType, productGroups, req.Search, http.StatusOK, cnt, c.ClientIP())
+						c.JSON(http.StatusOK, vResp)
+						return
+					}
+				}
+
 				groupPayloads := make([]map[string]interface{}, 0, len(webGroups))
 				for _, g := range webGroups {
 					groupPayloads = append(groupPayloads, map[string]interface{}{
@@ -660,6 +677,82 @@ func isVariantPriceIntent(intent, color, size, brand string) bool {
 		return false
 	}
 	return hasVariantAttribute(color, size, brand)
+}
+
+// pivotVariantAcrossGroups handles a variant-specific PRICE question whose
+// keyword LIKE-collides into MULTIPLE product lines (e.g. "FF901" matches both
+// "LS2 FF901" and "LS2 FF901 Carbon"). The plain disambiguation list is wrong
+// here: it drops the color/size the customer gave, and the deterministic pick
+// that follows only ever yields a family price_range — never the named variant —
+// so the customer loops ("cho mình biết màu + size" ⇄ they already did). Instead,
+// resolve the exact SKU under each colliding parent and, if EXACTLY ONE line
+// carries the requested color/size, answer that variant's price directly.
+//
+// Returns (resp, true) only on a unique match. Zero matches (the attributes
+// don't exist on any line) or more than one match (genuinely ambiguous — both
+// lines have that variant) return (nil, false) so the caller falls back to the
+// normal disambiguation list. Scanning is capped so a broad keyword can't fan
+// out into an unbounded number of variant lookups before we just ask the user.
+func pivotVariantAcrossGroups(ctx context.Context, tenantID string, groups []engine.WebGroupMatch, color, size, brand string, limit int, productGroups []string) (gin.H, bool) {
+	return selectUniqueVariantMatch(groups, func(parentCode string) (gin.H, bool) {
+		vResp, vErr := buildVariantResponse(ctx, tenantID, parentCode, color, size, brand, limit, productGroups)
+		if vErr != nil {
+			log.Printf("[erp_query] cross-group variant pivot parent=%s failed: %v", parentCode, vErr)
+			return nil, false
+		}
+		if vResp == nil {
+			return nil, false
+		}
+		cnt, _ := vResp["count"].(int)
+		return vResp, cnt > 0
+	})
+}
+
+// variantPivotMaxCandidates caps how many colliding parent lines a single PRICE
+// pivot will scan. Beyond this the keyword is too broad to resolve confidently,
+// so we hand off to the disambiguation list rather than fan out unbounded variant
+// lookups.
+const variantPivotMaxCandidates = 6
+
+// selectUniqueVariantMatch walks the colliding product lines, resolving the
+// requested variant under each parent via `resolve`, and returns a match ONLY
+// when exactly one line carries it. resolve reports (payload, matched): a true
+// `matched` means that parent has the color/size. Zero matches or a second match
+// (ambiguous) yield (nil, false) so the caller disambiguates instead. Scanning
+// stops once variantPivotMaxCandidates parents have been tried. The decision
+// logic is isolated here (no DB) so the unique/ambiguous/none/cap branches are
+// unit-testable independent of buildVariantResponse.
+func selectUniqueVariantMatch(groups []engine.WebGroupMatch, resolve func(parentCode string) (gin.H, bool)) (gin.H, bool) {
+	var matched gin.H
+	tried := 0
+	for _, g := range groups {
+		for _, pc := range g.ParentCodes {
+			if strings.TrimSpace(pc) == "" {
+				continue
+			}
+			if tried >= variantPivotMaxCandidates {
+				// Too many colliding lines to scan confidently → let the customer pick.
+				return nil, false
+			}
+			tried++
+			resp, ok := resolve(pc)
+			if !ok {
+				continue
+			}
+			if matched != nil {
+				// A second line also carries this color/size → genuinely ambiguous.
+				return nil, false
+			}
+			matched = resp
+		}
+	}
+	if matched == nil {
+		return nil, false
+	}
+	// Tag so the agent component renders this as a variant answer (exact price),
+	// matching the single-line price-pivot below.
+	matched["pivoted_from"] = "products"
+	return matched, true
 }
 
 // buildVariantResponse resolves ONE specific variant (color/size/brand) under a
