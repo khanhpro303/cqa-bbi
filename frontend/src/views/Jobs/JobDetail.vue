@@ -302,6 +302,10 @@
           <v-icon start size="small">mdi-account-group</v-icon>
           Khách hàng đã cache
         </v-tab>
+        <v-tab value="exclude_customers" v-if="job?.job_type === 'erp_customer_cache'">
+          <v-icon start size="small">mdi-account-cancel-outline</v-icon>
+          Loại trừ mã KH
+        </v-tab>
         <v-tab value="history">
           <v-icon start size="small">mdi-history</v-icon>
           {{ $t('run_history') }}
@@ -572,6 +576,85 @@
           <div v-else class="text-center text-grey pa-6">
             <v-icon size="48" color="grey-lighten-1">mdi-database-off-outline</v-icon>
             <div class="mt-2 text-body-2">Chưa có dữ liệu cache. Hãy chạy job để đồng bộ khách hàng từ ERP.</div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Tab: Exclude Customer Codes -->
+      <div v-if="activeTab === 'exclude_customers' && job?.job_type === 'erp_customer_cache'">
+        <div class="d-flex align-center flex-wrap ga-2 mb-3">
+          <v-chip size="small" variant="tonal" color="info">
+            <v-icon start size="small">mdi-account-multiple-outline</v-icon>
+            Tổng mã KH: {{ customerCodeList.length }}
+          </v-chip>
+          <v-chip size="small" variant="tonal" color="warning">
+            <v-icon start size="small">mdi-account-cancel-outline</v-icon>
+            Đang loại trừ: {{ excludedCustomerCount }}
+          </v-chip>
+          <v-spacer />
+          <v-btn
+            size="small"
+            variant="outlined"
+            prepend-icon="mdi-refresh"
+            :loading="customerCodeLoading"
+            @click="fetchCustomerCodes"
+          >Tải lại</v-btn>
+          <v-btn
+            size="small"
+            variant="outlined"
+            color="primary"
+            prepend-icon="mdi-file-upload-outline"
+            :disabled="!authStore.canEdit('settings')"
+            @click="customerImportModal = true"
+          >Import Excel</v-btn>
+          <v-btn
+            size="small"
+            color="primary"
+            variant="flat"
+            prepend-icon="mdi-account-cog-outline"
+            :disabled="!authStore.canEdit('settings') || customerCodeList.length === 0"
+            @click="customerManageModal = true"
+          >Cấu hình thủ công</v-btn>
+        </div>
+
+        <v-progress-linear v-if="customerCodeLoading" indeterminate color="info" class="mb-3" />
+
+        <v-alert v-if="customerCodeError" type="error" variant="tonal" density="compact" class="mb-3">
+          {{ customerCodeError }}
+        </v-alert>
+
+        <template v-if="!customerCodeLoading && !customerCodeError">
+          <template v-if="excludedCustomers.length > 0">
+            <v-table density="compact" hover>
+              <thead>
+                <tr>
+                  <th class="text-no-wrap">Mã KH</th>
+                  <th class="text-no-wrap">Họ tên</th>
+                  <th class="text-no-wrap">Điện thoại</th>
+                  <th class="text-no-wrap">Cập nhật lúc</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in paginatedExcludedCustomers" :key="item.customer_code">
+                  <td class="text-caption font-weight-medium">{{ item.customer_code }}</td>
+                  <td class="text-caption">{{ item.ho_va_ten || '—' }}</td>
+                  <td class="text-caption">{{ item.dien_thoai || '—' }}</td>
+                  <td class="text-caption text-grey">{{ formatExclusionDate(item.updated_at) }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+            <v-pagination
+              v-if="excludedCustomerTotalPages > 1"
+              v-model="excludedCustomerPage"
+              :length="excludedCustomerTotalPages"
+              :total-visible="7"
+              density="compact"
+              class="mt-3"
+            />
+          </template>
+          <div v-else class="text-center text-grey pa-6">
+            <v-icon size="48" color="grey-lighten-1">mdi-account-cancel-outline</v-icon>
+            <div class="mt-2 text-body-2">Chưa có mã khách hàng nào bị loại trừ. Tất cả khách hàng đều được lưu vào cache.</div>
           </div>
         </template>
       </div>
@@ -1105,6 +1188,19 @@
       @updated="onExclusionUpdated"
     />
 
+    <!-- Exclude customer codes — modals -->
+    <ExcludeCustomersImportModal
+      v-model="customerImportModal"
+      :tenant-id="tenantId"
+      @updated="onCustomerExclusionUpdated"
+    />
+    <ExcludeCustomersManageModal
+      v-model="customerManageModal"
+      :tenant-id="tenantId"
+      :initial-items="customerCodeList"
+      @updated="onCustomerExclusionUpdated"
+    />
+
     <!-- Lightbox overlay for image zoom -->
     <div v-if="lightboxSrc" class="lightbox-overlay" @click="lightboxSrc = ''">
       <img :src="lightboxSrc" class="lightbox-img" @click.stop />
@@ -1122,12 +1218,23 @@ import { useAuthStore } from '../../stores/auth'
 import api from '../../api'
 import ExcludeParentsImportModal from '../../components/erp-exclusions/ExcludeParentsImportModal.vue'
 import ExcludeParentsManageModal from '../../components/erp-exclusions/ExcludeParentsManageModal.vue'
+import ExcludeCustomersImportModal from '../../components/erp-exclusions/ExcludeCustomersImportModal.vue'
+import ExcludeCustomersManageModal from '../../components/erp-exclusions/ExcludeCustomersManageModal.vue'
 
 interface ParentSKURow {
   parent_sku: string
   child_count: number
   nhan_hieu: string
   is_excluded: boolean
+  updated_at?: string
+}
+
+interface CustomerCodeRow {
+  customer_code: string
+  ho_va_ten: string
+  dien_thoai: string
+  is_excluded: boolean
+  is_gmf_linked: boolean
   updated_at?: string
 }
 import { parseImageMessagePayload, parseStructuredMessageText, type ImageMessageView } from '../../utils/message-render'
@@ -1208,6 +1315,12 @@ const parentSkuError = ref('')
 const importModal = ref(false)
 const manageModal = ref(false)
 
+const customerCodeList = ref<CustomerCodeRow[]>([])
+const customerCodeLoading = ref(false)
+const customerCodeError = ref('')
+const customerImportModal = ref(false)
+const customerManageModal = ref(false)
+
 const erpCacheFilteredProducts = computed(() => {
   const q = erpCacheSearch.value?.toLowerCase().trim()
   if (!q) return erpCacheProducts.value
@@ -1240,6 +1353,27 @@ const paginatedExcludedParents = computed(() => {
 watch(excludedTotalPages, (newVal) => {
   if (excludedPage.value > newVal) {
     excludedPage.value = Math.max(1, newVal)
+  }
+})
+
+const excludedCustomers = computed(() =>
+  customerCodeList.value.filter((c) => c.is_excluded),
+)
+const excludedCustomerCount = computed(() => excludedCustomers.value.length)
+
+// Excluded customer codes pagination
+const excludedCustomerPage = ref(1)
+const excludedCustomerTotalPages = computed(() =>
+  Math.ceil(excludedCustomers.value.length / excludedPerPage),
+)
+const paginatedExcludedCustomers = computed(() => {
+  const start = (excludedCustomerPage.value - 1) * excludedPerPage
+  return excludedCustomers.value.slice(start, start + excludedPerPage)
+})
+
+watch(excludedCustomerTotalPages, (newVal) => {
+  if (excludedCustomerPage.value > newVal) {
+    excludedCustomerPage.value = Math.max(1, newVal)
   }
 })
 
@@ -1688,6 +1822,27 @@ async function onExclusionUpdated() {
   await fetchERPCache()
 }
 
+async function fetchCustomerCodes() {
+  customerCodeLoading.value = true
+  customerCodeError.value = ''
+  try {
+    const { data } = await api.get<{ items: CustomerCodeRow[] }>(
+      `/tenants/${tenantId.value}/erp/customer-codes`,
+    )
+    customerCodeList.value = data.items || []
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || err?.response?.data?.error || ''
+    customerCodeError.value = msg || 'Không thể tải danh sách mã khách hàng.'
+  } finally {
+    customerCodeLoading.value = false
+  }
+}
+
+async function onCustomerExclusionUpdated() {
+  await fetchCustomerCodes()
+  await fetchERPCustomerCache()
+}
+
 function formatExclusionDate(value?: string): string {
   if (!value) return '—'
   const d = new Date(value)
@@ -1769,6 +1924,7 @@ onMounted(async () => {
   if (job.value?.job_type === 'erp_customer_cache') {
     activeTab.value = 'erp_customer_cache'
     fetchERPCustomerCache() // non-blocking, loads in background
+    fetchCustomerCodes() // non-blocking
   }
   await jobStore.fetchJobRuns(tenantId.value, jobId.value)
   await jobStore.fetchAllJobResults(tenantId.value, jobId.value)

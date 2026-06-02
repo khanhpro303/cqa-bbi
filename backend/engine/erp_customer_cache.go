@@ -66,7 +66,8 @@ func (a *Analyzer) runERPCustomerCacheJob(ctx context.Context, job models.Job) (
 		return a.failRun(&run, fmt.Errorf("pull ERP customers from %s: %w", endpointPath, err))
 	}
 
-	// 4. Deduplicate by MA
+	// 4. Deduplicate by MA, skipping any customer code on the exclusion list.
+	excludedSet := loadCustomerExclusionSet(job.TenantID)
 	seenCodes := make(map[string]bool)
 	customers := make([]models.CachedCustomer, 0, len(data))
 	insertedNow := time.Now()
@@ -74,6 +75,9 @@ func (a *Analyzer) runERPCustomerCacheJob(ctx context.Context, job models.Job) (
 		ma := getStringVal(c, "MA")
 		if ma == "" {
 			ma = getStringVal(c, "ma")
+		}
+		if _, skip := excludedSet[strings.TrimSpace(ma)]; skip {
+			continue
 		}
 		if ma != "" {
 			if seenCodes[ma] {
@@ -203,4 +207,52 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// loadCustomerExclusionSet returns the set of customer codes (MA, trimmed) that
+// the tenant has marked as excluded from the customer cache. On error it returns
+// an empty set so a transient DB issue never silently caches excluded customers
+// by widening the result — it just fails open to "nothing excluded".
+func loadCustomerExclusionSet(tenantID string) map[string]struct{} {
+	var exclusions []models.ERPCustomerCodeExclusion
+	set := make(map[string]struct{})
+	if err := db.DB.Where("tenant_id = ?", tenantID).Find(&exclusions).Error; err != nil {
+		log.Printf("[customer_cache] warn: failed to load customer exclusions: %v", err)
+		return set
+	}
+	for _, e := range exclusions {
+		set[strings.TrimSpace(e.CustomerCode)] = struct{}{}
+	}
+	return set
+}
+
+// ApplyCustomerCodeExclusions removes every cached_customers row whose MA is on
+// the tenant's exclusion list and returns the number of cached_customers rows
+// that remain. It is the immediate-effect counterpart to RebuildCachedProductsFromRaw:
+// admins call it after editing the exclusion list so removals take effect without
+// waiting for the next ERP sync. (Un-excluding a code only restores the customer
+// on the next sync, since there is no raw customer table to rebuild from.)
+func ApplyCustomerCodeExclusions(tenantID string) (int, error) {
+	excludedSet := loadCustomerExclusionSet(tenantID)
+	if len(excludedSet) > 0 {
+		codes := make([]string, 0, len(excludedSet))
+		for code := range excludedSet {
+			if code != "" {
+				codes = append(codes, code)
+			}
+		}
+		if len(codes) > 0 {
+			if err := db.DB.Where("tenant_id = ? AND ma IN ?", tenantID, codes).
+				Delete(&models.CachedCustomer{}).Error; err != nil {
+				return 0, fmt.Errorf("prune excluded customers: %w", err)
+			}
+		}
+	}
+
+	var remaining int64
+	if err := db.DB.Model(&models.CachedCustomer{}).
+		Where("tenant_id = ?", tenantID).Count(&remaining).Error; err != nil {
+		return 0, fmt.Errorf("count cached customers: %w", err)
+	}
+	return int(remaining), nil
 }

@@ -272,6 +272,13 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/erp/parent-skus/import", middleware.RequirePermission("settings", "w"), handlers.ImportParentSKUExclusions)
 			tenant.PUT("/erp/parent-skus/exclusions", middleware.RequirePermission("settings", "w"), handlers.PutParentSKUExclusions)
 
+			// ERP customer-code exclusion list (filters cached_customers); guarded
+			// against excluding codes already linked to a GMF group.
+			tenant.GET("/erp/customer-codes", middleware.RequirePermission("settings", "r"), handlers.ListExcludableCustomerCodes)
+			tenant.GET("/erp/customer-codes/template", middleware.RequirePermission("settings", "r"), handlers.DownloadCustomerCodeTemplate)
+			tenant.POST("/erp/customer-codes/import", middleware.RequirePermission("settings", "w"), handlers.ImportCustomerCodeExclusions)
+			tenant.PUT("/erp/customer-codes/exclusions", middleware.RequirePermission("settings", "w"), handlers.PutCustomerCodeExclusions)
+
 			// Notification logs
 			tenant.GET("/notification-logs", handlers.ListNotificationLogs)
 
