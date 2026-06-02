@@ -108,7 +108,23 @@ func (a *Analyzer) runERPCustomerCacheJob(ctx context.Context, job models.Job) (
 
 	log.Printf("[customer_cache] job %s: fetched %d khách hàng from Cloudify ERP", job.Name, len(customers))
 
-	// 5. Clear existing tenant rows, then batch insert.
+	// 5. Enrich each customer with its Miền (region) by reading the external
+	//    reference Postgres (cloudify.cloudify_customers) by MA. This is READ-ONLY
+	//    against another app's database — we never write to it. It is non-fatal:
+	//    if Postgres is unreachable, we still cache the customer list with empty
+	//    regions and surface the error in the run summary.
+	regionsEnriched := 0
+	regionSourceError := ""
+	regionByCode, regionErr := db.GetCustomerRegionMap(a.cfg.PostgresURL)
+	if regionErr != nil {
+		regionSourceError = regionErr.Error()
+		log.Printf("[customer_cache] warn: failed to read regions from Postgres (continuing without region): %v", regionErr)
+	} else {
+		regionsEnriched = applyRegions(customers, regionByCode)
+		log.Printf("[customer_cache] job %s: enriched %d/%d khách hàng with Miền", job.Name, regionsEnriched, len(customers))
+	}
+
+	// 6. Clear existing tenant rows, then batch insert.
 	if errDel := db.DB.Where("tenant_id = ?", job.TenantID).Delete(&models.CachedCustomer{}).Error; errDel != nil {
 		log.Printf("[customer_cache] warn: failed to clear cached_customers: %v", errDel)
 	}
@@ -126,13 +142,18 @@ func (a *Analyzer) runERPCustomerCacheJob(ctx context.Context, job models.Job) (
 
 	finishedAt := time.Now()
 	runStatus := "success"
-	summaryMsg := fmt.Sprintf("Đã đồng bộ %d khách hàng từ ERP", len(customers))
-	summaryJSON, _ := json.Marshal(map[string]interface{}{
+	summaryMsg := fmt.Sprintf("Đã đồng bộ %d khách hàng từ ERP (gắn Miền cho %d khách hàng)", len(customers), regionsEnriched)
+	summaryFields := map[string]interface{}{
 		"message":                summaryMsg,
 		"conversations_analyzed": len(customers),
 		"conversations_found":    len(customers),
 		"conversations_passed":   len(customers),
-	})
+		"regions_enriched":       regionsEnriched,
+	}
+	if regionSourceError != "" {
+		summaryFields["region_source_error"] = regionSourceError
+	}
+	summaryJSON, _ := json.Marshal(summaryFields)
 
 	if err := db.DB.Model(&run).Updates(map[string]interface{}{
 		"status":      runStatus,
@@ -198,6 +219,21 @@ func coalesceFalse(s string) string {
 		return ""
 	}
 	return t
+}
+
+// applyRegions sets the REGION (Miền) on each cached customer from a
+// ma_khach_hang -> region map read from the reference Postgres. It returns the
+// number of customers that received a non-empty region. Pure (no DB) so it is
+// unit-testable.
+func applyRegions(customers []models.CachedCustomer, regionByCode map[string]string) int {
+	enriched := 0
+	for i := range customers {
+		if r, ok := regionByCode[strings.TrimSpace(customers[i].MA)]; ok && r != "" {
+			customers[i].REGION = r
+			enriched++
+		}
+	}
+	return enriched
 }
 
 func firstNonEmpty(vals ...string) string {

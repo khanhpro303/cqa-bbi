@@ -2476,8 +2476,17 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 			if customerCode != "" {
 				cfg, _ := config.Load()
-				// 2. Query Postgres database to get ten_khach_hang
-				tenKhachHang, errName := db.GetCloudifyCustomerNameByCode(cfg.PostgresURL, customerCode)
+				// 2. Resolve ten_khach_hang from the local MySQL cache first
+				//    (cached_customers, tenant-scoped). Fall back to the reference
+				//    Postgres only on a cache miss for this code.
+				var tenKhachHang string
+				var errName error
+				var cachedRec models.CachedCustomer
+				if err := db.DB.Where("tenant_id = ? AND ma = ?", tenantID, customerCode).First(&cachedRec).Error; err == nil && cachedRec.HO_VA_TEN != "" {
+					tenKhachHang = cachedRec.HO_VA_TEN
+				} else {
+					tenKhachHang, errName = db.GetCloudifyCustomerNameByCode(cfg.PostgresURL, customerCode)
+				}
 				if errName == nil && tenKhachHang != "" {
 					// 3. Make API call with JSON body: {"name": tenKhachHang, "limit": 1000}
 					apiPayload := map[string]interface{}{

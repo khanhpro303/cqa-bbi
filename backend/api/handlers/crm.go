@@ -755,10 +755,27 @@ func DeleteZaloCustomer(c *gin.Context) {
 
 func ListCustomerCodes(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		codes, err := db.GetCustomerCodes(cfg.PostgresURL)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_fetch_postgres_customer_codes", "details": err.Error()})
+		tenantID := middleware.GetTenantID(c)
+
+		// Prefer the local MySQL cache (cached_customers, tenant-scoped). Fall back
+		// to the reference Postgres only when the cache is empty (e.g. the daily
+		// erp_customer_cache job has not run yet for this tenant).
+		var codes []string
+		if err := db.DB.Model(&models.CachedCustomer{}).
+			Where("tenant_id = ?", tenantID).
+			Order("ma asc").
+			Pluck("ma", &codes).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_fetch_cached_customer_codes", "details": err.Error()})
 			return
+		}
+
+		if len(codes) == 0 {
+			fallbackCodes, err := db.GetCustomerCodes(cfg.PostgresURL)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_fetch_postgres_customer_codes", "details": err.Error()})
+				return
+			}
+			codes = fallbackCodes
 		}
 
 		c.JSON(http.StatusOK, codes)
@@ -769,11 +786,33 @@ func ListCloudifyCustomers(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 
-		// 1. Fetch Cloudify customer profiles from Postgres
-		profiles, err := db.GetCloudifyCustomerProfiles(cfg.PostgresURL)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_fetch_cloudify_customers", "details": err.Error()})
+		// 1. Fetch Cloudify customer profiles from the local MySQL cache
+		//    (cached_customers, tenant-scoped, includes Miền/region). Fall back to
+		//    the reference Postgres only when the cache is empty for this tenant.
+		var cached []models.CachedCustomer
+		if err := db.DB.Where("tenant_id = ?", tenantID).Order("ma asc").Find(&cached).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_fetch_cached_customers", "details": err.Error()})
 			return
+		}
+
+		profiles := make([]db.CloudifyCustomerProfile, 0, len(cached))
+		for _, cc := range cached {
+			profiles = append(profiles, db.CloudifyCustomerProfile{
+				CustomerCode: cc.MA,
+				Name:         cc.HO_VA_TEN,
+				Address:      cc.DIA_CHI,
+				Region:       cc.REGION,
+				PhoneNumber:  cc.DIEN_THOAI,
+			})
+		}
+
+		if len(profiles) == 0 {
+			fallbackProfiles, err := db.GetCloudifyCustomerProfiles(cfg.PostgresURL)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_fetch_cloudify_customers", "details": err.Error()})
+				return
+			}
+			profiles = fallbackProfiles
 		}
 
 		// 2. Fetch all local ZaloCustomer records from MySQL for this tenant
@@ -1172,11 +1211,11 @@ func ListGroupMembers(c *gin.Context) {
 		// Since OA is not a customer, we should exclude it from customers. Let's classify it as employee.
 		if member.OAID != "" {
 			responseEmployees = append(responseEmployees, gin.H{
-				"oa_id":        member.OAID,
-				"name":         member.Name,
-				"avatar":       member.Avatar,
-				"is_oa":        true,
-				"is_employee":  true,
+				"oa_id":       member.OAID,
+				"name":        member.Name,
+				"avatar":      member.Avatar,
+				"is_oa":       true,
+				"is_employee": true,
 			})
 			continue
 		}
@@ -1678,4 +1717,3 @@ func fetchUniqueGroupsFromAstraDB(ctx context.Context, tenantID string) ([]strin
 
 	return uniqueGroups, nil
 }
-
