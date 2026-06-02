@@ -378,14 +378,19 @@
                       v-model="ep.product_groups_arr"
                       :items="listTenNhomVthh"
                       multiple
-                      chips
                       density="compact"
                       variant="plain"
                       hide-details
                       :disabled="!ep.is_enabled"
                       placeholder="Chọn nhóm..."
                       style="font-size: 0.75rem;"
-                    />
+                    >
+                      <template #selection="{ index }">
+                        <span v-if="index === 0" class="text-caption">
+                          ({{ ep.product_groups_arr.length }})
+                        </span>
+                      </template>
+                    </v-select>
                     <span v-else class="text-caption text-grey-darken-1">—</span>
                   </td>
                 </tr>
