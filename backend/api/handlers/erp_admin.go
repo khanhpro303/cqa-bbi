@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -61,6 +62,19 @@ func SaveERPSettings(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
 		return
+	}
+
+	// Validate before persisting anything: an enabled product/inventory
+	// endpoint must carry a non-empty VTHH group filter.
+	for _, ep := range req.PrivateEndpoints {
+		if ep.IsEnabled && resourceRequiresProductGroups(ep.Resource) &&
+			strings.TrimSpace(ep.ProductGroups) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":    "product_groups_required",
+				"resource": ep.Resource,
+			})
+			return
+		}
 	}
 
 	cfg, _ := config.Load()

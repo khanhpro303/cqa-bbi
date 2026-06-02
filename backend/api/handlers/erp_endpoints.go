@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +14,13 @@ import (
 
 // Available ERP resources for validation
 var erpAvailableResources = []string{"products", "inventory", "orders", "customers", "debt"}
+
+// resourceRequiresProductGroups reports whether enabling a resource requires a
+// non-empty VTHH product-group filter. Only product/inventory reads are scoped
+// by product group; orders/customers/debt are scoped by partner instead.
+func resourceRequiresProductGroups(resource string) bool {
+	return resource == "products" || resource == "inventory"
+}
 
 // ---------------------------------------------------------------------------
 // ListGroupERPEndpoints — GET /crm/groups/:id/erp/endpoints
@@ -80,6 +88,22 @@ func SaveGroupERPEndpoints(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
 		return
+	}
+
+	// Validate first so we never persist a partial update: an enabled
+	// product/inventory endpoint must carry a non-empty VTHH group filter.
+	for _, ep := range req.Endpoints {
+		if !isValidERPResource(ep.Resource) {
+			continue
+		}
+		if ep.IsEnabled && resourceRequiresProductGroups(ep.Resource) &&
+			strings.TrimSpace(ep.ProductGroups) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":    "product_groups_required",
+				"resource": ep.Resource,
+			})
+			return
+		}
 	}
 
 	for _, ep := range req.Endpoints {

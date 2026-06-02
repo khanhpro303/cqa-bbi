@@ -830,7 +830,6 @@
                             density="compact"
                             hide-details
                             :disabled="!isOwnerOrAdmin"
-                            @change="quickToggleGroupEndpoint(ep)"
                           />
                         </td>
                         <td>
@@ -953,6 +952,11 @@
     </v-dialog>
 
     <v-snackbar v-model="snack" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
+
+    <ProductGroupRequiredModal
+      v-model="groupFilterModal"
+      :resources="missingGroupResources"
+    />
   </div>
 </template>
 
@@ -964,6 +968,8 @@ import { useUserStore } from '../stores/users'
 import { useChannelStore } from '../stores/channels'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
+import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
+import { findEndpointsMissingGroups } from '../utils/erp-permission-validation'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -1605,6 +1611,8 @@ const activeGroupForPerms = ref<any>(null)
 const groupEndpoints = ref<any[]>([])
 const loadingGroupEndpoints = ref(false)
 const savingGroupEndpoints = ref(false)
+const groupFilterModal = ref(false)
+const missingGroupResources = ref<string[]>([])
 
 const scopeOptions = [
   { title: 'Tất cả', value: 'all' },
@@ -1662,6 +1670,14 @@ async function loadGroupEndpoints(groupId: string) {
 }
 
 async function saveGroupEndpoints() {
+  // Block save when an enabled product/inventory endpoint has no VTHH filter.
+  const missing = findEndpointsMissingGroups(groupEndpoints.value)
+  if (missing.length > 0) {
+    missingGroupResources.value = missing
+    groupFilterModal.value = true
+    return
+  }
+
   savingGroupEndpoints.value = true
   try {
     const payload = groupEndpoints.value.map((ep: any) => {
@@ -1682,22 +1698,6 @@ async function saveGroupEndpoints() {
     showSnack(err.response?.data?.error || t('error'), 'error')
   } finally {
     savingGroupEndpoints.value = false
-  }
-}
-
-async function quickToggleGroupEndpoint(ep: any) {
-  if (ep.is_enabled) {
-    ep.scope_type = 'own'
-  }
-  try {
-    await api.post(`/tenants/${tenantId.value}/crm/groups/${activeGroupForPerms.value.id}/erp/endpoints/toggle`, {
-      resource: ep.resource,
-      is_enabled: ep.is_enabled,
-    })
-  } catch (err: any) {
-    ep.is_enabled = !ep.is_enabled
-    const errMsg = err.response?.data?.details || err.response?.data?.error || 'Có lỗi xảy ra khi cập nhật phân quyền'
-    showSnack(errMsg, 'error')
   }
 }
 

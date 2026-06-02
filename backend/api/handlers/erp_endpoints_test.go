@@ -136,3 +136,118 @@ func TestSaveAndToggleGroupERPEndpoints(t *testing.T) {
 		t.Fatalf("expected products endpoint to be disabled, got enabled")
 	}
 }
+
+func TestResourceRequiresProductGroups(t *testing.T) {
+	cases := []struct {
+		resource string
+		want     bool
+	}{
+		{"products", true},
+		{"inventory", true},
+		{"orders", false},
+		{"customers", false},
+		{"debt", false},
+		{"unknown", false},
+	}
+	for _, tc := range cases {
+		if got := resourceRequiresProductGroups(tc.resource); got != tc.want {
+			t.Errorf("resourceRequiresProductGroups(%q) = %v, want %v", tc.resource, got, tc.want)
+		}
+	}
+}
+
+// saveGroupERPEndpoints validation rejects an enabled product/inventory
+// endpoint with an empty VTHH group filter BEFORE any DB access, so this runs
+// without a database connection.
+func TestSaveGroupERPEndpointsBlocksEmptyProductGroups(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name       string
+		resource   string
+		isEnabled  bool
+		groups     string
+		wantStatus int
+	}{
+		{"enabled products empty groups -> 400", "products", true, "", http.StatusBadRequest},
+		{"enabled inventory empty groups -> 400", "inventory", true, "   ", http.StatusBadRequest},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]interface{}{
+				"endpoints": []map[string]interface{}{
+					{
+						"resource":       tc.resource,
+						"is_enabled":     tc.isEnabled,
+						"scope_type":     "own",
+						"product_groups": tc.groups,
+					},
+				},
+			})
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Params = []gin.Param{{Key: "id", Value: "grp-test"}}
+			c.Set("tenant_id", "ten-test")
+			c.Request, _ = http.NewRequest("PUT", "/endpoints", bytes.NewBuffer(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			SaveGroupERPEndpoints(c)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d (body: %s)", tc.wantStatus, w.Code, w.Body.String())
+			}
+			var resp struct {
+				Error    string `json:"error"`
+				Resource string `json:"resource"`
+			}
+			_ = json.Unmarshal(w.Body.Bytes(), &resp)
+			if resp.Error != "product_groups_required" {
+				t.Fatalf("expected error product_groups_required, got %q", resp.Error)
+			}
+			if resp.Resource != tc.resource {
+				t.Fatalf("expected resource %q, got %q", tc.resource, resp.Resource)
+			}
+		})
+	}
+}
+
+// SaveERPSettings validation rejects an enabled private-bot product/inventory
+// endpoint with an empty group filter before any persistence.
+func TestSaveERPSettingsBlocksEmptyProductGroups(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"public_active":  "false",
+		"private_active": "true",
+		"private_endpoints": []map[string]interface{}{
+			{
+				"resource":       "products",
+				"is_enabled":     true,
+				"scope_type":     "all",
+				"product_groups": "",
+			},
+		},
+	})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = []gin.Param{{Key: "tenantId", Value: "ten-test"}}
+	c.Request, _ = http.NewRequest("PUT", "/settings/erp", bytes.NewBuffer(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SaveERPSettings(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Error    string `json:"error"`
+		Resource string `json:"resource"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Error != "product_groups_required" || resp.Resource != "products" {
+		t.Fatalf("expected product_groups_required for products, got %+v", resp)
+	}
+}

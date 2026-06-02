@@ -404,6 +404,11 @@
     </v-card>
 
     <v-snackbar v-model="snackbar" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
+
+    <ProductGroupRequiredModal
+      v-model="groupFilterModal"
+      :resources="missingGroupResources"
+    />
   </div>
 </template>
 
@@ -413,6 +418,8 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useTheme } from 'vuetify'
 import api from '../api'
+import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
+import { findEndpointsMissingGroups } from '../utils/erp-permission-validation'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -432,6 +439,9 @@ const testing = ref(false)
 const savingERP = ref(false)
 const testingERP = ref(false)
 const showAdvanced = ref(false)
+
+const groupFilterModal = ref(false)
+const missingGroupResources = ref<string[]>([])
 
 const langflow = reactive({
   baseUrl: '',
@@ -627,6 +637,14 @@ async function fetchListTenNhomVthh() {
 }
 
 async function saveERP() {
+  // Block save when an enabled product/inventory endpoint has no VTHH filter.
+  const missing = findEndpointsMissingGroups(privateEndpoints.value)
+  if (missing.length > 0) {
+    missingGroupResources.value = missing
+    groupFilterModal.value = true
+    return
+  }
+
   savingERP.value = true
   try {
     const privateEndpointsPayload = privateEndpoints.value.map(ep => {

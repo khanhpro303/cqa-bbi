@@ -435,6 +435,9 @@ export default {
   erp_resource_debt: '💰 Debt / Ledger',
   erp_save_endpoints: 'Save permissions',
   erp_endpoints_saved: 'Endpoint permissions saved',
+  erp_group_filter_required_title: 'Missing VTHH product group filter',
+  erp_group_filter_required_desc: 'When a permission is enabled for the resources below, you must select at least one VTHH product group. Please pick a group or turn the permission off before saving.',
+  understood: 'Got it',
 
   // Zalo Whitelist & User Management
   users_system_tab: 'System Users',

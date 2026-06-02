@@ -435,6 +435,9 @@ export default {
   erp_resource_debt: '💰 Công nợ',
   erp_save_endpoints: 'Lưu phân quyền',
   erp_endpoints_saved: 'Đã lưu phân quyền endpoint',
+  erp_group_filter_required_title: 'Thiếu bộ lọc nhóm sản phẩm VTHH',
+  erp_group_filter_required_desc: 'Khi bật quyền cho các tài nguyên sau, bạn phải chọn ít nhất một nhóm sản phẩm VTHH. Vui lòng chọn nhóm hoặc tắt quyền trước khi lưu.',
+  understood: 'Đã hiểu',
 
   // Zalo Whitelist & User Management
   users_system_tab: 'Người dùng hệ thống',
