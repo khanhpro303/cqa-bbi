@@ -151,7 +151,8 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
         ERPQuery → if req.Resource == "products" (erp.go:274)   [cache-only, return sớm]
                                  │
                                  ▼
-                    exact_web_name == true ?  (erp.go:279)
+          exact_web_name == true  AND NOT (intent=price + color/size) ?
+          (gate: !isVariantPriceIntent — variant-price KHÔNG đi nhánh exact-web)
                                  │
                    ┌── CÓ ───────┴───────── KHÔNG ──┐
                    ▼                                ▼
@@ -194,6 +195,16 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
                                                                        ▼
                                             JSON: { source:"astradb_cache", data[], count }
 ```
+
+> 🆕 **Variant PRICE gate + pivot (2026-06-02).** Hai chốt mới trong `case "products"`:
+> 1. **Gate nhánh exact-web** (`!isVariantPriceIntent`): call có `intent=price` + color/size
+>    KHÔNG đi nhánh `exact_web_name`. Lý do: sau khi khách chọn 1 MÀU từ `available_colors`,
+>    agent hay set `exact_web_name=true` nhưng giữ keyword cũ ("FF901 Carbon") → exact-web tra
+>    tên web tuyệt đối → không khớp → "không tìm thấy". Gate cho nó rơi xuống nhánh LIKE.
+> 2. **Pivot sau khi resolve 1 dòng** (`shouldPivotToVariant` → `buildVariantResponse`): khi
+>    nhánh `==1 nhóm` hoặc `FUZZY` ra `resolvedParent` DUY NHẤT và call là price+color/size,
+>    backend re-resolve đúng SKU và trả đơn giá (`pivoted_from="products"`) thay vì `price_range`.
+>    Engine y hệt resource `product_variants` (mục G). 0 match → trả `available_colors/sizes`.
 
 > Câu mẫu **"storm 3"** đi nhánh: `exact_web_name=false` → có chữ → B1 LIKE trả **0
 > nhóm** → **B2 hybrid** bắt được `ma_cha` (qua `match.MaCha`) → `matchedMaCha` →

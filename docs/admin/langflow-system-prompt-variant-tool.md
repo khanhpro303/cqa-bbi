@@ -47,6 +47,11 @@ wording in Vietnamese to match the rest of the prompt.
      – đen bóng") để dễ hiểu.
    → Nếu vẫn 0 match: backend trả available_colors / available_sizes /
      available_brands. Hỏi user chọn lại từ các tuỳ chọn đó, KHÔNG bịa giá.
+   → KHI USER CHỌN LẠI MÀU/SIZE từ available_* (vd "Solid Carbon size XL"): gọi lại
+     resource="products", GIỮ NGUYÊN keyword cũ + color/size mới user chọn + intent="price".
+     TUYỆT ĐỐI KHÔNG set exact_web_name=true ở đây — đó là cờ cho pick TÊN DÒNG, không phải
+     pick màu/size; với color/size backend sẽ pivot ra đúng SKU + đơn giá. (Backend cũng đã
+     force bỏ qua nhánh exact-web cho mọi call price+color/size, nên lỡ set cờ cũng không vỡ.)
 
 3. User trả lời disambiguation (số 1/2/3 hoặc mã SP)
    → giữ flow cũ: resource="products" với search là mã SP đã chọn.
@@ -128,6 +133,10 @@ Sau khi cập nhật SYSTEM_PROMPT trong Langflow:
    và backend pivot (response có `pivoted_from="products"`). Cả hai đều hợp lệ.
 3. Gửi `FF901 màu hồng size XXL` → bot trả "không có variant đó, các màu
    có sẵn: …" (fallback `available_colors`/`available_sizes`).
+3b. (Tiếp 3) Khách chọn lại 1 màu có thật từ list, vd `Solid Carbon size XL đơn giá bao nhiêu`
+    → bot trả ĐÚNG đơn giá. Check log: call `products` có color="Solid Carbon", size="XL",
+    intent="price" và KHÔNG có exact_web_name (hoặc có nhưng vẫn ra giá nhờ gate); response
+    `pivoted_from="products"`. KHÔNG được ra "không tìm thấy" (regression của exact-web gate).
 4. Gửi `FF901 đen bóng size L tồn bao nhiêu?` → check log Langflow để thấy
    agent gọi 3 call (`products` → `product_variants` → `inventory(MA)`); bot
    trả ton_kho/TON_KHO chính xác từ live ERP.
@@ -146,7 +155,8 @@ Sau khi cập nhật SYSTEM_PROMPT trong Langflow:
 - Backend handler: `backend/api/handlers/erp.go` (case `product_variants` +
   `searchVariantsByAttributes`; price-pivot `shouldPivotToVariant` +
   `buildVariantResponse` — engine dùng chung cho cả resource `product_variants`
-  lẫn pivot từ `products`; case `orders` + `buildOrdersSummary` +
+  lẫn pivot từ `products`; `isVariantPriceIntent` gate nhánh exact-web để call
+  price+color/size không bị "không tìm thấy"; case `orders` + `buildOrdersSummary` +
   `trimOrdersForLLM` + `orderStatusName`).
 - Component code: `ERPGatewayCaller.component.py` (render `pivoted_from="products"`
   qua `_format_variant_response`; cũng được nhúng vào `BBI_RAG_Bot_Ext.json` qua
