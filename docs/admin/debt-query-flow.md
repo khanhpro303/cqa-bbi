@@ -81,6 +81,21 @@ Hai câu hỏi mẫu được trace đầy đủ:
 > `[RICH_MESSAGE_SENT]`. Khách gõ lại (vd: `"tháng này"`) → quay lại bước 1 với
 > `search="công nợ tháng này"` (hoặc "tháng trước" / "quý này").
 >
+> 🔑 **Lượt gõ lại KHÔNG bị bộ phân loại ý định nuốt (2026-06-02).** Lượt gõ lại
+> (`"tháng này"`...) vẫn đi qua worker và `classifyMessageIntent`
+> (`tasks.go:1654`). Vì câu này không có từ khoá nghiệp vụ, classifier từng gán
+> nó là **CASUAL** → worker đóng phiên + bỏ tin (`tasks.go` nhánh `intent ==
+> "CASUAL"`) → **bot im lặng**. Nay khi worker chặn câu trả lời vì backend đã đẩy
+> rich message (sentinel `[RICH_MESSAGE_SENT]`, `tasks.go:1277`), nó **ghi một
+> marker dùng-một-lần** `engine.StoreAwaitingFollowup` (`tasks.go:1284`;
+> key `…:awaiting_followup`, `engine/session_options.go:129`). Lượt kế tiếp,
+> trước khi phân loại, worker gọi `engine.TakeAwaitingFollowup` (`tasks.go:691`);
+> nếu marker còn → ép `IN_SCOPE`, **bỏ qua classifier** đúng một lượt rồi xoá
+> marker. Marker này phủ chung cho cả debt (kỳ), orders (3/5/7 ngày) và picker
+> dòng-vs-SKU của inventory — không phụ thuộc cách khách diễn đạt (`"nợ quý này"`,
+> `"tháng 5"`, nút bấm…). Câu xã giao ở các lượt sau (không ngay sau prompt) vẫn
+> được phân loại và đóng phiên như cũ.
+>
 > ⚠️ **Backend gửi trực tiếp, KHÔNG để Langflow gửi.** Trước đây handler chỉ trả
 > `zalo_rich_message` trong JSON nhưng KHÔNG ai gửi nó (worker không đọc field này,
 > ERPGatewayCaller cũng không) → khách không bao giờ nhận câu hỏi kỳ. Nay handler
@@ -345,7 +360,10 @@ Không có dữ liệu công nợ trong khoảng anh hỏi.
 | Webhook nhận tin | `backend/api/handlers/webhooks.go:17` | `ZaloWebhookHandler` |
 | Worker xử lý | `backend/workers/tasks.go:184` | `HandleZaloWebhookTask` |
 | Map ZaloUserID → mã khách | `backend/workers/tasks.go:526` | tra `zalo_customers` (`status='approved'`) |
-| Phân loại ý định | `backend/workers/tasks.go` | `classifyMessageIntent` → `IN_SCOPE` |
+| Phân loại ý định | `backend/workers/tasks.go:1654` | `classifyMessageIntent` → `IN_SCOPE` (bị bỏ qua khi marker awaiting-followup còn) |
+| Ghi marker lượt gõ lại | `backend/workers/tasks.go:1284` | `engine.StoreAwaitingFollowup` (đặt khi chặn sentinel `[RICH_MESSAGE_SENT]`, `:1277`) |
+| Tiêu thụ marker (bỏ qua classifier) | `backend/workers/tasks.go:691` | `engine.TakeAwaitingFollowup` → ép `IN_SCOPE` 1 lượt |
+| Helper marker (Redis, dùng-một-lần) | `backend/engine/session_options.go:129` | `AwaitingFollowupSuffix` / `StoreAwaitingFollowup` / `TakeAwaitingFollowup` |
 | Resolve quyền | `backend/engine/permission_context.go:58` | `ResolvePermissionsWithGroup` |
 | Kiểm tra resource | `backend/engine/permission_context.go:269` | `IsResourceAllowed("debt")` → scope |
 | Gọi Langflow | `backend/engine/langflow_client.go:209` | `RunFlowWithCustomer` |
