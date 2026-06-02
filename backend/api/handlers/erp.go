@@ -337,6 +337,10 @@ func ERPQuery(c *gin.Context) {
 		// Empty search → return empty + source=empty_search_use_knowledge so
 		// the agent falls back to the knowledge base (no catalog dump).
 		var cachedData []map[string]interface{}
+		// resolvedParent is the single product line (ma_cha) this search pinned
+		// down — set by the LIKE single-group path or the fuzzy fallback. It
+		// feeds the variant price-pivot below (shouldPivotToVariant).
+		var resolvedParent string
 		search := strings.TrimSpace(req.Search)
 
 		if search != "" {
@@ -393,6 +397,9 @@ func ERPQuery(c *gin.Context) {
 
 			if len(webGroups) == 1 && len(webGroups[0].ParentCodes) > 0 {
 				// B already pinpointed the parent SKU(s). Pull rows directly.
+				if len(webGroups[0].ParentCodes) == 1 {
+					resolvedParent = webGroups[0].ParentCodes[0]
+				}
 				for _, pc := range webGroups[0].ParentCodes {
 					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, pc)
 					if fetchErr != nil {
@@ -418,17 +425,43 @@ func ERPQuery(c *gin.Context) {
 				// (resolveMaChaFuzzy). The same helper backs the inventory
 				// web-name fallback, so both resources resolve identically and a
 				// single env toggle (ERP_EMBEDDING_FUZZY_ENABLED) governs both.
-				// products answers at the family level only, so the specific-SKU
-				// signal is intentionally ignored here (price_range must cover the
-				// whole line). Pinpointing is product_variants' job.
+				// This fuzzy step resolves the family code only — it does NOT pinpoint
+				// a SKU. For a vague/stock query the family price_range is the answer;
+				// for a variant PRICE query the pivot below (shouldPivotToVariant) takes
+				// resolvedParent and re-resolves the exact SKU via product_variants.
 				_, matchedMaCha, _ := resolveMaChaFuzzy(c.Request.Context(), tenantID, req.Search)
 				if matchedMaCha != "" {
+					resolvedParent = matchedMaCha
 					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, matchedMaCha)
 					if fetchErr != nil {
 						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", matchedMaCha, fetchErr)
 					} else {
 						cachedData = rows
 					}
+				}
+			}
+
+			// Forcing function — a variant-specific PRICE question must not be
+			// answered with a family price_range. Once products has pinned the line
+			// (resolvedParent) and the agent already named a color/size, the agent
+			// otherwise grabs the range and stops. The stock path never needs this:
+			// products carries no stock, so a stock question is already forced on to
+			// product_variants → inventory; only price questions terminate here, on a
+			// range that looks like a finished answer (the FF901 "đen XL đơn giá"
+			// bug). Re-resolve the exact SKU with the SAME engine the
+			// product_variants resource uses, so both routes agree on price.
+			if shouldPivotToVariant(req.Intent, req.Color, req.Size, req.Brand, resolvedParent) {
+				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups)
+				if vErr != nil {
+					log.Printf("[erp_query] variant price-pivot from products failed parent=%s: %v", resolvedParent, vErr)
+				} else if vResp != nil {
+					cnt, _ := vResp["count"].(int)
+					// Tag so the agent component renders this as a variant answer even
+					// though the request resource was "products".
+					vResp["pivoted_from"] = "products"
+					writeAuditLog(tenantID, permCtx, "product_variants", scopeType, productGroups, req.Search, http.StatusOK, cnt, c.ClientIP())
+					c.JSON(http.StatusOK, vResp)
+					return
 				}
 			}
 		} else {
@@ -502,7 +535,7 @@ func ERPQuery(c *gin.Context) {
 			return
 		}
 
-		variants, err := searchVariantsByAttributes(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand, req.Limit)
+		response, err := buildVariantResponse(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand, req.Limit, productGroups)
 		if err != nil {
 			log.Printf("[erp_query] variant attribute search error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -513,155 +546,8 @@ func ERPQuery(c *gin.Context) {
 			return
 		}
 
-		filtered := filterProductsByGroups(variants, productGroups)
-		slim := slimVariantsForLLM(filtered)
-
-		response := gin.H{
-			"status":      "success",
-			"data":        slim,
-			"source":      "astradb_cache_variants",
-			"resource":    req.Resource,
-			"parent_code": parentCode,
-			"count":       len(slim),
-		}
-
-		// (0a) Parent resolution. The agent passes a human model code
-		//      ("FF901") as parent_code, but the cache/Astra key it on the
-		//      internal parent SKU (ma_cha, e.g. "SP458484"). The Step-1 exact
-		//      `ma_cha = parent_code` filter therefore returns zero for the
-		//      normal case. When that happens, resolve the model code to its
-		//      real ma_cha via the Astra hybrid label search and retry the exact
-		//      attribute lookup against the resolved parent. effectiveParent is
-		//      then used by every fallback below so they target the right parent.
-		effectiveParent := parentCode
-		// A legitimate product_variants call always carries at least one
-		// attribute (color/size/brand) — it resolves ONE specific SKU. When the
-		// agent passes a parent_code that does not exact-match a ma_cha AND gives
-		// no attribute, embedding parent-resolution has only the bare code to go
-		// on and can misfire: a hallucinated code like "LS2-FF901" (the web_name
-		// with a dash) resolves via the lenient parentCodeInLabel guard to an
-		// unrelated accessory line whose label happens to contain "FF901",
-		// returning a confidently-wrong SKU + price. Skip resolution in that case
-		// so the response stays empty (count=0) and the agent re-evaluates instead
-		// of getting garbage. Legit specific-variant calls always have attributes,
-		// so this never blocks them.
-		if len(slim) == 0 && hasVariantAttribute(req.Color, req.Size, req.Brand) {
-			if resolved := resolveParentMaCha(c.Request.Context(), tenantID, parentCode, req.Brand); resolved != "" && !strings.EqualFold(resolved, parentCode) {
-				effectiveParent = resolved
-				response["resolved_parent"] = resolved
-				resolvedVariants, resolvedErr := searchVariantsByAttributes(c.Request.Context(), tenantID, effectiveParent, req.Color, req.Size, req.Brand, req.Limit)
-				if resolvedErr != nil {
-					log.Printf("[erp_query] variant search after parent resolve error: %v", resolvedErr)
-				} else {
-					resolvedSlim := slimVariantsForLLM(filterProductsByGroups(resolvedVariants, productGroups))
-					if len(resolvedSlim) > 0 {
-						slim = resolvedSlim
-						response["data"] = resolvedSlim
-						response["count"] = len(resolvedSlim)
-						response["source"] = "astradb_cache_variants_resolved"
-					}
-				}
-			}
-		}
-
-		// (0) Astra hybrid (BM25 lexical + vector) scoped to this parent, tried
-		//     BEFORE the bilingual/available_* fallback. searchVariantsByAttributes
-		//     above matches MySQL with exact size equality + substring colour,
-		//     which misses "Size L"/"L (40)" size storage and EN/VI colour
-		//     spelling ("trắng" vs the stored "Gloss White"). The hybrid index
-		//     ("FF901 — Gloss White — L") handles both. Same engine the products
-		//     flow uses (erp.go:396), now wired into the variant path. When it
-		//     pinpoints the SKU, slim becomes non-empty and the bilingual block
-		//     below is skipped by its own len(slim)==0 guard.
-		if len(slim) == 0 && (strings.TrimSpace(req.Color) != "" || strings.TrimSpace(req.Size) != "" || strings.TrimSpace(req.Brand) != "") {
-			if hybridRows := hybridMatchVariant(c.Request.Context(), tenantID, parentCode, effectiveParent, req.Color, req.Size, req.Brand); len(hybridRows) > 0 {
-				hybridSlim := slimVariantsForLLM(filterProductsByGroups(hybridRows, productGroups))
-				if len(hybridSlim) > 0 {
-					slim = hybridSlim
-					response["data"] = hybridSlim
-					response["count"] = len(hybridSlim)
-					response["source"] = "astradb_hybrid_variants"
-					log.Printf("[erp_query] variant hybrid matched parent=%s color=%q size=%q brand=%q → %d SKU",
-						parentCode, req.Color, req.Size, req.Brand, len(hybridSlim))
-				}
-			}
-		}
-
-		// Zero-result fallback. Two passes:
-		//  (1) Bilingual fuzzy match — the cache may store "Gloss Black"
-		//      while the customer typed "đen bóng". Resolve color/size/brand
-		//      against the parent's actual stored values and retry once.
-		//  (2) If still zero, surface available_* lists so the LLM agent can
-		//      ask the customer to pick a real combination.
-		if len(slim) == 0 && (strings.TrimSpace(req.Color) != "" || strings.TrimSpace(req.Size) != "" || strings.TrimSpace(req.Brand) != "") {
-			allVariants, allErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, effectiveParent)
-			if allErr != nil {
-				log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
-			} else {
-				allowed := filterProductsByGroups(allVariants, productGroups)
-				availColors, availSizes, availBrands := collectAvailableAttributes(allowed)
-
-				matchedColor, matchedSize, matchedBrand, matchErr := fuzzyMatchAttributesWithLLM(
-					c.Request.Context(), tenantID,
-					req.Color, req.Size, req.Brand,
-					availColors, availSizes, availBrands,
-				)
-				if matchErr != nil {
-					log.Printf("[erp_query] bilingual attribute match failed: %v", matchErr)
-				}
-
-				// Only retry if the LLM moved at least one filter to a value
-				// different from what we already tried (otherwise we'd loop).
-				movedColor := matchedColor != "" && !strings.EqualFold(matchedColor, strings.TrimSpace(req.Color))
-				movedSize := matchedSize != "" && !strings.EqualFold(matchedSize, strings.TrimSpace(req.Size))
-				movedBrand := matchedBrand != "" && !strings.EqualFold(matchedBrand, strings.TrimSpace(req.Brand))
-
-				if movedColor || movedSize || movedBrand {
-					retryColor := matchedColor
-					if retryColor == "" {
-						retryColor = req.Color
-					}
-					retrySize := matchedSize
-					if retrySize == "" {
-						retrySize = req.Size
-					}
-					retryBrand := matchedBrand
-					if retryBrand == "" {
-						retryBrand = req.Brand
-					}
-
-					retryVariants, retryErr := searchVariantsByAttributes(c.Request.Context(), tenantID, effectiveParent, retryColor, retrySize, retryBrand, req.Limit)
-					if retryErr != nil {
-						log.Printf("[erp_query] variant retry after bilingual match error: %v", retryErr)
-					} else {
-						retryFiltered := filterProductsByGroups(retryVariants, productGroups)
-						retrySlim := slimVariantsForLLM(retryFiltered)
-						if len(retrySlim) > 0 {
-							slim = retrySlim
-							response["data"] = retrySlim
-							response["count"] = len(retrySlim)
-							response["bilingual_match"] = gin.H{
-								"color": retryColor,
-								"size":  retrySize,
-								"brand": retryBrand,
-							}
-							log.Printf("[erp_query] bilingual match resolved parent=%s color=%q→%q size=%q→%q brand=%q→%q",
-								parentCode, req.Color, retryColor, req.Size, retrySize, req.Brand, retryBrand)
-						}
-					}
-				}
-
-				// Still zero after bilingual retry → surface the candidate set.
-				if len(slim) == 0 {
-					response["available_colors"] = availColors
-					response["available_sizes"] = availSizes
-					response["available_brands"] = availBrands
-					response["message"] = "Không có variant khớp màu/size yêu cầu (kể cả sau khi thử map song ngữ). Tham khảo các tuỳ chọn có sẵn ở available_colors / available_sizes / available_brands."
-				}
-			}
-		}
-
-		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, parentCode, http.StatusOK, len(slim), c.ClientIP())
+		count, _ := response["count"].(int)
+		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, parentCode, http.StatusOK, count, c.ClientIP())
 		c.JSON(http.StatusOK, response)
 		return
 	}
@@ -736,6 +622,180 @@ func ERPQuery(c *gin.Context) {
 
 	// ── 10. Execute live Cloudify call with filters ───────────────────────
 	respondWithLiveDataV2(c, client, req.Resource, req.Search, req.ParentCode, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx, req.ExactWebName)
+}
+
+// shouldPivotToVariant decides whether a products query must be re-resolved as a
+// specific variant before answering. It fires only for a PRICE question
+// (intent=price) that named a concrete attribute (color/size/brand) and resolved
+// to exactly one parent line. This is the forcing function that keeps the price
+// path symmetric with the stock path: a stock question can never terminate at
+// products (no stock there, so the agent is already pushed to product_variants →
+// inventory), but a price question otherwise stops at the family price_range and
+// shows a wrong span like "11.9tr–12.9tr" for a question that named one SKU.
+func shouldPivotToVariant(intent, color, size, brand, resolvedParent string) bool {
+	if strings.TrimSpace(resolvedParent) == "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(intent), "price") {
+		return false
+	}
+	return hasVariantAttribute(color, size, brand)
+}
+
+// buildVariantResponse resolves ONE specific variant (color/size/brand) under a
+// parent line and returns the agent-facing payload: the concrete DON_GIA_BAN per
+// matched SKU, or available_* candidate lists when nothing matches. It is the
+// shared engine behind BOTH the product_variants resource and the products
+// price-pivot (a variant-specific PRICE question that landed on products); both
+// must resolve the SKU identically, so the logic lives in one place.
+//
+// Returns (nil, err) only when the initial cache lookup hard-fails; every
+// downstream fallback tolerates its own errors by logging and pressing on.
+func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string) (gin.H, error) {
+	variants, err := searchVariantsByAttributes(ctx, tenantID, parentCode, color, size, brand, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := filterProductsByGroups(variants, productGroups)
+	slim := slimVariantsForLLM(filtered)
+
+	response := gin.H{
+		"status":      "success",
+		"data":        slim,
+		"source":      "astradb_cache_variants",
+		"resource":    "product_variants",
+		"parent_code": parentCode,
+		"count":       len(slim),
+	}
+
+	// (0a) Parent resolution. The agent passes a human model code ("FF901") as
+	//      parent_code, but the cache/Astra key it on the internal parent SKU
+	//      (ma_cha, e.g. "SP458484"). The Step-1 exact `ma_cha = parent_code`
+	//      filter therefore returns zero for the normal case. When that happens,
+	//      resolve the model code to its real ma_cha via the Astra hybrid label
+	//      search and retry the exact attribute lookup against the resolved
+	//      parent. effectiveParent is then used by every fallback below.
+	effectiveParent := parentCode
+	// A legitimate specific-variant call always carries at least one attribute
+	// (color/size/brand). When the parent_code does not exact-match a ma_cha AND
+	// no attribute is given, embedding parent-resolution has only the bare code
+	// to go on and can misfire (a hallucinated "LS2-FF901" resolves to an
+	// unrelated accessory whose label contains "FF901"). Skip resolution in that
+	// case so the response stays empty (count=0) and the caller re-evaluates.
+	if len(slim) == 0 && hasVariantAttribute(color, size, brand) {
+		if resolved := resolveParentMaCha(ctx, tenantID, parentCode, brand); resolved != "" && !strings.EqualFold(resolved, parentCode) {
+			effectiveParent = resolved
+			response["resolved_parent"] = resolved
+			resolvedVariants, resolvedErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, color, size, brand, limit)
+			if resolvedErr != nil {
+				log.Printf("[erp_query] variant search after parent resolve error: %v", resolvedErr)
+			} else {
+				resolvedSlim := slimVariantsForLLM(filterProductsByGroups(resolvedVariants, productGroups))
+				if len(resolvedSlim) > 0 {
+					slim = resolvedSlim
+					response["data"] = resolvedSlim
+					response["count"] = len(resolvedSlim)
+					response["source"] = "astradb_cache_variants_resolved"
+				}
+			}
+		}
+	}
+
+	// (0) Astra hybrid (BM25 lexical + vector) scoped to this parent, tried
+	//     BEFORE the bilingual/available_* fallback. The MySQL match above uses
+	//     exact size equality + substring colour, which misses "Size L"/"L (40)"
+	//     storage and EN/VI colour spelling ("trắng" vs stored "Gloss White").
+	//     The hybrid index ("FF901 — Gloss White — L") handles both.
+	if len(slim) == 0 && (strings.TrimSpace(color) != "" || strings.TrimSpace(size) != "" || strings.TrimSpace(brand) != "") {
+		if hybridRows := hybridMatchVariant(ctx, tenantID, parentCode, effectiveParent, color, size, brand); len(hybridRows) > 0 {
+			hybridSlim := slimVariantsForLLM(filterProductsByGroups(hybridRows, productGroups))
+			if len(hybridSlim) > 0 {
+				slim = hybridSlim
+				response["data"] = hybridSlim
+				response["count"] = len(hybridSlim)
+				response["source"] = "astradb_hybrid_variants"
+				log.Printf("[erp_query] variant hybrid matched parent=%s color=%q size=%q brand=%q → %d SKU",
+					parentCode, color, size, brand, len(hybridSlim))
+			}
+		}
+	}
+
+	// Zero-result fallback. Two passes:
+	//  (1) Bilingual fuzzy match — the cache may store "Gloss Black" while the
+	//      customer typed "đen bóng". Resolve against the parent's actual stored
+	//      values and retry once.
+	//  (2) If still zero, surface available_* lists so the agent can ask the
+	//      customer to pick a real combination.
+	if len(slim) == 0 && (strings.TrimSpace(color) != "" || strings.TrimSpace(size) != "" || strings.TrimSpace(brand) != "") {
+		allVariants, allErr := getProductsByMaChaFromCache(ctx, tenantID, effectiveParent)
+		if allErr != nil {
+			log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
+		} else {
+			allowed := filterProductsByGroups(allVariants, productGroups)
+			availColors, availSizes, availBrands := collectAvailableAttributes(allowed)
+
+			matchedColor, matchedSize, matchedBrand, matchErr := fuzzyMatchAttributesWithLLM(
+				ctx, tenantID,
+				color, size, brand,
+				availColors, availSizes, availBrands,
+			)
+			if matchErr != nil {
+				log.Printf("[erp_query] bilingual attribute match failed: %v", matchErr)
+			}
+
+			// Only retry if the LLM moved at least one filter to a value
+			// different from what we already tried (otherwise we'd loop).
+			movedColor := matchedColor != "" && !strings.EqualFold(matchedColor, strings.TrimSpace(color))
+			movedSize := matchedSize != "" && !strings.EqualFold(matchedSize, strings.TrimSpace(size))
+			movedBrand := matchedBrand != "" && !strings.EqualFold(matchedBrand, strings.TrimSpace(brand))
+
+			if movedColor || movedSize || movedBrand {
+				retryColor := matchedColor
+				if retryColor == "" {
+					retryColor = color
+				}
+				retrySize := matchedSize
+				if retrySize == "" {
+					retrySize = size
+				}
+				retryBrand := matchedBrand
+				if retryBrand == "" {
+					retryBrand = brand
+				}
+
+				retryVariants, retryErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, retryColor, retrySize, retryBrand, limit)
+				if retryErr != nil {
+					log.Printf("[erp_query] variant retry after bilingual match error: %v", retryErr)
+				} else {
+					retryFiltered := filterProductsByGroups(retryVariants, productGroups)
+					retrySlim := slimVariantsForLLM(retryFiltered)
+					if len(retrySlim) > 0 {
+						slim = retrySlim
+						response["data"] = retrySlim
+						response["count"] = len(retrySlim)
+						response["bilingual_match"] = gin.H{
+							"color": retryColor,
+							"size":  retrySize,
+							"brand": retryBrand,
+						}
+						log.Printf("[erp_query] bilingual match resolved parent=%s color=%q→%q size=%q→%q brand=%q→%q",
+							parentCode, color, retryColor, size, retrySize, brand, retryBrand)
+					}
+				}
+			}
+
+			// Still zero after bilingual retry → surface the candidate set.
+			if len(slim) == 0 {
+				response["available_colors"] = availColors
+				response["available_sizes"] = availSizes
+				response["available_brands"] = availBrands
+				response["message"] = "Không có variant khớp màu/size yêu cầu (kể cả sau khi thử map song ngữ). Tham khảo các tuỳ chọn có sẵn ở available_colors / available_sizes / available_brands."
+			}
+		}
+	}
+
+	return response, nil
 }
 
 // ---------------------------------------------------------------------------

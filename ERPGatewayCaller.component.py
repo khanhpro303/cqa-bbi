@@ -52,14 +52,14 @@ class ERPGatewayCaller(Component):
         MessageTextInput(
             name="color",
             display_name="Color",
-            info="Màu sắc/thuộc tính 1 khi resource=product_variants (vd: 'đen bóng', 'xanh navy'). Bỏ trống nếu user không nêu.",
+            info="Màu sắc/thuộc tính 1 (vd: 'đen bóng', 'xanh navy'). Dùng với resource=product_variants, HOẶC kèm resource=products+intent=price để backend pivot ra đúng đơn giá biến thể. Bỏ trống nếu user không nêu.",
             required=False,
             tool_mode=True
         ),
         MessageTextInput(
             name="size",
             display_name="Size",
-            info="Kích thước/thuộc tính 2 khi resource=product_variants (vd: 'L', 'XL'). Bỏ trống nếu user không nêu.",
+            info="Kích thước/thuộc tính 2 (vd: 'L', 'XL'). Dùng với resource=product_variants, HOẶC kèm resource=products+intent=price để backend pivot ra đúng đơn giá biến thể. Bỏ trống nếu user không nêu.",
             required=False,
             tool_mode=True
         ),
@@ -90,6 +90,9 @@ class ERPGatewayCaller(Component):
                 "('giá bao nhiêu', 'bán bao nhiêu', 'đơn giá'); để trống hoặc 'stock' khi hỏi "
                 "TỒN KHO hoặc mơ hồ. Backend nướng giá trị này vào nút chọn dòng — khi khách bấm "
                 "số để chọn từ danh sách, bot trả ĐÚNG giá (intent=price) thay vì hỏi tồn. "
+                "QUAN TRỌNG cho câu hỏi GIÁ của 1 biến thể CỤ THỂ (có màu/size): truyền "
+                "intent='price' KÈM color/size ngay trên call resource='products' — backend sẽ "
+                "tự pivot sang variant và trả đúng đơn giá SKU (không trả price_range). "
                 "Mặc định 'stock' nếu bỏ trống (an toàn: không bao giờ hiện giá sai)."
             ),
             required=False,
@@ -225,8 +228,15 @@ class ERPGatewayCaller(Component):
             err_msg = data.get("message", "Lỗi phản hồi từ ERP Gateway.")
             return Message(text=f"Không thể lấy dữ liệu ERP: {err_msg}")
 
-        if res == "product_variants":
-            return Message(text=self._format_variant_response(data, p_code, color, size))
+        # Render variant answers for BOTH an explicit product_variants call and a
+        # backend price-pivot: when the customer asked the PRICE of a concrete
+        # color/size, the backend re-resolves the exact SKU under resource=products
+        # and tags the response `pivoted_from=products` (it never hands back a
+        # family price_range for a named variant). Format it as a variant either
+        # way so the bot answers the exact price, or surfaces available_* on a miss.
+        if res == "product_variants" or data.get("pivoted_from") == "products":
+            resp_parent = self._coerce_text(data.get("parent_code")) or p_code
+            return Message(text=self._format_variant_response(data, resp_parent, color, size))
 
         if (
             data.get("is_orders_prompt") or data.get("is_debt_prompt")

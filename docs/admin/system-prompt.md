@@ -67,6 +67,16 @@ token next to a product code/name (e.g. "FF800 **trắng L**", "FF901 **đen bó
     A range is only correct for vague/family questions.
   - The ERP tool now accepts `color`, `size`, `brand` and the `product_variants`
     resource — use them; do not fall back to free-text `products` for a named variant.
+  - **Backend price-pivot (2026-06-02):** for a named-variant PRICE question you
+    SHOULD pass `color`/`size` (as the user wrote them) AND `intent="price"` on the
+    Step-1 `products` call itself. When `products` resolves to a single line and those
+    attributes are present, the backend re-resolves the exact SKU and returns the
+    concrete variant price directly (response tagged `pivoted_from="products"`,
+    formatted the same as `product_variants`); it NEVER returns a family `price_range`
+    for a named variant. The explicit Step-2 `product_variants` call still works and
+    stays the right choice once you already hold a real `parent_code`. (This pivot
+    only fires for PRICE intent; stock questions still go products → product_variants
+    → inventory as below.)
 
 - **VAGUE / FAMILY intent** (no color/size, e.g. "FF901 giá bao nhiêu", "có nón gì"):
   - `resource="products"`, `search=<keyword>`. A `price_range` (or a disambiguation

@@ -2,6 +2,66 @@ package handlers
 
 import "testing"
 
+func TestShouldPivotToVariant(t *testing.T) {
+	tests := []struct {
+		name                               string
+		intent, color, size, brand, parent string
+		want                               bool
+	}{
+		{
+			// The reported bug: "FF901 Carbon màu đen size XL đơn giá bán bao nhiêu".
+			// Price intent + concrete color/size + a resolved parent line MUST pivot
+			// to the variant resolver so the bot returns the exact DON_GIA_BAN, not
+			// the family range "11.9tr–12.9tr".
+			name:   "price + color + size + parent → pivot",
+			intent: "price", color: "đen", size: "XL", parent: "SP458496", want: true,
+		},
+		{
+			// Stock questions are already forced to product_variants → inventory by
+			// the absence of stock in the products response; they must NOT pivot here.
+			name:   "stock intent → no pivot",
+			intent: "stock", color: "đen", size: "XL", parent: "SP458496", want: false,
+		},
+		{
+			// Empty/omitted intent defaults to stock-safe: never show a price here.
+			name:   "empty intent → no pivot",
+			intent: "", color: "đen", size: "XL", parent: "SP458496", want: false,
+		},
+		{
+			// Family price question ("FF901 giá bao nhiêu") names no variant → the
+			// price_range IS the correct answer, so no pivot.
+			name:   "price but no attribute → no pivot",
+			intent: "price", parent: "SP458496", want: false,
+		},
+		{
+			// products could not pin a single parent (disambiguation list or fuzzy
+			// miss) → nothing to pivot into; fall through to the normal flow.
+			name:   "price + attribute but no resolved parent → no pivot",
+			intent: "price", color: "đen", size: "XL", parent: "", want: false,
+		},
+		{
+			name:   "case-insensitive intent",
+			intent: "PRICE", color: "đen", parent: "SP1", want: true,
+		},
+		{
+			name:   "whitespace around intent and parent still pivots",
+			intent: "  price  ", size: "L", parent: "  SP1  ", want: true,
+		},
+		{
+			name:   "brand-only attribute with price intent pivots",
+			intent: "price", brand: "LS2", parent: "SP1", want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldPivotToVariant(tt.intent, tt.color, tt.size, tt.brand, tt.parent); got != tt.want {
+				t.Errorf("shouldPivotToVariant(%q,%q,%q,%q,%q) = %v, want %v",
+					tt.intent, tt.color, tt.size, tt.brand, tt.parent, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParentCodeInLabel(t *testing.T) {
 	tests := []struct {
 		name       string

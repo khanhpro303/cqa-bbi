@@ -38,11 +38,17 @@ Ba câu hỏi mẫu được trace đầy đủ:
 3. **Tên web cụ thể (sau disambiguation):** `"Mũ LS2 FF800 Storm II"` +
    `exact_web_name=true` → backend khớp đúng tên web → trả họ đó + `price_range`.
 
-> ⚠️ **`products` KHÔNG pinpoint 1 SKU.** Nó luôn resolve ở **mức họ (`ma_cha`)** và
-> trả `price_range` phủ cả họ. Câu có **màu/size cụ thể** (vd "FF800 **trắng L**") là
+> ⚠️ **`products` resolve ở mức họ (`ma_cha`) — TRỪ price-pivot.** Mặc định nó trả
+> `price_range` phủ cả họ. Câu có **màu/size cụ thể** (vd "FF800 **trắng L**") là
 > intent **SPECIFIC-VARIANT** → agent route sang resource **`product_variants`** để
-> lấy đúng 1 SKU + giá đơn (mục G). Việc pinpoint 1 biến thể **chỉ** sống ở
-> `product_variants`, không còn trong `products`.
+> lấy đúng 1 SKU + giá đơn (mục G).
+>
+> 🆕 **Price-pivot (2026-06-02):** nếu agent gửi `products` kèm **color/size + intent=
+> "price"** và LIKE/fuzzy ra **đúng 1 dòng**, backend tự pivot sang engine variant
+> (`shouldPivotToVariant` + `buildVariantResponse`, erp.go) và trả **đúng đơn giá SKU**
+> (response gắn `pivoted_from="products"`), KHÔNG trả `price_range`. Đây là forcing
+> function để câu hỏi GIÁ-biến-thể không bao giờ rớt về khoảng giá. Pivot **chỉ** cho
+> `intent="price"`; câu hỏi TỒN vẫn đi `products` → `product_variants` → `inventory`.
 
 > Sơ đồ dùng ASCII monospace. Khi xem trong VitePress, đặt trong code block để giữ
 > căn lề.
@@ -109,17 +115,19 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
 | **P1** | "mũ bảo hiểm LS2 / có nón gì" (mơ hồ, nhiều dòng) | `products(search="mũ bảo hiểm LS2", intent=<price\|stock>)` → backend dò web-group, **>1** nhóm → trả `web_groups` để agent hỏi khách chọn. `intent` nướng vào postback `#stockpick_web` để cú gõ-số sau trả đúng giá/tồn |
 | **P2** | Khách đã chọn 1 tên web cụ thể từ danh sách trước | `products(search="<tên web>", exact_web_name=true)` → backend khớp đúng web name, **không** đẩy lại danh sách |
 | **P3** | "storm 3 bao nhiêu" / "FF901 giá bao nhiêu" (mã/tên, **không** màu/size) | `products(search="storm 3", intent="price")` (đặt `intent="price"` vì câu hỏi GIÁ) → backend fuzzy (hybrid → LLM) → **cả họ** + `price_range`. Nếu ra disambiguation, `intent` đã chụp giúp cú gõ-số trả khoảng giá thay vì hỏi tồn |
-| **P4** | "FF901 **đen bóng size L** giá bao nhiêu" / "FF800 **trắng L**" (mã cha + thuộc tính cụ thể) | `product_variants(parent_code="FF901", color="đen bóng", size="L")` → trả đúng SKU + giá đơn (mục G) |
+| **P4** | "FF901 **đen bóng size L** giá bao nhiêu" / "FF800 **trắng L**" (mã cha + thuộc tính cụ thể) | `product_variants(parent_code="FF901", color="đen bóng", size="L")` → trả đúng SKU + giá đơn (mục G). **HOẶC** (price-pivot) 1 call `products(search="FF901", color="đen bóng", size="L", intent="price")` → backend tự pivot, trả đúng đơn giá SKU (`pivoted_from="products"`) |
 
 > 🧠 **Agent KHÔNG cần tự match mã.** Chỉ cần phân biệt theo **có màu/size hay
 > không**: có màu/size cụ thể → `product_variants` (P4, pinpoint 1 SKU); chỉ mã/tên
 > → `products` (P1/P3, trả cả họ + khoảng giá). Mọi việc dò tên / sửa chính tả /
 > chọn biến thể do backend lo.
 
-> ⚠️ **`products` chỉ trả mức họ.** Từ bản gỡ pinpoint, `products` **không** còn trả
-> "1 SKU" — luôn là **cả họ + `price_range`**. Muốn đúng 1 biến thể + giá đơn thì
-> phải qua `product_variants` (P4). Nếu agent lỡ gửi "FF800 trắng L" vào `products`,
-> kết quả là cả họ FF800 (khoảng giá), không phải 1 cái.
+> ⚠️ **`products` trả mức họ — TRỪ price-pivot.** Mặc định `products` trả **cả họ +
+> `price_range`** (không pinpoint 1 SKU). **Ngoại lệ (2026-06-02):** khi call kèm
+> **color/size + intent="price"** và ra đúng 1 dòng, backend pivot và trả đúng 1
+> biến thể + đơn giá (`pivoted_from="products"`) — xem callout price-pivot ở mục B.
+> Câu hỏi TỒN (không phải price) gửi "FF800 trắng L" vào `products` vẫn ra cả họ FF800
+> (khoảng giá); muốn đúng 1 biến thể cho TỒN thì qua `product_variants` (P4).
 
 > 🔢 **LUẬT CỨNG:** Khi backend trả `astradb_cache_web_groups` (P1), agent **PHẢI**
 > liệt kê các `web_name` cho khách chọn, **KHÔNG** tự đoán 1 dòng rồi trả giá. Khi
@@ -191,11 +199,14 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
 > nhóm** → **B2 hybrid** bắt được `ma_cha` (qua `match.MaCha`) → `matchedMaCha` →
 > `getProductsByMaChaFromCache` → **cả họ** → `price_range` phủ mọi màu/size.
 >
-> Câu có **màu/size** như **"FF800 trắng L"** KHÔNG dừng ở `products`: agent nhận ra
-> SPECIFIC-VARIANT và gọi `product_variants` (mục G) để pinpoint 1 SKU + giá đơn.
-> `products` ở đây — nếu bị gọi — chỉ trả **cả họ FF800 + `price_range`**, vì nhánh
-> pinpoint (`match.Specific → matchedMA → getProductByMaFromCache`) **đã được gỡ
-> khỏi `products`**; `match.Specific`/`match.MA` giờ **chỉ** phục vụ `product_variants`.
+> Câu có **màu/size** như **"FF800 trắng L"**: agent route SPECIFIC-VARIANT sang
+> `product_variants` (mục G) để pinpoint 1 SKU + giá đơn. **Price-pivot (2026-06-02):**
+> nếu là câu hỏi GIÁ và agent gửi color/size + `intent="price"` thẳng vào `products`,
+> sau khi resolve được 1 dòng (`resolvedParent`) backend tự gọi `buildVariantResponse`
+> và trả đúng 1 SKU + đơn giá (`pivoted_from="products"`) — KHÔNG rớt về `price_range`.
+> Lưu ý đây là engine **attribute-based** (color/size/parent), khác với tín hiệu
+> embedding `match.Specific`/`match.MA` (vẫn chỉ phục vụ `product_variants`). Câu hỏi
+> **TỒN** gửi "FF800 trắng L" vào `products` (không price) vẫn chỉ trả cả họ + `price_range`.
 
 ---
 

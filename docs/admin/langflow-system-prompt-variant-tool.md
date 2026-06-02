@@ -27,6 +27,13 @@ wording in Vietnamese to match the rest of the prompt.
 2. User hỏi giá/tồn của một biến thể CỤ THỂ (vd: "FF901 đen bóng size L bao nhiêu?")
    → BƯỚC 1: gọi resource="products", search=<từ khoá> trước để xác định parent_code
      (đọc MA_CHA trong kết quả; nếu bot phải disambiguation thì đợi user chọn số).
+   → PIVOT GIÁ (2026-06-02): nếu là câu hỏi GIÁ, hãy truyền LUÔN color/size (theo lời
+     khách) + intent="price" ngay trên call resource="products" của BƯỚC 1. Khi products
+     khớp đúng 1 dòng và có color/size, backend tự resolve đúng SKU và trả thẳng đơn giá
+     variant (response gắn cờ pivoted_from="products", format y như product_variants) —
+     KHÔNG bao giờ trả price_range cho biến thể đã nêu. Khỏi cần BƯỚC 2 cho câu hỏi giá.
+     (Chỉ kích hoạt với intent="price"; câu hỏi TỒN vẫn đi đủ products → product_variants
+     → inventory như BƯỚC 2–3.)
    → BƯỚC 2: gọi resource="product_variants" với:
        parent_code = <MA_CHA đã xác định>
        color = <màu user nêu, vd "đen bóng"; bỏ trống nếu không nêu>
@@ -115,8 +122,10 @@ Sau khi cập nhật SYSTEM_PROMPT trong Langflow:
 
 1. Trên Zalo OA dev tenant, gửi `FF901 giá bao nhiêu?` → bot trả price_range
    (không regress flow cũ).
-2. Gửi `FF901 đen bóng size L giá bao nhiêu em?` → check log Langflow để
-   thấy agent gọi `product_variants` ở turn 2 và trả giá variant cụ thể.
+2. Gửi `FF901 đen bóng size L giá bao nhiêu em?` → bot trả ĐÚNG đơn giá variant,
+   KHÔNG phải price_range. Check log Langflow: hoặc agent gọi `product_variants` ở
+   turn 2 (flow cũ), HOẶC agent gọi 1 call `products` kèm color/size + intent="price"
+   và backend pivot (response có `pivoted_from="products"`). Cả hai đều hợp lệ.
 3. Gửi `FF901 màu hồng size XXL` → bot trả "không có variant đó, các màu
    có sẵn: …" (fallback `available_colors`/`available_sizes`).
 4. Gửi `FF901 đen bóng size L tồn bao nhiêu?` → check log Langflow để thấy
@@ -135,11 +144,15 @@ Sau khi cập nhật SYSTEM_PROMPT trong Langflow:
 ## Liên quan
 
 - Backend handler: `backend/api/handlers/erp.go` (case `product_variants` +
-  `searchVariantsByAttributes`; case `orders` + `buildOrdersSummary` +
+  `searchVariantsByAttributes`; price-pivot `shouldPivotToVariant` +
+  `buildVariantResponse` — engine dùng chung cho cả resource `product_variants`
+  lẫn pivot từ `products`; case `orders` + `buildOrdersSummary` +
   `trimOrdersForLLM` + `orderStatusName`).
-- Component code: `ERPGatewayCaller.component.py` (cũng được nhúng vào
-  `BBI_RAG_Bot_Ext.json` qua `scripts/update_erp_gateway_flow.py`).
+- Component code: `ERPGatewayCaller.component.py` (render `pivoted_from="products"`
+  qua `_format_variant_response`; cũng được nhúng vào `BBI_RAG_Bot_Ext.json` qua
+  `scripts/update_erp_gateway_flow.py`).
 - Tests: `backend/api/handlers/erp_test.go` — `TestFilterVariantsByAttributes`,
   `TestCollectAvailableAttributes`, `TestSlimVariantsForLLM`,
   `TestBuildOrdersSummary`, `TestSumOrderLineQuantity`,
-  `TestTrimOrdersForLLM`, `TestOrderStatusDisplayName`.
+  `TestTrimOrdersForLLM`, `TestOrderStatusDisplayName`;
+  `backend/api/handlers/erp_variants_test.go` — `TestShouldPivotToVariant`.
