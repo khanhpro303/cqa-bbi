@@ -104,6 +104,34 @@ func TestAwaitingVariantLineSuffixStable(t *testing.T) {
 // TestAwaitingFollowupNilRedisSafe verifies the follow-up marker helpers are
 // nil-safe: with no Redis configured Store is a no-op and Take returns false
 // without panicking. This guards the degraded path in unit/local contexts.
+
+// TestPendingIntentNilRedisSafe verifies the product-intent helpers are nil-safe:
+// with no Redis configured Store is a no-op and Take returns "" without panicking.
+func TestPendingIntentNilRedisSafe(t *testing.T) {
+	if db.RedisClient != nil {
+		t.Skip("Redis configured; this test only covers the nil-Redis contract")
+	}
+	ctx := context.Background()
+	const sessionKey = "zalo_session:ch1:u123"
+
+	// Must not panic with Redis unavailable.
+	StorePendingIntent(ctx, sessionKey, PendingIntentPrice, 10)
+	StorePendingIntent(ctx, sessionKey, "", 10) // empty intent is a no-op
+
+	if got := TakePendingIntent(ctx, sessionKey); got != "" {
+		t.Errorf("TakePendingIntent with nil Redis = %q; want \"\"", got)
+	}
+}
+
+// TestPendingIntentSuffixStable pins the Redis key suffix so a rename can't
+// silently split writer (worker pre-Langflow intent capture) from reader
+// (#stockpick_web pick router) — they share the session key and must agree.
+func TestPendingIntentSuffixStable(t *testing.T) {
+	if PendingIntentSuffix != ":pending_intent" {
+		t.Errorf("PendingIntentSuffix = %q; want \":pending_intent\"", PendingIntentSuffix)
+	}
+}
+
 func TestAwaitingFollowupNilRedisSafe(t *testing.T) {
 	if db.RedisClient != nil {
 		t.Skip("Redis configured; this test only covers the nil-Redis contract")

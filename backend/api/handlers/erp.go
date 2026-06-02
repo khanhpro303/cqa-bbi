@@ -1299,25 +1299,16 @@ func calculateProductPriceRange(products []map[string]interface{}) productPriceR
 	}
 }
 
+// formatProductPriceRange / formatVNDPrice delegate to the canonical engine
+// formatters so the products resource and the worker disambiguation price reply
+// never diverge in format. Kept as thin package-local wrappers to avoid churning
+// the existing call sites.
 func formatProductPriceRange(minPrice, maxPrice float64) string {
-	if minPrice <= 0 || maxPrice <= 0 {
-		return "Liên hệ"
-	}
-	if minPrice == maxPrice {
-		return formatVNDPrice(minPrice)
-	}
-	return fmt.Sprintf("%s - %s", formatVNDPrice(minPrice), formatVNDPrice(maxPrice))
+	return engine.FormatPriceRange(minPrice, maxPrice)
 }
 
 func formatVNDPrice(price float64) string {
-	value := strconv.FormatInt(int64(price+0.5), 10)
-	var parts []string
-	for len(value) > 3 {
-		parts = append([]string{value[len(value)-3:]}, parts...)
-		value = value[:len(value)-3]
-	}
-	parts = append([]string{value}, parts...)
-	return strings.Join(parts, ".") + "đ"
+	return engine.FormatVNDPrice(price)
 }
 
 func getMapString(m map[string]interface{}, keys ...string) string {

@@ -117,6 +117,53 @@ func TakeAwaitingVariantLine(ctx context.Context, sessionKey string) string {
 	return val
 }
 
+// PendingIntentSuffix is appended to a session key to remember whether the
+// question that triggered a `products` disambiguation list was a PRICE ask or a
+// STOCK ask. A later numeric pick on that list ("1"/"2") is intercepted
+// deterministically by the worker and arrives with NO intent of its own, so the
+// triggering question's intent is the only place to learn what the customer
+// actually wanted. Without it every pick falls into the stock picker — the
+// documented "đánh đổi intent GIÁ" where a price question silently turns into a
+// tồn-kho prompt. The worker writes this on every Langflow-bound turn (so it
+// always reflects the latest real question and never goes stale) and consumes it
+// when resolving the pick.
+const PendingIntentSuffix = ":pending_intent"
+
+// Pending product-intent values stored under PendingIntentSuffix.
+const (
+	PendingIntentPrice = "PRICE"
+	PendingIntentStock = "STOCK"
+)
+
+// StorePendingIntent records the product intent (PendingIntentPrice /
+// PendingIntentStock) of the current question so a later disambiguation pick can
+// be routed without an LLM round-trip. TTL follows the session timeout plus a
+// 1-minute grace. No-op when Redis is unavailable or the intent is empty.
+func StorePendingIntent(ctx context.Context, sessionKey, intent string, timeoutMinutes int) {
+	if db.RedisClient == nil || intent == "" {
+		return
+	}
+	ttl := time.Duration(timeoutMinutes)*time.Minute + 1*time.Minute
+	db.RedisClient.Set(ctx, sessionKey+PendingIntentSuffix, intent, ttl)
+}
+
+// TakePendingIntent returns and deletes (single-use) the intent stored by
+// StorePendingIntent. Returns "" when no intent is set or Redis is unavailable.
+// Single-use semantics keep a resolved pick's intent from leaking into a later
+// unrelated disambiguation.
+func TakePendingIntent(ctx context.Context, sessionKey string) string {
+	if db.RedisClient == nil {
+		return ""
+	}
+	key := sessionKey + PendingIntentSuffix
+	val, err := db.RedisClient.Get(ctx, key).Result()
+	if err != nil || strings.TrimSpace(val) == "" {
+		return ""
+	}
+	db.RedisClient.Del(ctx, key)
+	return val
+}
+
 // AwaitingFollowupSuffix is appended to a session key to mark that the backend
 // just pushed a Zalo prompt that expects the customer's next message as an
 // answer — e.g. the debt period question (Tháng này / Tháng trước / Quý này),

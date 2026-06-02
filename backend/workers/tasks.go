@@ -892,6 +892,32 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// re-enters Langflow. Fixes the prefix-collision loop + duplicate prose.
 		if strings.HasPrefix(userText, engine.StockPickWebPrefix) {
 			webName := strings.TrimPrefix(userText, engine.StockPickWebPrefix)
+
+			// Intent continuation: if the question that produced this list was a
+			// PRICE ask, the customer wants a price for the line they just picked —
+			// not the dòng-vs-SKU stock picker. Answer the exact-web price range
+			// directly (deterministic, no Langflow round-trip) and stop. Any other
+			// or ambiguous intent falls through to the stock picker, matching the
+			// system prompt's "ambiguous → stock" default. TakePendingIntent is
+			// single-use so it can't leak into a later unrelated disambiguation.
+			if engine.TakePendingIntent(ctx, sessionKey) == engine.PendingIntentPrice {
+				if priceReply, priceErr := priceRangeReplyByWebName(ctx, matchedChannel.TenantID, &permCtx, webName); priceErr == nil && priceReply != "" {
+					var sendErr error
+					if matchedGroup.ZaloGroupID != "" {
+						sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, priceReply)
+					} else {
+						sendErr = adapter.SendMessage(ctx, payload.Sender.ID, priceReply)
+					}
+					if sendErr != nil {
+						log.Printf("[worker] failed to send stockpick_web price reply: %v", sendErr)
+					}
+					return nil
+				}
+				// Price lookup failed or returned nothing → fall through to the stock
+				// picker so the customer still gets a usable next step, not silence.
+				log.Printf("[worker] stockpick_web PRICE intent but no price for %q; falling back to stock picker", webName)
+			}
+
 			prompt, buttons := engine.BuildExactWebStockPicker(webName)
 			text := channels.BuildButtonOptionsAsText(prompt, buttons)
 			engine.StorePendingOptions(ctx, sessionKey, buttons, meta.SessionTimeout)
@@ -1289,6 +1315,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] failed to sign permission token: %v", err)
 		}
 
+		// Capture this question's product intent (price vs stock) before handing
+		// it to Langflow. If the Agent answers with a `products` disambiguation
+		// list, the customer's later numeric pick is intercepted deterministically
+		// (see #stockpick_web below) and carries NO intent of its own — this stored
+		// value is the only way to know a price question should stay a price answer
+		// instead of collapsing into the stock picker. Postback / number replies
+		// short-circuit above and never reach here, so they cannot clobber the
+		// triggering question's intent. Re-storing every turn keeps it fresh and
+		// prevents a stale intent from an earlier turn leaking into a later pick.
+		engine.StorePendingIntent(ctx, sessionKey, classifyProductIntent(userText), meta.SessionTimeout)
+
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
 		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
 		if err != nil {
@@ -1616,6 +1653,89 @@ func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAda
 	} else {
 		_ = adapter.SendMessage(ctx, senderID, reply)
 	}
+}
+
+// classifyProductIntent labels a customer message as a PRICE or STOCK product
+// intent. It mirrors the keyword sets the system prompt uses for its
+// "Disambiguation Follow-up Rules": an explicit price word with no stock word is
+// PRICE; everything else (including the genuinely ambiguous "FF901 bao nhiêu")
+// defaults to STOCK, matching the prompt's "ambiguous → stock" rule. Kept
+// conservative on purpose: we only skip the stock picker when the price intent
+// is unmistakable, so a wrong guess never confidently shows the wrong figure.
+func classifyProductIntent(text string) string {
+	lower := strings.ToLower(text)
+
+	hasStock := false
+	for _, kw := range []string{"tồn", "ton kho", "còn hàng", "con hang", "còn không", "con khong", "số lượng", "so luong", "bao nhiêu con", "bao nhieu con", "còn bao nhiêu", "con bao nhieu", "stock"} {
+		if strings.Contains(lower, kw) {
+			hasStock = true
+			break
+		}
+	}
+	if hasStock {
+		return engine.PendingIntentStock
+	}
+
+	for _, kw := range []string{"giá", "gia ban", "giá bán", "đơn giá", "don gia", "bao nhiêu tiền", "bao nhieu tien", "price", "cost"} {
+		if strings.Contains(lower, kw) {
+			return engine.PendingIntentPrice
+		}
+	}
+	return engine.PendingIntentStock
+}
+
+// priceRangeReplyByWebName builds a price-range reply for ONE exact product-line
+// web name, reading the local product cache (the same source the `products`
+// resource uses) and the canonical engine price formatter. Variants the caller
+// is not permitted to see (product-group scope) are excluded. Returns "" when no
+// priced variant is visible, so the caller can fall back to the stock picker
+// instead of sending an empty or misleading reply.
+func priceRangeReplyByWebName(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, webName string) (string, error) {
+	var products []models.CachedProduct
+	err := db.DB.WithContext(ctx).
+		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
+		Limit(200).Find(&products).Error
+	if err != nil {
+		return "", fmt.Errorf("price cache query failed: %w", err)
+	}
+	if len(products) == 0 {
+		return "", nil
+	}
+
+	_, _, allowedGroups := permCtx.IsResourceAllowed("products")
+	prices := make([]float64, 0, len(products))
+	for _, p := range products {
+		if !isProductGroupAllowed(p.LIST_TEN_NHOM_VTHH, allowedGroups) {
+			continue
+		}
+		if p.DON_GIA_BAN > 0 {
+			prices = append(prices, p.DON_GIA_BAN)
+		}
+	}
+	if len(prices) == 0 {
+		return "", nil
+	}
+
+	minP, maxP := engine.PriceRangeOfPrices(prices)
+	label := engine.FormatPriceRange(minP, maxP)
+	return fmt.Sprintf("Giá %s: %s. Nếu anh/chị cần giá đúng theo màu + size cụ thể thì cho mình biết nhé.", webName, label), nil
+}
+
+// isProductGroupAllowed reports whether a product's group falls within the
+// permitted product groups. An empty allow-list means all groups are allowed
+// (no group restriction configured). Match is case-insensitive substring, the
+// same rule sumInventoryByMaChaAndWebName applies.
+func isProductGroupAllowed(group string, allowedGroups []string) bool {
+	if len(allowedGroups) == 0 {
+		return true
+	}
+	gLower := strings.ToLower(group)
+	for _, allowed := range allowedGroups {
+		if strings.Contains(gLower, strings.ToLower(allowed)) {
+			return true
+		}
+	}
+	return false
 }
 
 func getMapString(m map[string]interface{}, keys ...string) string {
