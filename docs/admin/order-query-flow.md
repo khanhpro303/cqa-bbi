@@ -504,8 +504,9 @@ Lượt 1 "đơn hàng" (generic, chưa có khách)         → hỏi "mã/tên 
 Lượt 1 "đơn hàng của S001" (nêu khách, chưa ngày)   → resolveOrdersCustomerCodes → scopeApprovedOrdersCodes:
         ├ 0  → 400 trung tính "Không tìm thấy đơn hàng của khách này trong phạm vi của bạn."
         ├ 1  → lưu {timerange,[code]} + hỏi 3/5/7 ngày
-        └ ≥2 → lưu {pick,[codes]} + liệt kê tên, hỏi chọn mã / "tất cả"
-Lượt sau {pick}:  "S005" → chọn mã khớp;  "tất cả" → giữ toàn bộ
+        └ ≥2 → lưu {pick,[codes]} + hỏi MÃ khách cụ thể / "tất cả"  (ordersCustomerPickByCodeText — KHÔNG liệt kê danh sách dài)
+Lượt sau {pick}:  "S005" → resolve+scope TRỰC TIẾP (KHÔNG ràng buộc vào danh sách đã chào, nên mã hợp-scope nào cũng chọn được);
+                  1 khách → {timerange,[code]} + hỏi 3/5/7 ngày;  vẫn ≥2 → hỏi lại mã cụ thể;  "tất cả" → giữ toàn bộ state.Codes
                   → chuyển {timerange,[codes]} + hỏi 3/5/7 ngày
 Lượt sau {timerange}: "7 ngày gần đây" → days=7, targetCodes=state.Codes
                   → kéo cửa sổ ngày, lọc membership ∈ targetCodes, orders_summary  ✅

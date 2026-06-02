@@ -16,6 +16,10 @@ func TestTokenizeOrdersCustomerQuery(t *testing.T) {
 		{"code and name", "đơn hàng S001 Huy", []string{"S001", "Huy"}},
 		{"generic only", "đơn hàng", []string{}},
 		{"generic with customer word", "đơn hàng của khách hàng", []string{}},
+		// Regression: "ra sao" leaked "ra" as a token, so this generic question
+		// was mistaken for a customer name and dumped a long match list.
+		{"generic ra sao tail", "đơn hàng của khách hàng ra sao", []string{}},
+		{"generic nhu nao tail", "đơn hàng của khách hàng như nào", []string{}},
 		{"bare code reply", "S001", []string{"S001"}},
 		{"empty", "", []string{}},
 	}
@@ -40,6 +44,7 @@ func TestIsPrivateOrdersCustomerQuery(t *testing.T) {
 	}{
 		{"generic", "đơn hàng", true},
 		{"generic of a customer", "đơn hàng của khách hàng", true},
+		{"generic with ra sao tail", "đơn hàng của khách hàng ra sao", true},
 		{"named customer", "đơn hàng của S001", false},
 		{"order code", "đơn ĐH000016 sao rồi", false},
 		{"date window", "đơn hàng 7 ngày gần đây", false},

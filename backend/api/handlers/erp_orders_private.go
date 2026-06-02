@@ -2,14 +2,11 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"sort"
 	"strings"
 
 	"github.com/vietbui/chat-quality-agent/config"
-	"github.com/vietbui/chat-quality-agent/db"
-	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
 )
 
@@ -40,6 +37,13 @@ const ordersTimeRangePromptText = "Anh/chị muốn xem các đơn hàng trong k
 // it never reveals whether a customer exists outside the staff member's scope.
 const ordersCustomerOutOfScopeText = "Không tìm thấy đơn hàng của khách này trong phạm vi của bạn."
 
+// ordersCustomerPickByCodeText replaces the old enumerated "which customer?"
+// list. When a name/keyword matches several customers we never dump the full
+// list (it was long and noisy); instead we ask the staff member for the exact
+// customer code. Their next reply resolves directly against the cache + scope
+// in the Pick stage, so any in-scope code advances the flow.
+const ordersCustomerPickByCodeText = "Có nhiều khách khớp. Anh/chị cho mình mã khách cụ thể nhé (ví dụ: S001), hoặc nhắn \"tất cả\"."
+
 // ordersCustomerStopwords are accent-folded words stripped before tokenizing an
 // orders-by-customer query, so "đơn hàng của khách Huy thế nào rồi" reduces to
 // ["Huy"]. Superset of the debt stopwords plus order-intent words.
@@ -50,6 +54,11 @@ var ordersCustomerStopwords = map[string]bool{
 	"the": true, "nao": true, "roi": true, "sao": true, "ve": true,
 	"cua khach": true, "tinh": true, "trang": true, "thai": true,
 	"don hang": true, "la": true, "bao": true, "nhieu": true,
+	// Conversational tails that must not be mistaken for a customer name.
+	// "ra sao" leaked "ra" through, so "đơn hàng của khách hàng ra sao"
+	// matched LIKE %ra% across many customers and dumped a long list.
+	"ra": true, "nhu": true, "vay": true, "dau": true, "nhi": true,
+	"chua": true, "gi": true, "a": true, "ad": true, "shop": true,
 }
 
 // allCustomersReplyWords are the accent-folded phrases the staff member can use
@@ -206,39 +215,6 @@ func codesContain(codes []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// lookupCachedCustomerNames returns a code→"HO_VA_TEN" map for the given bare
-// codes, scoped to the tenant, so the disambiguation prompt can show names
-// next to codes. Missing names fall back to the code at the call site.
-func lookupCachedCustomerNames(tenantID string, codes []string) map[string]string {
-	out := make(map[string]string, len(codes))
-	if len(codes) == 0 {
-		return out
-	}
-	var rows []models.CachedCustomer
-	db.DB.Where("tenant_id = ? AND ma IN ?", tenantID, codes).Find(&rows)
-	for _, r := range rows {
-		out[r.MA] = r.HO_VA_TEN
-	}
-	return out
-}
-
-// buildOrdersPickPromptText renders the "which customer?" list shown when a
-// name matches several customers, instructing the staff member to reply with a
-// code or "tất cả".
-func buildOrdersPickPromptText(tenantID string, codes []string) string {
-	names := lookupCachedCustomerNames(tenantID, codes)
-	var b strings.Builder
-	b.WriteString("Có nhiều khách khớp. Anh/chị muốn xem đơn của khách nào? Nhắn mã khách, hoặc \"tất cả\":\n")
-	for _, code := range codes {
-		if name := strings.TrimSpace(names[code]); name != "" {
-			fmt.Fprintf(&b, "- %s - %s\n", code, name)
-		} else {
-			fmt.Fprintf(&b, "- %s\n", code)
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
 }
 
 // orderCustomerSessionTimeout returns the configured chatbot session timeout in

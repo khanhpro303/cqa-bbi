@@ -2387,21 +2387,30 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			if state, ok := takeOrdersCustomerState(ctxReq, tenantID, permCtx); ok {
 				switch state.Stage {
 				case engine.OrderCustomerStagePick:
-					// This turn selects which of the offered customers to use.
+					// This turn names the customer to use. We resolve the reply
+					// against the cache + scope DIRECTLY — not constrained to the
+					// previously-offered set. The old code intersected with
+					// state.Codes (codesContain), so a valid in-scope code that
+					// was never listed (or truncated out of a capped list) could
+					// never be selected and the prompt looped forever.
 					var chosen []string
 					if isAllCustomersReply(search) {
 						chosen = state.Codes
 					} else {
-						approved := scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCode, allowedCodes)
-						for _, code := range approved {
-							if codesContain(state.Codes, code) {
-								chosen = append(chosen, code)
-							}
-						}
+						chosen = scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCode, allowedCodes)
 					}
-					if len(chosen) == 0 {
+					switch {
+					case len(chosen) == 0:
+						// Nothing in scope resolved — ask again for a code.
 						storeOrdersCustomerState(ctxReq, tenantID, permCtx, state)
-						pushPrompt(buildOrdersPickPromptText(tenantID, state.Codes))
+						pushPrompt(ordersCustomerPickByCodeText)
+						ordersPromptResponse()
+						return
+					case len(chosen) > 1:
+						// Still ambiguous — keep asking for an exact code rather
+						// than enumerating the matches.
+						storeOrdersCustomerState(ctxReq, tenantID, permCtx, engine.OrderCustomerState{Stage: engine.OrderCustomerStagePick, Codes: chosen})
+						pushPrompt(ordersCustomerPickByCodeText)
 						ordersPromptResponse()
 						return
 					}
@@ -2443,7 +2452,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					}
 					if len(approved) > 1 {
 						storeOrdersCustomerState(ctxReq, tenantID, permCtx, engine.OrderCustomerState{Stage: engine.OrderCustomerStagePick, Codes: approved})
-						pushPrompt(buildOrdersPickPromptText(tenantID, approved))
+						pushPrompt(ordersCustomerPickByCodeText)
 						ordersPromptResponse()
 						return
 					}
