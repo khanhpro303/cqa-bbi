@@ -497,3 +497,23 @@ giá** (không phải khoảng giá):
 | Resolve parent qua label | `backend/api/handlers/erp_variants.go:93` | `resolveParentMaCha` / `parentCodeInLabel` (model name → `ma_cha`) |
 | Attr fuzzy song ngữ | `backend/api/handlers/erp.go:586` → `erp_fuzzy.go:192` | `fuzzyMatchAttributesWithLLM` ("đen bóng"→"Gloss Black") |
 | Quyền dùng chung | `backend/api/handlers/erp.go:87` → `:208` | `methodPermissionResource`: `product_variants` → `products` |
+
+---
+
+## Bot private (nhân viên)
+
+> 📎 Phần chung (agent type, scope, marker) ở [`private-bot-overview.md`](./private-bot-overview.md).
+> Dưới đây chỉ là **delta riêng của `products` / `product_variants`**.
+
+`products` phục vụ **hoàn toàn từ cache MySQL** và **không** lọc theo "khách sở
+hữu" (giá/biến thể là dữ liệu chung), nên luồng tra giá **giống nhau** public và
+private. Khác biệt private chỉ ở **phạm vi nhóm sản phẩm**:
+
+- Quyền `products` lấy từ `IsResourceAllowed` → với private đọc cấu hình group
+  `private_bot` (`permission_context.go:270-299`); nếu `private_bot` chưa cấu hình
+  → full access (`scope "all"`, **mọi** product group).
+- `ProductGroups` (nếu admin gán cho `private_bot`) lọc danh mục như với group
+  khách — cùng cơ chế, chỉ khác nguồn cấu hình.
+
+Không có nhánh code riêng cho private trong block `products`; toàn bộ hybrid
+search / pivot / disambiguation dùng chung.

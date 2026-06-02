@@ -602,3 +602,18 @@ Response cuối (Backend → Langflow tool):
 - **`DEBUG_PUSH_FALLBACK_TO_ZALO=true`**: push payload trung gian
   (`exact_web`/`raw_like_groups`/`raw_like`/`slim`) của resource `products` tới
   admin Zalo để soi từng giai đoạn.
+
+---
+
+## Bot private (nhân viên)
+
+> 📎 Phần chung (agent type, scope, marker) ở [`private-bot-overview.md`](./private-bot-overview.md).
+> Dưới đây chỉ là **delta riêng của `inventory`**.
+
+Tồn kho là dữ liệu **chung** (không gắn "khách sở hữu"), nên luồng resolve dòng
+sản phẩm (embedding → LLM), picker dòng-vs-SKU, cộng tồn theo `KHO-TONG` **giống
+hệt** public và private. Khác biệt private chỉ ở **phạm vi nhóm sản phẩm** được
+phép, lấy từ cấu hình group `private_bot` qua `IsResourceAllowed`
+(`permission_context.go:270-299`); `private_bot` chưa cấu hình → full access
+(mọi product group). Không có nhánh code riêng cho private trong nhánh
+`inventory`.

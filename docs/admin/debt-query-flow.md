@@ -390,3 +390,52 @@ Không có dữ liệu công nợ trong khoảng anh hỏi.
 | Tests | `backend/api/handlers/erp_test.go:312` | `TestIsGenericDebtSearch` |
 | | `backend/api/handlers/erp_test.go:334` | `TestParseDebtPeriodFromSearch` |
 | | `backend/api/handlers/erp_test.go:383` | `TestMapDebtItemForLLM` |
+| Private: detect generic | `backend/api/handlers/erp_debt_private.go` | `isPrivateDebtCustomerQuery` |
+| Private: resolve cache | `backend/api/handlers/erp_debt_private.go` | `resolveCustomerCodesFromCache` (AND→OR) |
+| Private: gửi prompt mã/tên | `backend/api/handlers/erp_debt_private.go` | `sendDebtCustomerPrompt` |
+| Private: tests | `backend/api/handlers/erp_debt_private_test.go` | `TestIsPrivateDebtCustomerQuery` / `TestTokenizeCustomerQuery` / `TestFoldDebtSearch` |
+
+---
+
+## H. Bot private (nhân viên)
+
+> 📎 Phần chung (agent type, scope, marker) ở [`private-bot-overview.md`](./private-bot-overview.md).
+> Dưới đây chỉ là **delta riêng của `debt`** cho bot private.
+
+Mục C/D ở trên trace bot **public** (khách lẻ, `scope == "own"`: chỉ thấy nợ của
+chính mình). Bot **private** (nhân viên) đi nhánh `else` (`assigned`/`all`) và tra
+công nợ **theo mã/tên khách** mình gõ. Hội thoại điển hình:
+
+```
+Staff: "Công nợ của khách hàng bao nhiêu"
+  → debt(search="…")  • permCtx.AgentType=="private" • partnerID=="" 
+  • isPrivateDebtCustomerQuery(search)=true (nhắc "khách" chung chung, chưa có mã/tên/kỳ)
+  → backend TỰ GỬI "Anh/chị cho mình mã hoặc tên khách hàng cần tra cứu nhé."
+    (sendDebtCustomerPrompt) → is_debt_prompt → [RICH_MESSAGE_SENT] → worker lưu marker
+
+Staff: "S001"   (hoặc "Huy", "S001 Huy")
+  → TakeAwaitingFollowup ép IN_SCOPE (không bị nuốt) → debt(search="S001")
+  • isPrivateDebtCustomerQuery=false → nhánh resolve:
+      resolveCustomerCodesFromCache(tenantID,"S001")  ← cache MySQL cached_customers
+        mỗi token: ma LIKE %tok% OR ho_va_ten LIKE %tok%
+        ghép GIAO (AND); giao rỗng → lùi HỢP (OR); cap 20
+      cache miss hoàn toàn → fallback client.SearchPartners (hành vi cũ)
+  → targetCustomerCodes=[S001] → parse kỳ (mặc định tháng này) → th_cong_no_phai_thu/search
+```
+
+**Ba thay đổi so với public** (đều gate cứng `permCtx.AgentType == "private"`,
+nằm trong `case "debt"` nhánh `else`):
+
+1. **Prompt mã/tên** khi câu hỏi nhắc khách chung chung mà chưa có mã/tên/kỳ
+   (`isPrivateDebtCustomerQuery`). Trả đúng shape `is_debt_prompt` → marker phủ
+   lượt sau (xem [overview §D](./private-bot-overview.md)).
+2. **Resolve từ cache trước** (`resolveCustomerCodesFromCache`), `SearchPartners`
+   chỉ còn là **fallback** khi cache miss → nhanh, không phụ thuộc mạng ERP.
+3. **Lưới an toàn:** token cụ thể nhưng resolve rỗng (cache + ERP đều miss) và
+   không phải kỳ → **hỏi lại mã/tên** thay vì để `DS_KHACH_HANG=""` (vốn sẽ trả
+   công nợ **toàn bộ** khách). Câu kỳ thuần ("công nợ tháng này", scope `all`) vẫn
+   cho `DS_KHACH_HANG=""` để xem toàn bộ — đúng ý định.
+
+> 🔒 **Không đụng public:** khách lẻ luôn `scope == "own"` → đi nhánh `if scopeType
+> == "own"`, không bao giờ chạm 3 khối trên. Toàn bộ helper private cô lập trong
+> `erp_debt_private.go`.

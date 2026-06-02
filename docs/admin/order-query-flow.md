@@ -461,3 +461,25 @@ Anh không có đơn hàng nào trong 7 ngày gần đây.
 | Response JSON 1-đơn | `backend/api/handlers/erp.go:2179` | `count:1` + `order_code` + `orders[]` |
 | Response JSON khoảng-ngày | `backend/api/handlers/erp.go:2230` (nhánh `days > 0`) | `orders_summary` + `orders[]` |
 | Mock (dev) | `backend/api/handlers/erp.go:2655` (`respondWithMockDataV2`); prompt mơ hồ tự gửi ở `:2731` | cùng định tuyến: `days<=0` → tự gửi prompt; `days>0` → lọc theo ngày |
+
+---
+
+## Bot private (nhân viên)
+
+> 📎 Phần chung (agent type, scope, marker) ở [`private-bot-overview.md`](./private-bot-overview.md).
+> Dưới đây chỉ là **delta riêng của `orders`**.
+
+Tài liệu trên trace bot **public** (khách lẻ, `scope == "own"`: chỉ thấy đơn của
+chính mình). Bot **private** (nhân viên) khác ở **bước lọc scope** sau khi kéo cửa
+sổ ngày:
+
+- `scope == "assigned"` → `allowedCodes = resolveGroupCustomerCodes(...)`
+  (`erp.go:2348`); chỉ giữ đơn của **nhóm khách được giao** (`isOrderAuthorized`).
+- `scope == "all"` → **không lọc** theo mã khách; nhân viên thấy **mọi đơn** trong
+  cửa sổ.
+- Tra **một mã đơn** (`ĐH…`): kiểm quyền sở hữu cũng theo `scopeType` — `all`/
+  `assigned` cho phép xem đơn ngoài "own" miễn trong phạm vi.
+
+Phần định tuyến (mơ hồ → hỏi 3/5/7 ngày; tổng hợp `orders_summary`) và prompt +
+marker **giống hệt public** — private chỉ rẽ nhánh ở bước lọc `scopeType` trên,
+không có file/handler riêng.
