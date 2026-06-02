@@ -75,14 +75,25 @@ Public và private nạp quyền bằng **hai nhánh khác nhau** trong
 
 Cache khách hàng: bảng `cached_customers` (tenant-scoped, index `idx_cc_ma` +
 `idx_cc_name`), đồng bộ hằng ngày từ Cloudify qua job `erp_customer_cache`
-(`engine/erp_customer_cache.go`). Helper resolve dùng chung cho private:
-`resolveCustomerCodesFromCache` / `tokenizeCustomerQuery` /
-`isPrivateDebtCustomerQuery` / `sendDebtCustomerPrompt` trong
-`api/handlers/erp_debt_private.go`.
+(`engine/erp_customer_cache.go`). Lõi resolve dùng chung:
+`resolveCachedCustomerCodesFromTokens` (`erp_debt_private.go`) — nhận sẵn token
+nên mỗi phân hệ tự tokenize theo stopword riêng:
 
-> Hiện **`debt`** đã dùng cache-resolve + prompt mã/tên (xem
-> [delta debt](./debt-query-flow.md#bot-private-nhân-viên)). Các phân hệ khác có
-> thể tái dùng cùng helper khi cần tra theo khách.
+| Phân hệ | Helper resolve theo khách |
+|---|---|
+| `debt` | `resolveCustomerCodesFromCache` / `tokenizeCustomerQuery` / `isPrivateDebtCustomerQuery` / `sendDebtCustomerPrompt` — `api/handlers/erp_debt_private.go` |
+| `orders` | `resolveOrdersCustomerCodes` / `tokenizeOrdersCustomerQuery` / `isPrivateOrdersCustomerQuery` / `scopeApprovedOrdersCodes` / `isAllCustomersReply` / `sendPrivateOrdersPrompt` — `api/handlers/erp_orders_private.go` |
+
+> Hiện **`debt`** và **`orders`** đã dùng cache-resolve + prompt mã/tên (xem
+> [delta debt](./debt-query-flow.md#bot-private-nhân-viên) và
+> [delta orders](./order-query-flow.md#b2-flow-hỏi-đơn-theo-khách-mới--chỉ-private)).
+> Các phân hệ khác có thể tái dùng `resolveCachedCustomerCodesFromTokens` khi cần.
+
+> 🔑 **Khác biệt then chốt giữa hai flow:** debt **không** kiểm scope khi nêu khách
+> (nhân viên debt thường `all`), còn **orders giao mã khách với scope ngay khi
+> resolve** (`scopeApprovedOrdersCodes`) → kể cả scope `all`, query nêu khách chỉ
+> trả đơn của đúng khách đó; `assigned` chặn khách ngoài nhóm bằng 1 thông báo
+> trung tính.
 
 ---
 
@@ -107,6 +118,15 @@ thành CASUAL. Marker phủ chung debt/orders/inventory — không phụ thuộc
 > gửi (worker/ERPGatewayCaller không đọc field thô). Đây là lý do mọi prompt
 > dùng đúng shape ở trên.
 
+**Marker có payload (orders theo khách).** Ngoài `awaiting_followup` (cờ thuần,
+ép `IN_SCOPE` 1 lượt), flow orders-theo-khách còn lưu **state có dữ liệu** ở key
+`:awaiting_order_customer` (`engine.OrderCustomerState{Stage, Codes}`,
+`session_options.go`): `Stage ∈ {pick, timerange}`, `Codes` là **mã khách đã được
+giao scope**. Backend tự `StoreOrderCustomerState` khi gửi prompt (lúc đã resolve
+xong khách), và `TakeOrderCustomerState` (single-use) ở lượt sau để nhớ khách qua
+bước hỏi time range — vì câu trả lời "7 ngày gần đây" không còn token khách. Vì
+`Codes` đã giao scope trước khi lưu, replay ở lượt sau **không thể nới quyền**.
+
 ---
 
 ## E. Bảng tham chiếu file:line (private)
@@ -118,6 +138,9 @@ thành CASUAL. Marker phủ chung debt/orders/inventory — không phụ thuộc
 | Cho phép resource (private→true) | `backend/api/handlers/erp.go:984` `isResourcePermitted` |
 | Nạp quyền private | `backend/engine/permission_context.go:104-135` |
 | Scope private | `backend/engine/permission_context.go:270-299` `IsResourceAllowed` |
-| Resolve khách từ cache | `backend/api/handlers/erp_debt_private.go` |
+| Resolve khách từ cache (lõi dùng chung) | `backend/api/handlers/erp_debt_private.go` `resolveCachedCustomerCodesFromTokens` |
+| Resolve khách — debt | `backend/api/handlers/erp_debt_private.go` |
+| Resolve khách + giao scope — orders | `backend/api/handlers/erp_orders_private.go` `resolveOrdersCustomerCodes` / `scopeApprovedOrdersCodes` |
 | Cache khách hàng (job) | `backend/engine/erp_customer_cache.go` |
-| Marker prompt → followup | `backend/workers/tasks.go:716, 1335-1342` · `backend/engine/session_options.go:127-160` |
+| Marker prompt → followup | `backend/workers/tasks.go:716, 1335-1342` · `backend/engine/session_options.go:127-166` |
+| State orders-theo-khách (payload) | `backend/engine/session_options.go` `OrderCustomerState` / `StoreOrderCustomerState` / `TakeOrderCustomerState` · key `:awaiting_order_customer` |

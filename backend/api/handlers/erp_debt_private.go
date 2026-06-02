@@ -102,7 +102,15 @@ func tokenizeCustomerQuery(search string) []string {
 // back to the union (OR) when the intersection is empty. Returns nil on a full
 // cache miss so the caller can fall back to the live ERP SearchPartners lookup.
 func resolveCustomerCodesFromCache(tenantID, search string) []string {
-	tokens := tokenizeCustomerQuery(search)
+	return resolveCachedCustomerCodesFromTokens(tenantID, tokenizeCustomerQuery(search))
+}
+
+// resolveCachedCustomerCodesFromTokens is the tokenizer-agnostic core of the
+// cache resolve: it takes already-tokenized concrete fragments (codes/name
+// parts) and matches them against cached_customers with the same AND-narrow /
+// OR-widen strategy. Debt tokenizes with its own stopwords; the private orders
+// flow supplies order-specific tokens. Returns nil on a full cache miss.
+func resolveCachedCustomerCodesFromTokens(tenantID string, tokens []string) []string {
 	if len(tokens) == 0 {
 		return nil
 	}

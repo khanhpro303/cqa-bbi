@@ -461,6 +461,10 @@ Anh không có đơn hàng nào trong 7 ngày gần đây.
 | Response JSON 1-đơn | `backend/api/handlers/erp.go:2179` | `count:1` + `order_code` + `orders[]` |
 | Response JSON khoảng-ngày | `backend/api/handlers/erp.go:2230` (nhánh `days > 0`) | `orders_summary` + `orders[]` |
 | Mock (dev) | `backend/api/handlers/erp.go:2655` (`respondWithMockDataV2`); prompt mơ hồ tự gửi ở `:2731` | cùng định tuyến: `days<=0` → tự gửi prompt; `days>0` → lọc theo ngày |
+| **Private: flow theo khách** | `backend/api/handlers/erp_orders_private.go` | `isPrivateOrdersCustomerQuery` / `resolveOrdersCustomerCodes` / `scopeApprovedOrdersCodes` / `tokenizeOrdersCustomerQuery` / `isAllCustomersReply` / `codesContain` / prompt + store helpers |
+| **Private: pre-routing trong case orders** | `backend/api/handlers/erp.go` (trong `case "orders"`, ngay sau khối `allowedCodes`) | take state → pick/timerange; nêu khách → resolve+scope; gán `targetCodes` |
+| **Private: state qua lượt** | `backend/engine/session_options.go` | `OrderCustomerState{Stage,Codes}` · `StoreOrderCustomerState` / `TakeOrderCustomerState` · key `:awaiting_order_customer` |
+| **Private: lọc membership** | `backend/api/handlers/erp.go` (nhánh `days > 0`) | `len(targetCodes)>0` → `codesContain(targetCodes, …)`; ngược lại `isOrderAuthorized` |
 
 ---
 
@@ -470,16 +474,56 @@ Anh không có đơn hàng nào trong 7 ngày gần đây.
 > Dưới đây chỉ là **delta riêng của `orders`**.
 
 Tài liệu trên trace bot **public** (khách lẻ, `scope == "own"`: chỉ thấy đơn của
-chính mình). Bot **private** (nhân viên) khác ở **bước lọc scope** sau khi kéo cửa
-sổ ngày:
+chính mình). Bot **private** (nhân viên) khác ở **hai chỗ**: (1) lọc theo
+`scopeType`, và (2) một **flow hỏi-đơn-theo-khách** nhiều lượt (mới) cho phép nhân
+viên tra đơn của **một khách cụ thể** (`đơn hàng của S001`).
+
+### B1. Lọc theo scope (như cũ)
 
 - `scope == "assigned"` → `allowedCodes = resolveGroupCustomerCodes(...)`
-  (`erp.go:2348`); chỉ giữ đơn của **nhóm khách được giao** (`isOrderAuthorized`).
-- `scope == "all"` → **không lọc** theo mã khách; nhân viên thấy **mọi đơn** trong
-  cửa sổ.
+  (`erp.go:2353`); chỉ giữ đơn của **nhóm khách được giao** (`isOrderAuthorized`).
+- `scope == "all"` → **không lọc** theo mã khách (khi không nêu khách); nhân viên
+  thấy **mọi đơn** trong cửa sổ.
 - Tra **một mã đơn** (`ĐH…`): kiểm quyền sở hữu cũng theo `scopeType` — `all`/
   `assigned` cho phép xem đơn ngoài "own" miễn trong phạm vi.
 
-Phần định tuyến (mơ hồ → hỏi 3/5/7 ngày; tổng hợp `orders_summary`) và prompt +
-marker **giống hệt public** — private chỉ rẽ nhánh ở bước lọc `scopeType` trên,
-không có file/handler riêng.
+### B2. Flow hỏi-đơn-theo-khách (mới — chỉ private)
+
+Mirror flow debt-theo-khách (xem [`private-bot-overview.md` mục C](./private-bot-overview.md#c-xác-định-khách-hàng-cần-tra-điểm-khác-lớn-nhất)).
+Helper nằm ở `backend/api/handlers/erp_orders_private.go`; trạng thái qua lượt lưu ở
+Redis key `:awaiting_order_customer` (payload `{stage, codes}`, `engine.OrderCustomerState`).
+
+> 🔑 **An toàn scope:** mã khách được **giao với scope NGAY khi resolve** (lượt nêu
+> khách) qua `scopeApprovedOrdersCodes`, rồi mới lưu vào state. Nên dù scope là
+> `all`, query nêu khách vẫn **chỉ** trả đơn của đúng khách đó (KHÔNG dump toàn bộ);
+> còn `assigned` chỉ chấp nhận khách **trong nhóm được giao**. Lượt trả time range
+> về sau chỉ replay `codes` đã-duyệt → không thể nới quyền.
+
+```
+Lượt 1 "đơn hàng" (generic, chưa có khách)         → hỏi "mã/tên khách hàng?"   (ordersCustomerPromptText)
+Lượt 1 "đơn hàng của S001" (nêu khách, chưa ngày)   → resolveOrdersCustomerCodes → scopeApprovedOrdersCodes:
+        ├ 0  → 400 trung tính "Không tìm thấy đơn hàng của khách này trong phạm vi của bạn."
+        ├ 1  → lưu {timerange,[code]} + hỏi 3/5/7 ngày
+        └ ≥2 → lưu {pick,[codes]} + liệt kê tên, hỏi chọn mã / "tất cả"
+Lượt sau {pick}:  "S005" → chọn mã khớp;  "tất cả" → giữ toàn bộ
+                  → chuyển {timerange,[codes]} + hỏi 3/5/7 ngày
+Lượt sau {timerange}: "7 ngày gần đây" → days=7, targetCodes=state.Codes
+                  → kéo cửa sổ ngày, lọc membership ∈ targetCodes, orders_summary  ✅
+                  (chưa có ngày → nhắc lại prompt, giữ state;
+                   gõ mã đơn ĐH… → nhường nhánh 1-đơn)
+"đơn hàng của S001 7 ngày gần đây" (1 tin)          → resolve+scope 1 khách + days → trả luôn, targetCodes=[S001]
+"tất cả" / "toàn bộ" ở bước hỏi khách               → scope-wide (targetCodes rỗng) → lọc isOrderAuthorized như cũ
+Lượt 1 "đơn ĐH000016" (mã đơn)                       → nhánh 1-đơn cũ (đã scope-check) — KHÔNG đổi
+```
+
+- **Lọc đơn:** nhánh `days > 0`, nếu `len(targetCodes) > 0` → giữ đơn khi
+  `codesContain(targetCodes, orderCustomerCode(item))`; ngược lại dùng
+  `isOrderAuthorized(... scope ...)` như cũ. Response thêm `customer_codes` (mảng)
+  khi nêu khách; `orders_summary` vẫn **phẳng** (gộp tất cả khách đã chọn — đúng ý
+  khi nhân viên trả "tất cả").
+- Mọi prompt vẫn tự gửi qua `adapter.SendMessage/SendGroupMessage`, trả
+  `is_orders_prompt=true` + `message="zalo_rich_message_sent_directly"`; worker lưu
+  `awaiting_followup` → lượt sau ép `IN_SCOPE`. **Agent Langflow không cần sửa** —
+  vẫn forward text vào `orders(search=...)` và relay `[RICH_MESSAGE_SENT]`.
+- **Bot public (own) không đổi:** flow theo-khách chỉ chạy khi
+  `permCtx.AgentType == "private"`; khách lẻ vẫn "đơn hàng của tôi" → hỏi 3/5/7 ngày.

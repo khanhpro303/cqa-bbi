@@ -164,3 +164,71 @@ func TakeAwaitingFollowup(ctx context.Context, sessionKey string) bool {
 	db.RedisClient.Del(ctx, key)
 	return true
 }
+
+// AwaitingOrderCustomerSuffix is appended to a session key to carry the
+// private-bot (employee) "orders by customer" flow across turns. Unlike
+// AwaitingFollowup — a bare flag — this entry holds a payload: the customer
+// codes the staff member is asking about (already intersected with their
+// scope, so the later time-range turn can never widen access) plus the stage
+// the flow is paused at. It outlives a single prompt: the staff member first
+// names a customer, then answers the 3/5/7-ngày prompt, and only that second
+// turn carries the resolved codes — they would otherwise be lost because the
+// reply ("7 ngày gần đây") has no customer token.
+const AwaitingOrderCustomerSuffix = ":awaiting_order_customer"
+
+// Order-customer flow stages stored in OrderCustomerState.Stage.
+const (
+	// OrderCustomerStagePick — the name matched several customers; the next
+	// turn picks one (a code/name) or "tất cả" to keep them all.
+	OrderCustomerStagePick = "pick"
+	// OrderCustomerStageTimeRange — the customer is resolved; the next turn
+	// supplies the date window (3/5/7 ngày).
+	OrderCustomerStageTimeRange = "timerange"
+)
+
+// OrderCustomerState is the cross-turn payload for the private-bot orders flow.
+// Codes are bare customer codes (e.g. "S001") that have ALREADY been
+// intersected with the staff member's scope when stored, so replaying them on
+// a later turn cannot leak orders outside their allowed set.
+type OrderCustomerState struct {
+	Stage string   `json:"stage"`
+	Codes []string `json:"codes"`
+}
+
+// StoreOrderCustomerState persists the orders-by-customer flow state under the
+// session key so the next free-text turn (a customer pick or a date window)
+// can resume it. TTL follows the session timeout plus a 1-minute grace. No-op
+// when Redis is unavailable or the stage is empty.
+func StoreOrderCustomerState(ctx context.Context, sessionKey string, state OrderCustomerState, timeoutMinutes int) {
+	if db.RedisClient == nil || strings.TrimSpace(state.Stage) == "" {
+		return
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		log.Printf("[session_options] failed to marshal order-customer state for %s: %v", sessionKey, err)
+		return
+	}
+	ttl := time.Duration(timeoutMinutes)*time.Minute + 1*time.Minute
+	db.RedisClient.Set(ctx, sessionKey+AwaitingOrderCustomerSuffix, raw, ttl)
+}
+
+// TakeOrderCustomerState returns and deletes (single-use) the orders-by-customer
+// flow state. ok is false when no state is set, Redis is unavailable, or the
+// stored value cannot be decoded. Single-use semantics keep a stale customer
+// scope from leaking into unrelated later turns.
+func TakeOrderCustomerState(ctx context.Context, sessionKey string) (OrderCustomerState, bool) {
+	if db.RedisClient == nil {
+		return OrderCustomerState{}, false
+	}
+	key := sessionKey + AwaitingOrderCustomerSuffix
+	val, err := db.RedisClient.Get(ctx, key).Result()
+	if err != nil || strings.TrimSpace(val) == "" {
+		return OrderCustomerState{}, false
+	}
+	db.RedisClient.Del(ctx, key)
+	var state OrderCustomerState
+	if err := json.Unmarshal([]byte(val), &state); err != nil || strings.TrimSpace(state.Stage) == "" {
+		return OrderCustomerState{}, false
+	}
+	return state, true
+}

@@ -128,3 +128,31 @@ func TestAwaitingFollowupSuffixStable(t *testing.T) {
 		t.Errorf("AwaitingFollowupSuffix = %q; want \":awaiting_followup\"", AwaitingFollowupSuffix)
 	}
 }
+
+// TestOrderCustomerStateNilRedisSafe verifies the orders-by-customer state
+// helpers are nil-safe: with no Redis configured Store is a no-op and Take
+// returns ok=false without panicking.
+func TestOrderCustomerStateNilRedisSafe(t *testing.T) {
+	if db.RedisClient != nil {
+		t.Skip("Redis configured; this test only covers the nil-Redis contract")
+	}
+	ctx := context.Background()
+	const sessionKey = "zalo_session:ch1:u123"
+
+	// Must not panic with Redis unavailable.
+	StoreOrderCustomerState(ctx, sessionKey, OrderCustomerState{Stage: OrderCustomerStageTimeRange, Codes: []string{"S001"}}, 10)
+	StoreOrderCustomerState(ctx, sessionKey, OrderCustomerState{}, 10) // empty stage is a no-op
+
+	if _, ok := TakeOrderCustomerState(ctx, sessionKey); ok {
+		t.Errorf("TakeOrderCustomerState with nil Redis ok = true; want false")
+	}
+}
+
+// TestOrderCustomerSuffixStable pins the Redis key suffix so a rename can't
+// silently split the handler (writer at prompt time) from the handler (reader
+// on the next turn) — they share the session key and must agree.
+func TestOrderCustomerSuffixStable(t *testing.T) {
+	if AwaitingOrderCustomerSuffix != ":awaiting_order_customer" {
+		t.Errorf("AwaitingOrderCustomerSuffix = %q; want \":awaiting_order_customer\"", AwaitingOrderCustomerSuffix)
+	}
+}

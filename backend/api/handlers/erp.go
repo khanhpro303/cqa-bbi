@@ -2353,6 +2353,116 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			allowedCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
 		}
 
+		// targetCodes holds the scope-approved customer codes a PRIVATE
+		// (employee) query is narrowed to. Empty means scope-wide (the existing
+		// behaviour): public/own filters to the asker, private assigned/all
+		// filters by scope. When set, the date-window branch filters orders to
+		// these codes instead — and because they were intersected with scope at
+		// resolve time, replaying them can never widen access.
+		var targetCodes []string
+
+		// PRIVATE bot "orders by customer" flow. The staff member names a
+		// customer, the backend resolves it against the local cache, intersects
+		// with scope, then asks for a date window. Carried across turns via the
+		// order-customer session state. Public (own) and order-code lookups are
+		// untouched. See erp_orders_private.go and docs/admin/order-query-flow.md.
+		if permCtx.AgentType == "private" {
+			ctxReq := c.Request.Context()
+			ownCode := leadingCustomerCode(resolveOwnCustomerCode(permCtx, tenantID))
+			ordersPromptResponse := func() {
+				c.JSON(http.StatusOK, gin.H{
+					"status":           "success",
+					"is_orders_prompt": true,
+					"data":             []map[string]interface{}{},
+					"message":          "zalo_rich_message_sent_directly",
+					"count":            0,
+				})
+			}
+			pushPrompt := func(text string) {
+				if err := sendPrivateOrdersPrompt(ctxReq, tenantID, permCtx, text); err != nil {
+					log.Printf("[orders_query] failed to send private orders prompt to %s: %v", permCtx.ZaloUserID, err)
+				}
+			}
+
+			if state, ok := takeOrdersCustomerState(ctxReq, tenantID, permCtx); ok {
+				switch state.Stage {
+				case engine.OrderCustomerStagePick:
+					// This turn selects which of the offered customers to use.
+					var chosen []string
+					if isAllCustomersReply(search) {
+						chosen = state.Codes
+					} else {
+						approved := scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCode, allowedCodes)
+						for _, code := range approved {
+							if codesContain(state.Codes, code) {
+								chosen = append(chosen, code)
+							}
+						}
+					}
+					if len(chosen) == 0 {
+						storeOrdersCustomerState(ctxReq, tenantID, permCtx, state)
+						pushPrompt(buildOrdersPickPromptText(tenantID, state.Codes))
+						ordersPromptResponse()
+						return
+					}
+					storeOrdersCustomerState(ctxReq, tenantID, permCtx, engine.OrderCustomerState{Stage: engine.OrderCustomerStageTimeRange, Codes: chosen})
+					pushPrompt(ordersTimeRangePromptText)
+					ordersPromptResponse()
+					return
+				case engine.OrderCustomerStageTimeRange:
+					switch {
+					case parseDaysFromSearch(search) > 0:
+						targetCodes = state.Codes // fall through to the date-window query
+					case extractOrderCode(search) != "":
+						// staff pivoted to a specific order code — let the
+						// single-order branch handle it (state already consumed).
+					default:
+						storeOrdersCustomerState(ctxReq, tenantID, permCtx, state)
+						pushPrompt(ordersTimeRangePromptText)
+						ordersPromptResponse()
+						return
+					}
+				}
+			} else if extractOrderCode(search) == "" {
+				// No in-flight flow and not a specific order code.
+				if isPrivateOrdersCustomerQuery(search) {
+					pushPrompt(ordersCustomerPromptText)
+					ordersPromptResponse()
+					return
+				}
+				if !isAllCustomersReply(search) && len(tokenizeOrdersCustomerQuery(search)) > 0 {
+					approved := scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCode, allowedCodes)
+					if len(approved) == 0 {
+						writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadRequest, 0, c.ClientIP())
+						c.JSON(http.StatusBadRequest, gin.H{
+							"status":   "error",
+							"resource": "orders",
+							"message":  ordersCustomerOutOfScopeText,
+						})
+						return
+					}
+					if len(approved) > 1 {
+						storeOrdersCustomerState(ctxReq, tenantID, permCtx, engine.OrderCustomerState{Stage: engine.OrderCustomerStagePick, Codes: approved})
+						pushPrompt(buildOrdersPickPromptText(tenantID, approved))
+						ordersPromptResponse()
+						return
+					}
+					// Exactly one customer. If the staff already gave a window in
+					// the same message, answer now; otherwise ask for the window.
+					if parseDaysFromSearch(search) > 0 {
+						targetCodes = approved
+					} else {
+						storeOrdersCustomerState(ctxReq, tenantID, permCtx, engine.OrderCustomerState{Stage: engine.OrderCustomerStageTimeRange, Codes: approved})
+						pushPrompt(ordersTimeRangePromptText)
+						ordersPromptResponse()
+						return
+					}
+				}
+				// else: all-customers reply or a bare date window with no
+				// customer → fall through to the scope-wide behaviour below.
+			}
+		}
+
 		// Specific order code (e.g. "ĐH000016"): saorders/search filters
 		// server-side on SO_DON_HANG and returns just that order. We verify it
 		// belongs to the verified customer before handing it to the LLM, and
@@ -2425,7 +2535,15 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					// MA_KHACH_HANG arrives as [id, "CODE - Name"]; orderCustomerCode
 					// normalizes that (and legacy flat shapes) to the bare code.
 					itemCustCode := orderCustomerCode(item)
-					if !isOrderAuthorized(itemCustCode, scopeType, ownCode, allowedCodes) {
+					// When a PRIVATE query named specific customers, filter to
+					// those scope-approved codes (membership) — isOrderAuthorized
+					// would pass everything under scope "all". Otherwise keep the
+					// scope-wide authorization check (public/own, assigned, all).
+					if len(targetCodes) > 0 {
+						if !codesContain(targetCodes, itemCustCode) {
+							continue
+						}
+					} else if !isOrderAuthorized(itemCustCode, scopeType, ownCode, allowedCodes) {
 						continue
 					}
 					filteredData = append(filteredData, normalizeOrderRecord(item))
@@ -2439,7 +2557,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				summary := buildOrdersSummary(filteredData)
 				trimmed := trimOrdersForLLM(filteredData, 20)
 				writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusOK, len(filteredData), c.ClientIP())
-				c.JSON(http.StatusOK, gin.H{
+				resp := gin.H{
 					"status":         "success",
 					"source":         "cloudify_live",
 					"resource":       "orders",
@@ -2452,7 +2570,13 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					"orders_summary": summary,
 					"orders":         trimmed,
 					"data":           trimmed,
-				})
+				}
+				// When a private query targeted specific customers, surface the
+				// scope-approved codes so the LLM can name whose orders these are.
+				if len(targetCodes) > 0 {
+					resp["customer_codes"] = targetCodes
+				}
+				c.JSON(http.StatusOK, resp)
 				return
 			}
 		} else {
