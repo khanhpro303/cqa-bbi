@@ -1155,10 +1155,17 @@ func TestTrimOrdersForLLM(t *testing.T) {
 
 func TestResolveGlobalMethodPermission(t *testing.T) {
 	// orders allows POST only; debt allows GET only; products has a custom path.
+	// The get/post flags configure how the BACKEND calls the upstream Cloudify
+	// endpoint (see debt usePost at erp.go), NOT the trusted internal hop — the
+	// Langflow ERP caller always reaches /erp/query over POST. So a resource is
+	// "allowed" for the gate when it is enabled under ANY method; gating the
+	// incoming POST on the upstream method wrongly blocked GET-only upstreams
+	// like debt → forbidden_method ("lỗi kết nối ERP Gateway").
 	validConfig := `{
 		"orders":   {"get": false, "post": true,  "path": ""},
 		"debt":     {"get": true,  "post": false, "path": ""},
-		"products": {"get": true,  "post": true,  "path": "danhmucvattuhanghoa/search"}
+		"products": {"get": true,  "post": true,  "path": "danhmucvattuhanghoa/search"},
+		"disabled": {"get": false, "post": false, "path": ""}
 	}`
 
 	tests := []struct {
@@ -1171,7 +1178,7 @@ func TestResolveGlobalMethodPermission(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "system key match, GET allowed",
+			name:        "GET-only debt allows incoming GET",
 			config:      validConfig,
 			resource:    "debt",
 			method:      "GET",
@@ -1179,11 +1186,23 @@ func TestResolveGlobalMethodPermission(t *testing.T) {
 			wantAllowed: true,
 		},
 		{
-			name:        "system key match, POST not ticked",
+			// Regression: the Langflow caller always POSTs to /erp/query. A
+			// GET-only upstream (debt → th_cong_no_phai_thu/search) must NOT be
+			// rejected just because post is unticked — that produced the
+			// "lỗi kết nối ERP Gateway" 403 on every công nợ query.
+			name:        "GET-only debt still allows incoming POST",
 			config:      validConfig,
 			resource:    "debt",
 			method:      "POST",
 			wantSysRes:  "debt",
+			wantAllowed: true,
+		},
+		{
+			name:        "resource with no method enabled is blocked",
+			config:      validConfig,
+			resource:    "disabled",
+			method:      "POST",
+			wantSysRes:  "disabled",
 			wantAllowed: false,
 		},
 		{
@@ -1220,12 +1239,15 @@ func TestResolveGlobalMethodPermission(t *testing.T) {
 			wantErr:     true,
 		},
 		{
-			name:        "unknown HTTP method is blocked",
+			// HTTP verb no longer gates the trusted internal hop: an enabled
+			// resource is allowed regardless of the incoming method (the route
+			// only exposes GET/POST anyway).
+			name:        "enabled resource allowed regardless of incoming verb",
 			config:      validConfig,
 			resource:    "orders",
 			method:      "PUT",
 			wantSysRes:  "orders",
-			wantAllowed: false,
+			wantAllowed: true,
 		},
 	}
 

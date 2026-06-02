@@ -27,8 +27,14 @@ import (
 // resolveGlobalMethodPermission matches a requested resource against the
 // tenant's global HTTP-method config (setting key erp_global_method_permissions).
 // It returns the system resource key to re-route to (empty if no match), whether
-// the HTTP method is permitted, and an error if the config JSON is malformed —
-// in which case the caller MUST fail closed rather than allow the request.
+// the resource is permitted for ERP gateway access, and an error if the config
+// JSON is malformed — in which case the caller MUST fail closed rather than allow
+// the request.
+//
+// The httpMethod argument is no longer used to gate access: the get/post flags
+// configure how the BACKEND calls the upstream Cloudify endpoint, while the
+// Langflow ERP caller always reaches /erp/query over POST. A resource is allowed
+// when it is enabled under ANY method (get||post); both off means disabled.
 //
 // Matching order is preserved from the original inline gate: custom Path first,
 // then the system resource key.
@@ -67,14 +73,15 @@ func resolveGlobalMethodPermission(configJSON, reqResource, httpMethod string) (
 		return "", false, nil
 	}
 
-	switch strings.ToLower(httpMethod) {
-	case "get":
-		return systemResource, matched.Get, nil
-	case "post":
-		return systemResource, matched.Post, nil
-	default:
-		return systemResource, false, nil
-	}
+	// The get/post flags configure how the BACKEND calls the upstream Cloudify
+	// endpoint (e.g. debt → th_cong_no_phai_thu/search via GET, see usePost at
+	// erp.go), NOT the trusted internal hop: the Langflow ERP caller always
+	// reaches /erp/query over POST. Gating that incoming POST on the upstream
+	// method rejected GET-only resources like debt with forbidden_method
+	// ("lỗi kết nối ERP Gateway") even though the agent was permitted to query
+	// them. The gate's real job is the resource whitelist, so a resource is
+	// allowed when it is enabled under ANY method; both flags off = disabled.
+	return systemResource, matched.Get || matched.Post, nil
 }
 
 // methodPermissionResource maps a requested resource to the resource key used
