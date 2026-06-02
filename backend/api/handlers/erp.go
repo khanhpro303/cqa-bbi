@@ -326,13 +326,24 @@ func ERPQuery(c *gin.Context) {
 				return getProductsByMaChaFromCache(ctx, tenantID, maCha)
 			})
 			slim := slimProductsForLLM(filteredCached)
+			// Surface the line's parent SKU(s) so the agent can chain to
+			// product_variants. slimProductsForLLM collapses by web name and drops
+			// ma_cha, but the STOCK-pick continuation (system prompt "KHÓA ĐÚNG
+			// DÒNG ĐÃ CHỌN") needs parent_codes[0] from THIS exact-web response to
+			// resolve a variant under the chosen line. Without it the agent has no
+			// parent_code after a deterministic numeric pick (the disambiguation
+			// web-groups response it would otherwise read is now intercepted by the
+			// worker), so the variant lookup dead-ends at count=0. Mirror the
+			// web-groups payload's parent_codes shape.
+			parentCodes := collectParentCodesFromProducts(filteredCached)
 			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, search, http.StatusOK, len(slim), c.ClientIP())
 			c.JSON(http.StatusOK, gin.H{
-				"status":   "success",
-				"data":     slim,
-				"source":   "astradb_cache_exact_web",
-				"resource": req.Resource,
-				"count":    len(slim),
+				"status":       "success",
+				"data":         slim,
+				"parent_codes": parentCodes,
+				"source":       "astradb_cache_exact_web",
+				"resource":     req.Resource,
+				"count":        len(slim),
 			})
 			return
 		}
@@ -1326,6 +1337,30 @@ func searchProductsFromCacheWithFilter(ctx context.Context, tenantID, search, pa
 // the result is capped at slimProductsForLLMLimit entries to keep the payload
 // tiny.
 const slimProductsForLLMLimit = 5
+
+// collectParentCodesFromProducts returns the unique parent SKU codes (ma_cha)
+// present in a product row set, preserving first-seen order. It backs the
+// exact-web products response so the agent can copy parent_codes[0] into a
+// follow-up product_variants call — the same field name and shape the
+// disambiguation web-groups response exposes. Rows without a ma_cha are skipped
+// (a slimmed/aggregated row carries no parent), and an empty input yields an
+// empty (non-nil) slice so the JSON field is always an array.
+func collectParentCodesFromProducts(products []map[string]interface{}) []string {
+	codes := make([]string, 0, len(products))
+	seen := make(map[string]struct{}, len(products))
+	for _, p := range products {
+		maCha := getMapString(p, "MA_CHA", "ma_cha")
+		if maCha == "" {
+			continue
+		}
+		if _, dup := seen[maCha]; dup {
+			continue
+		}
+		seen[maCha] = struct{}{}
+		codes = append(codes, maCha)
+	}
+	return codes
+}
 
 func slimProductsForLLM(products []map[string]interface{}) []map[string]interface{} {
 	slim := make([]map[string]interface{}, 0, len(products))

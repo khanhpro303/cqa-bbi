@@ -159,6 +159,8 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
    searchProductsByExactWebName      strings.TrimSpace(search) == "" ? ◄── check khách có hỏi gì không
      FromCache (erp.go:1001)                        │
    source=astradb_cache_exact_web    ┌── RỖNG ──────┴────── CÓ CHỮ ──┐
+   + parent_codes[] (ma_cha dòng)
+   (collectParentCodesFromProducts)
                                      ▼                               ▼
                    return data:[] + source=          B1. searchProductWebGroupsFromCache
                    empty_search_use_knowledge            (erp.go:1038) LIKE 2-pass + rank
@@ -205,6 +207,19 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
 >    nhánh `==1 nhóm` hoặc `FUZZY` ra `resolvedParent` DUY NHẤT và call là price+color/size,
 >    backend re-resolve đúng SKU và trả đơn giá (`pivoted_from="products"`) thay vì `price_range`.
 >    Engine y hệt resource `product_variants` (mục G). 0 match → trả `available_colors/sizes`.
+
+> 🐞 **Bug đã sửa (2026-06-02) — exact-web KHÔNG trả `parent_codes` → đứt mạch STOCK-pick:**
+> response `products` exact-web (`source="astradb_cache_exact_web"`) chỉ đi qua `slimProductsForLLM`
+> (gộp theo tên, chỉ giữ `name/price_range/nhan_hieu_name/dvt`) nên **mất `ma_cha`**. Trong khi đó
+> prompt **KHÓA ĐÚNG DÒNG ĐÃ CHỌN** bắt Agent: sau khi khách bấm "🔍 mã SKU cụ thể" rồi nhập màu/size,
+> gọi `products(search="<dòng đã chọn>", exact_web_name=true)` → **copy `parent_codes[0]`** sang
+> `product_variants`. Vì backend chặn cú gõ-số deterministic (`ce91f82`/`021831e`) nên Agent KHÔNG còn
+> thấy response web-groups (nơi DUY NHẤT từng có `parent_codes`), mà đường exact-web lại không trả →
+> Agent thiếu `parent_code` → `product_variants` thất bại → `count=0` → bot xin "mã SKU". (Triệu chứng:
+> "FF901 → 1 → 2 → Nardo Grey size XL" báo *không tra được tồn kho*, dù SKU vẫn còn tồn.)
+> **Fix (backend-only):** exact-web giờ kèm `parent_codes` = `collectParentCodesFromProducts(filteredCached)`
+> (gom `ma_cha` duy nhất, giữ thứ tự), đúng shape như response web-groups. Prompt KHÓA ĐÚNG DÒNG giờ
+> thực hiện được nguyên văn; không cần sửa prompt/Langflow. Test: `TestCollectParentCodesFromProducts`.
 
 > Câu mẫu **"storm 3"** đi nhánh: `exact_web_name=false` → có chữ → B1 LIKE trả **0
 > nhóm** → **B2 hybrid** bắt được `ma_cha` (qua `match.MaCha`) → `matchedMaCha` →

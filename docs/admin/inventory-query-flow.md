@@ -362,6 +362,19 @@ Bước 3 — đọc tồn live của đúng SKU đó
 > `parent_codes[0]` DUY NHẤT, cấm search bare "FF901". Helpers ở `engine/session_options.go`
 > (`StoreAwaitingVariantLine`/`TakeAwaitingVariantLine`, có test nil-safe + suffix-stable).
 
+> 🐞 **Bug đã sửa (2026-06-02) — exact-web KHÔNG trả `parent_codes` nên "KHÓA ĐÚNG DÒNG" đứt mạch:**
+> hai bản vá hôm 01/06 ở trên đúng về Ý ĐỊNH nhưng cơ chế Bước 1 không chạy được. Prompt bắt Agent
+> `products(search="LS2 FF901", exact_web_name=true)` rồi **copy `parent_codes[0]`** sang
+> `product_variants`. **Nhưng** response exact-web (`source="astradb_cache_exact_web"`, erp.go:330)
+> đi qua `slimProductsForLLM` — chỉ giữ `name/price_range/nhan_hieu_name/dvt`, **drop `ma_cha`**.
+> `parent_codes[]` CHỈ tồn tại ở response web-groups (disambiguation), mà cú gõ-số giờ bị worker chặn
+> deterministic (`ce91f82`/`021831e`) nên Agent KHÔNG còn thấy response đó. → Agent không có `parent_code`
+> → `product_variants` thất bại → `count=0` → bot xin "mã SKU cụ thể" (đúng triệu chứng "nardo grey size XL"
+> tra không ra tồn dù SKU còn 25). **Fix (chỉ backend, không đụng prompt/Langflow):** response exact-web
+> giờ kèm `parent_codes` = `collectParentCodesFromProducts(filteredCached)` (gom `ma_cha` duy nhất, giữ
+> thứ tự), cùng shape với web-groups. Prompt "KHÓA ĐÚNG DÒNG" giờ thực thi được nguyên văn. Test:
+> `TestCollectParentCodesFromProducts` (`api/handlers/erp_parent_codes_test.go`).
+
 ---
 
 ## E. Chi tiết nhánh `inventory` backend (`respondWithLiveDataV2`, erp.go:1700)
