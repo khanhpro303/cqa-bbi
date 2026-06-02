@@ -2,6 +2,41 @@ package handlers
 
 import "testing"
 
+func TestIsVariantPriceIntent(t *testing.T) {
+	tests := []struct {
+		name                       string
+		intent, color, size, brand string
+		want                       bool
+	}{
+		{
+			// Turn-2 bug: agent sent exact_web_name=true with a colour pick. This
+			// predicate must return true so the exact-web short-circuit is skipped
+			// and the request flows into the pivot path instead of "không tìm thấy".
+			name:   "price + colour pick → true (skip exact-web)",
+			intent: "price", color: "Solid Carbon", size: "XL", want: true,
+		},
+		{
+			// A real web-name pick carries no color/size → exact-web path is correct.
+			name:   "price web-name pick, no attribute → false",
+			intent: "price", want: false,
+		},
+		{
+			// Stock web-name pick → exact-web/inventory path, never pivot.
+			name:   "stock + attribute → false",
+			intent: "stock", color: "đen", size: "XL", want: false,
+		},
+		{name: "case-insensitive price + size", intent: "PRICE", size: "L", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isVariantPriceIntent(tt.intent, tt.color, tt.size, tt.brand); got != tt.want {
+				t.Errorf("isVariantPriceIntent(%q,%q,%q,%q) = %v, want %v",
+					tt.intent, tt.color, tt.size, tt.brand, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShouldPivotToVariant(t *testing.T) {
 	tests := []struct {
 		name                               string

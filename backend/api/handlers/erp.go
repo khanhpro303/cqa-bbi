@@ -289,7 +289,15 @@ func ERPQuery(c *gin.Context) {
 		// the disambiguation history and is asking the backend NOT to push
 		// the option list again (which would loop on prefix-overlapping web
 		// names like "FF901" vs "FF901 Carbon").
-		if req.ExactWebName && strings.TrimSpace(req.Search) != "" {
+		//
+		// Skip it for a variant PRICE call (intent=price + color/size): the agent
+		// sometimes sets exact_web_name=true after the customer picks a COLOUR from
+		// an available_colors list, but keeps the old keyword as search. The exact
+		// path would then look up an exact web_name that never matches ("FF901
+		// Carbon" is a substring, not a web_name) and return "không tìm thấy",
+		// bypassing the pivot. Falling through lets the LIKE path resolve the line
+		// and pivot to the exact SKU + price.
+		if req.ExactWebName && strings.TrimSpace(req.Search) != "" && !isVariantPriceIntent(req.Intent, req.Color, req.Size, req.Brand) {
 			search := strings.TrimSpace(req.Search)
 			cachedData, err := searchProductsByExactWebNameFromCache(c.Request.Context(), tenantID, search, req.Limit)
 			if err != nil {
@@ -636,6 +644,18 @@ func shouldPivotToVariant(intent, color, size, brand, resolvedParent string) boo
 	if strings.TrimSpace(resolvedParent) == "" {
 		return false
 	}
+	return isVariantPriceIntent(intent, color, size, brand)
+}
+
+// isVariantPriceIntent reports whether a products call is really a PRICE question
+// about ONE concrete variant (intent=price + a color/size/brand). Such a call must
+// NOT be served by the exact-web short-circuit (which answers at the family level
+// and ignores attributes): exact_web_name is for bare web-name picks that carry no
+// color/size. When the agent sets exact_web_name=true but ALSO passes a color/size
+// price question (e.g. picking a colour from an available_colors list), we skip the
+// exact-web path so the request flows into the pivot-capable resolution instead of
+// failing with "không tìm thấy" on a web_name that was never an exact match.
+func isVariantPriceIntent(intent, color, size, brand string) bool {
 	if !strings.EqualFold(strings.TrimSpace(intent), "price") {
 		return false
 	}
