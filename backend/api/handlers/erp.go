@@ -2624,6 +2624,27 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			return
 		}
 
+		// PRIVATE bot only: a debt query that references a customer generically
+		// ("công nợ của khách hàng") with no code/name yet → ask for the code/name
+		// ourselves. Returning the same shape as the period prompt makes the agent
+		// reply [RICH_MESSAGE_SENT], so the worker stores the awaiting-followup
+		// marker and the staff member's next turn ("S001") is not dropped as CASUAL.
+		if permCtx.AgentType == "private" && partnerID == "" && isPrivateDebtCustomerQuery(search) {
+			if errPrompt := sendDebtCustomerPrompt(c.Request.Context(), tenantID, permCtx); errPrompt != nil {
+				log.Printf("[debt_query] cannot send customer prompt to %s: %v", permCtx.ZaloUserID, errPrompt)
+			} else {
+				log.Printf("[debt_query] sent công nợ customer prompt to %s", permCtx.ZaloUserID)
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status":         "success",
+				"is_debt_prompt": true,
+				"data":           []map[string]interface{}{},
+				"message":        "zalo_rich_message_sent_directly",
+				"count":          0,
+			})
+			return
+		}
+
 		var targetCustomerCodes []string
 		if scopeType == "own" {
 			ownCode := permCtx.CustomerCode
@@ -2646,12 +2667,21 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			} else if search != "" {
 				_, _, isPeriod := parseDebtPeriodFromSearch(search)
 				if !isPeriod {
-					partners, errPartners := client.SearchPartners(search, 5)
-					if errPartners == nil {
-						for _, p := range partners {
-							maVal := getMapString(p, "MA", "code", "ma")
-							if maVal != "" {
-								targetCustomerCodes = append(targetCustomerCodes, maVal)
+					// PRIVATE bot: resolve the customer code/name against the local
+					// MySQL cache (cached_customers) first — fast, no ERP round-trip.
+					if permCtx.AgentType == "private" {
+						targetCustomerCodes = resolveCustomerCodesFromCache(tenantID, search)
+					}
+					// Fallback to the live ERP lookup on a cache miss (also the only
+					// path for non-private scopes) — preserves the original behaviour.
+					if len(targetCustomerCodes) == 0 {
+						partners, errPartners := client.SearchPartners(search, 5)
+						if errPartners == nil {
+							for _, p := range partners {
+								maVal := getMapString(p, "MA", "code", "ma")
+								if maVal != "" {
+									targetCustomerCodes = append(targetCustomerCodes, maVal)
+								}
 							}
 						}
 					}
@@ -2664,6 +2694,28 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					groupIDs = append(groupIDs, grp.GroupID)
 				}
 				targetCustomerCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
+			}
+		}
+
+		// PRIVATE bot safety net: a specific code/name that resolved to nothing
+		// (cache miss + ERP miss) must NOT fall through with an empty DS_KHACH_HANG,
+		// which would return EVERY customer's debt. Ask again for the code/name
+		// instead. Period queries are exempt — they legitimately span all customers.
+		if permCtx.AgentType == "private" && partnerID == "" && len(targetCustomerCodes) == 0 {
+			if _, _, isPeriod := parseDebtPeriodFromSearch(search); !isPeriod {
+				if errPrompt := sendDebtCustomerPrompt(c.Request.Context(), tenantID, permCtx); errPrompt != nil {
+					log.Printf("[debt_query] cannot send customer prompt to %s: %v", permCtx.ZaloUserID, errPrompt)
+				} else {
+					log.Printf("[debt_query] sent công nợ customer prompt (unresolved) to %s", permCtx.ZaloUserID)
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"status":         "success",
+					"is_debt_prompt": true,
+					"data":           []map[string]interface{}{},
+					"message":        "zalo_rich_message_sent_directly",
+					"count":          0,
+				})
+				return
 			}
 		}
 
