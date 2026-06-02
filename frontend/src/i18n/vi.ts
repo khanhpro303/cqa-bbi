@@ -375,8 +375,13 @@ export default {
   langflow_system_prompt: 'System Prompt (Câu lệnh hệ thống)',
   langflow_system_prompt_placeholder: 'VD: Bạn là trợ lý bán hàng của BBI...',
   langflow_system_prompt_hint:
-    'Ghi đè prompt của agent cho mỗi request. Để trống sẽ dùng biến SYSTEM_PROMPT mặc định cấu hình sẵn trong Langflow.',
-  
+    'Ghi đè prompt của agent cho mỗi request trên luồng public / khách hàng (phạm vi OWN). Để trống sẽ dùng biến SYSTEM_PROMPT mặc định cấu hình sẵn trong Langflow.',
+  langflow_system_prompt_internal: 'System Prompt nội bộ (luồng nhân viên)',
+  langflow_system_prompt_internal_placeholder:
+    'VD: Bạn là trợ lý nội bộ của BBI. Nhận mã/tên khách hàng để tra cứu...',
+  langflow_system_prompt_internal_hint:
+    'Prompt cho luồng nội bộ / nhân viên (phạm vi ALL). Để trống sẽ dùng biến SYSTEM_PROMPT riêng của luồng đó — KHÔNG kế thừa prompt public ở trên.',
+
   // ERP Cloudify Configuration
   erp_config_title: 'Tích hợp dữ liệu ERP (Cloudify ERP Integration)',
   erp_active: 'Kích hoạt kết nối ERP',

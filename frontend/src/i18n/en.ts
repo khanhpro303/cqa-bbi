@@ -375,8 +375,13 @@ export default {
   langflow_system_prompt: 'System Prompt',
   langflow_system_prompt_placeholder: "e.g. You are BBI's sales assistant...",
   langflow_system_prompt_hint:
-    'Overrides the agent prompt for every request. Leave empty to use the default SYSTEM_PROMPT configured inside Langflow.',
-  
+    'Overrides the agent prompt for every request on the public / customer flow (OWN scope). Leave empty to use the default SYSTEM_PROMPT configured inside Langflow.',
+  langflow_system_prompt_internal: 'Internal System Prompt (staff flow)',
+  langflow_system_prompt_internal_placeholder:
+    'e.g. You are BBI internal staff assistant. Accept a customer code/name to look up...',
+  langflow_system_prompt_internal_hint:
+    'Prompt for the private / internal staff flow (ALL scope). Leave empty to use that flow\'s own SYSTEM_PROMPT — it does NOT inherit the public prompt above.',
+
   // ERP Cloudify Configuration
   erp_config_title: 'Cloudify ERP Integration',
   erp_active: 'Enable ERP connection',

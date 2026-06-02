@@ -203,6 +203,7 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		LangflowPublicFlowID string `json:"langflow_public_flow_id"`
 		LangflowToken        string `json:"langflow_token"`
 		SystemPrompt         string `json:"system_prompt"`
+		SystemPromptInternal string `json:"system_prompt_internal"`
 
 		// Astra DB configuration
 		AstraDBAPIEndpoint       string `json:"astradb_api_endpoint"`
@@ -241,10 +242,20 @@ func SaveAIEnginesSettings(c *gin.Context) {
 
 	// System prompt (plain text, optional). Empty clears the override so the
 	// agent falls back to the SYSTEM_PROMPT global variable inside Langflow.
+	// This applies to the public / OWN-scope flow.
 	if req.SystemPrompt != "" {
 		upsertSetting(tenantID, "ai_engine_system_prompt", req.SystemPrompt, nil)
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_system_prompt").Delete(&models.AppSetting{})
+	}
+
+	// Internal system prompt for the private / ALL-scope staff flow (plain text,
+	// optional). Empty clears it so the private flow uses its own SYSTEM_PROMPT
+	// global — it does NOT inherit the public prompt above.
+	if req.SystemPromptInternal != "" {
+		upsertSetting(tenantID, "ai_engine_system_prompt_internal", req.SystemPromptInternal, nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_system_prompt_internal").Delete(&models.AppSetting{})
 	}
 
 	// Token
@@ -367,7 +378,7 @@ func TestLangflowConnection(c *gin.Context) {
 
 	// Try calling run flow with a ping using the actual LangflowClient logic
 	lfClient := engine.NewLangflowClient(cfg)
-	
+
 	_, err := lfClient.RunFlowWithOverrides(c.Request.Context(), "ping_test_session", "", "ping", baseURL, token, flowID, "")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

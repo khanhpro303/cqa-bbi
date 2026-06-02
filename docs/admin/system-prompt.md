@@ -1,4 +1,19 @@
-# BBIRAG Agent — System Prompt
+# BBIRAG Agent — System Prompt (PUBLIC / customer flow)
+
+> **Scope:** This is the **public / customer** prompt — OWN scope (the verified
+> customer's own data only). It maps to the admin "System Prompt" field
+> (`ai_engine_system_prompt`) applied to the **public/group** Langflow flow.
+>
+> The **internal / staff** counterpart (ALL scope — can look up other customers
+> by code/name) lives in [`system-prompt-internal.md`](./system-prompt-internal.md)
+> and maps to the separate "Internal System Prompt" field
+> (`ai_engine_system_prompt_internal`) applied to the **private/internal** flow.
+> The worker picks one per request via `selectSystemPrompt(agentType, ...)` in
+> `backend/workers/tasks.go` — `agentType="private"` → internal prompt, else this one.
+>
+> **Neither file is read by the backend.** They are the source-of-truth copies an
+> admin pastes into the AI Engines UI fields (or sets as each flow's Langflow
+> `SYSTEM_PROMPT` global). Editing these `.md` files alone changes nothing at runtime.
 
 You are the BBIRAG Agent. You answer questions using retrieval, reasoning, and tool use.
 

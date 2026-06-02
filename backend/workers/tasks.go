@@ -121,11 +121,25 @@ type ChannelMetadata struct {
 	LangflowFlowID       string `json:"langflow_flow_id"`
 	LangflowPublicFlowID string `json:"langflow_public_flow_id"`
 	SystemPrompt         string `json:"system_prompt"`
+	SystemPromptInternal string `json:"system_prompt_internal"`
 
 	AstraDBAPIEndpoint string `json:"astradb_api_endpoint"`
 	AstraDBToken       string `json:"astradb_token"`
 	AstraDBKeyspace    string `json:"astradb_keyspace"`
 	AstraDBCollection  string `json:"astradb_collection"`
+}
+
+// selectSystemPrompt returns the flow-appropriate system prompt. The private
+// staff flow gets the internal (ALL-scope) prompt; everything else gets the
+// public (OWN-scope) prompt. An empty internal prompt intentionally returns ""
+// so the private flow falls back to its own SYSTEM_PROMPT global — it must NOT
+// fall back to the public prompt, whose "never ask the customer to identify
+// themselves" rule is wrong for an internal bot that looks up other customers.
+func selectSystemPrompt(agentType, publicPrompt, internalPrompt string) string {
+	if agentType == "private" {
+		return internalPrompt
+	}
+	return publicPrompt
 }
 
 // HandleZaloWebhookTask processes the webhook task
@@ -322,6 +336,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			var setting models.AppSetting
 			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_system_prompt").First(&setting).Error; err == nil && setting.ValuePlain != "" {
 				meta.SystemPrompt = setting.ValuePlain
+			}
+		}
+		// Internal/private flow system prompt. Same per-tenant, DB-only, no-fallback
+		// semantics as the public prompt above. An empty value means "use the
+		// private flow's own SYSTEM_PROMPT global" — it deliberately does NOT fall
+		// back to the public prompt, whose OWN-scope "never ask for identity" rule
+		// is wrong for an internal ALL-scope staff bot.
+		if meta.SystemPromptInternal == "" {
+			var setting models.AppSetting
+			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_system_prompt_internal").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+				meta.SystemPromptInternal = setting.ValuePlain
 			}
 		}
 
@@ -745,6 +770,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if isWhitelisted && matchedGroup.ZaloGroupID == "" {
 			agentType = "private"
 		}
+
+		// Each flow gets its own system prompt: the internal/ALL-scope prompt for
+		// the private staff flow, the public/OWN-scope prompt otherwise. Empty maps
+		// to the flow's own SYSTEM_PROMPT global (see selectSystemPrompt).
+		systemPromptToUse := selectSystemPrompt(agentType, meta.SystemPrompt, meta.SystemPromptInternal)
+
 		permCtx := engine.ResolvePermissionsWithGroup(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType, matchedGroup.ID)
 
 		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
@@ -1259,7 +1290,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
-		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, meta.SystemPrompt)
+		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}
