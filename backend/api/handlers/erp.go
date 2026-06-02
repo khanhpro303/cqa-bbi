@@ -156,6 +156,12 @@ func ERPQuery(c *gin.Context) {
 		Color           string `json:"color" form:"color"`
 		Size            string `json:"size" form:"size"`
 		Brand           string `json:"brand" form:"brand"`
+		// Intent is the Agent's price-vs-stock classification of the ORIGINAL
+		// product question (price|stock; anything else folds to stock). It is
+		// baked into the #stockpick_web pending-option postbacks so a later
+		// numeric pick replays the captured intent verbatim — the worker no
+		// longer keyword-classifies. See engine.BuildStockPickPendingButtons.
+		Intent string `json:"intent" form:"intent"`
 	}
 
 	if c.Request.Method == "POST" {
@@ -372,7 +378,7 @@ func ERPQuery(c *gin.Context) {
 				for _, g := range webGroups {
 					webNames = append(webNames, g.WebName)
 				}
-				storePendingDisambiguationOptions(c.Request.Context(), tenantID, permCtx, engine.BuildStockPickPendingButtons(webNames))
+				storePendingDisambiguationOptions(c.Request.Context(), tenantID, permCtx, engine.BuildStockPickPendingButtons(webNames, req.Intent))
 
 				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(groupPayloads), c.ClientIP())
 				c.JSON(http.StatusOK, gin.H{

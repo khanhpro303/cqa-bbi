@@ -891,16 +891,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// — it never re-LIKEs ("LS2 FF901" vs "LS2 FF901 Carbon") and never
 		// re-enters Langflow. Fixes the prefix-collision loop + duplicate prose.
 		if strings.HasPrefix(userText, engine.StockPickWebPrefix) {
-			webName := strings.TrimPrefix(userText, engine.StockPickWebPrefix)
+			pickIntent, webName := engine.ParseStockPickWeb(userText)
 
 			// Intent continuation: if the question that produced this list was a
 			// PRICE ask, the customer wants a price for the line they just picked —
 			// not the dòng-vs-SKU stock picker. Answer the exact-web price range
 			// directly (deterministic, no Langflow round-trip) and stop. Any other
 			// or ambiguous intent falls through to the stock picker, matching the
-			// system prompt's "ambiguous → stock" default. TakePendingIntent is
-			// single-use so it can't leak into a later unrelated disambiguation.
-			if engine.TakePendingIntent(ctx, sessionKey) == engine.PendingIntentPrice {
+			// system prompt's "ambiguous → stock" default. The intent travels
+			// inside the postback (baked at list-build time from the Agent's
+			// classification), so the pick replays it verbatim — no keyword guess.
+			if pickIntent == engine.StockPickIntentPrice {
 				if priceReply, priceErr := priceRangeReplyByWebName(ctx, matchedChannel.TenantID, &permCtx, webName); priceErr == nil && priceReply != "" {
 					var sendErr error
 					if matchedGroup.ZaloGroupID != "" {
@@ -1315,17 +1316,6 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] failed to sign permission token: %v", err)
 		}
 
-		// Capture this question's product intent (price vs stock) before handing
-		// it to Langflow. If the Agent answers with a `products` disambiguation
-		// list, the customer's later numeric pick is intercepted deterministically
-		// (see #stockpick_web below) and carries NO intent of its own — this stored
-		// value is the only way to know a price question should stay a price answer
-		// instead of collapsing into the stock picker. Postback / number replies
-		// short-circuit above and never reach here, so they cannot clobber the
-		// triggering question's intent. Re-storing every turn keeps it fresh and
-		// prevents a stale intent from an earlier turn leaking into a later pick.
-		engine.StorePendingIntent(ctx, sessionKey, classifyProductIntent(userText), meta.SessionTimeout)
-
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
 		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
 		if err != nil {
@@ -1653,35 +1643,6 @@ func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAda
 	} else {
 		_ = adapter.SendMessage(ctx, senderID, reply)
 	}
-}
-
-// classifyProductIntent labels a customer message as a PRICE or STOCK product
-// intent. It mirrors the keyword sets the system prompt uses for its
-// "Disambiguation Follow-up Rules": an explicit price word with no stock word is
-// PRICE; everything else (including the genuinely ambiguous "FF901 bao nhiêu")
-// defaults to STOCK, matching the prompt's "ambiguous → stock" rule. Kept
-// conservative on purpose: we only skip the stock picker when the price intent
-// is unmistakable, so a wrong guess never confidently shows the wrong figure.
-func classifyProductIntent(text string) string {
-	lower := strings.ToLower(text)
-
-	hasStock := false
-	for _, kw := range []string{"tồn", "ton kho", "còn hàng", "con hang", "còn không", "con khong", "số lượng", "so luong", "bao nhiêu con", "bao nhieu con", "còn bao nhiêu", "con bao nhieu", "stock"} {
-		if strings.Contains(lower, kw) {
-			hasStock = true
-			break
-		}
-	}
-	if hasStock {
-		return engine.PendingIntentStock
-	}
-
-	for _, kw := range []string{"giá", "gia ban", "giá bán", "đơn giá", "don gia", "bao nhiêu tiền", "bao nhieu tien", "price", "cost"} {
-		if strings.Contains(lower, kw) {
-			return engine.PendingIntentPrice
-		}
-	}
-	return engine.PendingIntentStock
 }
 
 // priceRangeReplyByWebName builds a price-range reply for ONE exact product-line

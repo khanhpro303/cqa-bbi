@@ -83,6 +83,19 @@ class ERPGatewayCaller(Component):
             tool_mode=True
         ),
         MessageTextInput(
+            name="intent",
+            display_name="Intent",
+            info=(
+                "Ý định GIÁ vs TỒN của câu hỏi sản phẩm gốc: đặt 'price' khi khách hỏi GIÁ "
+                "('giá bao nhiêu', 'bán bao nhiêu', 'đơn giá'); để trống hoặc 'stock' khi hỏi "
+                "TỒN KHO hoặc mơ hồ. Backend nướng giá trị này vào nút chọn dòng — khi khách bấm "
+                "số để chọn từ danh sách, bot trả ĐÚNG giá (intent=price) thay vì hỏi tồn. "
+                "Mặc định 'stock' nếu bỏ trống (an toàn: không bao giờ hiện giá sai)."
+            ),
+            required=False,
+            tool_mode=True
+        ),
+        MessageTextInput(
             name="zalo_user_id",
             display_name="Zalo User ID",
             info="Zalo user ID của khách hàng",
@@ -169,6 +182,7 @@ class ERPGatewayCaller(Component):
         brand = self._coerce_text(getattr(self, "brand", ""))
         exact_web_raw = self._coerce_text(getattr(self, "exact_web_name", ""))
         exact_web = exact_web_raw.lower() in ("true", "1", "yes", "có", "co")
+        intent = self._coerce_text(getattr(self, "intent", "")).strip().lower() or "stock"
         zalo_id = self._coerce_text(getattr(self, "zalo_user_id", ""))
         perm_token = self._coerce_text(getattr(self, "permission_token", ""))
 
@@ -187,6 +201,7 @@ class ERPGatewayCaller(Component):
             "size": size,
             "brand": brand,
             "exact_web_name": exact_web,
+            "intent": intent,
             "zalo_user_id": zalo_id,
             "limit": 10,
         }

@@ -29,6 +29,7 @@ You have access to several tools. Your job is to determine which tool to use and
   - `search`: The exact product code/SKU (`MA`), product line code (`MA_CHA`), customer/partner code, or free-text keyword. NEVER use raw "color size" descriptions as `search` for `resource="inventory"` — call `product_variants` first to resolve the `MA`.
   - `parent_code` (optional): The resolved parent product line code (`MA_CHA`); REQUIRED when `resource="product_variants"`. You MUST copy this value VERBATIM from a `parent_codes[]` entry returned by a previous `resource="products"` response (e.g. `parent_codes: ["SP458484"]` → pass `parent_code="SP458484"`). NEVER fabricate it from the `web_name` (do NOT turn "LS2 FF901" into "LS2-FF901"); a made-up code makes the backend resolve to the wrong product line and return a wrong SKU/price.
   - `color`, `size`, `brand` (optional, used with `resource="product_variants"`): Variant attributes as the user wrote them, even in Vietnamese (e.g., "đen bóng", "L"); the backend fuzzy-matches them bilingually (Vietnamese ↔ English) against cached canonical values stored in the product cache.
+  - `intent` (optional, used with `resource="products"`): The price-vs-stock intent of the ORIGINAL question — `"price"` when the customer asked GIÁ (giá / bán bao nhiêu / đơn giá), otherwise `"stock"` (default). When `products` returns a disambiguation list, the backend bakes this value into each line option, so that when the customer later picks a line by number the bot answers the RIGHT thing (price vs stock) WITHOUT you being called again. Leave empty / `"stock"` for vague or stock questions — `"stock"` is the safe default and never shows a wrong price.
 - **Conversation History**: Use this only to maintain continuity when the user refers to previous turns. Do not treat conversation history as a factual source.
 - **Conversation File Context**: Use when the user asks about an uploaded file or refers to file content.
 - **URL Ingestion Tool**: Use this only when the user explicitly asks to read, summarize, or analyze a URL. Do not ingest URLs automatically.
@@ -70,6 +71,12 @@ token next to a product code/name (e.g. "FF800 **trắng L**", "FF901 **đen bó
 - **VAGUE / FAMILY intent** (no color/size, e.g. "FF901 giá bao nhiêu", "có nón gì"):
   - `resource="products"`, `search=<keyword>`. A `price_range` (or a disambiguation
     list) is the correct, expected response here.
+  - **ALSO pass `intent`** on this call: `intent="price"` when the question asked
+    GIÁ (giá / bán bao nhiêu / đơn giá / bao nhiêu tiền), otherwise `intent="stock"`
+    (default — used for tồn / còn hàng / số lượng / ambiguous). If the backend returns
+    a disambiguation list, it bakes this intent into the line options so the customer's
+    later numeric pick is answered correctly (price vs stock) without another round-trip
+    to you. When unsure, omit it (defaults to `"stock"`).
 
 This is the first-turn version of nhánh B/C in the Hybrid / Chained Query Rules below;
 those rules give the full step-by-step and the bilingual / empty-result handling.
@@ -107,11 +114,14 @@ When `resource="products"` returns `source="astradb_cache_web_groups"`, each row
 
 > ⚙️ **Backend giờ chặn cú gõ-số deterministic (2026-06-01) — các luật dưới là FALLBACK.**
 > Khi `resource="products"` trả danh sách web-groups, backend đã lưu `pending_options`
-> dưới session key dùng chung. Một câu trả lời là SỐ TRẦN ("1"/"2") ngay sau danh sách đó
-> bị **worker chặn trước khi tới bạn** và tự route sang picker tồn-kho exact-web — bạn
-> KHÔNG được gọi lượt đó. Các luật dưới chỉ áp dụng khi câu trả lời KHÔNG phải số trần
-> (vd khách gõ lại tên dòng, hoặc mã `SP\d{6}`) hoặc khi pending đã hết hạn. Trong các
-> trường hợp đó, theo đúng các bước dưới.
+> dưới session key dùng chung, **kèm theo `intent` bạn đã truyền** (price/stock) nướng vào
+> từng option. Một câu trả lời là SỐ TRẦN ("1"/"2") ngay sau danh sách đó bị **worker chặn
+> trước khi tới bạn**: nếu intent đã chụp là `price` → backend trả thẳng khoảng giá của dòng
+> đó; ngược lại → route sang picker tồn-kho exact-web. Bạn KHÔNG được gọi lượt đó, và worker
+> KHÔNG còn tự đoán intent bằng từ khóa — nó dùng đúng `intent` bạn gửi ở câu hỏi gốc, nên hãy
+> đặt `intent="price"` cho câu hỏi GIÁ (xem Product Intent Routing). Các luật dưới chỉ áp dụng
+> khi câu trả lời KHÔNG phải số trần (vd khách gõ lại tên dòng, hoặc mã `SP\d{6}`) hoặc khi
+> pending đã hết hạn. Trong các trường hợp đó, theo đúng các bước dưới.
 
 > 🔒 **HARD GUARDRAIL — after a line pick, do NOT call `product_variants`.**
 > When the customer picks a line from a numbered list and has NOT given a concrete

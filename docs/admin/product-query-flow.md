@@ -106,9 +106,9 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
 
 | Kịch bản | Ý định khách | Tool call |
 |---|---|---|
-| **P1** | "mũ bảo hiểm LS2 / có nón gì" (mơ hồ, nhiều dòng) | `products(search="mũ bảo hiểm LS2")` → backend dò web-group, **>1** nhóm → trả `web_groups` để agent hỏi khách chọn |
+| **P1** | "mũ bảo hiểm LS2 / có nón gì" (mơ hồ, nhiều dòng) | `products(search="mũ bảo hiểm LS2", intent=<price\|stock>)` → backend dò web-group, **>1** nhóm → trả `web_groups` để agent hỏi khách chọn. `intent` nướng vào postback `#stockpick_web` để cú gõ-số sau trả đúng giá/tồn |
 | **P2** | Khách đã chọn 1 tên web cụ thể từ danh sách trước | `products(search="<tên web>", exact_web_name=true)` → backend khớp đúng web name, **không** đẩy lại danh sách |
-| **P3** | "storm 3 bao nhiêu" / "FF901 giá bao nhiêu" (mã/tên, **không** màu/size) | `products(search="storm 3")` → backend fuzzy (hybrid → LLM) → **cả họ** + `price_range` |
+| **P3** | "storm 3 bao nhiêu" / "FF901 giá bao nhiêu" (mã/tên, **không** màu/size) | `products(search="storm 3", intent="price")` (đặt `intent="price"` vì câu hỏi GIÁ) → backend fuzzy (hybrid → LLM) → **cả họ** + `price_range`. Nếu ra disambiguation, `intent` đã chụp giúp cú gõ-số trả khoảng giá thay vì hỏi tồn |
 | **P4** | "FF901 **đen bóng size L** giá bao nhiêu" / "FF800 **trắng L**" (mã cha + thuộc tính cụ thể) | `product_variants(parent_code="FF901", color="đen bóng", size="L")` → trả đúng SKU + giá đơn (mục G) |
 
 > 🧠 **Agent KHÔNG cần tự match mã.** Chỉ cần phân biệt theo **có màu/size hay
@@ -125,6 +125,15 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
 > liệt kê các `web_name` cho khách chọn, **KHÔNG** tự đoán 1 dòng rồi trả giá. Khi
 > khách đã chọn, gọi lại với `exact_web_name=true` (P2) để tránh lặp danh sách trên
 > các tên trùng tiền tố (vd "FF901" vs "FF901 Carbon").
+
+> 🎯 **Param `intent` (price/stock) — nguồn sự thật là LLM (2026-06-02).** Khi gọi
+> `products` cho câu hỏi mơ hồ/nhiều dòng, agent truyền `intent="price"` nếu câu hỏi gốc
+> là GIÁ, else `intent="stock"` (mặc định). Backend nướng giá trị này vào TỪNG postback
+> `pending_options`: `#stockpick_web:<intent>:<web_name>` (vd `#stockpick_web:price:LS2 FF901`).
+> Khi khách gõ số chọn dòng, worker đọc intent **thẳng từ postback** (không đoán lại bằng
+> keyword) → `price` thì trả khoảng giá dòng đó, ngược lại đẩy picker tồn-kho. `BuildStockPickPendingButtons`
+> + `ParseStockPickWeb` (`backend/engine/stock_disambiguation.go`) lo build/parse; postback
+> intent-less cũ trong Redis được parse mặc định `stock` (backward-compat).
 
 ---
 

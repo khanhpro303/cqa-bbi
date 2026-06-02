@@ -106,34 +106,3 @@ func TestIsDisambiguationReply(t *testing.T) {
 		})
 	}
 }
-
-// TestClassifyProductIntent locks the price-vs-stock keyword routing the worker
-// uses to keep a disambiguation pick's intent. A bare price word with no stock
-// word is PRICE; an explicit stock word, or a genuinely ambiguous phrasing,
-// defaults to STOCK (matching the system prompt's "ambiguous → stock" rule) so
-// a wrong guess never confidently shows the wrong figure.
-func TestClassifyProductIntent(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"explicit gia", "FF901 giá bán thế nào?", "PRICE"},
-		{"gia bao nhieu", "FF901 giá bao nhiêu", "PRICE"},
-		{"don gia", "cho mình xin đơn giá FF901", "PRICE"},
-		{"english price", "what is the price of FF901", "PRICE"},
-		{"explicit ton", "FF901 còn hàng không", "STOCK"},
-		{"so luong", "FF901 còn bao nhiêu cái", "STOCK"},
-		{"ton keyword", "FF901 tồn bao nhiêu", "STOCK"},
-		{"ambiguous bao nhieu defaults stock", "FF901 bao nhiêu", "STOCK"},
-		{"price word but also stock word stays stock", "FF901 giá và còn hàng không", "STOCK"},
-		{"plain mention defaults stock", "FF901", "STOCK"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyProductIntent(tc.in); got != tc.want {
-				t.Errorf("classifyProductIntent(%q) = %q; want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}
