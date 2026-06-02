@@ -16,7 +16,7 @@
       class="mt-2 ml-8"
     />
 
-    <template v-if="form.job_type !== 'erp_product_cache' && form.job_type !== 'chatbot_toggle'">
+    <template v-if="form.job_type !== 'erp_product_cache' && form.job_type !== 'erp_customer_cache' && form.job_type !== 'chatbot_toggle'">
       <v-divider class="my-6" />
 
       <!-- Output Schedule -->

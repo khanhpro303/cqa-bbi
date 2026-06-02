@@ -60,6 +60,7 @@ func AutoMigrate() error {
 		&models.AppSetting{},
 		&models.CachedProduct{},
 		&models.ERPRawProduct{},
+		&models.CachedCustomer{},
 		&models.ERPParentSKUExclusion{},
 		&models.NotificationLog{},
 		&models.AIUsageLog{},

@@ -23,7 +23,7 @@
         </v-expansion-panel>
 
         <!-- Input Channels -->
-        <v-expansion-panel value="input" v-if="form.job_type !== 'chatbot_toggle' && form.job_type !== 'erp_product_cache'">
+        <v-expansion-panel value="input" v-if="form.job_type !== 'chatbot_toggle' && form.job_type !== 'erp_product_cache' && form.job_type !== 'erp_customer_cache'">
           <v-expansion-panel-title>
             <v-icon start size="small">mdi-chat</v-icon>
             {{ $t('job_wizard_step_input') }}
@@ -35,7 +35,7 @@
         </v-expansion-panel>
 
         <!-- Rules -->
-        <v-expansion-panel value="rules" v-if="form.job_type !== 'erp_product_cache'">
+        <v-expansion-panel value="rules" v-if="form.job_type !== 'erp_product_cache' && form.job_type !== 'erp_customer_cache'">
           <v-expansion-panel-title>
             <v-icon start size="small">mdi-robot</v-icon>
             {{ $t('job_wizard_step_rules') }}
@@ -46,7 +46,7 @@
         </v-expansion-panel>
 
         <!-- Output -->
-        <v-expansion-panel value="output" v-if="form.job_type !== 'chatbot_toggle' && form.job_type !== 'erp_product_cache'">
+        <v-expansion-panel value="output" v-if="form.job_type !== 'chatbot_toggle' && form.job_type !== 'erp_product_cache' && form.job_type !== 'erp_customer_cache'">
           <v-expansion-panel-title>
             <v-icon start size="small">mdi-send</v-icon>
             {{ $t('job_wizard_step_output') }}
@@ -161,7 +161,7 @@ onMounted(async () => {
 async function saveJob() {
   saving.value = true
   try {
-    const isSpecialJob = form.value.job_type === 'chatbot_toggle' || form.value.job_type === 'erp_product_cache'
+    const isSpecialJob = form.value.job_type === 'chatbot_toggle' || form.value.job_type === 'erp_product_cache' || form.value.job_type === 'erp_customer_cache'
     await jobStore.updateJob(tenantId.value, jobId.value, {
       name: form.value.name,
       description: form.value.description,

@@ -29,7 +29,7 @@ var jobCancelFuncs sync.Map
 type CreateJobRequest struct {
 	Name            string          `json:"name" binding:"required,min=2,max=255"`
 	Description     string          `json:"description"`
-	JobType         string          `json:"job_type" binding:"required,oneof=qc_analysis classification chatbot_toggle erp_product_cache"`
+	JobType         string          `json:"job_type" binding:"required,oneof=qc_analysis classification chatbot_toggle erp_product_cache erp_customer_cache"`
 	InputChannelIDs []string        `json:"input_channel_ids"`
 	RulesContent    string          `json:"rules_content"`
 	RulesConfig     json.RawMessage `json:"rules_config"`
@@ -919,6 +919,78 @@ func ClearJobERPCache(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "success",
 		"message": "Xoá cache sản phẩm ERP thành công",
+	})
+}
+
+// GetJobERPCustomerCache retrieves cached customers from the local SQL database
+// for erp_customer_cache jobs.
+func GetJobERPCustomerCache(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	jobID := c.Param("jobId")
+
+	// 1. Verify job exists and belongs to tenant, and is of type erp_customer_cache
+	var job models.Job
+	if err := db.DB.Where("id = ? AND tenant_id = ? AND job_type = ?", jobID, tenantID, "erp_customer_cache").First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job_not_found"})
+		return
+	}
+
+	var customers []models.CachedCustomer
+	if err := db.DB.Where("tenant_id = ?", tenantID).
+		Find(&customers).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db_query_failed", "message": err.Error()})
+		return
+	}
+
+	var allDocuments []map[string]interface{}
+	for _, p := range customers {
+		allDocuments = append(allDocuments, map[string]interface{}{
+			"id":          p.ERP_ID,
+			"MA":          p.MA,
+			"ma":          p.MA,
+			"HO_VA_TEN":   p.HO_VA_TEN,
+			"ho_va_ten":   p.HO_VA_TEN,
+			"EMAIL":       p.EMAIL,
+			"email":       p.EMAIL,
+			"DIA_CHI":     p.DIA_CHI,
+			"dia_chi":     p.DIA_CHI,
+			"DIEN_THOAI":  p.DIEN_THOAI,
+			"dien_thoai":  p.DIEN_THOAI,
+			"create_date": p.ERP_CREATE_DATE,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":        "success",
+		"data":          allDocuments,
+		"nextPageState": "",
+		"count":         len(allDocuments),
+	})
+}
+
+// ClearJobERPCustomerCache clears cached customers from local MySQL.
+func ClearJobERPCustomerCache(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	jobID := c.Param("jobId")
+
+	// 1. Verify job exists and belongs to tenant, and is of type erp_customer_cache
+	var job models.Job
+	if err := db.DB.Where("id = ? AND tenant_id = ? AND job_type = ?", jobID, tenantID, "erp_customer_cache").First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job_not_found"})
+		return
+	}
+
+	// 2. Clear local MySQL cache
+	if err := db.DB.Where("tenant_id = ?", tenantID).Delete(&models.CachedCustomer{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db_delete_failed", "message": err.Error()})
+		return
+	}
+
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "job.clear_erp_customer_cache", "job", jobID, "Cleared ERP customer cache for job: "+job.Name, "", c.ClientIP())
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "success",
+		"message": "Xoá cache khách hàng ERP thành công",
 	})
 }
 

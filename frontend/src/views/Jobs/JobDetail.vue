@@ -12,7 +12,7 @@
         </v-tooltip>
         <v-btn v-else variant="outlined" prepend-icon="mdi-pencil" size="small" :to="`/${tenantId}/jobs/${jobId}/edit`" class="ml-2">{{ $t('edit') }}</v-btn>
 
-        <template v-if="job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache'">
+        <template v-if="job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache' && job?.job_type !== 'erp_customer_cache'">
           <v-tooltip v-if="!mdAndUp" text="Chạy thử" location="bottom">
             <template #activator="{ props }">
               <v-btn v-bind="props" variant="outlined" color="primary" icon="mdi-test-tube" size="small" :loading="isJobRunning" :disabled="isJobRunning" class="ml-1" @click="testRun" />
@@ -117,17 +117,21 @@
       <v-row dense>
         <v-col cols="6" sm="3">
           <div class="text-caption text-grey">{{ $t('job_type') }}</div>
-          <v-chip size="small" :color="job.job_type === 'qc_analysis' ? 'primary' : job.job_type === 'classification' ? 'secondary' : (job.job_type === 'erp_product_cache' ? 'info' : 'warning')" variant="tonal">
-            {{ job.job_type === 'qc_analysis' ? $t('job_qc') : job.job_type === 'classification' ? $t('job_classification') : (job.job_type === 'erp_product_cache' ? $t('job_erp_product_cache') : $t('job_chatbot_toggle')) }}
+          <v-chip size="small" :color="job.job_type === 'qc_analysis' ? 'primary' : job.job_type === 'classification' ? 'secondary' : (job.job_type === 'erp_product_cache' || job.job_type === 'erp_customer_cache' ? 'info' : 'warning')" variant="tonal">
+            {{ job.job_type === 'qc_analysis' ? $t('job_qc') : job.job_type === 'classification' ? $t('job_classification') : (job.job_type === 'erp_product_cache' ? $t('job_erp_product_cache') : (job.job_type === 'erp_customer_cache' ? $t('job_erp_customer_cache') : $t('job_chatbot_toggle'))) }}
           </v-chip>
         </v-col>
-        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle' && job.job_type !== 'erp_product_cache'">
+        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle' && job.job_type !== 'erp_product_cache' && job.job_type !== 'erp_customer_cache'">
           <div class="text-caption text-grey">{{ $t('ai_model') }}</div>
           <div class="text-body-2">{{ tenantAIProvider }} / {{ tenantAIModel }}</div>
         </v-col>
         <v-col cols="6" sm="3" v-else-if="job.job_type === 'erp_product_cache'">
           <div class="text-caption text-grey">Endpoint ERP</div>
           <div class="text-body-2 font-weight-medium">{{ erpProductEndpoint }}</div>
+        </v-col>
+        <v-col cols="6" sm="3" v-else-if="job.job_type === 'erp_customer_cache'">
+          <div class="text-caption text-grey">Endpoint ERP</div>
+          <div class="text-body-2 font-weight-medium">{{ erpCustomerEndpoint }}</div>
         </v-col>
         <v-col cols="6" sm="3" v-else>
           <div class="text-caption text-grey">Trạng thái thiết lập</div>
@@ -145,11 +149,11 @@
             {{ job.is_active ? $t('active') : $t('inactive') }}
           </v-chip>
         </v-col>
-        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle' && job.job_type !== 'erp_product_cache'">
+        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle' && job.job_type !== 'erp_product_cache' && job.job_type !== 'erp_customer_cache'">
           <div class="text-caption text-grey">{{ $t('job_input_channels') }}</div>
           <div class="text-body-2">{{ parsedChannelCount }} kênh</div>
         </v-col>
-        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle' && job.job_type !== 'erp_product_cache'">
+        <v-col cols="6" sm="3" v-if="job.job_type !== 'chatbot_toggle' && job.job_type !== 'erp_product_cache' && job.job_type !== 'erp_customer_cache'">
           <div class="text-caption text-grey">{{ $t('job_output') }}</div>
           <div class="d-flex flex-wrap ga-1">
             <v-chip v-for="(o, i) in parsedOutputs" :key="i" size="x-small" variant="tonal" :prepend-icon="o.type === 'telegram' ? 'mdi-send' : 'mdi-email'">
@@ -282,7 +286,7 @@
     <!-- Tabbed Content: History + Results -->
     <v-card class="pa-4">
       <v-tabs v-model="activeTab" density="compact" class="mb-3">
-        <v-tab value="results" v-if="job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache'">
+        <v-tab value="results" v-if="job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache' && job?.job_type !== 'erp_customer_cache'">
           <v-icon start size="small">mdi-magnify</v-icon>
           {{ $t('tab_results') }}
         </v-tab>
@@ -293,6 +297,10 @@
         <v-tab value="exclude_parents" v-if="job?.job_type === 'erp_product_cache'">
           <v-icon start size="small">mdi-filter-off-outline</v-icon>
           Loại trừ dòng SP
+        </v-tab>
+        <v-tab value="erp_customer_cache" v-if="job?.job_type === 'erp_customer_cache'">
+          <v-icon start size="small">mdi-account-group</v-icon>
+          Khách hàng đã cache
         </v-tab>
         <v-tab value="history">
           <v-icon start size="small">mdi-history</v-icon>
@@ -483,8 +491,93 @@
         </template>
       </div>
 
+      <!-- Tab: ERP Cache Customers -->
+      <div v-if="activeTab === 'erp_customer_cache' && job?.job_type === 'erp_customer_cache'">
+        <div class="d-flex align-center flex-wrap ga-2 mb-3">
+          <v-text-field
+            v-model="erpCustomerCacheSearch"
+            density="compact"
+            variant="outlined"
+            hide-details
+            prepend-inner-icon="mdi-magnify"
+            placeholder="Tìm theo mã, tên, số điện thoại, email..."
+            clearable
+            style="max-width: 360px;"
+            @input="erpCustomerCachePage = 1"
+          />
+          <div v-if="erpCustomerCacheBackgroundLoading" class="ml-auto d-flex align-center text-caption text-info mr-3">
+            <v-progress-circular indeterminate size="16" width="2" color="info" class="mr-2" />
+            Đang tải thêm khách hàng từ cache...
+          </div>
+          <v-chip :class="erpCustomerCacheBackgroundLoading ? 'mr-3' : 'ml-auto mr-3'" size="small" variant="tonal" color="info">
+            <v-icon start size="small">mdi-account-group</v-icon>
+            {{ erpCustomerCacheFiltered.length }} / {{ erpCustomerCacheRows.length }} khách hàng
+          </v-chip>
+          <v-btn
+            size="small"
+            variant="outlined"
+            prepend-icon="mdi-refresh"
+            :loading="erpCustomerCacheLoading"
+            @click="fetchERPCustomerCache"
+            class="mr-2"
+          >Tải lại</v-btn>
+          <v-btn
+            size="small"
+            variant="outlined"
+            prepend-icon="mdi-delete-sweep"
+            color="error"
+            :loading="erpCustomerCacheClearing"
+            @click="clearERPCustomerCacheDialog = true"
+          >Xóa cache</v-btn>
+        </div>
+
+        <v-progress-linear v-if="erpCustomerCacheLoading" indeterminate color="info" class="mb-3" />
+
+        <template v-if="!erpCustomerCacheLoading">
+          <v-alert v-if="erpCustomerCacheError" type="error" variant="tonal" density="compact" class="mb-3">
+            {{ erpCustomerCacheError }}
+          </v-alert>
+
+          <template v-else-if="erpCustomerCacheRows.length > 0">
+            <v-table density="compact" hover>
+              <thead>
+                <tr>
+                  <th class="text-no-wrap">Mã KH</th>
+                  <th class="text-no-wrap" style="min-width: 180px;">Họ và tên</th>
+                  <th class="text-no-wrap">Điện thoại</th>
+                  <th class="text-no-wrap" style="min-width: 180px;">Email</th>
+                  <th class="text-no-wrap" style="min-width: 200px;">Địa chỉ</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(p, idx) in erpCustomerCachePaginated" :key="idx">
+                  <td class="text-caption font-weight-medium text-no-wrap" style="max-width: 120px; overflow: hidden; text-overflow: ellipsis;" :title="p.MA">{{ p.MA || '—' }}</td>
+                  <td class="text-caption" style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="p.HO_VA_TEN">{{ p.HO_VA_TEN || '—' }}</td>
+                  <td class="text-caption text-no-wrap">{{ p.DIEN_THOAI || '—' }}</td>
+                  <td class="text-caption" style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="p.EMAIL">{{ p.EMAIL || '—' }}</td>
+                  <td class="text-caption" style="max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="p.DIA_CHI">{{ p.DIA_CHI || '—' }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+            <v-pagination
+              v-if="erpCustomerCacheTotalPages > 1"
+              v-model="erpCustomerCachePage"
+              :length="erpCustomerCacheTotalPages"
+              :total-visible="7"
+              density="compact"
+              class="mt-3"
+            />
+          </template>
+
+          <div v-else class="text-center text-grey pa-6">
+            <v-icon size="48" color="grey-lighten-1">mdi-database-off-outline</v-icon>
+            <div class="mt-2 text-body-2">Chưa có dữ liệu cache. Hãy chạy job để đồng bộ khách hàng từ ERP.</div>
+          </div>
+        </template>
+      </div>
+
       <!-- Tab: Results -->
-      <div v-if="activeTab === 'results' && job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache'">
+      <div v-if="activeTab === 'results' && job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache' && job?.job_type !== 'erp_customer_cache'">
         <!-- Filter + toolbar in one row -->
         <div class="d-flex align-center flex-wrap ga-2 mb-3">
           <!-- Filter chips: Classification -->
@@ -750,7 +843,7 @@
 
         <v-table v-if="jobStore.jobRuns.length" density="compact">
           <thead>
-            <tr v-if="job?.job_type === 'chatbot_toggle' || job?.job_type === 'erp_product_cache'">
+            <tr v-if="job?.job_type === 'chatbot_toggle' || job?.job_type === 'erp_product_cache' || job?.job_type === 'erp_customer_cache'">
               <th>Thời gian chạy</th>
               <th>Trạng thái</th>
               <th>Hoạt động</th>
@@ -774,11 +867,15 @@
                   {{ run.status }}
                 </v-chip>
               </td>
-              <template v-if="job?.job_type === 'chatbot_toggle' || job?.job_type === 'erp_product_cache'">
+              <template v-if="job?.job_type === 'chatbot_toggle' || job?.job_type === 'erp_product_cache' || job?.job_type === 'erp_customer_cache'">
                 <td class="text-body-2">
                   <template v-if="job?.job_type === 'erp_product_cache'">
                     <span v-if="run.status === 'running'">Đang đồng bộ sản phẩm từ ERP...</span>
                     <span v-else>{{ parseSummary(run.summary).message || 'Đã đồng bộ sản phẩm từ ERP' }}</span>
+                  </template>
+                  <template v-else-if="job?.job_type === 'erp_customer_cache'">
+                    <span v-if="run.status === 'running'">Đang đồng bộ khách hàng từ ERP...</span>
+                    <span v-else>{{ parseSummary(run.summary).message || 'Đã đồng bộ khách hàng từ ERP' }}</span>
                   </template>
                   <template v-else>
                     <span v-if="run.status === 'running'">Đang tự động thay đổi trạng thái chatbot...</span>
@@ -980,6 +1077,21 @@
       </v-card>
     </v-dialog>
 
+    <!-- Clear ERP customer cache dialog -->
+    <v-dialog v-model="clearERPCustomerCacheDialog" max-width="450">
+      <v-card>
+        <v-card-title class="px-6 pt-6 pb-2 text-error font-weight-bold">Xóa cache khách hàng ERP</v-card-title>
+        <v-card-text class="px-6 py-2">
+          Hành động này sẽ xóa toàn bộ dữ liệu khách hàng đã cache. Bạn sẽ cần chạy lại công việc này để đồng bộ lại dữ liệu từ ERP.
+        </v-card-text>
+        <v-card-actions class="px-6 pb-6 pt-2">
+          <v-spacer />
+          <v-btn @click="clearERPCustomerCacheDialog = false">Hủy</v-btn>
+          <v-btn color="error" :loading="erpCustomerCacheClearing" @click="clearERPCustomerCache">Xóa cache</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Exclude parents — modals -->
     <ExcludeParentsImportModal
       v-model="importModal"
@@ -1135,6 +1247,35 @@ const erpCacheTotalPages = computed(() => Math.ceil(erpCacheFilteredProducts.val
 const erpCachePaginatedProducts = computed(() => {
   const start = (erpCachePage.value - 1) * erpCachePerPage
   return erpCacheFilteredProducts.value.slice(start, start + erpCachePerPage)
+})
+
+// ERP Cache Customers
+const erpCustomerCacheRows = ref<Record<string, any>[]>([])
+const erpCustomerCacheLoading = ref(false)
+const erpCustomerCacheBackgroundLoading = ref(false)
+const erpCustomerCacheError = ref('')
+const erpCustomerCacheSearch = ref('')
+const erpCustomerCachePage = ref(1)
+const erpCustomerCachePerPage = 20
+const clearERPCustomerCacheDialog = ref(false)
+const erpCustomerCacheClearing = ref(false)
+const erpCustomerEndpoint = ref('khach_hang/search')
+
+const erpCustomerCacheFiltered = computed(() => {
+  const q = erpCustomerCacheSearch.value?.toLowerCase().trim()
+  if (!q) return erpCustomerCacheRows.value
+  return erpCustomerCacheRows.value.filter(p =>
+    (p.MA || '').toLowerCase().includes(q) ||
+    (p.HO_VA_TEN || '').toLowerCase().includes(q) ||
+    (p.DIEN_THOAI || '').toLowerCase().includes(q) ||
+    (p.EMAIL || '').toLowerCase().includes(q) ||
+    (p.DIA_CHI || '').toLowerCase().includes(q)
+  )
+})
+const erpCustomerCacheTotalPages = computed(() => Math.ceil(erpCustomerCacheFiltered.value.length / erpCustomerCachePerPage))
+const erpCustomerCachePaginated = computed(() => {
+  const start = (erpCustomerCachePage.value - 1) * erpCustomerCachePerPage
+  return erpCustomerCacheFiltered.value.slice(start, start + erpCustomerCachePerPage)
 })
 const resultFilter = ref<'all' | 'fail' | 'pass' | 'skip' | 'classified'>('all')
 const tagFilter = ref<string | null>(null)
@@ -1575,6 +1716,47 @@ async function clearERPCache() {
   }
 }
 
+let erpCustomerCacheLoadId = 0
+
+async function fetchERPCustomerCache() {
+  erpCustomerCacheLoading.value = true
+  erpCustomerCacheBackgroundLoading.value = false
+  erpCustomerCacheError.value = ''
+  erpCustomerCacheRows.value = []
+  erpCustomerCachePage.value = 1
+  erpCustomerCacheLoadId++
+  const currentId = erpCustomerCacheLoadId
+
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-customer-cache`)
+    if (currentId !== erpCustomerCacheLoadId) return
+    erpCustomerCacheRows.value = data?.data || []
+  } catch (err: any) {
+    if (currentId !== erpCustomerCacheLoadId) return
+    const msg = err?.response?.data?.message || err?.response?.data?.error || ''
+    erpCustomerCacheError.value = msg || 'Không thể tải danh sách khách hàng đã cache. Vui lòng kiểm tra cấu hình hệ thống.'
+  } finally {
+    if (currentId === erpCustomerCacheLoadId) {
+      erpCustomerCacheLoading.value = false
+    }
+  }
+}
+
+async function clearERPCustomerCache() {
+  erpCustomerCacheClearing.value = true
+  erpCustomerCacheError.value = ''
+  try {
+    await api.delete(`/tenants/${tenantId.value}/jobs/${jobId.value}/erp-customer-cache`)
+    clearERPCustomerCacheDialog.value = false
+    erpCustomerCacheRows.value = []
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || err?.response?.data?.error || ''
+    erpCustomerCacheError.value = msg || 'Không thể xóa cache khách hàng ERP.'
+  } finally {
+    erpCustomerCacheClearing.value = false
+  }
+}
+
 onMounted(async () => {
   job.value = await jobStore.fetchJob(tenantId.value, jobId.value)
   if (job.value?.job_type === 'classification') resultFilter.value = 'classified'
@@ -1583,6 +1765,10 @@ onMounted(async () => {
     activeTab.value = 'erp_cache'
     fetchERPCache() // non-blocking, loads in background
     fetchParentSKUs() // non-blocking
+  }
+  if (job.value?.job_type === 'erp_customer_cache') {
+    activeTab.value = 'erp_customer_cache'
+    fetchERPCustomerCache() // non-blocking, loads in background
   }
   await jobStore.fetchJobRuns(tenantId.value, jobId.value)
   await jobStore.fetchAllJobResults(tenantId.value, jobId.value)
@@ -1597,6 +1783,9 @@ onMounted(async () => {
         const parsed = JSON.parse(perms)
         if (parsed.products && parsed.products.path && parsed.products.path !== 'products') {
           erpProductEndpoint.value = parsed.products.path
+        }
+        if (parsed.customers && parsed.customers.path && parsed.customers.path !== 'customers') {
+          erpCustomerEndpoint.value = parsed.customers.path
         }
       } catch (e) {
         // Ignore
@@ -1668,7 +1857,7 @@ async function checkAIConfigured(): Promise<boolean> {
 }
 
 async function openRunDialog() {
-  if (job.value?.job_type === 'chatbot_toggle' || job.value?.job_type === 'erp_product_cache') {
+  if (job.value?.job_type === 'chatbot_toggle' || job.value?.job_type === 'erp_product_cache' || job.value?.job_type === 'erp_customer_cache') {
     triggering.value = true
     try {
       await jobStore.triggerJob(tenantId.value, jobId.value, 'since_last', {})

@@ -502,6 +502,9 @@ export default {
   jobs_type_erp_product_cache_title: 'Sync & Cache ERP Products',
   jobs_type_erp_product_cache_caption: 'Sync product catalog from ERP and cache to Astra DB for chatbot queries.',
   job_erp_product_cache: 'Sync & Cache ERP Products',
+  jobs_type_erp_customer_cache_title: 'Sync & Cache ERP Customers',
+  jobs_type_erp_customer_cache_caption: 'Sync the customer list from ERP and cache it to the system MySQL for fast lookup.',
+  job_erp_customer_cache: 'Sync & Cache ERP Customers',
 
 
   // CRM & GMF

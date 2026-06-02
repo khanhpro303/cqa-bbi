@@ -502,6 +502,9 @@ export default {
   jobs_type_erp_product_cache_title: 'Đồng bộ & Cache sản phẩm ERP',
   jobs_type_erp_product_cache_caption: 'Đồng bộ danh mục vật tư hàng hóa từ ERP và lưu trữ (cache) vào Astra DB để chatbot truy vấn.',
   job_erp_product_cache: 'Đồng bộ & Cache sản phẩm ERP',
+  jobs_type_erp_customer_cache_title: 'Đồng bộ & Cache khách hàng ERP',
+  jobs_type_erp_customer_cache_caption: 'Đồng bộ danh sách khách hàng từ ERP và lưu trữ (cache) vào MySQL của hệ thống để tra cứu nhanh.',
+  job_erp_customer_cache: 'Đồng bộ & Cache khách hàng ERP',
 
 
   // CRM & GMF

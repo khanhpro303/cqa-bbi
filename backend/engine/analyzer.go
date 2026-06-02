@@ -90,6 +90,9 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 	if job.JobType == "erp_product_cache" {
 		return a.runERPProductCacheJob(ctx, job)
 	}
+	if job.JobType == "erp_customer_cache" {
+		return a.runERPCustomerCacheJob(ctx, job)
+	}
 
 	now := time.Now()
 	run := models.JobRun{

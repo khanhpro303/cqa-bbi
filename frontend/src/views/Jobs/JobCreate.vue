@@ -12,12 +12,12 @@
         </template>
         <template #[`item.2`]>
           <StepRules v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
-          <StepOutputSchedule v-else-if="form.job_type === 'erp_product_cache'" v-model:form="form" />
+          <StepOutputSchedule v-else-if="isErpCache" v-model:form="form" />
           <StepInput v-else v-model:form="form" />
         </template>
         <template #[`item.3`]>
           <StepOutputSchedule v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
-          <StepConfirm v-else-if="form.job_type === 'erp_product_cache'" v-model:form="form" />
+          <StepConfirm v-else-if="isErpCache" v-model:form="form" />
           <StepRules v-else v-model:form="form" />
         </template>
         <template #[`item.4`]>
@@ -38,7 +38,7 @@
           {{ $t('back') }}
         </v-btn>
         <v-spacer />
-        <template v-if="step < (form.job_type === 'erp_product_cache' ? 3 : (form.job_type === 'chatbot_toggle' ? 4 : 6))">
+        <template v-if="step < (isErpCache ? 3 : (form.job_type === 'chatbot_toggle' ? 4 : 6))">
           <v-btn color="primary" :disabled="!canProceed" @click="step++">
             {{ $t('next') }}
             <v-icon end>mdi-chevron-right</v-icon>
@@ -47,7 +47,7 @@
             {{ validationMessage }}
           </div>
         </template>
-        <v-btn v-if="step === (form.job_type === 'erp_product_cache' ? 3 : (form.job_type === 'chatbot_toggle' ? 4 : 6))" color="success" :loading="creating" @click="submitJob">
+        <v-btn v-if="step === (isErpCache ? 3 : (form.job_type === 'chatbot_toggle' ? 4 : 6))" color="success" :loading="creating" @click="submitJob">
           <v-icon start>mdi-check-circle</v-icon>
           {{ $t('confirm') }}
         </v-btn>
@@ -79,8 +79,11 @@ const tenantId = computed(() => route.params.tenantId as string)
 const step = ref(1)
 const creating = ref(false)
 
+// erp_product_cache and erp_customer_cache share the same 3-step (type → schedule → confirm) flow.
+const isErpCache = computed(() => form.value.job_type === 'erp_product_cache' || form.value.job_type === 'erp_customer_cache')
+
 const canProceed = computed(() => {
-  if (form.value.job_type === 'erp_product_cache') {
+  if (isErpCache.value) {
     switch (step.value) {
       case 1: return form.value.name.trim().length >= 2
       case 2: {
@@ -130,7 +133,7 @@ const canProceed = computed(() => {
 })
 
 const validationMessage = computed(() => {
-  if (form.value.job_type === 'erp_product_cache') {
+  if (isErpCache.value) {
     switch (step.value) {
       case 1: return t('validation_min_chars', { min: 2 })
       default: return ''
@@ -174,7 +177,7 @@ const form = ref({
 })
 
 const stepItems = computed(() => {
-  if (form.value.job_type === 'erp_product_cache') {
+  if (isErpCache.value) {
     return [
       { title: t('job_wizard_step_type'), value: 1 },
       { title: t('job_wizard_step_schedule'), value: 2 },
@@ -202,7 +205,7 @@ const stepItems = computed(() => {
 async function submitJob() {
   creating.value = true
   try {
-    const isSpecialJob = form.value.job_type === 'chatbot_toggle' || form.value.job_type === 'erp_product_cache'
+    const isSpecialJob = form.value.job_type === 'chatbot_toggle' || isErpCache.value
     const payload = {
       ...form.value,
       input_channel_ids: isSpecialJob ? ['global'] : form.value.input_channel_ids,
