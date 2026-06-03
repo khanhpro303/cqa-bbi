@@ -12,6 +12,8 @@ type ERPEndpoint struct {
 	IsEnabled     bool      `gorm:"default:false;not null" json:"is_enabled"`
 	ScopeType     string    `gorm:"type:varchar(20);default:'all'" json:"scope_type"`         // "all" | "own" | "assigned"
 	ProductGroups string    `gorm:"type:varchar(500)" json:"product_groups"`                  // comma-separated group filter (optional)
+	Brands        string    `gorm:"type:varchar(500)" json:"brands"`                          // comma-separated brand (nhãn hiệu) filter, exact-match
+	AllBrands     bool      `gorm:"default:true;not null" json:"all_brands"`                  // true = no brand filter (default keeps legacy rows unrestricted)
 	CreatedAt     time.Time `gorm:"not null" json:"created_at"`
 	UpdatedAt     time.Time `gorm:"not null" json:"updated_at"`
 }

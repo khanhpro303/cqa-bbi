@@ -59,6 +59,16 @@ Public và private nạp quyền bằng **hai nhánh khác nhau** trong
 - `all` — **toàn bộ** khách (điển hình bot private/nhân viên khi `private_bot`
   chưa giới hạn).
 
+> 🏷️ **Hai boundary danh mục cho `products`/`inventory` (ngoài scope khách).** Mỗi
+> `ResourcePermission` còn mang hai bộ lọc danh mục, cấu hình ở admin "Phân quyền
+> Agent": **ProductGroups** (nhóm VTHH, khớp substring) và **Brands/AllBrands** (nhãn
+> hiệu, khớp **tuyệt đối** `nhan_hieu_name`). Cả hai resolve song song
+> (`IsResourceAllowed` cho group, `ResolveBrandFilter` cho brand) và áp **cùng
+> chokepoint** ở products/inventory/variant. Mặc định an toàn: danh sách rỗng hoặc
+> `AllBrands` ⇒ **không lọc** (giữ nguyên hành vi cũ; token JWT/row DB cũ không bị
+> ảnh hưởng). Với private, cả hai đọc từ group `private_bot`; chưa cấu hình ⇒ full
+> access mọi nhóm + mọi nhãn hiệu.
+
 > 🔑 Hệ quả: cùng một câu hỏi, **public khách lẻ** đi nhánh `scope == "own"`, còn
 > **private nhân viên** đi nhánh `else` (`assigned`/`all`). Mọi logic riêng của
 > private nằm ở nhánh `else` này.

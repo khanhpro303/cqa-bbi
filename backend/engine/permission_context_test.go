@@ -7,6 +7,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/vietbui/chat-quality-agent/db"
+	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
@@ -263,5 +264,127 @@ func TestResolvePermissionsWithGroup(t *testing.T) {
 
 	if ctx.Groups[0].Resources[0].ScopeType != "own" || len(ctx.Groups[0].Resources[0].ProductGroups) != 1 || ctx.Groups[0].Resources[0].ProductGroups[0] != "bò mỹ" {
 		t.Errorf("unexpected product resource details: %+v", ctx.Groups[0].Resources[0])
+	}
+}
+
+func TestResourcePermissionFromEndpointParsesBrands(t *testing.T) {
+	ep := models.ERPEndpoint{
+		Resource:      "products",
+		IsEnabled:     true,
+		ScopeType:     "own",
+		ProductGroups: "Nón, Áo",
+		Brands:        " LS2 , Bulldog ,,",
+		AllBrands:     false,
+	}
+	rp := resourcePermissionFromEndpoint(ep)
+
+	if len(rp.ProductGroups) != 2 || rp.ProductGroups[0] != "nón" || rp.ProductGroups[1] != "áo" {
+		t.Errorf("product groups parsed wrong: %+v", rp.ProductGroups)
+	}
+	if len(rp.Brands) != 2 || rp.Brands[0] != "ls2" || rp.Brands[1] != "bulldog" {
+		t.Errorf("brands parsed wrong (want lowercased, trimmed, no empties): %+v", rp.Brands)
+	}
+	if rp.AllBrands {
+		t.Errorf("AllBrands should be false")
+	}
+}
+
+func TestResolveBrandFilter(t *testing.T) {
+	tests := []struct {
+		name          string
+		ctx           GroupPermissionContext
+		resource      string
+		wantBrands    []string
+		wantAllBrands bool
+	}{
+		{
+			name: "specific brands restrict",
+			ctx: GroupPermissionContext{
+				AgentType: "public",
+				Groups: []GroupPermission{{GroupID: "g1", Resources: []ResourcePermission{
+					{Resource: "products", IsEnabled: true, Brands: []string{"ls2"}, AllBrands: false},
+				}}},
+			},
+			resource:      "products",
+			wantBrands:    []string{"ls2"},
+			wantAllBrands: false,
+		},
+		{
+			name: "empty list coerces to allBrands (never blocks everything)",
+			ctx: GroupPermissionContext{
+				AgentType: "public",
+				Groups: []GroupPermission{{GroupID: "g1", Resources: []ResourcePermission{
+					{Resource: "products", IsEnabled: true, Brands: nil, AllBrands: false},
+				}}},
+			},
+			resource:      "products",
+			wantAllBrands: true,
+		},
+		{
+			name: "any all-brands group wins the union (most permissive)",
+			ctx: GroupPermissionContext{
+				AgentType: "public",
+				Groups: []GroupPermission{
+					{GroupID: "g1", Resources: []ResourcePermission{{Resource: "products", IsEnabled: true, Brands: []string{"ls2"}}}},
+					{GroupID: "g2", Resources: []ResourcePermission{{Resource: "products", IsEnabled: true, AllBrands: true}}},
+				},
+			},
+			resource:      "products",
+			wantAllBrands: true,
+		},
+		{
+			name: "union across enabled groups",
+			ctx: GroupPermissionContext{
+				AgentType: "public",
+				Groups: []GroupPermission{
+					{GroupID: "g1", Resources: []ResourcePermission{{Resource: "products", IsEnabled: true, Brands: []string{"ls2"}}}},
+					{GroupID: "g2", Resources: []ResourcePermission{{Resource: "products", IsEnabled: true, Brands: []string{"ego"}}}},
+				},
+			},
+			resource:      "products",
+			wantBrands:    []string{"ls2", "ego"},
+			wantAllBrands: false,
+		},
+		{
+			name: "private_bot unconfigured = all brands",
+			ctx: GroupPermissionContext{
+				AgentType: "private",
+				Groups:    nil,
+			},
+			resource:      "inventory",
+			wantAllBrands: true,
+		},
+		{
+			name: "private_bot configured with brand restriction",
+			ctx: GroupPermissionContext{
+				AgentType: "private",
+				Groups: []GroupPermission{{GroupID: "private_bot", Resources: []ResourcePermission{
+					{Resource: "inventory", IsEnabled: true, Brands: []string{"bulldog"}, AllBrands: false},
+				}}},
+			},
+			resource:      "inventory",
+			wantBrands:    []string{"bulldog"},
+			wantAllBrands: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			brands, allBrands := tc.ctx.ResolveBrandFilter(tc.resource)
+			if allBrands != tc.wantAllBrands {
+				t.Fatalf("allBrands = %v; want %v", allBrands, tc.wantAllBrands)
+			}
+			if tc.wantAllBrands {
+				return // brands irrelevant when unrestricted
+			}
+			if len(brands) != len(tc.wantBrands) {
+				t.Fatalf("brands = %v; want %v", brands, tc.wantBrands)
+			}
+			for i, want := range tc.wantBrands {
+				if brands[i] != want {
+					t.Errorf("brands[%d] = %q; want %q", i, brands[i], want)
+				}
+			}
+		})
 	}
 }

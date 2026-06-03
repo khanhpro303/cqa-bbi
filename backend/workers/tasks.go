@@ -1483,6 +1483,39 @@ func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
 	}
 }
 
+// allowedBrandSet returns the set of permitted brand (nhãn hiệu) names, lowercased,
+// for a resource — or nil when there is no brand restriction (all brands allowed).
+// A nil set makes brandAllowedBySet a no-op so legacy inventory sums are unchanged.
+func allowedBrandSet(permCtx *engine.GroupPermissionContext, resource string) map[string]struct{} {
+	if permCtx == nil {
+		return nil
+	}
+	brands, allBrands := permCtx.ResolveBrandFilter(resource)
+	if allBrands || len(brands) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(brands))
+	for _, b := range brands {
+		if v := strings.ToLower(strings.TrimSpace(b)); v != "" {
+			set[v] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+// brandAllowedBySet reports whether a product's brand passes the boundary.
+// nil/empty set = no restriction → always allowed (exact, case-insensitive match).
+func brandAllowedBySet(set map[string]struct{}, brand string) bool {
+	if len(set) == 0 {
+		return true
+	}
+	_, ok := set[strings.ToLower(strings.TrimSpace(brand))]
+	return ok
+}
+
 func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string) (float64, error) {
 	// 1. Fetch child products from Astra DB
 	childProducts, err := getProductsByMaChaFromCache(ctx, tenantID, maCha)
@@ -1490,8 +1523,9 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 		return 0, err
 	}
 
-	// 2. Fetch allowed product groups for "inventory" resource
+	// 2. Fetch allowed product groups + brand boundary for "inventory" resource
 	_, _, allowedProductGroups := permCtx.IsResourceAllowed("inventory")
+	brandSet := allowedBrandSet(permCtx, "inventory")
 
 	// Collect original-case SKUs (ERP MA_HANG is case-sensitive). Dedup, preserve
 	// first-seen order.
@@ -1510,6 +1544,10 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 					break
 				}
 			}
+		}
+
+		if isAllowed && !brandAllowedBySet(brandSet, getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")) {
+			isAllowed = false
 		}
 
 		if isAllowed && sku != "" {
@@ -1673,9 +1711,13 @@ func priceRangeReplyByWebName(ctx context.Context, tenantID string, permCtx *eng
 	}
 
 	_, _, allowedGroups := permCtx.IsResourceAllowed("products")
+	brandSet := allowedBrandSet(permCtx, "products")
 	prices := make([]float64, 0, len(products))
 	for _, p := range products {
 		if !isProductGroupAllowed(p.LIST_TEN_NHOM_VTHH, allowedGroups) {
+			continue
+		}
+		if !brandAllowedBySet(brandSet, p.NHAN_HIEU_NAME) {
 			continue
 		}
 		if p.DON_GIA_BAN > 0 {
@@ -2242,8 +2284,9 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		}
 	}
 
-	// 2. Fetch allowed product groups for "inventory" resource
+	// 2. Fetch allowed product groups + brand boundary for "inventory" resource
 	_, _, allowedProductGroups := permCtx.IsResourceAllowed("inventory")
+	brandSet := allowedBrandSet(permCtx, "inventory")
 
 	// allowedSKU pairs an original-case SKU with its display name. Original case
 	// matters: the ERP MA_HANG lookup is case-sensitive, so the code we send must
@@ -2266,6 +2309,10 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 					break
 				}
 			}
+		}
+
+		if isAllowed && !brandAllowedBySet(brandSet, getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")) {
+			isAllowed = false
 		}
 
 		if isAllowed && sku != "" {

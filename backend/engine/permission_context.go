@@ -38,6 +38,38 @@ type ResourcePermission struct {
 	IsEnabled     bool     `json:"is_enabled"`
 	ScopeType     string   `json:"scope_type"`      // all|own|assigned
 	ProductGroups []string `json:"product_groups"`   // filtered VTHH groups
+	Brands        []string `json:"brands"`           // filtered brand (nhãn hiệu) names, lowercase, exact-match
+	AllBrands     bool     `json:"all_brands"`       // true = no brand filter for this resource
+}
+
+// resourcePermissionFromEndpoint converts a stored ERPEndpoint row into the
+// runtime ResourcePermission, parsing the comma-separated ProductGroups and
+// Brands filters identically (trim + lowercase). Centralizing this keeps the
+// three resolution branches below from drifting apart.
+func resourcePermissionFromEndpoint(ep models.ERPEndpoint) ResourcePermission {
+	return ResourcePermission{
+		Resource:      ep.Resource,
+		IsEnabled:     ep.IsEnabled,
+		ScopeType:     ep.ScopeType,
+		ProductGroups: splitCSVLower(ep.ProductGroups),
+		Brands:        splitCSVLower(ep.Brands),
+		AllBrands:     ep.AllBrands,
+	}
+}
+
+// splitCSVLower splits a comma-separated string into trimmed, lowercased,
+// non-empty tokens.
+func splitCSVLower(csv string) []string {
+	if csv == "" {
+		return nil
+	}
+	var out []string
+	for _, t := range strings.Split(csv, ",") {
+		if v := strings.TrimSpace(t); v != "" {
+			out = append(out, strings.ToLower(v))
+		}
+	}
+	return out
 }
 
 // permissionClaims wraps GroupPermissionContext as JWT claims.
@@ -75,20 +107,7 @@ func ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, 
 
 		var resources []ResourcePermission
 		for _, ep := range endpoints {
-			var productGroups []string
-			if ep.ProductGroups != "" {
-				for _, g := range strings.Split(ep.ProductGroups, ",") {
-					if t := strings.TrimSpace(g); t != "" {
-						productGroups = append(productGroups, strings.ToLower(t))
-					}
-				}
-			}
-			resources = append(resources, ResourcePermission{
-				Resource:      ep.Resource,
-				IsEnabled:     ep.IsEnabled,
-				ScopeType:     ep.ScopeType,
-				ProductGroups: productGroups,
-			})
+			resources = append(resources, resourcePermissionFromEndpoint(ep))
 		}
 
 		ctx.Groups = []GroupPermission{
@@ -108,20 +127,7 @@ func ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, 
 
 		var resources []ResourcePermission
 		for _, ep := range endpoints {
-			var productGroups []string
-			if ep.ProductGroups != "" {
-				for _, g := range strings.Split(ep.ProductGroups, ",") {
-					if t := strings.TrimSpace(g); t != "" {
-						productGroups = append(productGroups, strings.ToLower(t))
-					}
-				}
-			}
-			resources = append(resources, ResourcePermission{
-				Resource:      ep.Resource,
-				IsEnabled:     ep.IsEnabled,
-				ScopeType:     ep.ScopeType,
-				ProductGroups: productGroups,
-			})
+			resources = append(resources, resourcePermissionFromEndpoint(ep))
 		}
 
 		ctx.Groups = []GroupPermission{
@@ -167,22 +173,7 @@ func ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, 
 
 	groupEndpointMap := make(map[string][]ResourcePermission)
 	for _, ep := range endpoints {
-		var productGroups []string
-		if ep.ProductGroups != "" {
-			for _, g := range strings.Split(ep.ProductGroups, ",") {
-				if t := strings.TrimSpace(g); t != "" {
-					productGroups = append(productGroups, strings.ToLower(t))
-				}
-			}
-		}
-
-		rp := ResourcePermission{
-			Resource:      ep.Resource,
-			IsEnabled:     ep.IsEnabled,
-			ScopeType:     ep.ScopeType,
-			ProductGroups: productGroups,
-		}
-		groupEndpointMap[ep.GroupID] = append(groupEndpointMap[ep.GroupID], rp)
+		groupEndpointMap[ep.GroupID] = append(groupEndpointMap[ep.GroupID], resourcePermissionFromEndpoint(ep))
 	}
 
 	for _, gid := range groupIDs {
@@ -336,6 +327,74 @@ func (ctx *GroupPermissionContext) IsResourceAllowed(resource string) (allowed b
 	scopeType = bestScope
 
 	return
+}
+
+// ResolveBrandFilter returns the brand (nhãn hiệu) boundary for a resource,
+// parallel to the ProductGroups boundary in IsResourceAllowed but kept as a
+// separate method so existing IsResourceAllowed callers are untouched.
+//
+// Returned semantics (safe by construction — an empty/"all" result never blocks):
+//   - allBrands == true  → no brand restriction (the caller must NOT filter).
+//   - allBrands == false && len(brands) > 0 → keep only products whose
+//     lowercased nhan_hieu_name exactly equals one of brands.
+//   - allBrands == false && len(brands) == 0 → coerced to allBrands=true
+//     (no restriction) so a misconfigured/empty filter or a legacy JWT without
+//     these fields can never silently hide every product.
+func (ctx *GroupPermissionContext) ResolveBrandFilter(resource string) (brands []string, allBrands bool) {
+	defer func() {
+		if !allBrands && len(brands) == 0 {
+			allBrands = true // empty list is never a restriction
+		}
+	}()
+
+	if ctx.AgentType == "private" {
+		hasAnyPrivateConfig := false
+		for _, group := range ctx.Groups {
+			if group.GroupID == "private_bot" && len(group.Resources) > 0 {
+				hasAnyPrivateConfig = true
+			}
+		}
+		if !hasAnyPrivateConfig {
+			return nil, true // private_bot unconfigured → all brands
+		}
+		for _, group := range ctx.Groups {
+			if group.GroupID != "private_bot" {
+				continue
+			}
+			for _, res := range group.Resources {
+				if res.Resource == resource && res.IsEnabled {
+					return res.Brands, res.AllBrands
+				}
+			}
+		}
+		return nil, true
+	}
+
+	// Public/per-group: union brands across enabled groups; "all brands" in any
+	// enabled group wins (most permissive), matching the scope-union semantics.
+	seen := make(map[string]bool)
+	anyEnabled := false
+	for _, group := range ctx.Groups {
+		for _, res := range group.Resources {
+			if res.Resource != resource || !res.IsEnabled {
+				continue
+			}
+			anyEnabled = true
+			if res.AllBrands {
+				return nil, true
+			}
+			for _, b := range res.Brands {
+				if !seen[b] {
+					seen[b] = true
+					brands = append(brands, b)
+				}
+			}
+		}
+	}
+	if !anyEnabled {
+		return nil, true
+	}
+	return brands, false
 }
 
 // GetGroupSpecificPermission returns the permission for a specific resource

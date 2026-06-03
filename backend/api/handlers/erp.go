@@ -251,6 +251,10 @@ func ERPQuery(c *gin.Context) {
 	// Enforce permitted resources & scope. product_variants inherits the
 	// products grant via methodPermissionResource (same cache, finer read).
 	allowed, scopeType, productGroups := permCtx.IsResourceAllowed(methodPermissionResource(req.Resource))
+	// Brand (nhãn hiệu) boundary — a second filter parallel to productGroups,
+	// resolved alongside it and threaded through the same chokepoints. allBrands
+	// (or an empty list) means no brand restriction → legacy behavior preserved.
+	brandFilter, allBrands := permCtx.ResolveBrandFilter(methodPermissionResource(req.Resource))
 	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden_scope",
@@ -321,8 +325,8 @@ func ERPQuery(c *gin.Context) {
 				}(search, cachedData)
 			}
 
-			filteredCached := filterProductsByGroups(cachedData, productGroups)
-			filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
+			filteredCached := filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands)
+			filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, brandFilter, allBrands, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
 				return getProductsByMaChaFromCache(ctx, tenantID, maCha)
 			})
 			slim := slimProductsForLLM(filteredCached)
@@ -363,7 +367,7 @@ func ERPQuery(c *gin.Context) {
 		search := strings.TrimSpace(req.Search)
 
 		if search != "" {
-			webGroups, err := searchProductWebGroupsFromCache(c.Request.Context(), tenantID, req.Search, productGroups)
+			webGroups, err := searchProductWebGroupsFromCache(c.Request.Context(), tenantID, req.Search, productGroups, brandFilter, allBrands)
 			if err != nil {
 				log.Printf("[erp_query] product web-group search error: %v", err)
 				webGroups = nil
@@ -379,7 +383,7 @@ func ERPQuery(c *gin.Context) {
 				// Stock/vague questions (isVariantPriceIntent=false) skip this and
 				// disambiguate as before.
 				if isVariantPriceIntent(req.Intent, req.Color, req.Size, req.Brand) {
-					if vResp, ok := pivotVariantAcrossGroups(c.Request.Context(), tenantID, webGroups, req.Color, req.Size, req.Brand, req.Limit, productGroups); ok {
+					if vResp, ok := pivotVariantAcrossGroups(c.Request.Context(), tenantID, webGroups, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands); ok {
 						cnt, _ := vResp["count"].(int)
 						writeAuditLog(tenantID, permCtx, "product_variants", scopeType, productGroups, req.Search, http.StatusOK, cnt, c.ClientIP())
 						c.JSON(http.StatusOK, vResp)
@@ -487,7 +491,7 @@ func ERPQuery(c *gin.Context) {
 			// bug). Re-resolve the exact SKU with the SAME engine the
 			// product_variants resource uses, so both routes agree on price.
 			if shouldPivotToVariant(req.Intent, req.Color, req.Size, req.Brand, resolvedParent) {
-				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups)
+				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands)
 				if vErr != nil {
 					log.Printf("[erp_query] variant price-pivot from products failed parent=%s: %v", resolvedParent, vErr)
 				} else if vResp != nil {
@@ -530,8 +534,8 @@ func ERPQuery(c *gin.Context) {
 			}(req.Search, cachedData)
 		}
 
-		filteredCached := filterProductsByGroups(cachedData, productGroups)
-		filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
+		filteredCached := filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands)
+		filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, brandFilter, allBrands, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
 			return getProductsByMaChaFromCache(ctx, tenantID, maCha)
 		})
 
@@ -571,7 +575,7 @@ func ERPQuery(c *gin.Context) {
 			return
 		}
 
-		response, err := buildVariantResponse(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand, req.Limit, productGroups)
+		response, err := buildVariantResponse(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands)
 		if err != nil {
 			log.Printf("[erp_query] variant attribute search error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -704,9 +708,9 @@ func isVariantPriceIntent(intent, color, size, brand string) bool {
 // lines have that variant) return (nil, false) so the caller falls back to the
 // normal disambiguation list. Scanning is capped so a broad keyword can't fan
 // out into an unbounded number of variant lookups before we just ask the user.
-func pivotVariantAcrossGroups(ctx context.Context, tenantID string, groups []engine.WebGroupMatch, color, size, brand string, limit int, productGroups []string) (gin.H, bool) {
+func pivotVariantAcrossGroups(ctx context.Context, tenantID string, groups []engine.WebGroupMatch, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool) (gin.H, bool) {
 	return selectUniqueVariantMatch(groups, func(parentCode string) (gin.H, bool) {
-		vResp, vErr := buildVariantResponse(ctx, tenantID, parentCode, color, size, brand, limit, productGroups)
+		vResp, vErr := buildVariantResponse(ctx, tenantID, parentCode, color, size, brand, limit, productGroups, allowedBrands, allBrands)
 		if vErr != nil {
 			log.Printf("[erp_query] cross-group variant pivot parent=%s failed: %v", parentCode, vErr)
 			return nil, false
@@ -775,13 +779,13 @@ func selectUniqueVariantMatch(groups []engine.WebGroupMatch, resolve func(parent
 //
 // Returns (nil, err) only when the initial cache lookup hard-fails; every
 // downstream fallback tolerates its own errors by logging and pressing on.
-func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string) (gin.H, error) {
+func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool) (gin.H, error) {
 	variants, err := searchVariantsByAttributes(ctx, tenantID, parentCode, color, size, brand, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	filtered := filterProductsByGroups(variants, productGroups)
+	filtered := filterProductsByBrands(filterProductsByGroups(variants, productGroups), allowedBrands, allBrands)
 	slim := slimVariantsForLLM(filtered)
 
 	response := gin.H{
@@ -815,7 +819,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 			if resolvedErr != nil {
 				log.Printf("[erp_query] variant search after parent resolve error: %v", resolvedErr)
 			} else {
-				resolvedSlim := slimVariantsForLLM(filterProductsByGroups(resolvedVariants, productGroups))
+				resolvedSlim := slimVariantsForLLM(filterProductsByBrands(filterProductsByGroups(resolvedVariants, productGroups), allowedBrands, allBrands))
 				if len(resolvedSlim) > 0 {
 					slim = resolvedSlim
 					response["data"] = resolvedSlim
@@ -833,7 +837,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 	//     The hybrid index ("FF901 — Gloss White — L") handles both.
 	if len(slim) == 0 && (strings.TrimSpace(color) != "" || strings.TrimSpace(size) != "" || strings.TrimSpace(brand) != "") {
 		if hybridRows := hybridMatchVariant(ctx, tenantID, parentCode, effectiveParent, color, size, brand); len(hybridRows) > 0 {
-			hybridSlim := slimVariantsForLLM(filterProductsByGroups(hybridRows, productGroups))
+			hybridSlim := slimVariantsForLLM(filterProductsByBrands(filterProductsByGroups(hybridRows, productGroups), allowedBrands, allBrands))
 			if len(hybridSlim) > 0 {
 				slim = hybridSlim
 				response["data"] = hybridSlim
@@ -856,7 +860,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 		if allErr != nil {
 			log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
 		} else {
-			allowed := filterProductsByGroups(allVariants, productGroups)
+			allowed := filterProductsByBrands(filterProductsByGroups(allVariants, productGroups), allowedBrands, allBrands)
 			availColors, availSizes, availBrands := collectAvailableAttributes(allowed)
 
 			matchedColor, matchedSize, matchedBrand, matchErr := fuzzyMatchAttributesWithLLM(
@@ -892,7 +896,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 				if retryErr != nil {
 					log.Printf("[erp_query] variant retry after bilingual match error: %v", retryErr)
 				} else {
-					retryFiltered := filterProductsByGroups(retryVariants, productGroups)
+					retryFiltered := filterProductsByBrands(filterProductsByGroups(retryVariants, productGroups), allowedBrands, allBrands)
 					retrySlim := slimVariantsForLLM(retryFiltered)
 					if len(retrySlim) > 0 {
 						slim = retrySlim
@@ -1238,7 +1242,7 @@ func searchProductsByExactWebNameFromCache(ctx context.Context, tenantID, webNam
 	return results, nil
 }
 
-func searchProductWebGroupsFromCache(ctx context.Context, tenantID, search string, allowedGroups []string) ([]engine.WebGroupMatch, error) {
+func searchProductWebGroupsFromCache(ctx context.Context, tenantID, search string, allowedGroups []string, allowedBrands []string, allBrands bool) ([]engine.WebGroupMatch, error) {
 	search = strings.TrimSpace(search)
 	if search == "" {
 		return nil, nil
@@ -1286,7 +1290,7 @@ func searchProductWebGroupsFromCache(ctx context.Context, tenantID, search strin
 		})
 	}
 
-	filtered := filterProductsByGroups(candidates, allowedGroups)
+	filtered := filterProductsByBrands(filterProductsByGroups(candidates, allowedGroups), allowedBrands, allBrands)
 	return engine.RankProductWebGroups(filtered), nil
 }
 
@@ -1437,7 +1441,7 @@ type productPriceRange struct {
 	Label string
 }
 
-func enrichProductsWithPriceRanges(ctx context.Context, products []map[string]interface{}, allowedGroups []string, loadVariants func(context.Context, string) ([]map[string]interface{}, error)) []map[string]interface{} {
+func enrichProductsWithPriceRanges(ctx context.Context, products []map[string]interface{}, allowedGroups []string, allowedBrands []string, allBrands bool, loadVariants func(context.Context, string) ([]map[string]interface{}, error)) []map[string]interface{} {
 	priceRangeByMaCha := make(map[string]productPriceRange)
 	enriched := make([]map[string]interface{}, 0, len(products))
 
@@ -1460,7 +1464,7 @@ func enrichProductsWithPriceRanges(ctx context.Context, products []map[string]in
 					variants = []map[string]interface{}{product}
 				}
 
-				variants = filterProductsByGroups(variants, allowedGroups)
+				variants = filterProductsByBrands(filterProductsByGroups(variants, allowedGroups), allowedBrands, allBrands)
 				if len(variants) == 0 {
 					variants = []map[string]interface{}{product}
 				}
@@ -1892,6 +1896,35 @@ func filterProductsByGroups(products []map[string]interface{}, allowedGroups []s
 	return filtered
 }
 
+// filterProductsByBrands enforces the per-group brand (nhãn hiệu) boundary. It
+// is ADDITIVE to filterProductsByGroups and intentionally a no-op when allBrands
+// is set or the allowed list is empty, so legacy configs / JWTs without a brand
+// filter keep their current behavior. Unlike the group filter (substring across
+// several fields), brand matching is EXACT on nhan_hieu_name because the allowed
+// values are rendered from distinct nhan_hieu_name of the product cache.
+func filterProductsByBrands(products []map[string]interface{}, allowedBrands []string, allBrands bool) []map[string]interface{} {
+	if allBrands || len(allowedBrands) == 0 {
+		return products
+	}
+	allowed := make(map[string]struct{}, len(allowedBrands))
+	for _, b := range allowedBrands {
+		if v := strings.ToLower(strings.TrimSpace(b)); v != "" {
+			allowed[v] = struct{}{}
+		}
+	}
+	if len(allowed) == 0 {
+		return products
+	}
+	var filtered []map[string]interface{}
+	for _, p := range products {
+		brand := strings.ToLower(strings.TrimSpace(getFirstNonEmptyMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")))
+		if _, ok := allowed[brand]; ok {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
+}
+
 func productMatchesAllowedGroups(product map[string]interface{}, allowedGroups []string) bool {
 	valuesToCheck := []string{
 		getFirstNonEmptyMapString(product, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group"),
@@ -1939,6 +1972,14 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		err  error
 	)
 
+	// Brand (nhãn hiệu) boundary for this resource — parallel to productGroups,
+	// no-op when allBrands or empty so existing inventory flows are unchanged.
+	var brandFilter []string
+	allBrands := true
+	if permCtx != nil {
+		brandFilter, allBrands = permCtx.ResolveBrandFilter(resource)
+	}
+
 	switch resource {
 	case "inventory":
 		// Resolve the inventory endpoint + HTTP method from the tenant's Global
@@ -1952,7 +1993,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		if parentCode != "" && search != "" {
 			matchedProducts, errSearch := searchProductsFromCacheWithFilter(c.Request.Context(), tenantID, search, parentCode, 20)
 			if errSearch == nil && len(matchedProducts) > 0 {
-				matchedProducts = filterProductsByGroups(matchedProducts, productGroups)
+				matchedProducts = filterProductsByBrands(filterProductsByGroups(matchedProducts, productGroups), brandFilter, allBrands)
 				var variantData []map[string]interface{}
 				for _, child := range matchedProducts {
 					childSKU := getMapString(child, "MA", "ma", "ma_hang")
@@ -2013,7 +2054,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			if errExact != nil {
 				log.Printf("[inventory_query] exact web-name search error for tenant=%s search=%s: %v", tenantID, search, errExact)
 			}
-			exactRows = filterProductsByGroups(exactRows, productGroups)
+			exactRows = filterProductsByBrands(filterProductsByGroups(exactRows, productGroups), brandFilter, allBrands)
 
 			// STOCK continuation guard. When the agent already named a color/size,
 			// the customer has passed the dòng-vs-SKU step (they chose "🔍 Xem theo
@@ -2260,14 +2301,14 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		// Reuse the rows already fetched above (no second cache/LLM lookup) to
 		// decide whether this is a whole-line query (loop child SKUs) or a
 		// single SKU. On a miss matchedProducts is empty → single-SKU path.
-		maCha, isMaCha := classifyDominantMaCha(c.Request.Context(), tenantID, matchedProducts, productGroups)
+		maCha, isMaCha := classifyDominantMaCha(c.Request.Context(), tenantID, matchedProducts, productGroups, brandFilter, allBrands)
 		if isMaCha {
 			// Query for parent product line (ma_cha)
 			childProducts, errVal := getProductsByMaChaFromCache(c.Request.Context(), tenantID, maCha)
 			if errVal != nil {
 				err = fmt.Errorf("failed to fetch variants from cache: %w", errVal)
 			} else if len(childProducts) > 0 {
-				childProducts = filterProductsByGroups(childProducts, productGroups)
+				childProducts = filterProductsByBrands(filterProductsByGroups(childProducts, productGroups), brandFilter, allBrands)
 
 				// Sum stocks for each child variant
 				var variantData []map[string]interface{}
@@ -3197,10 +3238,15 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	if resource == "inventory" {
 		for i, p := range data {
 			sku := getMapString(p, "code", "ma_hang", "ma", "product_code", "MA_HANG", "MA")
-			group := getProductGroupFromAstra(c.Request.Context(), tenantID, sku)
+			group, brandName := getProductGroupAndBrandFromAstra(c.Request.Context(), tenantID, sku)
 			data[i]["list_ten_nhom_vthh"] = group
+			// Enrich brand so the brand boundary below is fail-closed on the
+			// single-SKU path (stock records don't carry nhan_hieu_name natively).
+			if _, ok := data[i]["nhan_hieu_name"]; !ok {
+				data[i]["nhan_hieu_name"] = brandName
+			}
 		}
-		data = filterProductsByGroups(data, productGroups)
+		data = filterProductsByBrands(filterProductsByGroups(data, productGroups), brandFilter, allBrands)
 	}
 
 	if resource == "customers" && permCtx.AgentType != "private" && scopeType == "assigned" {
@@ -3696,31 +3742,32 @@ func getProductBySkuFromAstraDB(ctx context.Context, tenantID, sku string) (map[
 	return astraResp.Data.Document, nil
 }
 
-func getProductGroupFromAstra(ctx context.Context, tenantID, sku string) string {
+// getProductGroupAndBrandFromAstra resolves BOTH the product group and the brand
+// (nhãn hiệu) for a SKU from a single doc lookup, so the inventory final-stage
+// enrichment can enforce the group and brand boundaries without doubling the
+// per-SKU catalog reads. Tries an exact Astra doc lookup, then the cache search.
+func getProductGroupAndBrandFromAstra(ctx context.Context, tenantID, sku string) (group, brand string) {
 	if sku == "" {
-		return ""
+		return "", ""
 	}
 
-	// Try exact match first
-	doc, err := getProductBySkuFromAstraDB(ctx, tenantID, sku)
-	if err == nil && doc != nil {
-		return getMapString(doc, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+	if doc, err := getProductBySkuFromAstraDB(ctx, tenantID, sku); err == nil && doc != nil {
+		return getMapString(doc, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group"),
+			getMapString(doc, "NHAN_HIEU_NAME", "nhan_hieu_name")
 	}
 
-	// Fallback to searching
 	products, err := searchProductsFromCache(ctx, tenantID, sku, 5)
 	if err != nil || len(products) == 0 {
-		return ""
+		return "", ""
 	}
-
 	for _, p := range products {
-		maVal := getMapString(p, "MA", "code", "ma")
-		if strings.EqualFold(maVal, sku) {
-			return getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+		if strings.EqualFold(getMapString(p, "MA", "code", "ma"), sku) {
+			return getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group"),
+				getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")
 		}
 	}
-
-	return getMapString(products[0], "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+	return getMapString(products[0], "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group"),
+		getMapString(products[0], "NHAN_HIEU_NAME", "nhan_hieu_name")
 }
 
 // getProductByMaFromCache fetches a single SKU by its variant code (MA) from
@@ -3812,8 +3859,8 @@ func dominantMaCha(rows []map[string]interface{}) string {
 // It reuses rows already fetched by the caller (no second cache/LLM lookup),
 // replacing the former detectMaChaFromSearch which re-queried on the same
 // keyword that the caller had just searched.
-func classifyDominantMaCha(ctx context.Context, tenantID string, rows []map[string]interface{}, allowedGroups []string) (string, bool) {
-	rows = filterProductsByGroups(rows, allowedGroups)
+func classifyDominantMaCha(ctx context.Context, tenantID string, rows []map[string]interface{}, allowedGroups []string, allowedBrands []string, allBrands bool) (string, bool) {
+	rows = filterProductsByBrands(filterProductsByGroups(rows, allowedGroups), allowedBrands, allBrands)
 	if len(rows) == 0 {
 		return "", false
 	}

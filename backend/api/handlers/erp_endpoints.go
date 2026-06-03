@@ -56,6 +56,7 @@ func ListGroupERPEndpoints(c *gin.Context) {
 				Resource:  resource,
 				IsEnabled: false,
 				ScopeType: "own",
+				AllBrands: true, // a not-yet-configured resource defaults to all brands
 			})
 		}
 	}
@@ -82,6 +83,8 @@ func SaveGroupERPEndpoints(c *gin.Context) {
 			IsEnabled     bool   `json:"is_enabled"`
 			ScopeType     string `json:"scope_type"`     // "all" | "own" | "assigned"
 			ProductGroups string `json:"product_groups"` // comma-separated
+			Brands        string `json:"brands"`         // comma-separated brand (nhãn hiệu) filter
+			AllBrands     bool   `json:"all_brands"`     // true = no brand restriction
 		} `json:"endpoints" binding:"required"`
 	}
 
@@ -90,19 +93,31 @@ func SaveGroupERPEndpoints(c *gin.Context) {
 		return
 	}
 
-	// Validate first so we never persist a partial update: an enabled
-	// product/inventory endpoint must carry a non-empty VTHH group filter.
+	// Validate first so we never persist a partial update. For an enabled
+	// product/inventory endpoint:
+	//   - it must carry a non-empty VTHH group filter, and
+	//   - it must make an explicit brand choice: either AllBrands, or a
+	//     non-empty brand list. (Runtime still treats an empty list as "all",
+	//     so legacy rows keep working — this requirement is UI/save-time only.)
 	for _, ep := range req.Endpoints {
 		if !isValidERPResource(ep.Resource) {
 			continue
 		}
-		if ep.IsEnabled && resourceRequiresProductGroups(ep.Resource) &&
-			strings.TrimSpace(ep.ProductGroups) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":    "product_groups_required",
-				"resource": ep.Resource,
-			})
-			return
+		if ep.IsEnabled && resourceRequiresProductGroups(ep.Resource) {
+			if strings.TrimSpace(ep.ProductGroups) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error":    "product_groups_required",
+					"resource": ep.Resource,
+				})
+				return
+			}
+			if !ep.AllBrands && strings.TrimSpace(ep.Brands) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error":    "brands_required",
+					"resource": ep.Resource,
+				})
+				return
+			}
 		}
 	}
 
@@ -112,6 +127,13 @@ func SaveGroupERPEndpoints(c *gin.Context) {
 		}
 
 		scopeType := "own" // Enforce 'own' scope for GMF groups
+
+		// When AllBrands is set, clear any stale brand list so the stored row is
+		// unambiguous ("all" + empty). Runtime treats both as "no restriction".
+		brands := ep.Brands
+		if ep.AllBrands {
+			brands = ""
+		}
 
 		var existing models.ERPEndpoint
 		result := db.DB.Where("tenant_id = ? AND group_id = ? AND resource = ?",
@@ -123,6 +145,8 @@ func SaveGroupERPEndpoints(c *gin.Context) {
 				"is_enabled":     ep.IsEnabled,
 				"scope_type":     scopeType,
 				"product_groups": ep.ProductGroups,
+				"brands":         brands,
+				"all_brands":     ep.AllBrands,
 				"updated_at":     time.Now(),
 			}).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "update_failed", "details": err.Error()})
@@ -138,6 +162,8 @@ func SaveGroupERPEndpoints(c *gin.Context) {
 				IsEnabled:     ep.IsEnabled,
 				ScopeType:     scopeType,
 				ProductGroups: ep.ProductGroups,
+				Brands:        brands,
+				AllBrands:     ep.AllBrands,
 				CreatedAt:     time.Now(),
 				UpdatedAt:     time.Now(),
 			}).Error; err != nil {

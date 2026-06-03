@@ -1596,6 +1596,63 @@ func GetListTenNhomVthh(c *gin.Context) {
 	})
 }
 
+// GetListNhanHieu - GET /crm/list-nhan-hieu
+// Returns the list of unique brands (nhãn hiệu) from the local product cache —
+// the same source (cached_products) the brand boundary filter matches against,
+// so the admin's options always align with what is actually filterable.
+// Returns HTTP 400 with error "product_cache_not_synced" when the cache is empty.
+func GetListNhanHieu(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	refresh := c.Query("refresh") == "true"
+
+	if !refresh {
+		var s models.AppSetting
+		err := db.DB.Where("tenant_id = ? AND setting_key = 'list_nhan_hieu'", tenantID).First(&s).Error
+		if err == nil && s.ValuePlain != "" {
+			var brands []string
+			if err := json.Unmarshal([]byte(s.ValuePlain), &brands); err == nil {
+				c.JSON(http.StatusOK, brands)
+				return
+			}
+		}
+	}
+
+	var brands []string
+	err := db.DB.WithContext(c.Request.Context()).
+		Model(&models.CachedProduct{}).
+		Distinct("nhan_hieu_name").
+		Where("tenant_id = ? AND nhan_hieu_name <> ''", tenantID).
+		Order("nhan_hieu_name ASC").
+		Pluck("nhan_hieu_name", &brands).Error
+	if err == nil && len(brands) > 0 {
+		if brandJSON, errMarshal := json.Marshal(brands); errMarshal == nil {
+			var setting models.AppSetting
+			if errFind := db.DB.Where("tenant_id = ? AND setting_key = 'list_nhan_hieu'", tenantID).First(&setting).Error; errFind == nil {
+				db.DB.Model(&setting).Updates(map[string]interface{}{
+					"value_plain": string(brandJSON),
+					"updated_at":  time.Now(),
+				})
+			} else {
+				db.DB.Create(&models.AppSetting{
+					ID:         pkg.NewUUID(),
+					TenantID:   tenantID,
+					SettingKey: "list_nhan_hieu",
+					ValuePlain: string(brandJSON),
+					CreatedAt:  time.Now(),
+					UpdatedAt:  time.Now(),
+				})
+			}
+		}
+		c.JSON(http.StatusOK, brands)
+		return
+	}
+
+	c.JSON(http.StatusBadRequest, gin.H{
+		"error":   "product_cache_not_synced",
+		"message": "Danh mục sản phẩm chưa được đồng bộ. Vui lòng chạy Job đồng bộ danh mục sản phẩm trước.",
+	})
+}
+
 // fetchUniqueGroupsFromAstraDB queries unique product groups cached in Astra DB.
 func fetchUniqueGroupsFromAstraDB(ctx context.Context, tenantID string) ([]string, error) {
 	// 1. Load Astra DB credentials

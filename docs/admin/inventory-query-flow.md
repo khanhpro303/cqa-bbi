@@ -386,6 +386,15 @@ Cấu hình endpoint (đầu `case "inventory"`, erp.go:1707):
 - Hằng số: `inventoryTotalStockEndpoint` (erp.go:2527),
   `inventoryTotalWarehouseName = "Kho Tổng"` (erp.go:2531).
 
+> 🏷️ **Boundary nhãn hiệu (brand) — chạy cùng chỗ với product-group.** Mỗi nhánh dưới,
+> ngay sau `filterProductsByGroups(...)` còn gọi `filterProductsByBrands(... brandFilter,
+> allBrands)` (khớp **tuyệt đối** `nhan_hieu_name`); `brandFilter/allBrands` lấy từ
+> `permCtx.ResolveBrandFilter("inventory")` ở đầu `respondWithLiveDataV2`. Stage cuối
+> (single-SKU) enrich `nhan_hieu_name` qua `getProductGroupAndBrandFromAstra` rồi lọc
+> (fail-closed). Worker `sumInventoryByMaCha*` cũng check brand exact trong vòng lọc SKU
+> con (`allowedBrandSet`/`brandAllowedBySet`). **No-op khi `allBrands`/rỗng → giữ nguyên
+> hành vi cũ.**
+
 Cây quyết định 3 nhánh:
 
 ```
@@ -615,5 +624,7 @@ sản phẩm (embedding → LLM), picker dòng-vs-SKU, cộng tồn theo `KHO-TO
 hệt** public và private. Khác biệt private chỉ ở **phạm vi nhóm sản phẩm** được
 phép, lấy từ cấu hình group `private_bot` qua `IsResourceAllowed`
 (`permission_context.go:270-299`); `private_bot` chưa cấu hình → full access
-(mọi product group). Không có nhánh code riêng cho private trong nhánh
+(mọi product group). **Boundary nhãn hiệu** (`Brands`/`AllBrands` qua
+`ResolveBrandFilter`) cũng đọc từ `private_bot` theo cùng cơ chế — chưa cấu hình
+hoặc `AllBrands` → mọi nhãn hiệu. Không có nhánh code riêng cho private trong nhánh
 `inventory`.

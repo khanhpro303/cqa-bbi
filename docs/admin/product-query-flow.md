@@ -335,6 +335,12 @@ Sau khi có `cachedData` (luôn ở mức **cả họ** với products), ba bư�
 
 1. **`filterProductsByGroups`** (`:1664`) — lọc theo `productGroups` mà permission
    token cho phép (ẩn nhóm sản phẩm ngoài quyền).
+1b. **`filterProductsByBrands`** — boundary thứ hai, chạy NGAY SAU `filterProductsByGroups`
+   ở MỌI chokepoint (list cả họ, exact-web, web-groups disambiguation, price-pivot,
+   `product_variants`). Khớp **tuyệt đối** (case-insensitive) trên `nhan_hieu_name` với
+   danh sách nhãn hiệu permission token cho phép. **No-op khi `allBrands` hoặc danh sách
+   rỗng** → tenant chưa cấu hình nhãn hiệu giữ NGUYÊN hành vi cũ. Nguồn cấu hình: cột
+   `Brands`/`AllBrands` trên `ERPEndpoint` → `permCtx.ResolveBrandFilter(resource)`.
 2. **`enrichProductsWithPriceRanges`** (`:1213`) — với mỗi sản phẩm có `ma_cha`,
    nạp lại toàn bộ biến thể (`getProductsByMaChaFromCache`),
    `calculateProductPriceRange` (`:1265`) lấy min/max, `formatProductPriceRange`
@@ -514,6 +520,9 @@ private. Khác biệt private chỉ ở **phạm vi nhóm sản phẩm**:
   → full access (`scope "all"`, **mọi** product group).
 - `ProductGroups` (nếu admin gán cho `private_bot`) lọc danh mục như với group
   khách — cùng cơ chế, chỉ khác nguồn cấu hình.
+- **`Brands`/`AllBrands`** (boundary nhãn hiệu thứ hai) cũng đọc từ `private_bot` qua
+  `permCtx.ResolveBrandFilter` — `private_bot` chưa cấu hình (hoặc `AllBrands`) → mọi
+  nhãn hiệu. Cùng helper `filterProductsByBrands`, không có nhánh code riêng cho private.
 
 Không có nhánh code riêng cho private trong block `products`; toàn bộ hybrid
 search / pivot / disambiguation dùng chung.

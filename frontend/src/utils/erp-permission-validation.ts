@@ -10,6 +10,8 @@ export interface PermissionEndpoint {
   resource: string
   is_enabled: boolean
   product_groups_arr?: string[]
+  brands_arr?: string[]
+  all_brands?: boolean
 }
 
 /**
@@ -27,6 +29,28 @@ export function findEndpointsMissingGroups(
           ep.resource as (typeof RESOURCES_REQUIRING_GROUPS)[number],
         ) &&
         (ep.product_groups_arr?.filter((g) => g && g.trim()).length ?? 0) === 0,
+    )
+    .map((ep) => ep.resource)
+}
+
+/**
+ * Returns the list of enabled product/inventory resources that have NOT made an
+ * explicit brand choice — neither "all brands" nor a non-empty brand list. An
+ * empty array means the brand boundary is validly configured. Mirrors the group
+ * requirement; the runtime still treats an empty list as "all" (legacy-safe).
+ */
+export function findEndpointsMissingBrands(
+  endpoints: PermissionEndpoint[],
+): string[] {
+  return endpoints
+    .filter(
+      (ep) =>
+        ep.is_enabled &&
+        RESOURCES_REQUIRING_GROUPS.includes(
+          ep.resource as (typeof RESOURCES_REQUIRING_GROUPS)[number],
+        ) &&
+        !ep.all_brands &&
+        (ep.brands_arr?.filter((b) => b && b.trim()).length ?? 0) === 0,
     )
     .map((ep) => ep.resource)
 }

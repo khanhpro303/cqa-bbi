@@ -5,7 +5,15 @@
       <v-spacer />
       
       <!-- Action buttons depending on active tab -->
-      <v-btn v-if="currentTab === 'groups'" color="primary" prepend-icon="mdi-plus-box" @click="openCreateGroupDialog">
+      <template v-if="currentTab === 'campaigns'">
+        <v-btn color="blue-grey" variant="tonal" prepend-icon="mdi-chart-box-outline" class="mr-2" @click="campaignDashboardOpen = true">
+          {{ $t('campaign_dashboard') }}
+        </v-btn>
+        <v-btn color="primary" prepend-icon="mdi-bullhorn-outline" @click="campaignListRef?.openCreate()">
+          {{ $t('campaign_create') }}
+        </v-btn>
+      </template>
+      <v-btn v-else-if="currentTab === 'groups'" color="primary" prepend-icon="mdi-plus-box" @click="openCreateGroupDialog">
         Thêm nhóm mới
       </v-btn>
       <v-btn v-else color="teal" prepend-icon="mdi-account-plus" @click="openInviteDialog">
@@ -33,6 +41,10 @@
         <v-chip v-if="pendingApprovalCount > 0" color="error" size="x-small" class="ml-2 font-weight-bold">
           {{ pendingApprovalCount }}
         </v-chip>
+      </v-tab>
+      <v-tab value="campaigns">
+        <v-icon start>mdi-bullhorn-outline</v-icon>
+        {{ $t('crm_campaigns') }}
       </v-tab>
     </v-tabs>
 
@@ -349,7 +361,15 @@
           </v-table>
         </v-card>
       </v-window-item>
+
+      <!-- TAB 5: CRM CAMPAIGNS (Chiến dịch CRM) -->
+      <v-window-item value="campaigns" class="pt-2">
+        <CampaignList ref="campaignListRef" @notify="showSnack" />
+      </v-window-item>
     </v-window>
+
+    <!-- Campaign dashboard modal -->
+    <CampaignDashboardModal v-model="campaignDashboardOpen" />
 
     <!-- Dialog 1: Tạo/Sửa nhóm -->
     <v-dialog v-model="groupDialog" max-width="500">
@@ -815,10 +835,11 @@
                   <v-table density="compact">
                     <thead>
                       <tr>
-                        <th style="width:36%">{{ $t('erp_endpoint_resource') }}</th>
-                        <th style="width:14%" class="text-center">{{ $t('erp_endpoint_enabled') }}</th>
-                        <th style="width:26%">{{ $t('erp_endpoint_scope') }}</th>
-                        <th style="width:24%">{{ $t('erp_endpoint_groups') }}</th>
+                        <th style="width:26%">{{ $t('erp_endpoint_resource') }}</th>
+                        <th style="width:10%" class="text-center">{{ $t('erp_endpoint_enabled') }}</th>
+                        <th style="width:18%">{{ $t('erp_endpoint_scope') }}</th>
+                        <th style="width:23%">{{ $t('erp_endpoint_groups') }}</th>
+                        <th style="width:23%">{{ $t('erp_endpoint_brands') }}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -875,6 +896,50 @@
                               </span>
                             </template>
                           </v-select>
+                          <span v-else class="text-caption text-grey">—</span>
+                        </td>
+                        <td>
+                          <template v-if="ep.resource === 'products' || ep.resource === 'inventory'">
+                            <v-checkbox
+                              v-model="ep.all_brands"
+                              density="compact"
+                              hide-details
+                              :disabled="!ep.is_enabled || !isOwnerOrAdmin"
+                              :label="$t('erp_endpoint_all_brands')"
+                              class="brand-all-checkbox"
+                              @update:model-value="(v: boolean | null) => { if (v) ep.brands_arr = [] }"
+                            />
+                            <v-select
+                              v-if="!ep.all_brands"
+                              v-model="ep.brands_arr"
+                              :items="listNhanHieu"
+                              multiple
+                              density="compact"
+                              variant="plain"
+                              hide-details
+                              :disabled="!ep.is_enabled || !isOwnerOrAdmin"
+                              placeholder="Chọn nhãn hiệu..."
+                              style="font-size:0.75rem; min-width: 90px;"
+                            >
+                              <template #selection="{ index }">
+                                <span
+                                  v-if="index === 0"
+                                  class="text-truncate"
+                                  :title="ep.brands_arr.join(', ')"
+                                  style="max-width: 100%; display: inline-block;"
+                                >
+                                  <v-chip
+                                    size="x-small"
+                                    color="teal-lighten-1"
+                                    variant="flat"
+                                    class="ma-0 font-weight-bold"
+                                  >
+                                    {{ ep.brands_arr.length > 1 ? `(${ep.brands_arr.length})` : ep.brands_arr[0] }}
+                                  </v-chip>
+                                </span>
+                              </template>
+                            </v-select>
+                          </template>
                           <span v-else class="text-caption text-grey">—</span>
                         </td>
                       </tr>
@@ -938,6 +1003,12 @@
                     <div class="text-grey text-caption text-truncate" style="font-size: 0.6rem !important; max-width: 100px;" v-if="isGroupEndpointEnabled('inventory') && getGroupProductGroups('inventory')" :title="`Tồn kho: ${getGroupProductGroups('inventory')}`">
                       Lọc Kho: {{ getGroupProductGroups('inventory') }}
                     </div>
+                    <div class="text-grey text-caption text-truncate" style="font-size: 0.6rem !important; max-width: 100px;" v-if="isGroupEndpointEnabled('products') && getGroupBrands('products')" :title="`Nhãn hiệu SP: ${getGroupBrands('products')}`">
+                      NH SP: {{ getGroupBrands('products') }}
+                    </div>
+                    <div class="text-grey text-caption text-truncate" style="font-size: 0.6rem !important; max-width: 100px;" v-if="isGroupEndpointEnabled('inventory') && getGroupBrands('inventory')" :title="`Nhãn hiệu Kho: ${getGroupBrands('inventory')}`">
+                      NH Kho: {{ getGroupBrands('inventory') }}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -970,7 +1041,9 @@ import { useChannelStore } from '../stores/channels'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
 import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
-import { findEndpointsMissingGroups } from '../utils/erp-permission-validation'
+import CampaignList from '../components/crm-campaigns/CampaignList.vue'
+import CampaignDashboardModal from '../components/crm-campaigns/CampaignDashboardModal.vue'
+import { findEndpointsMissingGroups, findEndpointsMissingBrands } from '../utils/erp-permission-validation'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -990,6 +1063,10 @@ const isOwner = computed(() => authStore.tenantPerms?.role === 'owner')
 const currentTab = ref('groups')
 const memberTab = ref('employees')
 
+// CRM Campaigns (Chiến dịch CRM) — list ref drives the create dialog from header.
+const campaignListRef = ref<InstanceType<typeof CampaignList> | null>(null)
+const campaignDashboardOpen = ref(false)
+
 // CRM Groups State
 const groups = ref<any[]>([])
 const loadingGroups = ref(false)
@@ -1007,6 +1084,8 @@ const activeGroupQR = ref<any>(null)
 
 // Product Groups list
 const listTenNhomVthh = ref<string[]>([])
+// Brand (nhãn hiệu) list — distinct brands from the product cache
+const listNhanHieu = ref<string[]>([])
 
 // Group Members management (GMF)
 const activeGroup = ref<any>(null)
@@ -1150,6 +1229,7 @@ onMounted(async () => {
   await fetchCustomerCodes()
   await fetchCloudifyCustomers()
   await fetchListTenNhomVthh()
+  await fetchListNhanHieu()
   if (zaloOAChannels.value.length > 0) {
     await fetchGmfPackages(zaloOAChannels.value[0].id)
   } else {
@@ -1674,18 +1754,36 @@ async function fetchListTenNhomVthh() {
   }
 }
 
+async function fetchListNhanHieu() {
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/list-nhan-hieu`)
+    listNhanHieu.value = data || []
+  } catch (err: any) {
+    // A not-yet-synced cache is non-fatal here — the brand selector just shows
+    // no options; surfacing the backend message helps the admin run the sync.
+    const errMsg = err.response?.data?.message || 'Không thể tải danh sách nhãn hiệu'
+    showSnack(errMsg, 'error')
+  }
+}
+
 async function loadGroupEndpoints(groupId: string) {
   loadingGroupEndpoints.value = true
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups/${groupId}/erp/endpoints`)
     groupEndpoints.value = (data.endpoints || []).map((ep: any) => {
-      const groupsArr = ep.product_groups 
+      const groupsArr = ep.product_groups
         ? ep.product_groups.split(',').map((g: string) => g.trim()).filter((g: string) => g)
+        : []
+      const brandsArr = ep.brands
+        ? ep.brands.split(',').map((b: string) => b.trim()).filter((b: string) => b)
         : []
       return {
         ...ep,
         scope_type: 'own', // Enforce 'own' scope for GMF groups
-        product_groups_arr: groupsArr
+        product_groups_arr: groupsArr,
+        brands_arr: brandsArr,
+        // Default a not-yet-configured resource to "all brands" (no restriction).
+        all_brands: ep.all_brands ?? true,
       }
     })
   } catch (err) {
@@ -1704,6 +1802,18 @@ async function saveGroupEndpoints() {
     return
   }
 
+  // Block save when an enabled product/inventory endpoint made no brand choice
+  // (neither "all brands" nor a specific list). Runtime still treats empty as
+  // "all", so this requirement is enforced only here at save time.
+  const missingBrands = findEndpointsMissingBrands(groupEndpoints.value)
+  if (missingBrands.length > 0) {
+    showSnack(
+      t('erp_brands_required', { resources: missingBrands.map(resourceLabel).join(', ') }),
+      'error',
+    )
+    return
+  }
+
   savingGroupEndpoints.value = true
   try {
     const payload = groupEndpoints.value.map((ep: any) => {
@@ -1712,6 +1822,9 @@ async function saveGroupEndpoints() {
         epCopy.product_groups = epCopy.product_groups_arr.join(',')
         delete epCopy.product_groups_arr
       }
+      // Serialize brands; "all brands" stores an empty list (runtime = no filter).
+      epCopy.brands = epCopy.all_brands ? '' : (epCopy.brands_arr || []).join(',')
+      delete epCopy.brands_arr
       return epCopy
     })
     await api.put(`/tenants/${tenantId.value}/crm/groups/${activeGroupForPerms.value.id}/erp/endpoints`, {
@@ -1744,6 +1857,14 @@ function getGroupProductGroups(resource: string): string {
   }
   return ep.product_groups || ''
 }
+
+function getGroupBrands(resource: string): string {
+  const ep = groupEndpoints.value.find(e => e.resource === resource)
+  if (!ep) return ''
+  if (ep.all_brands) return t('erp_endpoint_all_brands')
+  if (ep.brands_arr && ep.brands_arr.length) return ep.brands_arr.join(', ')
+  return ep.brands || ''
+}
 </script>
 
 <style scoped>
@@ -1752,6 +1873,10 @@ function getGroupProductGroups(resource: string): string {
 }
 .v-list-item {
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+.brand-all-checkbox :deep(.v-label) {
+  font-size: 0.7rem;
+  opacity: 0.9;
 }
 
 .scopes-card {

@@ -74,7 +74,12 @@ class ERPGatewayCaller(Component):
         MessageTextInput(
             name="brand",
             display_name="Brand",
-            info="Thương hiệu (tuỳ chọn, lọc theo nhãn hiệu khi cần).",
+            info=(
+                "Thương hiệu user TỰ nêu để lọc biến thể (tuỳ chọn, dùng với "
+                "resource=product_variants). ĐÂY KHÔNG phải boundary phân quyền: "
+                "việc giới hạn nhãn hiệu theo nhóm agent được enforce ở backend "
+                "(permission token), agent không cần và không nên tự suy ra."
+            ),
             required=False,
             tool_mode=True
         ),

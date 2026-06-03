@@ -96,7 +96,7 @@ func TestEnrichProductsWithPriceRangesUsesVariantsByMaCha(t *testing.T) {
 		}, nil
 	}
 
-	enriched := enrichProductsWithPriceRanges(context.Background(), products, []string{"Nguyên Đầu"}, loadVariants)
+	enriched := enrichProductsWithPriceRanges(context.Background(), products, []string{"Nguyên Đầu"}, nil, true, loadVariants)
 
 	if len(enriched) != 1 {
 		t.Fatalf("expected 1 enriched product, got %d", len(enriched))
@@ -583,6 +583,78 @@ func TestSlimProductsForLLM(t *testing.T) {
 					if got[i][k] != v {
 						t.Errorf("row %d key %q = %v; want %v", i, k, got[i][k], v)
 					}
+				}
+			}
+		})
+	}
+}
+
+func TestFilterProductsByBrands(t *testing.T) {
+	products := []map[string]interface{}{
+		{"MA": "A1", "NHAN_HIEU_NAME": "LS2"},
+		{"MA": "A2", "NHAN_HIEU_NAME": "Bulldog"},
+		{"MA": "A3", "nhan_hieu_name": "bulldog"}, // lowercase key + value
+		{"MA": "A4", "NHAN_HIEU_NAME": "EGO"},
+		{"MA": "A5"}, // no brand field
+	}
+
+	tests := []struct {
+		name      string
+		brands    []string
+		allBrands bool
+		wantMAs   []string
+	}{
+		{
+			name:      "allBrands is a no-op (legacy behavior preserved)",
+			brands:    []string{"ls2"},
+			allBrands: true,
+			wantMAs:   []string{"A1", "A2", "A3", "A4", "A5"},
+		},
+		{
+			name:      "empty list is a no-op",
+			brands:    nil,
+			allBrands: false,
+			wantMAs:   []string{"A1", "A2", "A3", "A4", "A5"},
+		},
+		{
+			name:      "exact match, case-insensitive on key and value",
+			brands:    []string{"bulldog"},
+			allBrands: false,
+			wantMAs:   []string{"A2", "A3"},
+		},
+		{
+			name:      "multiple allowed brands",
+			brands:    []string{"ls2", "ego"},
+			allBrands: false,
+			wantMAs:   []string{"A1", "A4"},
+		},
+		{
+			name:      "exact match does not do substring (bull != bulldog)",
+			brands:    []string{"bull"},
+			allBrands: false,
+			wantMAs:   []string{},
+		},
+		{
+			name:      "product without brand is excluded when a filter is active",
+			brands:    []string{"ego"},
+			allBrands: false,
+			wantMAs:   []string{"A4"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := filterProductsByBrands(products, tc.brands, tc.allBrands)
+			gotMAs := make([]string, 0, len(got))
+			for _, v := range got {
+				gotMAs = append(gotMAs, v["MA"].(string))
+			}
+			if len(gotMAs) != len(tc.wantMAs) {
+				t.Fatalf("got %d products %v; want %d %v", len(gotMAs), gotMAs, len(tc.wantMAs), tc.wantMAs)
+			}
+			for i, want := range tc.wantMAs {
+				if gotMAs[i] != want {
+					t.Errorf("product[%d] = %q; want %q", i, gotMAs[i], want)
 				}
 			}
 		})
