@@ -12,11 +12,11 @@
 
     <v-dialog v-model="open" max-width="460" persistent>
       <v-card>
-        <v-card-title class="text-subtitle-1 font-weight-bold">
+        <v-card-title class="text-subtitle-1 font-weight-bold px-6 pt-5">
           {{ $t('delete_logs') }}
         </v-card-title>
 
-        <v-card-text class="pb-0">
+        <v-card-text class="px-6 pb-0">
           <v-alert type="warning" variant="tonal" density="compact" class="mb-4">
             {{ $t('delete_logs_warning') }}
           </v-alert>
@@ -48,7 +48,7 @@
           <div v-if="errorMsg" class="text-error text-body-2 mt-3">{{ errorMsg }}</div>
         </v-card-text>
 
-        <v-card-actions>
+        <v-card-actions class="px-6 pb-5 pt-3 ga-2">
           <v-spacer />
           <v-btn variant="text" :disabled="loading" @click="open = false">{{ $t('cancel') }}</v-btn>
           <v-btn color="error" variant="flat" :loading="loading" :disabled="!canConfirm" @click="confirmDelete">
