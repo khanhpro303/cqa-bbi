@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -44,4 +45,33 @@ func ListActivityLogs(c *gin.Context) {
 		"page":     page,
 		"per_page": perPage,
 	})
+}
+
+// DeleteActivityLogs bulk-deletes activity logs for the tenant within an optional
+// date range. Query params (YYYY-MM-DD): "from" (created_at >= from 00:00:00) and
+// "to" (created_at <= to 23:59:59). With neither param, all tenant logs are deleted.
+// Owner/admin only (gated at the router). Returns the number of rows deleted.
+func DeleteActivityLogs(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	from := c.Query("from")
+	to := c.Query("to")
+
+	query := db.DB.Where("tenant_id = ?", tenantID)
+	if from != "" {
+		query = query.Where("created_at >= ?", from+" 00:00:00")
+	}
+	if to != "" {
+		query = query.Where("created_at <= ?", to+" 23:59:59")
+	}
+
+	result := query.Delete(&models.ActivityLog{})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_delete_logs"})
+		return
+	}
+
+	detail := fmt.Sprintf("Cleared %d activity logs (from=%q, to=%q)", result.RowsAffected, from, to)
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "activity_logs.clear", "activity_logs", "", detail, "", c.ClientIP())
+
+	c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
 }

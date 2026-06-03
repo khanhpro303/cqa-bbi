@@ -3,6 +3,15 @@
     <h1 class="text-h5 font-weight-bold mb-6">{{ $t('nav_notification_logs') }}</h1>
 
     <v-card style="overflow-x: auto;">
+      <v-card-text v-if="canManage" class="d-flex pb-0">
+        <DeleteLogsDialog
+          class="ml-auto"
+          :tenant-id="tenantId"
+          :endpoint="`/tenants/${tenantId}/notification-logs`"
+          @deleted="onDeleted"
+        />
+      </v-card-text>
+
       <v-table v-if="logs.length" density="compact">
         <thead>
           <tr>
@@ -56,22 +65,39 @@
         <div class="text-grey">{{ $t('no_notifications_desc') }}</div>
       </div>
     </v-card>
+
+    <v-snackbar v-model="snackbar" color="success" timeout="3000">{{ snackbarText }}</v-snackbar>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import api from '../api'
+import { useAuthStore } from '../stores/auth'
+import DeleteLogsDialog from '../components/DeleteLogsDialog.vue'
 
 const route = useRoute()
+const { t } = useI18n()
+const auth = useAuthStore()
 const tenantId = computed(() => route.params.tenantId as string)
+const canManage = computed(() => ['owner', 'admin'].includes(auth.tenantPerms.role))
 const logs = ref<any[]>([])
 const expandedId = ref('')
 const page = ref(1)
 const total = ref(0)
 const perPage = 20
 const totalPages = computed(() => Math.ceil(total.value / perPage))
+const snackbar = ref(false)
+const snackbarText = ref('')
+
+function onDeleted(count: number) {
+  snackbarText.value = t('logs_deleted', { count })
+  snackbar.value = true
+  page.value = 1
+  loadLogs()
+}
 
 async function loadLogs() {
   try {

@@ -3,15 +3,23 @@
     <h1 class="text-h5 font-weight-bold mb-6">{{ $t('activity_logs') }}</h1>
 
     <v-card style="overflow-x: auto;">
-      <v-card-text class="d-flex ga-3 pb-0">
+      <v-card-text class="d-flex ga-3 pb-0 align-center">
         <v-select
           v-model="filterAction"
           :items="actionOptions"
           :label="$t('filter')"
           density="compact"
           clearable
+          hide-details
           style="max-width: 200px"
           @update:model-value="loadLogs"
+        />
+        <DeleteLogsDialog
+          v-if="canManage"
+          class="ml-auto"
+          :tenant-id="tenantId"
+          :endpoint="`/tenants/${tenantId}/activity-logs`"
+          @deleted="onDeleted"
         />
       </v-card-text>
 
@@ -44,16 +52,24 @@
         <v-pagination v-model="page" :length="totalPages" density="compact" />
       </v-card-actions>
     </v-card>
+
+    <v-snackbar v-model="snackbar" color="success" timeout="3000">{{ snackbarText }}</v-snackbar>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import api from '../api'
+import { useAuthStore } from '../stores/auth'
+import DeleteLogsDialog from '../components/DeleteLogsDialog.vue'
 
 const route = useRoute()
+const { t } = useI18n()
+const auth = useAuthStore()
 const tenantId = computed(() => route.params.tenantId as string)
+const canManage = computed(() => ['owner', 'admin'].includes(auth.tenantPerms.role))
 
 const logs = ref<any[]>([])
 const page = ref(1)
@@ -61,6 +77,15 @@ const total = ref(0)
 const perPage = 20
 const filterAction = ref('')
 const totalPages = computed(() => Math.ceil(total.value / perPage))
+const snackbar = ref(false)
+const snackbarText = ref('')
+
+function onDeleted(count: number) {
+  snackbarText.value = t('logs_deleted', { count })
+  snackbar.value = true
+  page.value = 1
+  loadLogs()
+}
 
 const actionOptions = [
   { title: 'Job Run', value: 'job.run' },

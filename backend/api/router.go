@@ -201,6 +201,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 			// Activity Logs
 			tenant.GET("/activity-logs", handlers.ListActivityLogs)
+			tenant.DELETE("/activity-logs", middleware.RequireRole("owner", "admin"), handlers.DeleteActivityLogs)
 
 			// Cost Logs
 			tenant.GET("/cost-logs", handlers.ListCostLogs)
@@ -294,6 +295,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 			// Notification logs
 			tenant.GET("/notification-logs", handlers.ListNotificationLogs)
+			tenant.DELETE("/notification-logs", middleware.RequireRole("owner", "admin"), handlers.DeleteNotificationLogs)
 
 			// Demo data
 			tenant.GET("/demo/status", handlers.GetDemoStatus)
