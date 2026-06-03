@@ -117,6 +117,35 @@ func TestScopeApprovedDebtCodes(t *testing.T) {
 	}
 }
 
+func TestExactCustomerCodePick(t *testing.T) {
+	codes := []string{"S001", "S001_1", "S001_2"}
+	tests := []struct {
+		name   string
+		search string
+		codes  []string
+		want   string
+	}{
+		// The loop-killer: picking the prefix code "S001" must resolve to exactly
+		// S001, not re-match its siblings via LIKE.
+		{"exact prefix code wins", "S001", codes, "S001"},
+		{"exact sub-code", "S001_1", codes, "S001_1"},
+		{"case-insensitive", "s001_2", codes, "S001_2"},
+		{"trims whitespace", "  S001  ", codes, "S001"},
+		{"no match returns empty", "S999", codes, ""},
+		{"partial is not exact", "S00", codes, ""},
+		{"empty search", "", codes, ""},
+		{"empty codes", "S001", nil, ""},
+		{"trims candidate label whitespace", "S001", []string{" S001 "}, "S001"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := exactCustomerCodePick(tt.search, tt.codes); got != tt.want {
+				t.Errorf("exactCustomerCodePick(%q, %v) = %q, want %q", tt.search, tt.codes, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFoldDebtSearch(t *testing.T) {
 	tests := []struct {
 		in   string

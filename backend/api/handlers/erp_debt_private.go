@@ -315,6 +315,28 @@ func resolveDebtCustomerCodes(tenantID, search string) []string {
 	return resolveCachedCustomerCodesFromTokens(tenantID, tokenizeCustomerQuery(search))
 }
 
+// exactCustomerCodePick reports the candidate code the staff member picked when
+// their reply is exactly one of the already-offered codes, else "". Used by the
+// pick stage (debt + orders) so an EXACT pick wins outright before the substring
+// LIKE resolve runs. This is the loop-killer for codes that are a prefix of
+// their siblings: "S001" LIKE-matches "S001", "S001_1", "S001_2", so resolving
+// the reply never narrows below the full list and the prompt repeats forever.
+// `codes` are the candidates stored in the pick state (already scope-approved),
+// so an exact match is inherently in scope — no re-scoping needed. The returned
+// value is the canonical code from `codes` (not the raw reply). Pure → testable.
+func exactCustomerCodePick(search string, codes []string) string {
+	reply := strings.TrimSpace(search)
+	if reply == "" {
+		return ""
+	}
+	for _, code := range codes {
+		if strings.EqualFold(reply, strings.TrimSpace(code)) {
+			return strings.TrimSpace(code)
+		}
+	}
+	return ""
+}
+
 // scopeApprovedDebtCodes intersects cache-resolved customer codes with the staff
 // member's scope so a named-customer debt lookup can never widen access. Mirrors
 // scopeApprovedOrdersCodes:

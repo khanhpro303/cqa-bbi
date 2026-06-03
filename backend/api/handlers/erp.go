@@ -2394,9 +2394,16 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					// was never listed (or truncated out of a capped list) could
 					// never be selected and the prompt looped forever.
 					var chosen []string
-					if isAllCustomersReply(search) {
+					switch {
+					case isAllCustomersReply(search):
 						chosen = state.Codes
-					} else {
+					case exactCustomerCodePick(search, state.Codes) != "":
+						// EXACT pick of a listed code wins before the substring LIKE
+						// resolve — otherwise a code that is a prefix of its siblings
+						// ("S001" vs "S001_1"/"S001_2") re-matches the whole list and
+						// the pick prompt loops forever (mirror of the debt fix).
+						chosen = []string{exactCustomerCodePick(search, state.Codes)}
+					default:
 						chosen = scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCode, allowedCodes)
 					}
 					switch {
@@ -2837,6 +2844,19 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					// both" behaviour but now still asks the period first.
 					if isAllCustomersReply(search) {
 						storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePeriod, Codes: state.Codes})
+						pushDebtPrompt(debtPeriodPromptText)
+						debtPromptResponse()
+						return
+					}
+					// An EXACT pick of a listed code wins outright, before the LIKE
+					// resolve below. The candidate codes were already scope-approved
+					// when stored, and a code that is a PREFIX of its siblings
+					// ("S001" alongside "S001_1"/"S001_2") can never narrow through
+					// the substring LIKE in resolveDebtCustomerCodes — so without
+					// this, picking exactly the code the prompt offered re-lists the
+					// same codes forever (the reported loop).
+					if exact := exactCustomerCodePick(search, state.Codes); exact != "" {
+						storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePeriod, Codes: []string{exact}})
 						pushDebtPrompt(debtPeriodPromptText)
 						debtPromptResponse()
 						return

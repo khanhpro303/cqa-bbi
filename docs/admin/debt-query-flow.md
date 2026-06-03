@@ -393,6 +393,7 @@ Không có dữ liệu công nợ trong khoảng anh hỏi.
 | Private: detect generic | `backend/api/handlers/erp_debt_private.go` | `isPrivateDebtCustomerQuery` |
 | Private: resolve cache | `backend/api/handlers/erp_debt_private.go` | `resolveDebtCustomerCodes` / `resolveCustomerCodesFromCache` (AND→OR) |
 | Private: scope GIAO | `backend/api/handlers/erp_debt_private.go` | `scopeApprovedDebtCodes` |
+| Private: exact pick (loop-killer) | `backend/api/handlers/erp_debt_private.go` | `exactCustomerCodePick` (chặn LIKE khi gõ đúng mã liệt kê; dùng chung debt + orders) |
 | Private: gửi prompt | `backend/api/handlers/erp_debt_private.go` | `sendDebtCustomerPrompt` / `sendPrivateDebtPrompt` |
 | Private: state kỳ/pick | `backend/engine/session_options.go` | `DebtCustomerState` (`:awaiting_debt_customer`, stages `pick`/`period`) |
 | Private: driver | `backend/api/handlers/erp.go` (`case "debt"`) | take state → Pick/Period; mặc định `tháng này` CHỈ cho nhánh kỳ-toàn-scope |
@@ -447,15 +448,25 @@ soi gương flow orders trong `erp_orders_private.go`):
 2. **Pick by code** — tên/khoá khớp nhiều khách → lưu `DebtCustomerState{Pick}`
    và **liệt kê mã+tên** các khách khớp (`renderDebtCustomerPickText`, tên lấy từ
    `cached_customers` qua `debtCustomerCandidates`) thay vì trả nợ của tất cả rồi
-   để LLM tự phân giải. Lượt Pick resolve **trực tiếp** vào cache + scope (không
-   giới hạn trong danh sách đã liệt kê) nên mã in-scope nào cũng tiến được.
-   Thoát vòng pick chắc chắn bằng 2 lối: (a) nhân viên gõ một mã con cụ thể
-   (vd "S001_1" → đúng 1 khách → sang bước kỳ); hoặc (b) nhắn **"tất cả"**
-   (`isAllCustomersReply`) → giữ TOÀN BỘ mã đã khớp, sang thẳng bước kỳ rồi trả
-   nợ của tất cả các khách đó. Bản gốc thiếu cả hai (prompt tĩnh "ví dụ: S001"
-   trùng đúng tiền tố nhân viên vừa gõ) nên gõ lại "S001" → khớp nhiều → lặp
-   vô hạn. **Khác** với orders: nhánh "tất cả" của debt đi thẳng bước kỳ với
-   nhiều mã (không rơi lại case len>1).
+   để LLM tự phân giải. Thoát vòng pick chắc chắn bằng 3 lối:
+   - **(a) gõ ĐÚNG một mã đã liệt kê** (`exactCustomerCodePick`, so khớp chính xác
+     `state.Codes`, không phân biệt hoa/thường) → chọn **đúng mã đó**, sang bước kỳ.
+     Đây là lối thoát quan trọng nhất và là **bản vá vòng lặp**: mã liệt kê đã GIAO
+     scope khi lưu nên khớp đúng là hợp lệ, không cần re-scope.
+   - **(b)** gõ một token mới (vd tên/mã khác) → resolve **trực tiếp** vào cache +
+     scope (không giới hạn danh sách đã liệt kê) nên mã in-scope nào cũng tiến được;
+     còn khớp nhiều thì liệt kê lại.
+   - **(c)** nhắn **"tất cả"** (`isAllCustomersReply`) → giữ TOÀN BỘ mã đã khớp,
+     sang thẳng bước kỳ rồi trả nợ của tất cả. **Khác** với orders: nhánh "tất cả"
+     của debt đi thẳng bước kỳ với nhiều mã (không rơi lại case len>1).
+
+   > 🐛 **Vì sao cần (a) — vòng lặp đã gặp (2026-06-03).** Khi mã chọn là **tiền tố**
+   > của mã anh em (`S001` ⊂ `S001_1`, `S001_2`), `resolveDebtCustomerCodes` dùng
+   > `LIKE %S001%` nên gõ lại đúng "S001" vẫn khớp CẢ BA → `len>1` → liệt kê lại y
+   > nguyên → **lặp vô hạn**. Bản 30d31cc mới chỉ thêm danh sách + "tất cả" nhưng
+   > picking đúng mã tiền tố vẫn lặp. `exactCustomerCodePick` chặn trước bước LIKE
+   > nên gõ đúng mã nào trong danh sách (kể cả mã cha tiền tố) đều tiến được. Lối
+   > thoát này được mirror sang orders (cùng cấu trúc, cùng lỗi tiềm ẩn).
 3. **State riêng, single-use, có scope** — `DebtCustomerState` lưu dưới
    `:awaiting_debt_customer` (khác `:awaiting_order_customer` để debt và orders
    không đụng nhau giữa chừng). `Codes` đã GIAO scope **khi lưu**, nên replay ở
