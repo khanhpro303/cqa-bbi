@@ -946,21 +946,27 @@ func (z *ZaloOAAdapter) UploadGroupImage(ctx context.Context, fileBytes []byte, 
 }
 
 // SendGroupImage sends a previously-uploaded image (by attachment_id) to a GMF
-// group. Group chats support text/image/file but NOT button/list templates
-// (error -233), so the image is attached as message.attachment type "image"
-// rather than a template-media payload.
-//
-// NOTE: the exact GMF image payload could not be confirmed from the JS-rendered
-// Zalo docs — verify against a live OA token in staging. If Zalo rejects this
-// shape, fall back to a template-media attachment (template_type "media",
-// elements[].media_type "image").
+// group. Zalo's image attachment uses the template/media shape — a flat
+// {attachment:{type:"image"}} payload is rejected (error -213/-214 "invalid
+// attachment"), which is why campaign images silently failed to send while the
+// text went through. The shape below mirrors what every Zalo OA SDK/wrapper
+// uses for media attachments: an attachment of type "template" whose payload is
+// template_type "media" with one image element referencing the attachment_id.
 func (z *ZaloOAAdapter) SendGroupImage(ctx context.Context, groupID, attachmentID string) error {
 	payload := map[string]interface{}{
 		"recipient": map[string]interface{}{"group_id": groupID},
 		"message": map[string]interface{}{
 			"attachment": map[string]interface{}{
-				"type":    "image",
-				"payload": map[string]interface{}{"attachment_id": attachmentID},
+				"type": "template",
+				"payload": map[string]interface{}{
+					"template_type": "media",
+					"elements": []map[string]interface{}{
+						{
+							"media_type":    "image",
+							"attachment_id": attachmentID,
+						},
+					},
+				},
 			},
 		},
 	}

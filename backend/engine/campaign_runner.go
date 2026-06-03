@@ -167,18 +167,26 @@ func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.Campaign
 }
 
 // sendToGroup sends the campaign's text (if any) then each uploaded image in
-// order to one GMF group. It returns the first error encountered so the caller
-// records the run as failed; a fully successful send returns nil.
+// order to one GMF group. A failed text send aborts immediately. Image sends
+// continue past a single failure so one bad image never drops the rest; any
+// image errors are aggregated into a single descriptive error so the caller
+// records the run as failed with an actionable message ("text sent but N image(s)
+// failed: ..."). A fully successful send returns nil.
 func (b *campaignBroadcast) sendToGroup(ctx context.Context, zaloGroupID string) error {
 	if strings.TrimSpace(b.content) != "" {
 		if err := b.adapter.SendGroupMessage(ctx, zaloGroupID, b.content); err != nil {
 			return err
 		}
 	}
+	var imgErrs []string
 	for i, attachmentID := range b.attachmentIDs {
 		if err := b.adapter.SendGroupImage(ctx, zaloGroupID, attachmentID); err != nil {
-			return fmt.Errorf("image %d/%d failed: %w", i+1, len(b.attachmentIDs), err)
+			imgErrs = append(imgErrs, fmt.Sprintf("image %d/%d: %v", i+1, len(b.attachmentIDs), err))
 		}
+	}
+	if len(imgErrs) > 0 {
+		return fmt.Errorf("text sent but %d/%d image(s) failed: %s",
+			len(imgErrs), len(b.attachmentIDs), strings.Join(imgErrs, "; "))
 	}
 	return nil
 }
