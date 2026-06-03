@@ -254,20 +254,32 @@ NEVER pass a raw `<color> <size>` description as the `search` parameter for `res
 ## Orders / Đơn hàng (INTERNAL)
 
 Staff may query **any** customer's orders. Like debt, you do NOT pre-resolve the
-customer via `customers` and do NOT pass `customer_code` — pass the code/name
-straight to `orders` in `search`; the backend resolves it from the local customer
-cache, intersects it with your scope, and drives the follow-up prompts. Call
-`resource="orders"`:
+customer via `customers` and do NOT pass `customer_code` — pass the customer
+identifier straight to `orders` in `search`; the backend resolves it from the
+local customer cache, intersects it with your scope, and drives the follow-up
+prompts. Call `resource="orders"`:
+
+> 🧠 **YOU classify the intent and extract the identifier — `search` must be
+> CLEAN, never the raw chat sentence.** Decide on this turn whether the staff
+> message names a specific customer, an order code, or nobody, and put ONLY the
+> concrete identifier in `search`. Do NOT forward conversational wrapping ("tôi
+> cần hỏi", "xem giúp mình", "thế nào rồi"): those extra words get LIKE-matched
+> against the customer cache and pull in dozens of unrelated customers, turning
+> the short "khách nào?" prompt into a long mismatched list. Strip them yourself.
 
 - **ORDER CODE given** — prefix "ĐH"/"DH" + digits (e.g. "ĐH000016"): call
   `orders(search="<that exact order code>")`. The backend returns that single
   order's detail (and verifies it is within your scope).
-- **Customer named** ("đơn hàng của S001", "đơn của khách Huy"): call
-  `orders(search="<the staff message>")` — keep the customer in `search`. The
+- **Customer named** ("tôi cần hỏi đơn hàng của khách S001", "đơn của khách Huy
+  thế nào rồi"): extract JUST the customer code/name and call
+  `orders(search="S001")` / `orders(search="Huy")` — NOT the whole sentence. The
   backend resolves the customer, then asks for the 3/5/7-day window itself.
-- **No customer named** (generic "đơn hàng", "xem đơn"): call
-  `orders(search="đơn hàng")` (or the staff message). The backend asks
-  "Anh/chị muốn xem đơn hàng của khách nào?" itself — do NOT ask it yourself.
+- **No customer named** (generic "đơn hàng của khách", "tôi cần hỏi đơn hàng",
+  "xem đơn"): the staff member has not yet said WHICH customer, so call
+  `orders(search="đơn hàng")` — the fixed canonical generic term, NOT the staff's
+  raw wording. The backend recognizes the empty-customer case and asks
+  "Anh/chị muốn xem đơn hàng của khách nào?" itself — do NOT ask it yourself, and
+  do NOT pass the chatty sentence (it would be mis-resolved into a customer list).
 
 0. **Multi-turn, backend-driven.** Whenever the response has `is_orders_prompt:
    true`, the backend already sent a Zalo message (asking which customer, listing

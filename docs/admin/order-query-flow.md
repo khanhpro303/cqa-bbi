@@ -504,6 +504,19 @@ Mirror flow debt-theo-khách (xem [`private-bot-overview.md` mục C](./private-
 Helper nằm ở `backend/api/handlers/erp_orders_private.go`; trạng thái qua lượt lưu ở
 Redis key `:awaiting_order_customer` (payload `{stage, codes}`, `engine.OrderCustomerState`).
 
+> 🧠 **Nhận diện intent là việc của LLM — `search` tới backend phải SẠCH.** Agent
+> tự phân loại câu hỏi rồi chỉ truyền **định danh cụ thể** vào `search`: có khách →
+> mã/tên khách trần (`S001`, `Huy`); CHƯA nêu khách → đúng cụm canonical
+> `"đơn hàng"`. Backend KHÔNG đoán intent bằng danh sách stopword chatty — nó chỉ
+> tokenize tối thiểu cụm canonical (`đơn`/`hàng` → 0 token → fire prompt
+> `ordersCustomerPromptText` "khách nào?"). Nếu agent forward NGUYÊN câu chat
+> ("tôi cần hỏi đơn hàng của khách…"), các chữ thừa (`cần`, `hỏi`…) lọt vào LIKE
+> `cached_customers` (collation bỏ dấu/không phân biệt hoa-thường: `cần`→`Cần`/`Cảnh`,
+> `hỏi`→`Hội`) → khớp hàng chục khách → backend rơi vào nhánh `≥2` và LIỆT KÊ danh
+> sách dài thay vì hỏi gọn. Vì vậy guardrail nằm ở **system prompt + tool info**
+> (xem [`system-prompt-internal.md` mục Orders](./system-prompt-internal.md) và
+> field `search` của `ERPGatewayCaller`), KHÔNG ở backend.
+
 > 🔑 **An toàn scope:** mã khách được **giao với scope NGAY khi resolve** (lượt nêu
 > khách) qua `scopeApprovedOrdersCodes`, rồi mới lưu vào state. Nên dù scope là
 > `all`, query nêu khách vẫn **chỉ** trả đơn của đúng khách đó (KHÔNG dump toàn bộ);

@@ -89,6 +89,16 @@ nên mỗi phân hệ tự tokenize theo stopword riêng:
 > [delta orders](./order-query-flow.md#b2-flow-hỏi-đơn-theo-khách-mới--chỉ-private)).
 > Các phân hệ khác có thể tái dùng `resolveCachedCustomerCodesFromTokens` khi cần.
 
+> 🧠 **Nhận diện intent = việc của LLM, không phải stopword backend.** Agent (system
+> prompt) tự đọc câu hỏi và CHỈ truyền **định danh sạch** vào `search`: nêu khách →
+> mã/tên trần (`S001`, `Huy`); chưa nêu khách → cụm canonical (`"đơn hàng"` /
+> `"công nợ"`). Backend chỉ tokenize tối thiểu cụm canonical để biết "chưa có khách"
+> → gửi prompt "khách nào?". Nếu agent forward NGUYÊN câu chat ("tôi cần hỏi đơn
+> hàng của khách…"), chữ thừa (`cần`/`hỏi`…) lọt vào LIKE `cached_customers` (bỏ dấu,
+> không phân biệt hoa-thường) → khớp nhầm nhiều khách → backend liệt kê danh sách dài
+> thay vì hỏi gọn. Vì vậy guardrail "làm sạch `search`" đặt ở **system prompt + field
+> info của `ERPGatewayCaller`**, KHÔNG nhồi thêm stopword chatty vào Go.
+
 > 🔑 **Thứ tự hỏi (private): KHÁCH trước, KỲ/khoảng-ngày sau.** Với `debt`, ngay cả
 > câu mơ hồ **bare "công nợ"** (qua `isGenericDebtSearch`) cũng gửi prompt-khách
 > trước cho bot private — KHÔNG hỏi kỳ trước như bot public/own (2026-06-03). Cùng

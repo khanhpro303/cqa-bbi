@@ -38,7 +38,15 @@ class ERPGatewayCaller(Component):
         MessageTextInput(
             name="search",
             display_name="Search",
-            info="Từ khóa tìm kiếm (tên sản phẩm, mã SKU, mã đơn hàng, công nợ...)",
+            info=(
+                "Từ khóa tìm kiếm ĐÃ LÀM SẠCH (tên sản phẩm, mã SKU, mã đơn hàng, "
+                "mã/tên khách...). Với resource='orders'/'debt' bạn TỰ nhận diện ý "
+                "định và CHỈ truyền định danh cụ thể: có khách → mã/tên khách trần "
+                "(vd 'S001', 'Huy'); chưa nêu khách → đúng cụm generic 'đơn hàng' / "
+                "'công nợ'. TUYỆT ĐỐI không truyền cả câu chat ('tôi cần hỏi đơn "
+                "hàng của khách…') — chữ thừa sẽ LIKE-trùng nhiều khách và làm "
+                "backend liệt kê nhầm danh sách thay vì hỏi 'khách nào?'."
+            ),
             required=False,
             tool_mode=True
         ),
