@@ -284,7 +284,7 @@
   </v-dialog>
 
   <!-- Global Approval Modal -->
-  <v-dialog v-model="globalApproveDialog" max-width="550" persistent>
+  <v-dialog v-model="globalApproveDialog" max-width="550">
     <v-card class="pa-4 rounded-xl">
       <v-card-title class="font-weight-bold d-flex align-center pb-2">
         <v-icon start color="warning" class="bell-ring-animation">mdi-bell-ring</v-icon>

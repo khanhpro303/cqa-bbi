@@ -10,7 +10,7 @@
       {{ $t('delete_logs') }}
     </v-btn>
 
-    <v-dialog v-model="open" max-width="460" persistent>
+    <v-dialog v-model="open" max-width="460">
       <v-card>
         <v-card-title class="text-subtitle-1 font-weight-bold px-6 pt-5">
           {{ $t('delete_logs') }}
