@@ -78,6 +78,15 @@ type Config struct {
 	ChatbotSessionTimeout        int
 	ChatbotSessionTimeoutMessage string
 	ChatbotHistoryRetentionDays  int
+
+	// GroupPerSenderSessions scopes group-chat flow-state (the processing lock,
+	// pending_options, and the awaiting_* sidecars) plus the Langflow session_id
+	// to the individual sender, so two employees in the same group never share a
+	// pending menu/picker, never block each other, and keep separate AI memory.
+	// The group activation gate (one trigger word activates the bot for the whole
+	// group) is unchanged. Default false → keys and behaviour identical to before;
+	// flip per deployment via CHATBOT_GROUP_PER_SENDER_SESSIONS=true.
+	GroupPerSenderSessions bool
 }
 
 func Load() (*Config, error) {
@@ -120,6 +129,7 @@ func Load() (*Config, error) {
 		ChatbotSessionTimeout:        getEnvInt("CHATBOT_SESSION_TIMEOUT", 30),
 		ChatbotSessionTimeoutMessage: getEnv("CHATBOT_SESSION_TIMEOUT_MESSAGE", "Nếu bạn không cần mình hỗ trợ gì thêm, mình xin phép dừng cuộc trò chuyện tại đây, nếu cần thì bạn biết kiếm mình sao rồi đó ;)"),
 		ChatbotHistoryRetentionDays:  getEnvInt("CHATBOT_HISTORY_RETENTION_DAYS", 30),
+		GroupPerSenderSessions:       strings.EqualFold(getEnv("CHATBOT_GROUP_PER_SENDER_SESSIONS", "false"), "true"),
 	}
 
 	if cfg.JWTSecret == "" {

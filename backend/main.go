@@ -27,6 +27,10 @@ func main() {
 	// Initialize JWT
 	middleware.SetJWTSecret(cfg.JWTSecret)
 
+	// Wire the per-sender group-session feature flag into the session key builder
+	// before any worker or ERP request runs (write-once, read-only thereafter).
+	engine.SetPerSenderGroupSessions(cfg.GroupPerSenderSessions)
+
 	// Connect database
 	if err := db.Connect(cfg.DSN(), cfg.IsProduction()); err != nil {
 		log.Fatalf("Failed to connect database: %v", err)

@@ -21,12 +21,40 @@ import (
 // without round-tripping through Langflow.
 const PendingOptionsSuffix = ":pending_options"
 
-// BuildSessionKey returns the Redis session key shared by the worker and the
-// ERP handler so both ends read/write the same pending_options entry. For
-// group chats pass the Zalo group ID (zaloGroupID != ""); otherwise pass the
-// individual zaloUserID and leave zaloGroupID blank.
+// perSenderGroupSessions, when true, scopes group-chat FLOW STATE (the
+// processing lock, pending_options, and the awaiting_* sidecars) to the
+// individual sender via a ":user:<zaloUserID>" segment, so two employees in the
+// same group never share a pending menu/picker or block each other. The base
+// activation key the worker writes inline stays group-level (one trigger
+// activates the bot for the whole group). Default false → keys identical to
+// before. Set ONCE at startup via SetPerSenderGroupSessions before any worker
+// runs; read-only thereafter, so the plain bool needs no synchronisation.
+var perSenderGroupSessions bool
+
+// SetPerSenderGroupSessions wires the CHATBOT_GROUP_PER_SENDER_SESSIONS config
+// flag into the key builder. Call once at startup.
+func SetPerSenderGroupSessions(enabled bool) { perSenderGroupSessions = enabled }
+
+// PerSenderGroupSessions reports whether group flow-state is scoped per sender.
+func PerSenderGroupSessions() bool { return perSenderGroupSessions }
+
+// BuildSessionKey returns the Redis key shared by the worker and the ERP handler
+// for a turn's FLOW STATE (pending_options + awaiting_* sidecars + the
+// processing lock) so both ends read/write the same entry. For group chats pass
+// the Zalo group ID (zaloGroupID != ""); otherwise pass the individual
+// zaloUserID and leave zaloGroupID blank.
+//
+// When per-sender group sessions are enabled, a group key additionally carries
+// the sender (":user:<zaloUserID>") so each employee's flow state is private.
+// With the feature off — the default — the returned string is byte-for-byte the
+// same as before, which is what keeps 1:1 chats and existing group behaviour
+// unchanged. Worker and ERP both route through this one function, so they can
+// never disagree on the exact key.
 func BuildSessionKey(channelID, zaloUserID, zaloGroupID string) string {
 	if zaloGroupID != "" {
+		if perSenderGroupSessions && zaloUserID != "" {
+			return fmt.Sprintf("zalo_session:%s:group:%s:user:%s", channelID, zaloGroupID, zaloUserID)
+		}
 		return fmt.Sprintf("zalo_session:%s:group:%s", channelID, zaloGroupID)
 	}
 	return fmt.Sprintf("zalo_session:%s:%s", channelID, zaloUserID)

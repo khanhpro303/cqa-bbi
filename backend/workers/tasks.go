@@ -552,19 +552,38 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
+		// sessionKey is the ACTIVATION/base key: it stores the active session UUID
+		// and drives the idle-timeout. It stays group-level for group chats so one
+		// trigger word activates the bot for the whole group.
 		sessionKey := fmt.Sprintf("zalo_session:%s:%s", matchedChannel.ID, payload.Sender.ID)
 		if matchedGroup.ZaloGroupID != "" {
 			sessionKey = fmt.Sprintf("zalo_session:%s:group:%s", matchedChannel.ID, matchedGroup.ZaloGroupID)
 		}
 
-		// Concurrency control: Sequential processing per sessionKey using Redis lock
+		// workKey scopes a turn's FLOW STATE (the processing lock, pending_options,
+		// and the awaiting_* sidecars) to the individual sender inside a group when
+		// per-sender group sessions are enabled — so two employees never share a
+		// pending menu/picker or block each other. It is built by the SAME function
+		// the ERP handler uses (engine.BuildSessionKey), so the two ends can never
+		// disagree on the exact key. For 1:1 chats, and for groups when the feature
+		// is off, workKey == sessionKey (byte-identical to the previous behaviour).
+		workKey := engine.BuildSessionKey(matchedChannel.ID, payload.Sender.ID, matchedGroup.ZaloGroupID)
+
+		// Concurrency control: sequential processing per lock key using a safe,
+		// owner-token Redis lock (engine.AcquireSessionLock / ReleaseSessionLock).
+		// The lock TTL (engine.SessionLockTTL) comfortably exceeds the Langflow
+		// timeout so it never lapses mid-flight, and release is compare-and-del so
+		// a holder can only ever release its own lock — never one a later worker
+		// acquired after a TTL lapse. Locking on workKey means different senders in
+		// a group run in parallel (when the feature is on) instead of serialising.
 		if db.RedisClient != nil {
-			lockKey := sessionKey + ":lock"
+			lockKey := workKey + ":lock"
+			var lockToken string
 			acquired := false
-			// Try to acquire lock every 250ms for up to 30 seconds
+			// Try to acquire the lock every 250ms for up to 30 seconds.
 			for i := 0; i < 120; i++ {
-				locked, err := db.RedisClient.SetNX(ctx, lockKey, "1", 45*time.Second).Result()
-				if err == nil && locked {
+				if token, ok := engine.AcquireSessionLock(ctx, lockKey); ok {
+					lockToken = token
 					acquired = true
 					break
 				}
@@ -573,7 +592,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if !acquired {
 				return fmt.Errorf("timeout waiting for session lock for key %s", sessionKey)
 			}
-			defer db.RedisClient.Del(ctx, lockKey)
+			defer engine.ReleaseSessionLock(ctx, lockKey, lockToken)
 		}
 
 		// Check session
@@ -609,9 +628,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				// session key is stable across open/close cycles, so an unclean
 				// teardown (crash, Redis hiccup) could otherwise resume a stale
 				// debt/order/menu state on this fresh session's first real turn.
-				if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
-					log.Printf("[worker] failed to clear stale session state for key %s: %v", sessionKey, err)
-				}
+				teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
 				newSessionID := uuid.New().String()
 				if db.RedisClient != nil {
 					db.RedisClient.Set(ctx, sessionKey, newSessionID, time.Duration(meta.SessionTimeout)*time.Minute+1*time.Minute)
@@ -658,9 +675,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 		if isEndTriggered {
-			if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
-				log.Printf("[worker] failed to clear session state for key %s: %v", sessionKey, err)
-			}
+			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
 			var err error
 			if matchedGroup.ZaloGroupID != "" {
 				err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionGoodbyeMessage)
@@ -720,7 +735,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// the bot mid-flow. The marker is single-use, so only this one
 		// continuation turn bypasses classification.
 		var intent string
-		if engine.TakeAwaitingFollowup(ctx, sessionKey) {
+		if engine.TakeAwaitingFollowup(ctx, workKey) {
 			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
 			intent = "IN_SCOPE"
 		} else {
@@ -734,9 +749,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		if intent == "HANDOVER" {
 			log.Printf("[worker] message classified as HANDOVER. Closing session and sending handover message.")
-			if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
-				log.Printf("[worker] failed to clear session state for key %s: %v", sessionKey, err)
-			}
+			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
 			handoverMsg := "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Em sẽ báo các bạn nhân viên admin liên hệ trực tiếp hỗ trợ mình ngay nhé ạ!"
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
@@ -752,9 +765,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		if intent == "CASUAL" {
 			log.Printf("[worker] message classified as CASUAL. Closing session and passing through (auto-ignoring).")
-			if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
-				log.Printf("[worker] failed to clear session state for key %s: %v", sessionKey, err)
-			}
+			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
 			return nil
 		}
 
@@ -791,14 +802,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// button-intercept handlers below — no Langflow round-trip. An out-of-range
 		// number re-prompts while keeping the menu so the user can pick again.
 		if db.RedisClient != nil {
-			pendingKey := sessionKey + engine.PendingOptionsSuffix
+			pendingKey := workKey + engine.PendingOptionsSuffix
 			if raw, err := db.RedisClient.Get(ctx, pendingKey).Result(); err == nil && raw != "" {
 				var pendingOptions []string
 				if jsonErr := json.Unmarshal([]byte(raw), &pendingOptions); jsonErr == nil {
 					if postback, matched, inRange := engine.ResolveNumericSelection(userText, pendingOptions); matched {
 						if inRange {
 							db.RedisClient.Del(ctx, pendingKey)
-							log.Printf("[stock-pick] numeric reply %q resolved to postback %q (sessionKey=%s, %d pending options)", userText, postback, sessionKey, len(pendingOptions))
+							log.Printf("[stock-pick] numeric reply %q resolved to postback %q (workKey=%s, %d pending options)", userText, postback, workKey, len(pendingOptions))
 							userText = postback
 						} else {
 							msg := "Vui lòng chọn một số trong danh sách."
@@ -859,7 +870,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				// để khách gõ "1"/"2"/"3" là resolve được ở intercept phía trên.
 				// Re-enable channels.BuildV3ListTemplatePayload nếu Zalo confirm hỗ trợ.
 				text := channels.BuildButtonOptionsAsText(prompt, buttons)
-				engine.StorePendingOptions(ctx, sessionKey, buttons, meta.SessionTimeout)
+				engine.StorePendingOptions(ctx, workKey, buttons, meta.SessionTimeout)
 				var sendErr error
 				if matchedGroup.ZaloGroupID != "" {
 					sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, text)
@@ -878,7 +889,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// bare model code from prose history ("FF901") that spans sibling lines
 			// ("LS2 FF901" vs "LS2 FF901 Carbon") and answers for both. Consumed
 			// (single-use) on the next free-text turn before Langflow (see below).
-			engine.StoreAwaitingVariantLine(ctx, sessionKey, keyword, meta.SessionTimeout)
+			engine.StoreAwaitingVariantLine(ctx, workKey, keyword, meta.SessionTimeout)
 			reply := fmt.Sprintf("Bạn muốn xem tồn kho cụ thể của màu và size nào cho dòng sản phẩm %s?\nVui lòng nhập thông tin (Ví dụ: %s màu đỏ size L).", keyword, keyword)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
@@ -928,7 +939,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			prompt, buttons := engine.BuildExactWebStockPicker(webName)
 			text := channels.BuildButtonOptionsAsText(prompt, buttons)
-			engine.StorePendingOptions(ctx, sessionKey, buttons, meta.SessionTimeout)
+			engine.StorePendingOptions(ctx, workKey, buttons, meta.SessionTimeout)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, text)
@@ -1312,8 +1323,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// instead of re-deriving a bare model code that spans sibling lines.
 		// Single-use: consumed here so it never leaks into unrelated later turns.
 		if !strings.HasPrefix(userText, "#") {
-			if lockedLine := engine.TakeAwaitingVariantLine(ctx, sessionKey); lockedLine != "" {
-				log.Printf("[stock-pick] variant-line lock active: scoping %q to chosen line %q (sessionKey=%s)", userText, lockedLine, sessionKey)
+			if lockedLine := engine.TakeAwaitingVariantLine(ctx, workKey); lockedLine != "" {
+				log.Printf("[stock-pick] variant-line lock active: scoping %q to chosen line %q (workKey=%s)", userText, lockedLine, workKey)
 				userText = fmt.Sprintf("%s [DÒNG ĐÃ CHỌN: %s — chỉ tra tồn kho đúng dòng này bằng exact_web_name=true; KHÔNG mở rộng sang dòng khác]", userText, lockedLine)
 			}
 		}
@@ -1323,8 +1334,18 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] failed to sign permission token: %v", err)
 		}
 
+		// Per-sender Langflow memory: in a group, scope the session_id to the sender
+		// so each employee's short-term chat memory stays separate (the history
+		// retriever already filters by zalo_user_id; this isolates Langflow's
+		// built-in chat memory too). With the feature off, this is the unchanged
+		// group/1:1 session UUID.
+		langflowSessionID := activeSessionID
+		if matchedGroup.ZaloGroupID != "" && engine.PerSenderGroupSessions() {
+			langflowSessionID = activeSessionID + ":" + payload.Sender.ID
+		}
+
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
-		replyText, err := langflowClient.RunFlowWithCustomer(ctx, activeSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
+		replyText, err := langflowClient.RunFlowWithCustomer(ctx, langflowSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}
@@ -1346,7 +1367,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// dòng-vs-SKU). Mark the session so that reply — which arrives as
 			// ordinary short text — bypasses the CASUAL classifier once instead
 			// of being dropped as small talk.
-			engine.StoreAwaitingFollowup(ctx, sessionKey, meta.SessionTimeout)
+			engine.StoreAwaitingFollowup(ctx, workKey, meta.SessionTimeout)
 			return nil
 		}
 
@@ -1376,6 +1397,25 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		log.Printf("[worker] successfully replied to user %s via Langflow", payload.Sender.ID)
 		return nil
+	}
+}
+
+// teardownSession clears a finished session's Redis state. When per-sender group
+// sessions are enabled, a group's flow-state sidecars live under
+// "...:group:<gid>:user:<sender>", so a single ClearSessionState(base) would
+// miss every member's sidecars; wipe the whole group instead (the base
+// activation key is group-level, so ending it ends the session for everyone).
+// For 1:1 chats — and whenever the feature is off — this falls back to the exact
+// ClearSessionState(sessionKey), i.e. today's behaviour byte-for-byte.
+func teardownSession(ctx context.Context, sessionKey, zaloGroupID string) {
+	if zaloGroupID != "" && engine.PerSenderGroupSessions() {
+		if _, err := engine.ClearGroupSessionState(ctx, zaloGroupID); err != nil {
+			log.Printf("[worker] failed to clear group session state for group %s: %v", zaloGroupID, err)
+		}
+		return
+	}
+	if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
+		log.Printf("[worker] failed to clear session state for key %s: %v", sessionKey, err)
 	}
 }
 
@@ -1420,10 +1460,10 @@ func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
 
 		// Close the session: delete the session key AND every sidecar flow-state
 		// key so an idle timeout leaves nothing for the next conversation to
-		// resume (matches the end-keyword / HANDOVER / CASUAL teardown).
-		if err := engine.ClearSessionState(ctx, payload.SessionKey); err != nil {
-			log.Printf("[worker] failed to clear session state for key %s: %v", payload.SessionKey, err)
-		}
+		// resume (matches the end-keyword / HANDOVER / CASUAL teardown). For a
+		// per-sender group session the per-user sidecars live off the per-user
+		// work key, so wipe the whole group rather than just the base key.
+		teardownSession(ctx, payload.SessionKey, payload.ZaloGroupID)
 
 		// Find the channel to get credentials
 		var ch models.Channel
