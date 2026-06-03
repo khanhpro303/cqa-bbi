@@ -15,10 +15,14 @@
         <CampaignDashboardPanel
           :stats="stats"
           :loading="loading"
-          :month="month"
-          :month-options="monthOptions"
+          :date-from="dateFrom"
+          :date-to="dateTo"
+          :date-preset="datePreset"
+          :presets="presets"
           :first-card-label="$t('dash_segments')"
-          @update:month="onMonth"
+          @preset="onPreset"
+          @update:date-from="onFrom"
+          @update:date-to="onTo"
         />
       </v-card-text>
     </v-card>
@@ -28,7 +32,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import CampaignDashboardPanel from './CampaignDashboardPanel.vue'
-import { useCampaignMonths } from './useCampaignMonths'
+import { useCampaignDateRange } from './useCampaignDateRange'
 import { getStats } from './mockCampaigns'
 import type { CampaignStats } from './types'
 
@@ -38,7 +42,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>()
 
-const { monthOptions, month } = useCampaignMonths()
+const { dateFrom, dateTo, datePreset, presets, applyPreset, setFrom, setTo } = useCampaignDateRange()
 
 const open = ref(props.modelValue)
 watch(() => props.modelValue, (v) => { open.value = v; if (v) load() })
@@ -51,14 +55,22 @@ async function load() {
   if (!props.campaign) return
   loading.value = true
   try {
-    stats.value = await getStats(month.value, props.campaign.id)
+    stats.value = await getStats(dateFrom.value, dateTo.value, props.campaign.id)
   } finally {
     loading.value = false
   }
 }
 
-function onMonth(v: string) {
-  month.value = v
+function onPreset(v: string) {
+  applyPreset(v)
+  load()
+}
+function onFrom(v: string) {
+  setFrom(v)
+  load()
+}
+function onTo(v: string) {
+  setTo(v)
   load()
 }
 </script>

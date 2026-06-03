@@ -1,17 +1,36 @@
 <template>
   <div>
-    <!-- Header row: optional title + month selector -->
-    <div class="d-flex align-center mb-3">
+    <!-- Header row: optional title + time filter (presets + from/to range) -->
+    <div class="d-flex align-center flex-wrap mb-3 ga-2">
       <slot name="title" />
-      <v-spacer />
-      <v-select
-        :model-value="month"
-        :items="monthOptions"
+      <v-spacer class="d-none d-md-block" />
+      <v-chip-group :model-value="datePreset" selected-class="text-primary">
+        <v-chip
+          v-for="p in presets"
+          :key="p.value"
+          :value="p.value"
+          size="small"
+          variant="outlined"
+          @click="emit('preset', p.value)"
+        >
+          {{ p.label }}
+        </v-chip>
+      </v-chip-group>
+      <v-text-field
+        :model-value="dateFrom"
+        type="date"
         density="compact"
-        variant="outlined"
         hide-details
-        style="max-width: 170px"
-        @update:model-value="(v: string) => emit('update:month', v)"
+        style="max-width: 150px"
+        @update:model-value="(v: string) => emit('update:dateFrom', v)"
+      />
+      <v-text-field
+        :model-value="dateTo"
+        type="date"
+        density="compact"
+        hide-details
+        style="max-width: 150px"
+        @update:model-value="(v: string) => emit('update:dateTo', v)"
       />
     </div>
 
@@ -102,20 +121,26 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 const { t } = useI18n()
 
-interface MonthOption {
-  title: string
+interface DatePreset {
+  label: string
   value: string
 }
 
 const props = defineProps<{
   stats: CampaignStats | null
   loading: boolean
-  month: string
-  monthOptions: MonthOption[]
+  dateFrom: string
+  dateTo: string
+  datePreset: string
+  presets: DatePreset[]
   firstCardLabel?: string
 }>()
 
-const emit = defineEmits<{ 'update:month': [string] }>()
+const emit = defineEmits<{
+  preset: [string]
+  'update:dateFrom': [string]
+  'update:dateTo': [string]
+}>()
 
 const chartData = computed(() => ({
   labels: (props.stats?.byDay ?? []).map((d) => formatChartDate(d.date)),

@@ -3,9 +3,13 @@
     <CampaignDashboardPanel
       :stats="stats"
       :loading="loading"
-      :month="month"
-      :month-options="monthOptions"
-      @update:month="onMonth"
+      :date-from="dateFrom"
+      :date-to="dateTo"
+      :date-preset="datePreset"
+      :presets="presets"
+      @preset="onPreset"
+      @update:date-from="onFrom"
+      @update:date-to="onTo"
     >
       <template #title>
         <div class="d-flex align-center">
@@ -20,11 +24,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import CampaignDashboardPanel from './CampaignDashboardPanel.vue'
-import { useCampaignMonths } from './useCampaignMonths'
+import { useCampaignDateRange } from './useCampaignDateRange'
 import { getStats } from './mockCampaigns'
 import type { CampaignStats } from './types'
 
-const { monthOptions, month } = useCampaignMonths()
+const { dateFrom, dateTo, datePreset, presets, applyPreset, setFrom, setTo } = useCampaignDateRange()
 
 const loading = ref(false)
 const stats = ref<CampaignStats | null>(null)
@@ -32,14 +36,22 @@ const stats = ref<CampaignStats | null>(null)
 async function load() {
   loading.value = true
   try {
-    stats.value = await getStats(month.value)
+    stats.value = await getStats(dateFrom.value, dateTo.value)
   } finally {
     loading.value = false
   }
 }
 
-function onMonth(v: string) {
-  month.value = v
+function onPreset(v: string) {
+  applyPreset(v)
+  load()
+}
+function onFrom(v: string) {
+  setFrom(v)
+  load()
+}
+function onTo(v: string) {
+  setTo(v)
   load()
 }
 

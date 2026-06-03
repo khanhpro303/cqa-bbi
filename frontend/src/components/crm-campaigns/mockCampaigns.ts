@@ -175,9 +175,34 @@ export function sendNow(id: string): Promise<{ sent: number }> {
   return delay({ sent })
 }
 
-export function getStats(month: string, campaignId?: string): Promise<CampaignStats> {
-  // `month` = 'YYYY-MM'; mock ignores the value beyond realistic numbers.
-  void month
+// Number of day-buckets to plot for a [from, to] range (inclusive), capped so a
+// wide preset like "Năm này" stays readable instead of rendering hundreds of bars.
+const MAX_CHART_DAYS = 31
+
+function rangeDayCount(from: string, to: string): number {
+  const a = new Date(`${from}T00:00:00`).getTime()
+  const b = new Date(`${to}T00:00:00`).getTime()
+  if (Number.isNaN(a) || Number.isNaN(b)) return 14
+  const days = Math.round((b - a) / 86_400_000) + 1
+  return Math.min(Math.max(days, 1), MAX_CHART_DAYS)
+}
+
+// Day-string buckets ending at `to`, going back `n - 1` days.
+function rangeDays(to: string, n: number): string[] {
+  const end = new Date(`${to}T00:00:00`)
+  if (Number.isNaN(end.getTime())) return []
+  const out: string[] = []
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(end)
+    d.setDate(end.getDate() - i)
+    out.push(d.toISOString().split('T')[0])
+  }
+  return out
+}
+
+export function getStats(dateFrom: string, dateTo: string, campaignId?: string): Promise<CampaignStats> {
+  const dayCount = rangeDayCount(dateFrom, dateTo)
+  const days = rangeDays(dateTo, dayCount)
 
   // Per-campaign scope: numbers narrowed to a single campaign for the row drill-down modal.
   if (campaignId) {
@@ -192,11 +217,11 @@ export function getStats(month: string, campaignId?: string): Promise<CampaignSt
         recent: [],
       })
     }
-    // Spread the campaign's monthly total across the last 14 days as a plausible curve.
-    const weights = Array.from({ length: 14 }, () => 0.3 + Math.random())
+    // Spread the campaign's total across the selected range as a plausible curve.
+    const weights = Array.from({ length: dayCount }, () => 0.3 + Math.random())
     const weightSum = weights.reduce((s, w) => s + w, 0)
     const byDay = weights.map((w, i) => ({
-      date: isoDaysFromNow(-13 + i).split('T')[0],
+      date: days[i],
       sent: Math.round((c.sentThisMonth * w) / weightSum),
     }))
     const fail = c.status === 'active' ? Math.round(c.sentThisMonth * 0.018) : 0
@@ -220,8 +245,8 @@ export function getStats(month: string, campaignId?: string): Promise<CampaignSt
   }
 
   // Aggregate scope (overview dashboard at the top of the tab).
-  const byDay = Array.from({ length: 14 }, (_, i) => ({
-    date: isoDaysFromNow(-13 + i).split('T')[0],
+  const byDay = days.map((date) => ({
+    date,
     sent: Math.round(200 + Math.random() * 900),
   }))
   const messagesSentThisMonth = byDay.reduce((sum, d) => sum + d.sent, 0)
