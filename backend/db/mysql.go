@@ -85,6 +85,12 @@ func AutoMigrate() error {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
 
+	// Backfill: pre-existing channels should auto-reply (preserve legacy behavior
+	// where the global chatbot_active flag alone gated auto-reply). Idempotent.
+	if err := DB.Model(&models.Channel{}).Where("auto_reply_enabled IS NULL").Update("auto_reply_enabled", true).Error; err != nil {
+		log.Printf("[db] failed to backfill channels.auto_reply_enabled: %v", err)
+	}
+
 	// Clean up deprecated database schema from older versions
 	cleanupDeprecatedSchema()
 
@@ -140,7 +146,6 @@ func backfillCampaignImages() {
 		log.Printf("[db] backfilled message_images for %d campaign(s)", res.RowsAffected)
 	}
 }
-
 
 func addUniqueConstraints() {
 	constraints := []struct {

@@ -45,6 +45,7 @@ type ChannelResponse struct {
 	Name                   string                               `json:"name"`
 	ExternalID             string                               `json:"external_id"`
 	IsActive               bool                                 `json:"is_active"`
+	AutoReplyEnabled       bool                                 `json:"auto_reply_enabled"`
 	Metadata               string                               `json:"metadata"`
 	LastSyncAt             *time.Time                           `json:"last_sync_at"`
 	LastSyncStatus         string                               `json:"last_sync_status"`
@@ -219,9 +220,10 @@ func UpdateChannel(c *gin.Context) {
 	}
 
 	var req struct {
-		Name     string `json:"name" binding:"omitempty,min=2,max=255"`
-		IsActive *bool  `json:"is_active"`
-		Metadata string `json:"metadata"`
+		Name             string `json:"name" binding:"omitempty,min=2,max=255"`
+		IsActive         *bool  `json:"is_active"`
+		AutoReplyEnabled *bool  `json:"auto_reply_enabled"`
+		Metadata         string `json:"metadata"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -234,6 +236,14 @@ func UpdateChannel(c *gin.Context) {
 	}
 	if req.IsActive != nil {
 		updates["is_active"] = *req.IsActive
+	}
+	if req.AutoReplyEnabled != nil {
+		updates["auto_reply_enabled"] = *req.AutoReplyEnabled
+	}
+	// A deactivated channel must never auto-reply: deactivating forces auto-reply off.
+	// Reactivating does not auto-enable it (must be turned on explicitly).
+	if req.IsActive != nil && !*req.IsActive {
+		updates["auto_reply_enabled"] = false
 	}
 	if req.Metadata != "" {
 		metadata := req.Metadata
@@ -913,16 +923,17 @@ func getFBPageToken(userToken string, targetPageID string) (pageID, pageToken, p
 
 func channelToResponse(ch models.Channel) ChannelResponse {
 	return ChannelResponse{
-		ID:             ch.ID,
-		TenantID:       ch.TenantID,
-		ChannelType:    ch.ChannelType,
-		Name:           ch.Name,
-		ExternalID:     ch.ExternalID,
-		IsActive:       ch.IsActive,
-		Metadata:       ch.Metadata,
-		LastSyncAt:     ch.LastSyncAt,
-		LastSyncStatus: ch.LastSyncStatus,
-		CreatedAt:      ch.CreatedAt,
+		ID:               ch.ID,
+		TenantID:         ch.TenantID,
+		ChannelType:      ch.ChannelType,
+		Name:             ch.Name,
+		ExternalID:       ch.ExternalID,
+		IsActive:         ch.IsActive,
+		AutoReplyEnabled: ch.AutoReplyEnabled,
+		Metadata:         ch.Metadata,
+		LastSyncAt:       ch.LastSyncAt,
+		LastSyncStatus:   ch.LastSyncStatus,
+		CreatedAt:        ch.CreatedAt,
 	}
 }
 

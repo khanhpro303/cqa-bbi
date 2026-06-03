@@ -266,8 +266,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			chatbotActive = (activeSetting.ValuePlain == "true")
 		}
 
-		if !chatbotActive {
-			log.Printf("[worker] chatbot is disabled for tenant %s (ignoring message from Zalo user %s)", matchedChannel.TenantID, payload.Sender.ID)
+		// Auto-reply requires BOTH the tenant master switch (chatbot_active) AND the
+		// per-channel flag. AutoReplyEnabled comes from the already-loaded channel (no extra query).
+		if !chatbotActive || !matchedChannel.AutoReplyEnabled {
+			log.Printf("[worker] auto-reply disabled (tenant=%s master=%v channel=%s auto_reply=%v); ignoring message from Zalo user %s",
+				matchedChannel.TenantID, chatbotActive, matchedChannel.ID, matchedChannel.AutoReplyEnabled, payload.Sender.ID)
 			return nil
 		}
 

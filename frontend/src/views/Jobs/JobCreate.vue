@@ -16,16 +16,17 @@
           <StepInput v-else v-model:form="form" />
         </template>
         <template #[`item.3`]>
-          <StepOutputSchedule v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
+          <StepChatbotChannels v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
           <StepConfirm v-else-if="isErpCache" v-model:form="form" />
           <StepRules v-else v-model:form="form" />
         </template>
         <template #[`item.4`]>
-          <StepConfirm v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
+          <StepOutputSchedule v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
           <StepOutput v-else v-model:form="form" />
         </template>
         <template #[`item.5`]>
-          <StepOutputSchedule v-model:form="form" />
+          <StepConfirm v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
+          <StepOutputSchedule v-else v-model:form="form" />
         </template>
         <template #[`item.6`]>
           <StepConfirm v-model:form="form" />
@@ -38,7 +39,7 @@
           {{ $t('back') }}
         </v-btn>
         <v-spacer />
-        <template v-if="step < (isErpCache ? 3 : (form.job_type === 'chatbot_toggle' ? 4 : 6))">
+        <template v-if="step < (isErpCache ? 3 : (form.job_type === 'chatbot_toggle' ? 5 : 6))">
           <v-btn color="primary" :disabled="!canProceed" @click="step++">
             {{ $t('next') }}
             <v-icon end>mdi-chevron-right</v-icon>
@@ -47,7 +48,7 @@
             {{ validationMessage }}
           </div>
         </template>
-        <v-btn v-if="step === (isErpCache ? 3 : (form.job_type === 'chatbot_toggle' ? 4 : 6))" color="success" :loading="creating" @click="submitJob">
+        <v-btn v-if="step === (isErpCache ? 3 : (form.job_type === 'chatbot_toggle' ? 5 : 6))" color="success" :loading="creating" @click="submitJob">
           <v-icon start>mdi-check-circle</v-icon>
           {{ $t('confirm') }}
         </v-btn>
@@ -64,6 +65,7 @@ import { useI18n } from 'vue-i18n'
 import { useJobStore } from '../../stores/jobs'
 import StepType from '../../components/JobWizard/StepType.vue'
 import StepInput from '../../components/JobWizard/StepInput.vue'
+import StepChatbotChannels from '../../components/JobWizard/StepChatbotChannels.vue'
 import StepRules from '../../components/JobWizard/StepRules.vue'
 import StepOutput from '../../components/JobWizard/StepOutput.vue'
 import StepOutputSchedule from '../../components/JobWizard/StepOutputSchedule.vue'
@@ -98,7 +100,8 @@ const canProceed = computed(() => {
     switch (step.value) {
       case 1: return form.value.name.trim().length >= 2
       case 2: return !!form.value.rules_content
-      case 3: {
+      case 3: return form.value.input_channel_ids.length > 0
+      case 4: {
         if (form.value.schedule_type === 'cron' && !form.value.schedule_cron.trim()) return false
         return true
       }
@@ -144,6 +147,7 @@ const validationMessage = computed(() => {
     switch (step.value) {
       case 1: return t('validation_min_chars', { min: 2 })
       case 2: return t('jobs_validation_chatbot_status')
+      case 3: return t('jobs_validation_chatbot_channels')
       default: return ''
     }
   }
@@ -188,8 +192,9 @@ const stepItems = computed(() => {
     return [
       { title: t('job_wizard_step_type'), value: 1 },
       { title: t('jobs_wizard_step_status_config'), value: 2 },
-      { title: t('job_wizard_step_schedule'), value: 3 },
-      { title: t('job_wizard_step_confirm'), value: 4 },
+      { title: t('job_wizard_step_input'), value: 3 },
+      { title: t('job_wizard_step_schedule'), value: 4 },
+      { title: t('job_wizard_step_confirm'), value: 5 },
     ]
   }
   return [
@@ -208,7 +213,9 @@ async function submitJob() {
     const isSpecialJob = form.value.job_type === 'chatbot_toggle' || isErpCache.value
     const payload = {
       ...form.value,
-      input_channel_ids: isSpecialJob ? ['global'] : form.value.input_channel_ids,
+      // ERP cache jobs are tenant-wide (['global']); chatbot_toggle uses the user's
+      // per-channel selection (which may itself be ['global'] = all OA channels).
+      input_channel_ids: isErpCache.value ? ['global'] : form.value.input_channel_ids,
       outputs: isSpecialJob ? [] : JSON.parse(form.value.outputs || '[]'),
       rules_config: form.value.job_type === 'classification' ? JSON.parse(form.value.rules_config) : (isSpecialJob ? [] : undefined),
       output_at: form.value.output_at || undefined,

@@ -34,6 +34,17 @@
           </v-expansion-panel-text>
         </v-expansion-panel>
 
+        <!-- Chatbot target channels -->
+        <v-expansion-panel value="channels" v-if="form.job_type === 'chatbot_toggle'">
+          <v-expansion-panel-title>
+            <v-icon start size="small">mdi-chat</v-icon>
+            {{ $t('jobs_chatbot_toggle_select_channels') }}
+          </v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <StepChatbotChannels v-model:form="form" />
+          </v-expansion-panel-text>
+        </v-expansion-panel>
+
         <!-- Rules -->
         <v-expansion-panel value="rules" v-if="form.job_type !== 'erp_product_cache' && form.job_type !== 'erp_customer_cache'">
           <v-expansion-panel-title>
@@ -92,6 +103,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useJobStore } from '../../stores/jobs'
 import StepType from '../../components/JobWizard/StepType.vue'
 import StepInput from '../../components/JobWizard/StepInput.vue'
+import StepChatbotChannels from '../../components/JobWizard/StepChatbotChannels.vue'
 import StepRules from '../../components/JobWizard/StepRules.vue'
 import StepOutput from '../../components/JobWizard/StepOutput.vue'
 import StepOutputSchedule from '../../components/JobWizard/StepOutputSchedule.vue'
@@ -161,18 +173,20 @@ onMounted(async () => {
 async function saveJob() {
   saving.value = true
   try {
-    const isSpecialJob = form.value.job_type === 'chatbot_toggle' || form.value.job_type === 'erp_product_cache' || form.value.job_type === 'erp_customer_cache'
+    const isErpCache = form.value.job_type === 'erp_product_cache' || form.value.job_type === 'erp_customer_cache'
+    const isSpecialJob = form.value.job_type === 'chatbot_toggle' || isErpCache
+    const selectedChannelIds = Array.isArray(form.value.input_channel_ids)
+      ? form.value.input_channel_ids
+      : JSON.parse(form.value.input_channel_ids || '[]')
     await jobStore.updateJob(tenantId.value, jobId.value, {
       name: form.value.name,
       description: form.value.description,
       rules_content: form.value.rules_content,
       rules_config: isSpecialJob ? '[]' : form.value.rules_config,
       skip_conditions: isSpecialJob ? '' : form.value.skip_conditions,
-      input_channel_ids: isSpecialJob
-        ? ['global']
-        : (Array.isArray(form.value.input_channel_ids)
-          ? form.value.input_channel_ids
-          : JSON.parse(form.value.input_channel_ids || '[]')),
+      // ERP cache is tenant-wide (['global']); chatbot_toggle uses its per-channel
+      // selection (which may itself be ['global'] = all OA channels).
+      input_channel_ids: isErpCache ? ['global'] : selectedChannelIds,
       outputs: isSpecialJob
         ? []
         : (typeof form.value.outputs === 'string'

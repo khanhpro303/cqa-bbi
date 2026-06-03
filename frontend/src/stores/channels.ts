@@ -9,6 +9,7 @@ export interface Channel {
   name: string
   external_id: string
   is_active: boolean
+  auto_reply_enabled: boolean
   metadata: string
   last_sync_at: string | null
   last_sync_status: string

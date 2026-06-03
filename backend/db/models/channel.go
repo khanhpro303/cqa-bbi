@@ -10,6 +10,7 @@ type Channel struct {
 	ExternalID           string     `gorm:"type:varchar(255)" json:"external_id"`
 	CredentialsEncrypted []byte     `gorm:"type:varbinary(2048);not null" json:"-"`
 	IsActive             bool       `gorm:"default:true;index:idx_channel_tenant_active" json:"is_active"`
+	AutoReplyEnabled     bool       `gorm:"column:auto_reply_enabled;not null;default:true" json:"auto_reply_enabled"` // per-channel chatbot auto-reply switch, orthogonal to IsActive
 	LastSyncAt           *time.Time `json:"last_sync_at"`
 	LastSyncStatus       string     `gorm:"type:varchar(20)" json:"last_sync_status"`
 	LastSyncError        string     `gorm:"type:text" json:"last_sync_error,omitempty"`

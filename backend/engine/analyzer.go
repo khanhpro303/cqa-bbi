@@ -867,17 +867,39 @@ func (a *Analyzer) runChatbotToggleJob(ctx context.Context, job models.Job) (*mo
 	} else {
 		targetVal = "false"
 	}
+	targetBool := targetVal == "true"
 
-	// Update the chatbot_active setting
-	upsertSetting(job.TenantID, "chatbot_active", targetVal)
+	// Resolve target channels from job.InputChannelIDs (JSON array). The legacy
+	// sentinel "global" (and an empty list) means "all webhook-capable active OA
+	// channels" — reproducing the old tenant-wide behavior without touching the
+	// master switch or non-webhook channels (e.g. personal_zalo_import).
+	var channelIDs []string
+	_ = json.Unmarshal([]byte(job.InputChannelIDs), &channelIDs)
+	realIDs := channelIDs[:0]
+	for _, id := range channelIDs {
+		if id != "" && id != "global" {
+			realIDs = append(realIDs, id)
+		}
+	}
+
+	q := db.DB.Model(&models.Channel{}).Where("tenant_id = ?", job.TenantID)
+	if len(realIDs) > 0 {
+		q = q.Where("id IN ?", realIDs)
+	} else {
+		q = q.Where("channel_type IN ? AND is_active = ?", []string{"zalo_oa", "facebook"}, true)
+	}
+	updateRes := q.Update("auto_reply_enabled", targetBool)
+	if updateRes.Error != nil {
+		log.Printf("[analyzer] chatbot toggle job failed to update channels: %v", updateRes.Error)
+	}
 
 	finishedAt := time.Now()
 	runStatus := "success"
 	actionStr := "tắt"
-	if targetVal == "true" {
+	if targetBool {
 		actionStr = "bật"
 	}
-	summaryMsg := fmt.Sprintf("Đã tự động %s chatbot", actionStr)
+	summaryMsg := fmt.Sprintf("Đã tự động %s trả lời cho %d kênh", actionStr, updateRes.RowsAffected)
 	summaryJSON, _ := json.Marshal(map[string]interface{}{
 		"message": summaryMsg,
 	})
@@ -901,28 +923,4 @@ func (a *Analyzer) runChatbotToggleJob(ctx context.Context, job models.Job) (*mo
 		fmt.Sprintf("Job '%s': completed, %s", job.Name, summaryMsg), "", "")
 
 	return &run, nil
-}
-
-func upsertSetting(tenantID, key, plainValue string) {
-	var existing models.AppSetting
-	result := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&existing)
-
-	if result.Error == nil {
-		updates := map[string]interface{}{
-			"value_plain":     plainValue,
-			"value_encrypted": nil,
-			"updated_at":      time.Now(),
-		}
-		db.DB.Model(&existing).Updates(updates)
-	} else {
-		setting := models.AppSetting{
-			ID:         pkg.NewUUID(),
-			TenantID:   tenantID,
-			SettingKey: key,
-			ValuePlain: plainValue,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
-		}
-		db.DB.Create(&setting)
-	}
 }
