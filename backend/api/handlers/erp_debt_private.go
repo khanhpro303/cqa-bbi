@@ -30,11 +30,13 @@ const debtCustomerPromptText = "Anh/chị cho mình mã hoặc tên khách hàng
 // to the literal the generic branch sends so staff see one consistent question.
 const debtPeriodPromptText = "Anh/chị muốn xem đối chiếu công nợ trong khoảng thời gian nào? Vui lòng nhắn: \"tháng này\", \"tháng trước\" hoặc \"quý này\"."
 
-// debtCustomerPickByCodeText asks the staff member for an exact customer code
-// when a name/keyword matched several customers, instead of dumping the full
-// list. Mirrors ordersCustomerPickByCodeText: their next reply resolves directly
-// against the cache + scope in the Pick stage, so any in-scope code advances.
-const debtCustomerPickByCodeText = "Có nhiều khách khớp. Anh/chị cho mình mã khách cụ thể nhé (ví dụ: S001)."
+// debtCustomerPickByCodeText is the FALLBACK pick prompt, used only when the
+// candidate codes cannot be looked up for display. The normal path enumerates
+// the matched customers (renderDebtCustomerPickText) so staff can pick a real
+// code (e.g. "S001_1") instead of re-typing the ambiguous prefix forever.
+// Mirrors ordersCustomerPickByCodeText, including the "tất cả" escape that the
+// Pick stage honours (isAllCustomersReply) to guarantee the loop can terminate.
+const debtCustomerPickByCodeText = "Có nhiều khách khớp. Anh/chị cho mình mã khách cụ thể nhé (ví dụ: S001), hoặc nhắn \"tất cả\"."
 
 // customerCacheResolveLimit caps how many customer codes a single private-bot
 // debt lookup may resolve from the local cache, keeping DS_KHACH_HANG bounded.
@@ -235,6 +237,74 @@ func sendPrivateDebtPrompt(ctx context.Context, tenantID string, permCtx *engine
 		return adapter.SendGroupMessage(ctx, groupID, text)
 	}
 	return adapter.SendMessage(ctx, permCtx.ZaloUserID, text)
+}
+
+// debtCustomerCandidate is one matched customer offered in the pick prompt when
+// a token resolved to several codes. Code is the bare MA (e.g. "S001_1"); Name
+// is HO_VA_TEN (may be empty).
+type debtCustomerCandidate struct {
+	Code string
+	Name string
+}
+
+// renderDebtCustomerPickText builds the multi-match pick prompt, listing each
+// candidate's code + name so the staff member can choose a concrete code
+// (e.g. "S001_1") or reply "tất cả". Falls back to the static prompt when no
+// candidates are available (cache lookup miss), so the caller never sends an
+// empty list. Pure (no DB) → unit-testable.
+func renderDebtCustomerPickText(candidates []debtCustomerCandidate) string {
+	if len(candidates) == 0 {
+		return debtCustomerPickByCodeText
+	}
+	var b strings.Builder
+	b.WriteString("Có nhiều khách khớp. Anh/chị chọn giúp mình mã khách cụ thể (hoặc nhắn \"tất cả\"):")
+	for _, c := range candidates {
+		code := strings.TrimSpace(c.Code)
+		if code == "" {
+			continue
+		}
+		if name := strings.TrimSpace(c.Name); name != "" {
+			b.WriteString("\n• " + code + " — " + name)
+		} else {
+			b.WriteString("\n• " + code)
+		}
+	}
+	return b.String()
+}
+
+// debtCustomerCandidates loads the display name for each resolved code from the
+// tenant-scoped customer cache so the pick prompt can enumerate concrete codes.
+// Codes are bare MA values (already scope-approved). Returns nil on a full miss
+// so renderDebtCustomerPickText falls back to the static prompt.
+func debtCustomerCandidates(tenantID string, codes []string) []debtCustomerCandidate {
+	if len(codes) == 0 {
+		return nil
+	}
+	nameByCode := make(map[string]string, len(codes))
+	var rows []models.CachedCustomer
+	db.DB.Model(&models.CachedCustomer{}).
+		Where("tenant_id = ? AND ma IN ?", tenantID, codes).
+		Limit(customerCacheResolveLimit).
+		Find(&rows)
+	for _, r := range rows {
+		if _, seen := nameByCode[r.MA]; !seen {
+			nameByCode[r.MA] = r.HO_VA_TEN
+		}
+	}
+	out := make([]debtCustomerCandidate, 0, len(codes))
+	for _, code := range codes {
+		out = append(out, debtCustomerCandidate{Code: code, Name: nameByCode[code]})
+	}
+	return out
+}
+
+// sendDebtCustomerPickPrompt delivers the enumerated multi-match pick prompt to
+// the staff member, looking up candidate names from the cache. Used by both the
+// fresh-turn and StagePick multi-match branches so a token that maps to several
+// codes (e.g. "S001" → S001_1, S001_2) shows the real codes instead of looping.
+func sendDebtCustomerPickPrompt(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, codes []string) error {
+	text := renderDebtCustomerPickText(debtCustomerCandidates(tenantID, codes))
+	return sendPrivateDebtPrompt(ctx, tenantID, permCtx, text)
 }
 
 // resolveDebtCustomerCodes resolves a private-bot debt query ("S001", "Huy",

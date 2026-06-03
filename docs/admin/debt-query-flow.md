@@ -423,7 +423,8 @@ Staff: "S001"   (hoặc "Huy", "S001 Huy")
       approved = scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID,"S001"), scope…)
         cache MySQL cached_customers; mỗi token ma LIKE %tok% OR ho_va_ten LIKE %tok%
         GIAO (AND) → rỗng thì HỢP (OR); cap 20; rồi GIAO với scope (assigned/all/own)
-  • len(approved) > 1  → lưu DebtCustomerState{Pick} → hỏi "cho mình mã khách cụ thể"
+  • len(approved) > 1  → lưu DebtCustomerState{Pick} → LIỆT KÊ mã+tên các khách khớp
+      (renderDebtCustomerPickText) để chọn mã cụ thể (vd S001_1) hoặc nhắn "tất cả"
   • len(approved) == 1 → lưu DebtCustomerState{Period} → HỎI KỲ
       "Anh/chị muốn xem công nợ trong khoảng thời gian nào? tháng này / tháng trước / quý này"
 
@@ -444,10 +445,17 @@ soi gương flow orders trong `erp_orders_private.go`):
    (`parseDebtPeriodFromSearch` ok) mới query. Mặc định `tháng này` chỉ còn áp cho
    nhánh kỳ-toàn-scope (bare "công nợ"), **không** cho nhánh theo-khách.
 2. **Pick by code** — tên/khoá khớp nhiều khách → lưu `DebtCustomerState{Pick}`
-   và hỏi mã cụ thể (`debtCustomerPickByCodeText`) thay vì trả nợ của tất cả rồi
+   và **liệt kê mã+tên** các khách khớp (`renderDebtCustomerPickText`, tên lấy từ
+   `cached_customers` qua `debtCustomerCandidates`) thay vì trả nợ của tất cả rồi
    để LLM tự phân giải. Lượt Pick resolve **trực tiếp** vào cache + scope (không
-   giới hạn trong danh sách đã liệt kê) nên mã in-scope nào cũng tiến được, không
-   lặp vô hạn — đúng bài học từ flow orders.
+   giới hạn trong danh sách đã liệt kê) nên mã in-scope nào cũng tiến được.
+   Thoát vòng pick chắc chắn bằng 2 lối: (a) nhân viên gõ một mã con cụ thể
+   (vd "S001_1" → đúng 1 khách → sang bước kỳ); hoặc (b) nhắn **"tất cả"**
+   (`isAllCustomersReply`) → giữ TOÀN BỘ mã đã khớp, sang thẳng bước kỳ rồi trả
+   nợ của tất cả các khách đó. Bản gốc thiếu cả hai (prompt tĩnh "ví dụ: S001"
+   trùng đúng tiền tố nhân viên vừa gõ) nên gõ lại "S001" → khớp nhiều → lặp
+   vô hạn. **Khác** với orders: nhánh "tất cả" của debt đi thẳng bước kỳ với
+   nhiều mã (không rơi lại case len>1).
 3. **State riêng, single-use, có scope** — `DebtCustomerState` lưu dưới
    `:awaiting_debt_customer` (khác `:awaiting_order_customer` để debt và orders
    không đụng nhau giữa chừng). `Codes` đã GIAO scope **khi lưu**, nên replay ở

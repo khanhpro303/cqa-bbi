@@ -2,8 +2,35 @@ package handlers
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestRenderDebtCustomerPickText(t *testing.T) {
+	candidates := []debtCustomerCandidate{
+		{Code: "S001_1", Name: "Arrow SG (Huy)"},
+		{Code: "S001_2", Name: "Arrow HN (Huy)"},
+	}
+	got := renderDebtCustomerPickText(candidates)
+	for _, want := range []string{"S001_1", "Arrow SG (Huy)", "S001_2", "Arrow HN (Huy)", "tất cả"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("renderDebtCustomerPickText() = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestRenderDebtCustomerPickTextCodeOnly(t *testing.T) {
+	got := renderDebtCustomerPickText([]debtCustomerCandidate{{Code: "S001_1"}})
+	if !strings.Contains(got, "S001_1") {
+		t.Errorf("renderDebtCustomerPickText() = %q, missing code", got)
+	}
+}
+
+func TestRenderDebtCustomerPickTextFallback(t *testing.T) {
+	if got := renderDebtCustomerPickText(nil); got != debtCustomerPickByCodeText {
+		t.Errorf("renderDebtCustomerPickText(nil) = %q, want fallback %q", got, debtCustomerPickByCodeText)
+	}
+}
 
 func TestIsPrivateDebtCustomerQuery(t *testing.T) {
 	tests := []struct {

@@ -2818,24 +2818,43 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					log.Printf("[debt_query] failed to send private debt prompt to %s: %v", permCtx.ZaloUserID, err)
 				}
 			}
+			// pushDebtPickPrompt sends the multi-match prompt enumerating the
+			// candidate codes/names so staff can pick a concrete code (e.g.
+			// "S001_1") or reply "tất cả" — never just the ambiguous prefix again.
+			pushDebtPickPrompt := func(codes []string) {
+				if err := sendDebtCustomerPickPrompt(ctxReq, tenantID, permCtx, codes); err != nil {
+					log.Printf("[debt_query] failed to send private debt pick prompt to %s: %v", permCtx.ZaloUserID, err)
+				}
+			}
 
 			if state, ok := takeDebtCustomerState(ctxReq, tenantID, permCtx); ok {
 				switch state.Stage {
 				case engine.DebtCustomerStagePick:
-					// This turn names the customer to use. Resolve the reply
+					// "tất cả" is the explicit escape: keep every previously-matched
+					// code and advance straight to the period step, so a token that
+					// maps to several sub-accounts (e.g. "S001" → S001_1, S001_2) can
+					// always terminate the pick loop. This reproduces the old "show
+					// both" behaviour but now still asks the period first.
+					if isAllCustomersReply(search) {
+						storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePeriod, Codes: state.Codes})
+						pushDebtPrompt(debtPeriodPromptText)
+						debtPromptResponse()
+						return
+					}
+					// Otherwise this turn names the customer to use. Resolve the reply
 					// against the cache + scope DIRECTLY (not constrained to the
-					// previously-offered set) so any in-scope code advances
-					// instead of looping forever on a code that was never listed.
+					// offered set) so any in-scope code advances; the prompt now lists
+					// the real candidate codes so staff can pick one.
 					chosen := scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID, search), scopeType, ownCode, allowedDebtCodes)
 					switch {
 					case len(chosen) == 0:
 						storeDebtCustomerState(ctxReq, tenantID, permCtx, state)
-						pushDebtPrompt(debtCustomerPickByCodeText)
+						pushDebtPickPrompt(state.Codes)
 						debtPromptResponse()
 						return
 					case len(chosen) > 1:
 						storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePick, Codes: chosen})
-						pushDebtPrompt(debtCustomerPickByCodeText)
+						pushDebtPickPrompt(chosen)
 						debtPromptResponse()
 						return
 					}
@@ -2873,7 +2892,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						return
 					case len(approved) > 1:
 						storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePick, Codes: approved})
-						pushDebtPrompt(debtCustomerPickByCodeText)
+						pushDebtPickPrompt(approved)
 						debtPromptResponse()
 						return
 					}
