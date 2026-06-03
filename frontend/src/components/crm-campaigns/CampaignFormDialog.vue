@@ -107,7 +107,7 @@
 import { ref, watch } from 'vue'
 import MessageComposer from './MessageComposer.vue'
 import SegmentScheduleRow from './SegmentScheduleRow.vue'
-import { saveCampaign, setCampaignStatus } from './mockCampaigns'
+import { saveCampaign, setCampaignStatus } from './campaignsApi'
 import type { Campaign, CampaignFormState, CampaignSegment, SelectOption } from './types'
 
 const props = defineProps<{

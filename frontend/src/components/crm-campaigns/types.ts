@@ -1,7 +1,6 @@
 // Types for the CRM Campaign (Chiến dịch CRM) feature.
-// Frontend-first: these mirror the planned backend payloads documented in
-// docs/api/crm-campaigns.md. When the backend lands, mockCampaigns.ts is the
-// only file that should need swapping for real `api` calls.
+// These mirror the backend payloads served from /tenants/:tenantId/crm/campaigns…
+// (see backend/api/handlers/crm_campaigns.go). The real API lives in campaignsApi.ts.
 
 // Zalo text payload limit (mirror of backend/channels/zalo_oa.go zaloMaxTextRunes).
 // Used for the live character counter + "sẽ bị chia nhiều tin" warning.

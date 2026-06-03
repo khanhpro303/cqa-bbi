@@ -1056,7 +1056,17 @@ const isOwnerOrAdmin = computed(() => {
 // reserved for the app owner, since it force-resets live bot conversations.
 const isOwner = computed(() => authStore.tenantPerms?.role === 'owner')
 
-const currentTab = ref('groups')
+const VALID_TABS = ['groups', 'customers', 'cloudify_customers', 'approvals', 'campaigns']
+const currentTab = ref(
+  VALID_TABS.includes(route.query.tab as string) ? (route.query.tab as string) : 'groups',
+)
+// Deep-link support: the global warning bell navigates here with ?tab=campaigns.
+watch(
+  () => route.query.tab,
+  (tab) => {
+    if (typeof tab === 'string' && VALID_TABS.includes(tab)) currentTab.value = tab
+  },
+)
 const memberTab = ref('employees')
 
 // CRM Campaigns (Chiến dịch CRM) — list ref drives the create dialog from header.

@@ -3,6 +3,8 @@
   <v-app-bar v-if="!mdAndUp" density="compact" color="primary" flat>
     <v-app-bar-nav-icon @click="drawer = !drawer" />
     <v-app-bar-title class="text-body-1 font-weight-bold">BBI CRM Agent</v-app-bar-title>
+    <v-spacer />
+    <CampaignWarningBell />
   </v-app-bar>
 
   <v-navigation-drawer
@@ -96,6 +98,9 @@
           size="small"
           @click="toggleTheme"
         />
+
+        <!-- Campaign warning bell (inactive Zalo OA channel) -->
+        <CampaignWarningBell />
 
         <!-- Language -->
         <LanguageSwitcher v-if="!isRail" />
@@ -400,14 +405,17 @@ import { clearTenantCache, permissionDeniedMsg, clearPermissionDeniedMsg } from 
 import { useTheme, useDisplay } from 'vuetify'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '../stores/auth'
+import { useCampaignWarningsStore } from '../stores/campaignWarnings'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
+import CampaignWarningBell from '../components/CampaignWarningBell.vue'
 import api from '../api'
 import logoUrl from '../assets/bbi-logo.ico'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const campaignWarningsStore = useCampaignWarningsStore()
 const theme = useTheme()
 const { mdAndUp } = useDisplay()
 const { t } = useI18n()
@@ -701,6 +709,7 @@ function stopPolling() {
 watch(tenantId, (newId) => {
   if (newId) {
     startPolling()
+    campaignWarningsStore.fetchWarnings(newId)
   } else {
     stopPolling()
     pendingCustomers.value = []

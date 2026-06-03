@@ -1,5 +1,16 @@
 <template>
   <div>
+    <v-alert
+      v-if="affectedByInactiveChannel.length > 0"
+      type="warning"
+      variant="tonal"
+      density="comfortable"
+      class="mb-3"
+      icon="mdi-bell-alert"
+    >
+      {{ $t('campaign_channel_inactive_warning', { count: affectedByInactiveChannel.length }) }}
+    </v-alert>
+
     <v-card :loading="loading">
       <v-table density="comfortable">
         <thead>
@@ -118,6 +129,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import CampaignFormDialog from './CampaignFormDialog.vue'
 import CampaignDashboardModal from './CampaignDashboardModal.vue'
 import {
@@ -125,15 +138,45 @@ import {
   sendNow,
   setCampaignStatus,
   deleteCampaign,
-  MOCK_GMF_GROUPS,
-  MOCK_OA_CHANNELS,
-} from './mockCampaigns'
-import type { Campaign, CampaignStatus } from './types'
+} from './campaignsApi'
+import api from '../../api'
+import { useChannelStore } from '../../stores/channels'
+import { useCampaignWarningsStore } from '../../stores/campaignWarnings'
+import type { Campaign, CampaignStatus, SelectOption } from './types'
 
 const emit = defineEmits<{ notify: [text: string, color: string] }>()
 
-const groups = MOCK_GMF_GROUPS
-const channels = MOCK_OA_CHANNELS
+const route = useRoute()
+const { t } = useI18n()
+const tenantId = computed(() => route.params.tenantId as string)
+const channelStore = useChannelStore()
+const warningsStore = useCampaignWarningsStore()
+
+// Real reference data — GMF groups and Zalo OA channels (all of them, including
+// deactivated ones, so the user can still see/pick them and get warned).
+const groups = ref<SelectOption[]>([])
+const channels = ref<SelectOption[]>([])
+const inactiveChannelIds = ref<Set<string>>(new Set())
+
+async function loadReferenceData() {
+  try {
+    const { data } = await api.get<{ id: string; name: string }[]>(`/tenants/${tenantId.value}/crm/groups`)
+    groups.value = (data ?? []).map((g) => ({ id: g.id, name: g.name }))
+  } catch {
+    groups.value = []
+  }
+  try {
+    await channelStore.fetchChannels(tenantId.value)
+    const oa = channelStore.channels.filter((ch) => ch.channel_type === 'zalo_oa')
+    inactiveChannelIds.value = new Set(oa.filter((ch) => !ch.is_active).map((ch) => ch.id))
+    channels.value = oa.map((ch) => ({
+      id: ch.id,
+      name: ch.is_active ? ch.name : `${ch.name} ${t('campaign_channel_inactive_suffix')}`,
+    }))
+  } catch {
+    channels.value = []
+  }
+}
 
 const campaigns = ref<Campaign[]>([])
 const loading = ref(false)
@@ -177,8 +220,14 @@ function openEdit(c: Campaign) {
   formOpen.value = true
 }
 
+// Campaigns currently targeting a deactivated Zalo OA channel — shown inline.
+const affectedByInactiveChannel = computed(() =>
+  campaigns.value.filter((c) => inactiveChannelIds.value.has(c.channelId)),
+)
+
 async function onSaved() {
   await load()
+  await warningsStore.refresh()
   emit('notify', 'Đã lưu chiến dịch', 'success')
 }
 
@@ -188,8 +237,13 @@ async function onSendNow(c: Campaign) {
     const { sent } = await sendNow(c.id)
     await load()
     emit('notify', `Đã gửi ${sent.toLocaleString()} tin`, 'success')
-  } catch {
-    emit('notify', 'Gửi thất bại', 'error')
+  } catch (e: any) {
+    const code = e?.response?.data?.error
+    if (code === 'channel_inactive' || code === 'channel_not_found') {
+      emit('notify', t('campaign_send_channel_inactive'), 'error')
+    } else {
+      emit('notify', 'Gửi thất bại', 'error')
+    }
   } finally {
     busyId.value = null
   }
@@ -205,6 +259,7 @@ async function onDelete() {
   await deleteCampaign(confirmId.value)
   confirmId.value = null
   await load()
+  await warningsStore.refresh()
   emit('notify', 'Đã xóa chiến dịch', 'success')
 }
 
@@ -236,7 +291,10 @@ function formatDateTime(iso?: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-onMounted(load)
+onMounted(async () => {
+  await loadReferenceData()
+  await load()
+})
 defineExpose({ openCreate, reload: load })
 </script>
 

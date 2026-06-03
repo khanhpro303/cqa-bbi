@@ -242,6 +242,15 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.GET("/crm/cloudify-customers", handlers.ListCloudifyCustomers(cfg))
 			tenant.POST("/crm/cloudify-customers/assign-phone", middleware.RequireRole("owner", "admin"), handlers.AssignCloudifyCustomerPhone(cfg))
 
+			// CRM Campaigns (Chiến dịch CRM)
+			tenant.GET("/crm/campaigns/stats", handlers.GetCampaignStats)
+			tenant.GET("/crm/campaigns", handlers.ListCampaigns)
+			tenant.POST("/crm/campaigns", middleware.RequireRole("owner", "admin"), handlers.CreateCampaign)
+			tenant.PUT("/crm/campaigns/:id", middleware.RequireRole("owner", "admin"), handlers.UpdateCampaign)
+			tenant.DELETE("/crm/campaigns/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteCampaign)
+			tenant.POST("/crm/campaigns/:id/status", middleware.RequireRole("owner", "admin"), handlers.SetCampaignStatus)
+			tenant.POST("/crm/campaigns/:id/send-now", middleware.RequireRole("owner", "admin"), handlers.SendNow)
+
 			tenant.GET("/crm/customer-profiles", handlers.ListCustomerCodes(cfg))
 			tenant.GET("/crm/gmf-packages", handlers.ListGMFPackages)
 			tenant.GET("/crm/list-ten-nhom-vthh", handlers.GetListTenNhomVthh)

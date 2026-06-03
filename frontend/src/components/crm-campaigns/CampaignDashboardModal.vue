@@ -33,7 +33,7 @@
 import { ref, watch } from 'vue'
 import CampaignDashboardPanel from './CampaignDashboardPanel.vue'
 import { useCampaignDateRange } from './useCampaignDateRange'
-import { getStats } from './mockCampaigns'
+import { getStats } from './campaignsApi'
 import type { CampaignStats } from './types'
 
 const props = defineProps<{

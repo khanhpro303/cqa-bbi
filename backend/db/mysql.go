@@ -77,6 +77,9 @@ func AutoMigrate() error {
 		&models.CRMGroupCustomer{},
 		&models.ERPAuditLog{},
 		&models.ERPGroupRateLimit{},
+		&models.Campaign{},
+		&models.CampaignSegment{},
+		&models.CampaignRun{},
 	)
 	if err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
