@@ -26,6 +26,19 @@
       </div>
     </div>
 
+    <!-- Segmented progress: active slide = deep orange, others = pale orange -->
+    <div class="d-flex ga-1 mb-3 flex-shrink-0">
+      <button
+        v-for="(s, i) in slides"
+        :key="s.key"
+        type="button"
+        class="cost-seg"
+        :class="{ 'cost-seg--active': i === slide }"
+        :aria-label="s.title"
+        @click="slide = i"
+      />
+    </div>
+
     <!-- Auto-rotating carousel of chart topics; pauses on hover -->
     <div
       class="flex-grow-1"
@@ -40,7 +53,6 @@
         height="270"
         hide-delimiter-background
         show-arrows="hover"
-        progress="warning"
       >
         <v-carousel-item v-for="(s, i) in slides" :key="s.key" :value="i">
           <div class="px-2 pt-2" style="height: 240px">
@@ -254,3 +266,29 @@ async function loadAll() {
 watch([source, segment], loadAll)
 onMounted(loadAll)
 </script>
+
+<style scoped>
+/* Deep orange = active, pale orange = inactive, in step with the slide */
+.cost-seg {
+  flex: 1;
+  height: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: rgba(255, 167, 38, 0.22);
+  cursor: pointer;
+  transition: background 0.35s ease;
+}
+.cost-seg--active {
+  background: #ef6c00;
+}
+
+/* Bottom delimiter dots inherit the same orange language */
+:deep(.v-carousel__controls__item) {
+  color: rgba(255, 167, 38, 0.35);
+  opacity: 1;
+}
+:deep(.v-carousel__controls__item.v-btn--active) {
+  color: #ef6c00;
+}
+</style>

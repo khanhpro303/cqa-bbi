@@ -34,7 +34,7 @@
 
           <div class="d-flex align-center justify-space-between mb-2">
             <span class="text-caption text-grey">{{ $t('status') }}</span>
-            <div class="d-flex align-center ga-1" @click.stop>
+            <div class="d-flex align-center ga-3" @click.stop>
               <v-switch
                 :model-value="ch.is_active"
                 hide-details
@@ -52,7 +52,7 @@
           <!-- Per-channel auto-reply (webhook channels only) — separate from "hoạt động" -->
           <div v-if="WEBHOOK_CHANNEL_TYPES.includes(ch.channel_type)" class="d-flex align-center justify-space-between mb-2">
             <span class="text-caption text-grey">{{ $t('chatbot_channel_autoreply_short') }}</span>
-            <div class="d-flex align-center ga-1" @click.stop>
+            <div class="d-flex align-center ga-3" @click.stop>
               <span v-if="!chatbotActive" class="text-caption text-grey">{{ $t('chatbot_master_off_hint') }}</span>
               <v-switch
                 :model-value="ch.auto_reply_enabled"
