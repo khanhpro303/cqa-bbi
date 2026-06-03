@@ -304,6 +304,13 @@ class ERPGatewayCaller(Component):
         items = data.get("data", [])
         source = data.get("source", "unknown")
         count = data.get("count", 0)
+        # parent_codes is a TOP-LEVEL field on the exact-web products response
+        # (source=astradb_cache_exact_web) — the line's ma_cha lives here, NOT
+        # inside data[] the way the web-groups disambiguation payload carries it.
+        # Without echoing it, the STOCK-pick continuation ("KHÓA ĐÚNG DÒNG ĐÃ
+        # CHỌN") has no parent_code to copy into product_variants, so the variant
+        # lookup dead-ends at count=0 and the bot wrongly says it can't lock the SKU.
+        parent_codes = data.get("parent_codes") or []
 
         if count == 0:
             return Message(text=f"Không tìm thấy thông tin '{res}' cho từ khóa '{search_query}'.")
@@ -311,4 +318,13 @@ class ERPGatewayCaller(Component):
         lines = [f"Tìm thấy {count} kết quả {res} (Nguồn: {source}):"]
         for item in items[:10]:
             lines.append(json.dumps(item, ensure_ascii=False))
+        if parent_codes:
+            codes_str = ", ".join(f'"{str(pc)}"' for pc in parent_codes)
+            lines.append(f"parent_codes: [{codes_str}]")
+            lines.append(
+                "Agent: để tra biến thể (màu/size) hoặc tồn theo SKU của dòng này, "
+                "COPY parent_codes[0] ở trên VERBATIM sang resource='product_variants' "
+                "(parent_code=<parent_codes[0]>, color/size theo khách). TUYỆT ĐỐI "
+                "không bịa parent_code từ tên web."
+            )
         return Message(text="\n".join(lines))
