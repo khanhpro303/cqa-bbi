@@ -818,7 +818,7 @@
     </v-dialog>
 
     <!-- Dialog 7: Phân quyền Endpoint & Sơ đồ tương tác dữ liệu live -->
-    <v-dialog v-model="permsDialog" max-width="960">
+    <v-dialog v-model="permsDialog" max-width="1100">
       <v-card>
         <v-card-title class="px-6 pt-6 pb-2 font-weight-bold d-flex align-center">
           <v-icon start color="indigo">mdi-shield-lock-outline</v-icon>
@@ -827,8 +827,8 @@
 
         <v-card-text class="px-6 py-2">
           <v-row class="align-stretch">
-            <!-- Left: Table of endpoints -->
-            <v-col cols="12" md="6" class="d-flex flex-column">
+            <!-- Top: Table of endpoints -->
+            <v-col cols="12" class="d-flex flex-column">
               <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('erp_endpoints_title') }}</div>
               <v-card variant="outlined" class="rounded-lg scopes-card pa-1 flex-grow-1 d-flex flex-column justify-space-between">
                 <div>
@@ -956,8 +956,8 @@
               </v-card>
             </v-col>
 
-            <!-- Right: Sơ đồ tương tác dữ liệu Live -->
-            <v-col cols="12" md="6" class="d-flex flex-column">
+            <!-- Bottom: Sơ đồ tương tác dữ liệu Live -->
+            <v-col cols="12" class="d-flex flex-column">
               <div class="text-subtitle-2 mb-2 font-weight-bold">{{ $t('crm_live_flow_title') }}</div>
               <div class="erp-visual-graph pa-6 rounded-lg d-flex flex-column justify-center align-center border flex-grow-1" style="min-height: 250px;">
                 <div class="d-flex flex-row justify-space-between align-center w-100 my-auto">
