@@ -18,6 +18,18 @@ export async function listCampaigns(): Promise<Campaign[]> {
   return data ?? []
 }
 
+// uploadCampaignImages sends the picked image files (multipart field "images")
+// and returns their stored tenant-relative paths, in input order.
+export async function uploadCampaignImages(files: File[]): Promise<string[]> {
+  if (files.length === 0) return []
+  const formData = new FormData()
+  for (const file of files) formData.append('images', file)
+  const { data } = await api.post<{ images: string[] }>(`${base()}/upload`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data.images ?? []
+}
+
 export async function saveCampaign(form: CampaignFormState): Promise<Campaign> {
   if (form.id) {
     const { data } = await api.put<Campaign>(`${base()}/${form.id}`, form)

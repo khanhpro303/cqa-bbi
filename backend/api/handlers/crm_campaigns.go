@@ -2,7 +2,12 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,12 +21,29 @@ import (
 	"gorm.io/gorm"
 )
 
+// Campaign image upload limits (mirrored in the frontend MessageComposer).
+const (
+	maxCampaignImages   = 5
+	maxCampaignImageMB  = 2
+	campaignFilesBase   = "/var/lib/cqa/files"
+	campaignImageSubdir = "campaigns"
+)
+
+// allowedCampaignImageExt maps accepted file extensions used for both naming and
+// validation. jpg/jpeg/png/webp only.
+var allowedCampaignImageExt = map[string]bool{
+	".jpg":  true,
+	".jpeg": true,
+	".png":  true,
+	".webp": true,
+}
+
 // ---- Response/request DTOs (camelCase to match frontend crm-campaigns/types.ts) ----
 
 type campaignMessageDTO struct {
-	Text      string `json:"text"`
-	Link      string `json:"link,omitempty"`
-	ImageName string `json:"imageName,omitempty"`
+	Text   string   `json:"text"`
+	Link   string   `json:"link,omitempty"`
+	Images []string `json:"images,omitempty"`
 }
 
 type campaignSegmentDTO struct {
@@ -60,9 +82,9 @@ type campaignFormBody struct {
 	Description string `json:"description"`
 	ChannelID   string `json:"channelId" binding:"required"`
 	Message     struct {
-		Text      string `json:"text"`
-		Link      string `json:"link"`
-		ImageName string `json:"imageName"`
+		Text   string   `json:"text"`
+		Link   string   `json:"link"`
+		Images []string `json:"images"`
 	} `json:"message"`
 	Segments []campaignFormSegment `json:"segments"`
 }
@@ -99,20 +121,25 @@ func CreateCampaign(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
 		return
 	}
+	images := sanitizeCampaignImages(body.Message.Images)
+	if len(images) > maxCampaignImages {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too_many_images"})
+		return
+	}
 
 	now := time.Now()
 	campaign := models.Campaign{
-		ID:               uuid.New().String(),
-		TenantID:         tenantID,
-		Name:             body.Name,
-		Description:      body.Description,
-		ChannelID:        body.ChannelID,
-		Status:           "draft",
-		MessageText:      body.Message.Text,
-		MessageLink:      body.Message.Link,
-		MessageImageName: body.Message.ImageName,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:            uuid.New().String(),
+		TenantID:      tenantID,
+		Name:          body.Name,
+		Description:   body.Description,
+		ChannelID:     body.ChannelID,
+		Status:        "draft",
+		MessageText:   body.Message.Text,
+		MessageLink:   body.Message.Link,
+		MessageImages: images,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	campaign.Segments = buildSegments(campaign.ID, body.Segments, tenantID)
 
@@ -136,6 +163,11 @@ func UpdateCampaign(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
 		return
 	}
+	images := sanitizeCampaignImages(body.Message.Images)
+	if len(images) > maxCampaignImages {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too_many_images"})
+		return
+	}
 
 	var campaign models.Campaign
 	if err := db.DB.Where("id = ? AND tenant_id = ?", id, tenantID).First(&campaign).Error; err != nil {
@@ -148,7 +180,8 @@ func UpdateCampaign(c *gin.Context) {
 	campaign.ChannelID = body.ChannelID
 	campaign.MessageText = body.Message.Text
 	campaign.MessageLink = body.Message.Link
-	campaign.MessageImageName = body.Message.ImageName
+	campaign.MessageImages = images
+	campaign.MessageImageName = "" // migrated to MessageImages
 	campaign.UpdatedAt = time.Now()
 
 	err := db.DB.Transaction(func(tx *gorm.DB) error {
@@ -263,6 +296,99 @@ func SendNow(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"sent": sent, "fail": fail})
+}
+
+// UploadCampaignImages accepts up to maxCampaignImages image files (multipart
+// field "images"), validates and stores each under
+// /var/lib/cqa/files/<tenant>/campaigns/<uuid>.<ext>, and returns the relative
+// paths so the frontend can attach them to the campaign payload and render them
+// via the existing GET /api/v1/files/<path> route.
+func UploadCampaignImages(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+
+	form, err := c.MultipartForm()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_multipart_form"})
+		return
+	}
+	files := form.File["images"]
+	if len(files) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no_images"})
+		return
+	}
+	if len(files) > maxCampaignImages {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too_many_images"})
+		return
+	}
+
+	destDir := filepath.Join(campaignFilesBase, tenantID, campaignImageSubdir)
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_prepare_storage"})
+		return
+	}
+
+	saved := make([]string, 0, len(files))
+	for _, fh := range files {
+		ext := strings.ToLower(filepath.Ext(fh.Filename))
+		if !allowedCampaignImageExt[ext] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_image_type", "filename": fh.Filename})
+			return
+		}
+		if fh.Size > maxCampaignImageMB*1024*1024 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "image_too_large", "filename": fh.Filename})
+			return
+		}
+		relPath, err := saveCampaignImage(fh, destDir, tenantID, ext)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_save_image", "filename": fh.Filename})
+			return
+		}
+		saved = append(saved, relPath)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"images": saved})
+}
+
+// saveCampaignImage writes one uploaded file to destDir under a uuid name and
+// returns its tenant-relative path (e.g. "<tenant>/campaigns/<uuid>.jpg").
+func saveCampaignImage(fh *multipart.FileHeader, destDir, tenantID, ext string) (string, error) {
+	src, err := fh.Open()
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+
+	name := uuid.New().String() + ext
+	fullPath := filepath.Join(destDir, name)
+	dst, err := os.Create(fullPath)
+	if err != nil {
+		return "", err
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s/%s/%s", tenantID, campaignImageSubdir, name), nil
+}
+
+// sanitizeCampaignImages trims, drops blanks, and de-duplicates the image path
+// list coming from the form body.
+func sanitizeCampaignImages(in []string) models.JSONStringSlice {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make(models.JSONStringSlice, 0, len(in))
+	for _, p := range in {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 const maxChartDays = 31
@@ -390,9 +516,9 @@ func toCampaignDTO(c *models.Campaign, groupNames map[string]string, sentThisMon
 		ChannelID:   c.ChannelID,
 		Status:      c.Status,
 		Message: campaignMessageDTO{
-			Text:      c.MessageText,
-			Link:      c.MessageLink,
-			ImageName: c.MessageImageName,
+			Text:   c.MessageText,
+			Link:   c.MessageLink,
+			Images: c.Images(),
 		},
 		Segments:      segs,
 		SentThisMonth: sentThisMonth,

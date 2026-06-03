@@ -24,8 +24,9 @@ export interface CampaignSegment {
 export interface CampaignMessage {
   text: string
   link?: string
-  // Mock chỉ giữ tên file. Gửi ảnh thật cần endpoint attachment Zalo (phase sau).
-  imageName?: string
+  // Tenant-relative paths of uploaded images (served via /api/v1/files/<path>).
+  // Populated after upload; broadcast attaches them in order via Zalo.
+  images?: string[]
 }
 
 export interface Campaign {

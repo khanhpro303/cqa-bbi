@@ -48,7 +48,7 @@
             <v-icon size="18" class="mr-1">mdi-message-text-outline</v-icon>
             {{ $t('campaign_section_message') }}
           </div>
-          <MessageComposer v-model="form.message" />
+          <MessageComposer ref="composerRef" v-model="form.message" />
 
           <!-- Section 3: Schedule & segments -->
           <div class="section-label mt-5">
@@ -128,6 +128,7 @@ watch(() => props.modelValue, (v) => { open.value = v; if (v) resetForm() })
 watch(open, (v) => emit('update:modelValue', v))
 
 const formRef = ref<any>(null)
+const composerRef = ref<{ commit: () => Promise<void> } | null>(null)
 const saving = ref<false | 'draft' | 'active'>(false)
 
 function emptyForm(): CampaignFormState {
@@ -135,7 +136,7 @@ function emptyForm(): CampaignFormState {
     name: '',
     description: '',
     channelId: props.channels[0]?.id ?? '',
-    message: { text: '', link: undefined, imageName: undefined },
+    message: { text: '', link: undefined, images: [] },
     segments: [],
   }
 }
@@ -189,6 +190,13 @@ async function submit(target: 'draft' | 'active') {
   }
   saving.value = target
   try {
+    // Upload any pending images first, then persist the campaign with their paths.
+    try {
+      await composerRef.value?.commit()
+    } catch {
+      emit('error', 'campaign_image_upload_error')
+      return
+    }
     let saved = await saveCampaign(form.value)
     if (target === 'active') {
       saved = (await setCampaignStatus(saved.id, 'active')) ?? saved

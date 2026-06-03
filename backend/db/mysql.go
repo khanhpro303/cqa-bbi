@@ -113,6 +113,32 @@ func cleanupDeprecatedSchema() {
 			log.Println("[db] successfully dropped deprecated column agent_type from erp_endpoints")
 		}
 	}
+
+	backfillCampaignImages()
+}
+
+// backfillCampaignImages copies the legacy single-image column into the new
+// message_images JSON array for rows that haven't been migrated yet. Idempotent:
+// it only touches rows where message_image_name is set and message_images is
+// empty/NULL, so running it on every boot is harmless.
+func backfillCampaignImages() {
+	if !DB.Migrator().HasColumn(&models.Campaign{}, "message_images") ||
+		!DB.Migrator().HasColumn(&models.Campaign{}, "message_image_name") {
+		return
+	}
+	res := DB.Exec(`
+		UPDATE campaigns
+		SET message_images = JSON_ARRAY(message_image_name)
+		WHERE message_image_name IS NOT NULL AND message_image_name <> ''
+		  AND (message_images IS NULL
+		       OR JSON_LENGTH(message_images) = 0
+		       OR message_images = '')
+	`)
+	if res.Error != nil {
+		log.Printf("[db] failed to backfill campaign message_images: %v", res.Error)
+	} else if res.RowsAffected > 0 {
+		log.Printf("[db] backfilled message_images for %d campaign(s)", res.RowsAffected)
+	}
 }
 
 

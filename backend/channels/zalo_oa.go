@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -923,6 +924,116 @@ func (z *ZaloOAAdapter) sendGroupPayload(ctx context.Context, payload map[string
 		return fmt.Errorf("zalo send group message api error %v: %s", errCode, msg)
 	}
 	return nil
+}
+
+// UploadGroupImage uploads an image to Zalo OA and returns its attachment_id.
+// Zalo does not accept arbitrary external image URLs for sending — an image must
+// be uploaded first, then referenced by attachment_id in the group message.
+func (z *ZaloOAAdapter) UploadGroupImage(ctx context.Context, fileBytes []byte, fileName string) (string, error) {
+	result, err := z.doRequestMultipart(ctx, zaloAPIBaseV2+"/upload/image", "file", fileName, fileBytes)
+	if err != nil {
+		return "", fmt.Errorf("zalo upload image failed: %w", err)
+	}
+	data, ok := result["data"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("zalo upload image: missing data in response")
+	}
+	attachmentID, _ := data["attachment_id"].(string)
+	if attachmentID == "" {
+		return "", fmt.Errorf("zalo upload image: empty attachment_id")
+	}
+	return attachmentID, nil
+}
+
+// SendGroupImage sends a previously-uploaded image (by attachment_id) to a GMF
+// group. Group chats support text/image/file but NOT button/list templates
+// (error -233), so the image is attached as message.attachment type "image"
+// rather than a template-media payload.
+//
+// NOTE: the exact GMF image payload could not be confirmed from the JS-rendered
+// Zalo docs — verify against a live OA token in staging. If Zalo rejects this
+// shape, fall back to a template-media attachment (template_type "media",
+// elements[].media_type "image").
+func (z *ZaloOAAdapter) SendGroupImage(ctx context.Context, groupID, attachmentID string) error {
+	payload := map[string]interface{}{
+		"recipient": map[string]interface{}{"group_id": groupID},
+		"message": map[string]interface{}{
+			"attachment": map[string]interface{}{
+				"type":    "image",
+				"payload": map[string]interface{}{"attachment_id": attachmentID},
+			},
+		},
+	}
+	return z.sendGroupPayload(ctx, payload)
+}
+
+// doRequestMultipart POSTs a single file as multipart/form-data with the standard
+// access_token header, mirroring doRequestQueryParams' -216 token-refresh retry.
+func (z *ZaloOAAdapter) doRequestMultipart(ctx context.Context, apiURL, fieldName, fileName string, fileBytes []byte) (map[string]interface{}, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		var buf bytes.Buffer
+		w := multipart.NewWriter(&buf)
+		part, err := w.CreateFormFile(fieldName, fileName)
+		if err != nil {
+			return nil, fmt.Errorf("create multipart file: %w", err)
+		}
+		if _, err := part.Write(fileBytes); err != nil {
+			return nil, fmt.Errorf("write multipart file: %w", err)
+		}
+		if err := w.Close(); err != nil {
+			return nil, fmt.Errorf("close multipart writer: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &buf)
+		if err != nil {
+			return nil, fmt.Errorf("create zalo api request: %w", err)
+		}
+		req.Header.Set("Content-Type", w.FormDataContentType())
+
+		z.mu.Lock()
+		token := z.creds.AccessToken
+		z.mu.Unlock()
+		req.Header["access_token"] = []string{token}
+
+		resp, err := z.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("zalo api request failed: %w", err)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("zalo api read body failed: %w", err)
+		}
+
+		log.Printf("[zalo] POST(multipart) %s: status=%d len=%d", apiURL, resp.StatusCode, len(body))
+
+		var result map[string]interface{}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("zalo api decode failed: %w", err)
+		}
+
+		// Token expired (error=-216): refresh once and retry.
+		if errCode, ok := result["error"].(float64); ok && errCode == -216 && attempt == 0 {
+			z.mu.Lock()
+			currentToken := z.creds.AccessToken
+			z.mu.Unlock()
+			if currentToken == token {
+				if refreshErr := z.refreshToken(ctx); refreshErr != nil {
+					return nil, fmt.Errorf("token refresh failed: %w", refreshErr)
+				}
+			}
+			continue
+		}
+
+		if errCode, ok := result["error"].(float64); ok && errCode != 0 {
+			msg, _ := result["message"].(string)
+			return nil, fmt.Errorf("zalo api error %v: %s", errCode, msg)
+		}
+
+		return result, nil
+	}
+	return nil, fmt.Errorf("zalo api failed after retry")
 }
 
 type GMFGroupMember struct {

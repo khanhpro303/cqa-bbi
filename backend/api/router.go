@@ -245,6 +245,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			// CRM Campaigns (Chiến dịch CRM)
 			tenant.GET("/crm/campaigns/stats", handlers.GetCampaignStats)
 			tenant.GET("/crm/campaigns", handlers.ListCampaigns)
+			tenant.POST("/crm/campaigns/upload", middleware.RequireRole("owner", "admin"), handlers.UploadCampaignImages)
 			tenant.POST("/crm/campaigns", middleware.RequireRole("owner", "admin"), handlers.CreateCampaign)
 			tenant.PUT("/crm/campaigns/:id", middleware.RequireRole("owner", "admin"), handlers.UpdateCampaign)
 			tenant.DELETE("/crm/campaigns/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteCampaign)

@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -34,14 +38,17 @@ type campaignBroadcast struct {
 	channel  *models.Channel
 	adapter  *channels.ZaloOAAdapter
 	content  string
-	tenantID string
+	// attachmentIDs are Zalo attachment_ids for the campaign's images, uploaded
+	// once per broadcast (not per group) so each group send just references them.
+	attachmentIDs []string
+	tenantID      string
 }
 
 // prepareCampaignBroadcast loads the campaign + segments, runs the channel guard
 // (must exist + be an active zalo_oa channel), decrypts credentials, builds the
 // Zalo adapter (with the same token-refresh persistence callback the handler
 // used), and builds the broadcast content.
-func prepareCampaignBroadcast(_ context.Context, campaignID, tenantID string) (*campaignBroadcast, error) {
+func prepareCampaignBroadcast(ctx context.Context, campaignID, tenantID string) (*campaignBroadcast, error) {
 	var campaign models.Campaign
 	if err := db.DB.Preload("Segments").Where("id = ? AND tenant_id = ?", campaignID, tenantID).First(&campaign).Error; err != nil {
 		return nil, ErrCampaignNotFound
@@ -81,12 +88,46 @@ func prepareCampaignBroadcast(_ context.Context, campaignID, tenantID string) (*
 	})
 
 	return &campaignBroadcast{
-		campaign: &campaign,
-		channel:  &channel,
-		adapter:  adapter,
-		content:  buildBroadcastContent(&campaign),
-		tenantID: tenantID,
+		campaign:      &campaign,
+		channel:       &channel,
+		adapter:       adapter,
+		content:       buildBroadcastContent(&campaign),
+		attachmentIDs: uploadCampaignImages(ctx, adapter, campaign.Images()),
+		tenantID:      tenantID,
 	}, nil
+}
+
+// campaignFilesBase is the on-disk root where campaign images are stored
+// (mirrors handlers.campaignFilesBase / the /api/v1/files file server).
+const campaignFilesBase = "/var/lib/cqa/files"
+
+// uploadCampaignImages reads each stored campaign image and uploads it to Zalo,
+// returning the resulting attachment_ids. A single image that can't be read or
+// uploaded is logged and skipped so it never blocks the whole broadcast.
+func uploadCampaignImages(ctx context.Context, adapter *channels.ZaloOAAdapter, paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(paths))
+	for _, rel := range paths {
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			continue
+		}
+		fullPath := filepath.Join(campaignFilesBase, filepath.Clean("/"+rel))
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			log.Printf("[campaign] skip image %q: read failed: %v", rel, err)
+			continue
+		}
+		id, err := adapter.UploadGroupImage(ctx, data, filepath.Base(rel))
+		if err != nil {
+			log.Printf("[campaign] skip image %q: zalo upload failed: %v", rel, err)
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // fireSegment sends the campaign content to one segment's GMF group and writes a
@@ -111,7 +152,7 @@ func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.Campaign
 		run.Status, run.FailCount, run.ErrorMessage = "error", 1, "group_has_no_zalo_group"
 		fail = 1
 	default:
-		if sErr := b.adapter.SendGroupMessage(ctx, group.ZaloGroupID, b.content); sErr != nil {
+		if sErr := b.sendToGroup(ctx, group.ZaloGroupID); sErr != nil {
 			run.Status, run.FailCount, run.ErrorMessage = "error", 1, sErr.Error()
 			fail = 1
 		} else {
@@ -123,6 +164,23 @@ func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.Campaign
 	run.FinishedAt = &finished
 	db.DB.Create(&run)
 	return sent, fail
+}
+
+// sendToGroup sends the campaign's text (if any) then each uploaded image in
+// order to one GMF group. It returns the first error encountered so the caller
+// records the run as failed; a fully successful send returns nil.
+func (b *campaignBroadcast) sendToGroup(ctx context.Context, zaloGroupID string) error {
+	if strings.TrimSpace(b.content) != "" {
+		if err := b.adapter.SendGroupMessage(ctx, zaloGroupID, b.content); err != nil {
+			return err
+		}
+	}
+	for i, attachmentID := range b.attachmentIDs {
+		if err := b.adapter.SendGroupImage(ctx, zaloGroupID, attachmentID); err != nil {
+			return fmt.Errorf("image %d/%d failed: %w", i+1, len(b.attachmentIDs), err)
+		}
+	}
+	return nil
 }
 
 // SendCampaignNow fires every segment of a campaign immediately. Used by the
