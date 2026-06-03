@@ -251,3 +251,45 @@ func TestSaveERPSettingsBlocksEmptyProductGroups(t *testing.T) {
 		t.Fatalf("expected product_groups_required for products, got %+v", resp)
 	}
 }
+
+// SaveERPSettings validation rejects an enabled private-bot product/inventory
+// endpoint that carries a VTHH group filter but makes no explicit brand choice
+// (neither all_brands nor a non-empty brand list), before any persistence.
+func TestSaveERPSettingsBlocksMissingBrandChoice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"public_active":  "false",
+		"private_active": "true",
+		"private_endpoints": []map[string]interface{}{
+			{
+				"resource":       "inventory",
+				"is_enabled":     true,
+				"scope_type":     "all",
+				"product_groups": "NHOM-A",
+				"all_brands":     false,
+				"brands":         "",
+			},
+		},
+	})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = []gin.Param{{Key: "tenantId", Value: "ten-test"}}
+	c.Request, _ = http.NewRequest("PUT", "/settings/erp", bytes.NewBuffer(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SaveERPSettings(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Error    string `json:"error"`
+		Resource string `json:"resource"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Error != "brands_required" || resp.Resource != "inventory" {
+		t.Fatalf("expected brands_required for inventory, got %+v", resp)
+	}
+}

@@ -56,6 +56,8 @@ func SaveERPSettings(c *gin.Context) {
 			IsEnabled     bool   `json:"is_enabled"`
 			ScopeType     string `json:"scope_type"`
 			ProductGroups string `json:"product_groups"`
+			Brands        string `json:"brands"`     // comma-separated brand (nhãn hiệu) filter
+			AllBrands     bool   `json:"all_brands"` // true = no brand restriction
 		} `json:"private_endpoints"`
 	}
 
@@ -65,15 +67,25 @@ func SaveERPSettings(c *gin.Context) {
 	}
 
 	// Validate before persisting anything: an enabled product/inventory
-	// endpoint must carry a non-empty VTHH group filter.
+	// endpoint must carry a non-empty VTHH group filter, and must make an
+	// explicit brand choice (AllBrands, or a non-empty brand list). Mirrors
+	// SaveGroupERPEndpoints; runtime still treats an empty list as "all".
 	for _, ep := range req.PrivateEndpoints {
-		if ep.IsEnabled && resourceRequiresProductGroups(ep.Resource) &&
-			strings.TrimSpace(ep.ProductGroups) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":    "product_groups_required",
-				"resource": ep.Resource,
-			})
-			return
+		if ep.IsEnabled && resourceRequiresProductGroups(ep.Resource) {
+			if strings.TrimSpace(ep.ProductGroups) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error":    "product_groups_required",
+					"resource": ep.Resource,
+				})
+				return
+			}
+			if !ep.AllBrands && strings.TrimSpace(ep.Brands) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error":    "brands_required",
+					"resource": ep.Resource,
+				})
+				return
+			}
 		}
 	}
 
@@ -149,11 +161,20 @@ func SaveERPSettings(c *gin.Context) {
 			scopeType = "all"
 		}
 
+		// When AllBrands is set, clear any stale brand list so the stored row is
+		// unambiguous ("all" + empty). Runtime treats both as "no restriction".
+		brands := ep.Brands
+		if ep.AllBrands {
+			brands = ""
+		}
+
 		if result.Error == nil {
 			db.DB.Model(&existing).Updates(map[string]interface{}{
 				"is_enabled":     ep.IsEnabled,
 				"scope_type":     scopeType,
 				"product_groups": ep.ProductGroups,
+				"brands":         brands,
+				"all_brands":     ep.AllBrands,
 				"updated_at":     time.Now(),
 			})
 		} else {
@@ -165,6 +186,8 @@ func SaveERPSettings(c *gin.Context) {
 				IsEnabled:     ep.IsEnabled,
 				ScopeType:     scopeType,
 				ProductGroups: ep.ProductGroups,
+				Brands:        brands,
+				AllBrands:     ep.AllBrands,
 				CreatedAt:     time.Now(),
 				UpdatedAt:     time.Now(),
 			})

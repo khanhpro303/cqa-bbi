@@ -343,10 +343,11 @@
             <v-table density="compact">
               <thead>
                 <tr>
-                  <th style="width: 30%;">Tài nguyên</th>
-                  <th style="width: 15%;" class="text-center">Cho phép truy cập</th>
-                  <th style="width: 25%;">Phạm vi dữ liệu</th>
-                  <th style="width: 30%;">Bộ lọc nhóm sản phẩm (VTHH)</th>
+                  <th style="width: 22%;">Tài nguyên</th>
+                  <th style="width: 12%;" class="text-center">Cho phép truy cập</th>
+                  <th style="width: 18%;">Phạm vi dữ liệu</th>
+                  <th style="width: 24%;">Bộ lọc nhóm sản phẩm (VTHH)</th>
+                  <th style="width: 24%;">{{ $t('erp_endpoint_brands') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -393,6 +394,38 @@
                     </v-select>
                     <span v-else class="text-caption text-grey-darken-1">—</span>
                   </td>
+                  <td>
+                    <template v-if="ep.resource === 'products' || ep.resource === 'inventory'">
+                      <v-checkbox
+                        v-model="ep.all_brands"
+                        density="compact"
+                        hide-details
+                        :disabled="!ep.is_enabled"
+                        :label="$t('erp_endpoint_all_brands')"
+                        style="font-size: 0.75rem;"
+                        @update:model-value="(v: boolean | null) => { if (v) ep.brands_arr = [] }"
+                      />
+                      <v-select
+                        v-if="!ep.all_brands"
+                        v-model="ep.brands_arr"
+                        :items="listNhanHieu"
+                        multiple
+                        density="compact"
+                        variant="plain"
+                        hide-details
+                        :disabled="!ep.is_enabled"
+                        placeholder="Chọn nhãn hiệu..."
+                        style="font-size: 0.75rem;"
+                      >
+                        <template #selection="{ index }">
+                          <span v-if="index === 0" class="text-caption">
+                            ({{ ep.brands_arr.length }})
+                          </span>
+                        </template>
+                      </v-select>
+                    </template>
+                    <span v-else class="text-caption text-grey-darken-1">—</span>
+                  </td>
                 </tr>
               </tbody>
             </v-table>
@@ -424,7 +457,7 @@ import { useI18n } from 'vue-i18n'
 import { useTheme } from 'vuetify'
 import api from '../api'
 import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
-import { findEndpointsMissingGroups } from '../utils/erp-permission-validation'
+import { findEndpointsMissingGroups, findEndpointsMissingBrands } from '../utils/erp-permission-validation'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -498,12 +531,16 @@ const globalMethodPermissions = ref<Record<string, { get: boolean; post: boolean
 })
 
 const privateEndpoints = ref<any[]>([
-  { resource: 'products', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
-  { resource: 'inventory', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
-  { resource: 'orders', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
-  { resource: 'customers', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
-  { resource: 'debt', is_enabled: true, scope_type: 'all', product_groups_arr: [] },
+  { resource: 'products', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
+  { resource: 'inventory', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
+  { resource: 'orders', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
+  { resource: 'customers', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
+  { resource: 'debt', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
 ])
+
+// Brand (nhãn hiệu) options — distinct brands from the local product cache,
+// the same source the backend brand boundary filter matches against.
+const listNhanHieu = ref<string[]>([])
 
 const gatewayUrl = computed(() => {
   return `${window.location.origin}/api/v1/tenants/${tenantId.value}/erp/query`
@@ -569,14 +606,20 @@ async function loadSettings() {
       privateEndpoints.value = privateEndpoints.value.map(ep => {
         const dbEp = data.private_endpoints.find((d: any) => d.resource === ep.resource)
         if (dbEp) {
-          const groupsArr = dbEp.product_groups 
+          const groupsArr = dbEp.product_groups
             ? dbEp.product_groups.split(',').map((g: string) => g.trim()).filter((g: string) => g)
+            : []
+          const brandsArr = dbEp.brands
+            ? dbEp.brands.split(',').map((b: string) => b.trim()).filter((b: string) => b)
             : []
           return {
             ...ep,
             is_enabled: dbEp.is_enabled,
             scope_type: dbEp.scope_type || 'all',
-            product_groups_arr: groupsArr
+            product_groups_arr: groupsArr,
+            brands_arr: brandsArr,
+            // Default a not-yet-configured resource to "all brands" (no restriction).
+            all_brands: dbEp.all_brands ?? true
           }
         }
         return ep
@@ -641,12 +684,34 @@ async function fetchListTenNhomVthh() {
   }
 }
 
+async function fetchListNhanHieu() {
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/list-nhan-hieu`)
+    listNhanHieu.value = data || []
+  } catch (err: any) {
+    // Ignore — the brand boundary is optional; an empty option list just means
+    // the admin must run the product-catalog sync job before choosing brands.
+  }
+}
+
 async function saveERP() {
   // Block save when an enabled product/inventory endpoint has no VTHH filter.
   const missing = findEndpointsMissingGroups(privateEndpoints.value)
   if (missing.length > 0) {
     missingGroupResources.value = missing
     groupFilterModal.value = true
+    return
+  }
+
+  // Block save when an enabled product/inventory endpoint has made no explicit
+  // brand choice (neither "all brands" nor a specific list). Runtime still
+  // treats empty as "all", so this requirement is save-time only.
+  const missingBrands = findEndpointsMissingBrands(privateEndpoints.value)
+  if (missingBrands.length > 0) {
+    showSnack(
+      t('erp_brands_required', { resources: missingBrands.map(r => resourceLabels[r] || r).join(', ') }),
+      'warning'
+    )
     return
   }
 
@@ -658,6 +723,9 @@ async function saveERP() {
         is_enabled: ep.is_enabled,
         scope_type: ep.scope_type || 'all',
         product_groups: ep.product_groups_arr ? ep.product_groups_arr.join(',') : '',
+        // "all brands" stores an empty list (runtime = no filter).
+        brands: ep.all_brands ? '' : (ep.brands_arr || []).join(','),
+        all_brands: ep.all_brands ?? true,
       }
     })
 
@@ -721,6 +789,7 @@ function showSnack(text: string, color: string) {
 onMounted(async () => {
   await loadSettings()
   await fetchListTenNhomVthh()
+  await fetchListNhanHieu()
 })
 </script>
 
