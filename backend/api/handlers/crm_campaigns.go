@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -10,11 +10,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
-	"github.com/vietbui/chat-quality-agent/channels"
-	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
-	"github.com/vietbui/chat-quality-agent/pkg"
+	"github.com/vietbui/chat-quality-agent/engine"
 	"gorm.io/gorm"
 )
 
@@ -122,6 +120,7 @@ func CreateCampaign(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_create_campaign"})
 		return
 	}
+	reloadCampaignScheduler()
 
 	groupNames := loadGroupNames(tenantID)
 	c.JSON(http.StatusCreated, toCampaignDTO(&campaign, groupNames, 0))
@@ -172,6 +171,7 @@ func UpdateCampaign(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_update_campaign"})
 		return
 	}
+	reloadCampaignScheduler()
 
 	groupNames := loadGroupNames(tenantID)
 	c.JSON(http.StatusOK, toCampaignDTO(&campaign, groupNames, sentThisMonthByCampaign(tenantID)[campaign.ID]))
@@ -200,6 +200,7 @@ func DeleteCampaign(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_delete_campaign"})
 		return
 	}
+	reloadCampaignScheduler()
 
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
@@ -234,6 +235,7 @@ func SetCampaignStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_update_status"})
 		return
 	}
+	reloadCampaignScheduler()
 
 	groupNames := loadGroupNames(tenantID)
 	c.JSON(http.StatusOK, toCampaignDTO(&campaign, groupNames, sentThisMonthByCampaign(tenantID)[campaign.ID]))
@@ -245,90 +247,22 @@ func SendNow(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	id := c.Param("id")
 
-	var campaign models.Campaign
-	if err := db.DB.Preload("Segments").Where("id = ? AND tenant_id = ?", id, tenantID).First(&campaign).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "campaign_not_found"})
-		return
-	}
-
-	// Guard: the channel must exist and be active, otherwise webhook/automation is off.
-	var channel models.Channel
-	if err := db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ?", campaign.ChannelID, tenantID, "zalo_oa").First(&channel).Error; err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "channel_not_found"})
-		return
-	}
-	if !channel.IsActive {
-		c.JSON(http.StatusConflict, gin.H{"error": "channel_inactive"})
-		return
-	}
-
-	cfg, _ := config.Load()
-	credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey)
+	sent, fail, err := engine.SendCampaignNow(c.Request.Context(), id, tenantID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_decrypt_channel_credentials"})
-		return
-	}
-	var zaloCreds channels.ZaloOACredentials
-	if err := json.Unmarshal(credBytes, &zaloCreds); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_parse_channel_credentials"})
-		return
-	}
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		credsMap := map[string]interface{}{
-			"app_id":        zaloCreds.AppID,
-			"app_secret":    zaloCreds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         zaloCreds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		if encrypted, e := pkg.Encrypt(newCredJSON, cfg.EncryptionKey); e == nil {
-			db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-		}
-	})
-
-	content := buildBroadcastContent(&campaign)
-	totalSent, totalFail := 0, 0
-
-	for i := range campaign.Segments {
-		seg := campaign.Segments[i]
-		run := models.CampaignRun{
-			ID:         uuid.New().String(),
-			TenantID:   tenantID,
-			CampaignID: campaign.ID,
-			SegmentID:  seg.ID,
-			StartedAt:  time.Now(),
-			Status:     "running",
-		}
-
-		var group models.CRMGroup
-		gErr := db.DB.Where("id = ? AND tenant_id = ?", seg.GroupID, tenantID).First(&group).Error
 		switch {
-		case gErr != nil:
-			run.Status, run.FailCount, run.ErrorMessage = "error", 1, "group_not_found"
-			totalFail++
-		case group.ZaloGroupID == "":
-			run.Status, run.FailCount, run.ErrorMessage = "error", 1, "group_has_no_zalo_group"
-			totalFail++
+		case errors.Is(err, engine.ErrCampaignNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "campaign_not_found"})
+		case errors.Is(err, engine.ErrCampaignChannelNotFound):
+			c.JSON(http.StatusConflict, gin.H{"error": "channel_not_found"})
+		case errors.Is(err, engine.ErrCampaignChannelInactive):
+			c.JSON(http.StatusConflict, gin.H{"error": "channel_inactive"})
 		default:
-			if sErr := adapter.SendGroupMessage(c.Request.Context(), group.ZaloGroupID, content); sErr != nil {
-				run.Status, run.FailCount, run.ErrorMessage = "error", 1, sErr.Error()
-				totalFail++
-			} else {
-				run.Status, run.SentCount = "success", 1
-				totalSent++
-			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		}
-		finished := time.Now()
-		run.FinishedAt = &finished
-		db.DB.Create(&run)
+		return
 	}
 
-	// Mirror the mock behaviour: a sent campaign becomes active.
-	db.DB.Model(&campaign).Updates(map[string]interface{}{"status": "active", "updated_at": time.Now()})
-
-	c.JSON(http.StatusOK, gin.H{"sent": totalSent, "fail": totalFail})
+	c.JSON(http.StatusOK, gin.H{"sent": sent, "fail": fail})
 }
 
 const maxChartDays = 31
@@ -429,12 +363,11 @@ func buildSegments(campaignID string, in []campaignFormSegment, tenantID string)
 	return out
 }
 
-func buildBroadcastContent(c *models.Campaign) string {
-	parts := []string{strings.TrimSpace(c.MessageText)}
-	if link := strings.TrimSpace(c.MessageLink); link != "" {
-		parts = append(parts, link)
+// reloadCampaignScheduler re-registers campaign segment jobs after a mutation.
+func reloadCampaignScheduler() {
+	if sched := engine.GetDefaultScheduler(); sched != nil {
+		sched.ReloadCampaignJobs()
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func toCampaignDTO(c *models.Campaign, groupNames map[string]string, sentThisMonth int) campaignDTO {

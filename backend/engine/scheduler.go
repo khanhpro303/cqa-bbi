@@ -86,6 +86,9 @@ func (s *Scheduler) Start() {
 	// Load and schedule cron-based analysis jobs
 	s.loadCronJobs()
 
+	// Load and schedule CRM campaign segment jobs
+	s.loadCampaignJobs()
+
 	// Safety net: mark any stuck "running" jobs as failed on startup
 	cleanupStuckRuns()
 
