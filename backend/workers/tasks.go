@@ -604,7 +604,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					return nil
 				}
 
-				// Open session and generate unique session ID
+				// Open session and generate unique session ID. Defensively wipe any
+				// sidecar flow-state left over from a prior conversation: the base
+				// session key is stable across open/close cycles, so an unclean
+				// teardown (crash, Redis hiccup) could otherwise resume a stale
+				// debt/order/menu state on this fresh session's first real turn.
+				if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
+					log.Printf("[worker] failed to clear stale session state for key %s: %v", sessionKey, err)
+				}
 				newSessionID := uuid.New().String()
 				if db.RedisClient != nil {
 					db.RedisClient.Set(ctx, sessionKey, newSessionID, time.Duration(meta.SessionTimeout)*time.Minute+1*time.Minute)
@@ -651,8 +658,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 		if isEndTriggered {
-			if db.RedisClient != nil {
-				db.RedisClient.Del(ctx, sessionKey)
+			if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
+				log.Printf("[worker] failed to clear session state for key %s: %v", sessionKey, err)
 			}
 			var err error
 			if matchedGroup.ZaloGroupID != "" {
@@ -727,8 +734,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		if intent == "HANDOVER" {
 			log.Printf("[worker] message classified as HANDOVER. Closing session and sending handover message.")
-			if db.RedisClient != nil {
-				db.RedisClient.Del(ctx, sessionKey)
+			if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
+				log.Printf("[worker] failed to clear session state for key %s: %v", sessionKey, err)
 			}
 			handoverMsg := "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Em sẽ báo các bạn nhân viên admin liên hệ trực tiếp hỗ trợ mình ngay nhé ạ!"
 			var sendErr error
@@ -745,8 +752,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		if intent == "CASUAL" {
 			log.Printf("[worker] message classified as CASUAL. Closing session and passing through (auto-ignoring).")
-			if db.RedisClient != nil {
-				db.RedisClient.Del(ctx, sessionKey)
+			if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
+				log.Printf("[worker] failed to clear session state for key %s: %v", sessionKey, err)
 			}
 			return nil
 		}
@@ -1411,9 +1418,11 @@ func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
 			return nil
 		}
 
-		// Close the session: delete the key from Redis
-		if err := db.RedisClient.Del(ctx, payload.SessionKey).Err(); err != nil {
-			log.Printf("[worker] failed to delete session key %s: %v", payload.SessionKey, err)
+		// Close the session: delete the session key AND every sidecar flow-state
+		// key so an idle timeout leaves nothing for the next conversation to
+		// resume (matches the end-keyword / HANDOVER / CASUAL teardown).
+		if err := engine.ClearSessionState(ctx, payload.SessionKey); err != nil {
+			log.Printf("[worker] failed to clear session state for key %s: %v", payload.SessionKey, err)
 		}
 
 		// Find the channel to get credentials

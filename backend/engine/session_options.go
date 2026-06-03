@@ -32,6 +32,42 @@ func BuildSessionKey(channelID, zaloUserID, zaloGroupID string) string {
 	return fmt.Sprintf("zalo_session:%s:%s", channelID, zaloUserID)
 }
 
+// sessionStateSuffixes lists every Redis key suffix that hangs off the base
+// session key to carry cross-turn flow state (numbered menus, the variant-line
+// continuation, the awaiting-followup marker, and the orders/debt by-customer
+// state machines). The base session key (zalo_session:...) is keyed by
+// channel+user/group and is therefore STABLE across open/close cycles — only the
+// stored UUID rotates. So these sidecars must be torn down explicitly whenever a
+// session ends; otherwise they outlive the conversation on their own TTL and
+// leak into the next one (e.g. a stale debt/period state resuming after the
+// staff member ended the chat and reopened it). Keep this list in sync with the
+// Suffix constants below.
+var sessionStateSuffixes = []string{
+	PendingOptionsSuffix,
+	AwaitingVariantLineSuffix,
+	AwaitingFollowupSuffix,
+	AwaitingOrderCustomerSuffix,
+	AwaitingDebtCustomerSuffix,
+}
+
+// ClearSessionState deletes the base session key AND every sidecar flow-state
+// key hung off it, in a single Redis round-trip. Call this anywhere a session is
+// torn down (end keyword, HANDOVER, CASUAL, idle timeout) and defensively before
+// opening a fresh session so a prior unclean teardown cannot bleed stale state
+// into the new conversation. No-op (nil) when Redis is unavailable. Returns the
+// Redis DEL error, if any, so timeout/teardown callers can log it.
+func ClearSessionState(ctx context.Context, sessionKey string) error {
+	if db.RedisClient == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(sessionStateSuffixes)+1)
+	keys = append(keys, sessionKey)
+	for _, suffix := range sessionStateSuffixes {
+		keys = append(keys, sessionKey+suffix)
+	}
+	return db.RedisClient.Del(ctx, keys...).Err()
+}
+
 // ResolveNumericSelection resolves a bare-number reply against a previously
 // presented numbered option list. It returns:
 //   - payload: the stored postback at index n-1 (only when inRange is true)

@@ -7,6 +7,49 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 )
 
+// TestClearSessionStateCoversAllSidecars is the regression guard for the
+// cross-session state leak: ending a conversation only deleted the base session
+// key, leaving the debt/order/menu sidecars to outlive the chat on their own
+// TTL and resume in the next conversation. ClearSessionState must wipe EVERY
+// sidecar suffix. If someone adds a new ":awaiting_*" suffix and forgets to add
+// it to sessionStateSuffixes, this test fails and the leak is caught before it
+// ships.
+func TestClearSessionStateCoversAllSidecars(t *testing.T) {
+	allSuffixes := []string{
+		PendingOptionsSuffix,
+		AwaitingVariantLineSuffix,
+		AwaitingFollowupSuffix,
+		AwaitingOrderCustomerSuffix,
+		AwaitingDebtCustomerSuffix,
+	}
+
+	if len(sessionStateSuffixes) != len(allSuffixes) {
+		t.Fatalf("sessionStateSuffixes has %d entries; want %d (a sidecar suffix is missing from the teardown list — it will leak across sessions)",
+			len(sessionStateSuffixes), len(allSuffixes))
+	}
+
+	cleared := make(map[string]bool, len(sessionStateSuffixes))
+	for _, s := range sessionStateSuffixes {
+		cleared[s] = true
+	}
+	for _, want := range allSuffixes {
+		if !cleared[want] {
+			t.Errorf("suffix %q is not cleared by ClearSessionState; it will survive conversation end and leak into the next session", want)
+		}
+	}
+}
+
+// TestClearSessionStateNilRedisSafe pins the nil-Redis contract: with no Redis
+// configured ClearSessionState is a no-op that returns nil rather than panicking.
+func TestClearSessionStateNilRedisSafe(t *testing.T) {
+	if db.RedisClient != nil {
+		t.Skip("Redis configured; this test only covers the nil-Redis contract")
+	}
+	if err := ClearSessionState(context.Background(), "zalo_session:ch1:u123"); err != nil {
+		t.Errorf("ClearSessionState with nil Redis err = %v; want nil", err)
+	}
+}
+
 func TestResolveNumericSelection(t *testing.T) {
 	opts := []string{
 		"#show_macha_options_by_web:Áo gió",
