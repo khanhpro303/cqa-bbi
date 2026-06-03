@@ -366,12 +366,32 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 	return text, nil
 }
 
-// RunFlowWithCustomer allows passing specific API URL, Key, Flow ID, Customer Code, and Permission Token.
+// LangflowResult carries the chatbot reply text plus best-effort token usage
+// parsed from the Langflow response. HasUsage is true only when real usage
+// figures were found; callers should fall back to estimation otherwise.
+type LangflowResult struct {
+	Text         string
+	InputTokens  int
+	OutputTokens int
+	Model        string
+	Provider     string
+	HasUsage     bool
+}
+
+// RunFlowWithCustomer keeps the original string-only contract for callers that
+// don't need usage telemetry; it delegates to RunFlowWithCustomerUsage.
+func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, systemPrompt string) (string, error) {
+	res, err := l.RunFlowWithCustomerUsage(ctx, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, systemPrompt)
+	return res.Text, err
+}
+
+// RunFlowWithCustomerUsage allows passing specific API URL, Key, Flow ID, Customer Code, and Permission Token.
 // systemPrompt, when non-empty, overrides the agent's SYSTEM_PROMPT global
 // variable for this request via a tweak; empty means "use the Langflow default".
-func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, systemPrompt string) (string, error) {
+// It additionally parses token usage from the Langflow response when present.
+func (l *LangflowClient) RunFlowWithCustomerUsage(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, systemPrompt string) (LangflowResult, error) {
 	if apiURL == "" || flowID == "" {
-		return "", fmt.Errorf("langflow integration is not configured")
+		return LangflowResult{}, fmt.Errorf("langflow integration is not configured")
 	}
 
 	url := fmt.Sprintf("%s/api/v1/run/%s", apiURL, flowID)
@@ -431,14 +451,20 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 		"tweaks":      tweaks,
 	}
 
+	return l.sendAndParse(ctx, url, apiKey, payload)
+}
+
+// sendAndParse marshals the payload, performs the Langflow HTTP call, and parses
+// the reply text plus best-effort token usage from the response.
+func (l *LangflowClient) sendAndParse(ctx context.Context, url, apiKey string, payload map[string]interface{}) (LangflowResult, error) {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("marshal langflow payload: %w", err)
+		return LangflowResult{}, fmt.Errorf("marshal langflow payload: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("create langflow request: %w", err)
+		return LangflowResult{}, fmt.Errorf("create langflow request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -449,74 +475,138 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 
 	resp, err := l.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("langflow request failed: %w", err)
+		return LangflowResult{}, fmt.Errorf("langflow request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read langflow response: %w", err)
+		return LangflowResult{}, fmt.Errorf("read langflow response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("langflow api error (status %d): %s", resp.StatusCode, string(respBody))
+		return LangflowResult{}, fmt.Errorf("langflow api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
+	return parseLangflowResult(respBody)
+}
+
+// parseLangflowResult extracts the reply text from the nested Langflow response
+// shape and, on a best-effort basis, any token usage metadata it carries.
+func parseLangflowResult(respBody []byte) (LangflowResult, error) {
 	var result map[string]interface{}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("unmarshal langflow response: %w", err)
+		return LangflowResult{}, fmt.Errorf("unmarshal langflow response: %w", err)
+	}
+
+	res := LangflowResult{}
+	// Best-effort: scan the whole response for token usage metadata, which
+	// different Langflow component versions place in different spots.
+	if in, out, model, found := findTokenUsage(result); found {
+		res.InputTokens, res.OutputTokens, res.Model, res.HasUsage = in, out, model, true
 	}
 
 	outputs, ok := result["outputs"].([]interface{})
 	if !ok || len(outputs) == 0 {
-		return "", fmt.Errorf("langflow response missing outputs")
+		return res, fmt.Errorf("langflow response missing outputs")
 	}
 
 	firstOutput, ok := outputs[0].(map[string]interface{})
 	if !ok {
-		return "", fmt.Errorf("langflow response invalid output format")
+		return res, fmt.Errorf("langflow response invalid output format")
 	}
 
 	innerOutputs, ok := firstOutput["outputs"].([]interface{})
 	if !ok || len(innerOutputs) == 0 {
-		return "", fmt.Errorf("langflow response missing inner outputs")
+		return res, fmt.Errorf("langflow response missing inner outputs")
 	}
 
 	innerFirst, ok := innerOutputs[0].(map[string]interface{})
 	if !ok {
-		return "", fmt.Errorf("langflow response invalid inner output format")
+		return res, fmt.Errorf("langflow response invalid inner output format")
 	}
 
 	results, ok := innerFirst["results"].(map[string]interface{})
 	if !ok {
 		if text, ok := innerFirst["text"].(string); ok {
-			return text, nil
+			res.Text = text
+			return res, nil
 		}
 		if msgs, ok := innerFirst["messages"].([]interface{}); ok && len(msgs) > 0 {
 			if msgObj, ok := msgs[0].(map[string]interface{}); ok {
 				if text, ok := msgObj["message"].(string); ok {
-					return text, nil
+					res.Text = text
+					return res, nil
 				}
 				if text, ok := msgObj["text"].(string); ok {
-					return text, nil
+					res.Text = text
+					return res, nil
 				}
 			}
 		}
-		return "", fmt.Errorf("langflow response missing results: %v", innerFirst)
+		return res, fmt.Errorf("langflow response missing results: %v", innerFirst)
 	}
 
 	msgObj, ok := results["message"].(map[string]interface{})
 	if !ok {
 		if textObj, ok := results["text"].(string); ok {
-			return textObj, nil
+			res.Text = textObj
+			return res, nil
 		}
-		return "", fmt.Errorf("langflow response missing message in results")
+		return res, fmt.Errorf("langflow response missing message in results")
 	}
 
 	text, ok := msgObj["text"].(string)
 	if !ok {
-		return "", fmt.Errorf("langflow response missing text in message")
+		return res, fmt.Errorf("langflow response missing text in message")
 	}
 
-	return text, nil
+	res.Text = text
+	return res, nil
+}
+
+// findTokenUsage walks an arbitrary decoded JSON value looking for a map that
+// carries LLM token usage. It accepts the common key spellings used by OpenAI,
+// Anthropic and Langflow components, returning found=true on the first match
+// that yields a non-zero input or output token count.
+func findTokenUsage(v interface{}) (inTok, outTok int, model string, found bool) {
+	switch node := v.(type) {
+	case map[string]interface{}:
+		in := firstIntKey(node, "input_tokens", "prompt_tokens")
+		out := firstIntKey(node, "output_tokens", "completion_tokens")
+		if in > 0 || out > 0 {
+			m, _ := node["model"].(string)
+			if m == "" {
+				m, _ = node["model_name"].(string)
+			}
+			return in, out, m, true
+		}
+		for _, child := range node {
+			if i, o, m, ok := findTokenUsage(child); ok {
+				return i, o, m, ok
+			}
+		}
+	case []interface{}:
+		for _, child := range node {
+			if i, o, m, ok := findTokenUsage(child); ok {
+				return i, o, m, ok
+			}
+		}
+	}
+	return 0, 0, "", false
+}
+
+// firstIntKey returns the first integer value found among the given keys.
+func firstIntKey(m map[string]interface{}, keys ...string) int {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			switch n := v.(type) {
+			case float64:
+				return int(n)
+			case int:
+				return n
+			}
+		}
+	}
+	return 0
 }

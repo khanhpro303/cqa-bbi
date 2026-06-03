@@ -1348,10 +1348,16 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
-		replyText, err := langflowClient.RunFlowWithCustomer(ctx, langflowSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
+		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
 		if err != nil {
 			return fmt.Errorf("langflow error: %w", err)
 		}
+		replyText := lfRes.Text
+
+		// Record AI spend for this chatbot turn (non-blocking). Tokens come from
+		// the Langflow response when present, else are estimated from text length.
+		// matchedGroup.ID is "" for 1:1 chats; whitelistRec.Name is "" for customers.
+		go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, agentType, matchedGroup.ID, lfRes, systemPromptToUse+userText, lfRes.Text)
 
 		if replyText == "" {
 			log.Printf("[worker] langflow returned empty response")
@@ -2087,6 +2093,81 @@ func getAIClient(ctx context.Context, tenantID string) (ai.AIProvider, error) {
 		return ai.NewOpenAIProvider(apiKey, model, baseURL), nil
 	default:
 		return nil, fmt.Errorf("unsupported AI provider: %s", provider)
+	}
+}
+
+// resolveChatbotPricing returns the provider/model used to price chatbot LLM
+// spend when the Langflow response carried no real usage numbers. It prefers
+// dedicated chatbot_* settings, then the tenant's general ai_* settings, then a
+// sane default.
+func resolveChatbotPricing(tenantID string) (provider, model string) {
+	get := func(key string) string {
+		var s models.AppSetting
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&s).Error; err == nil {
+			return s.ValuePlain
+		}
+		return ""
+	}
+	provider = get("chatbot_provider")
+	if provider == "" {
+		provider = get("ai_provider")
+	}
+	if provider == "" {
+		provider = "openai"
+	}
+	model = get("chatbot_model")
+	if model == "" {
+		model = get("ai_model")
+	}
+	if model == "" {
+		switch provider {
+		case "claude":
+			model = "claude-haiku-4-5"
+		case "gemini":
+			model = "gemini-2.0-flash"
+		default:
+			model = "gpt-5.4-mini"
+		}
+	}
+	return provider, model
+}
+
+// logChatbotAIUsage records the estimated (or real) AI spend for a single Zalo
+// OA chatbot turn. It never blocks the reply path: failures are only logged.
+// When the Langflow response carried real token usage it is used verbatim;
+// otherwise tokens are estimated from text length (a lower bound, since history
+// and RAG context injected inside Langflow are invisible to the backend).
+func logChatbotAIUsage(tenantID, channelID, senderID, senderName, agentType, groupID string, res engine.LangflowResult, promptText, replyText string) {
+	provider, model := res.Provider, res.Model
+	inTok, outTok := res.InputTokens, res.OutputTokens
+
+	if !res.HasUsage {
+		provider, model = resolveChatbotPricing(tenantID)
+		inTok = ai.EstimateTokens(promptText)
+		outTok = ai.EstimateTokens(replyText)
+	} else if provider == "" {
+		// Real token counts but no provider/model label — price with tenant config.
+		provider, model = resolveChatbotPricing(tenantID)
+	}
+
+	usage := models.AIUsageLog{
+		ID:               pkg.NewUUID(),
+		TenantID:         tenantID,
+		Source:           "chatbot",
+		ChannelID:        channelID,
+		SenderExternalID: senderID,
+		SenderName:       senderName,
+		AgentType:        agentType,
+		GroupID:          groupID,
+		Provider:         provider,
+		Model:            model,
+		InputTokens:      inTok,
+		OutputTokens:     outTok,
+		CostUSD:          ai.CalculateCostUSD(provider, model, inTok, outTok),
+		CreatedAt:        time.Now(),
+	}
+	if err := db.DB.Create(&usage).Error; err != nil {
+		log.Printf("[worker] failed to log chatbot AI usage for tenant %s: %v", tenantID, err)
 	}
 }
 

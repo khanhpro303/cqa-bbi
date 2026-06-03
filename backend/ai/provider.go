@@ -73,3 +73,22 @@ func CalculateCostUSD(provider, model string, inputTokens, outputTokens int) flo
 
 	return (float64(inputTokens) * inputRate / 1_000_000) + (float64(outputTokens) * outputRate / 1_000_000)
 }
+
+// EstimateTokens approximates the token count of a piece of text when the real
+// usage figures are unavailable (e.g. the LLM ran inside Langflow and the
+// response carried no usage metadata). It uses the common ~4-chars-per-token
+// heuristic over runes so multibyte Vietnamese text is not over-counted.
+//
+// This is intentionally a lower-bound estimate for chatbot turns: the actual
+// prompt sent to the model also includes conversation history and RAG context
+// injected inside Langflow, which the Go backend never sees.
+func EstimateTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	tokens := len([]rune(text)) / 4
+	if tokens < 1 {
+		return 1
+	}
+	return tokens
+}

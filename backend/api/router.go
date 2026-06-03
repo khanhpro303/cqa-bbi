@@ -180,6 +180,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 			// Dashboard
 			tenant.GET("/dashboard", handlers.GetDashboard)
+			tenant.GET("/analytics/ai-cost", handlers.GetAICostAnalytics)
 
 			// Jobs
 			tenant.GET("/jobs", middleware.RequirePermission("jobs", "r"), handlers.ListJobs)

@@ -285,19 +285,7 @@
         </v-card>
       </v-col>
       <v-col cols="12" md="6">
-        <v-card class="pa-4 h-100 d-flex flex-column">
-          <div class="text-subtitle-1 font-weight-bold mb-3 flex-shrink-0">
-            <v-icon start size="small" color="warning">mdi-chart-line</v-icon>
-            {{ $t('cost_by_day_chart') }}
-          </div>
-          <div v-if="costChartData.labels.length" class="flex-grow-1" style="min-height: 250px">
-            <Line :data="costChartData" :options="chartOptionsNoLegend" style="max-height: 250px; height: 100%" />
-          </div>
-          <div v-else class="text-center text-grey pa-4 flex-grow-1 d-flex flex-column justify-center align-center" style="min-height: 250px">
-            <v-icon size="40" color="grey-lighten-2" class="mb-2">mdi-chart-box-outline</v-icon>
-            <div>{{ $t('no_data') }}</div>
-          </div>
-        </v-card>
+        <AiCostCarousel :tenant-id="tenantId" :exchange-rate="exchangeRate" />
       </v-col>
     </v-row>
   </div>
@@ -312,6 +300,7 @@ import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useChannelStore, type Channel } from '../stores/channels'
+import AiCostCarousel from '../components/dashboard/AiCostCarousel.vue'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend)
 
@@ -514,29 +503,10 @@ const messagesChartData = computed(() => ({
   ],
 }))
 
-const costChartData = computed(() => ({
-  labels: [...costByDay.value].reverse().map(d => formatChartDate(d.date)),
-  datasets: [{
-    label: 'Chi phí (VNĐ)',
-    data: [...costByDay.value].reverse().map(d => Math.round(d.total_cost * exchangeRate.value)),
-    borderColor: '#FFA726',
-    backgroundColor: 'rgba(255,167,38,0.1)',
-    fill: true,
-    tension: 0.3,
-  }],
-}))
-
 const chartOptions = {
   responsive: true,
   maintainAspectRatio: false,
   plugins: { legend: { display: true, position: 'bottom' as const } },
-  scales: { y: { beginAtZero: true } },
-}
-
-const chartOptionsNoLegend = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: { legend: { display: false } },
   scales: { y: { beginAtZero: true } },
 }
 
