@@ -914,6 +914,7 @@
                               hide-details
                               :disabled="!ep.is_enabled || !isOwnerOrAdmin"
                               placeholder="Chọn nhãn hiệu..."
+                              class="brand-select"
                               style="font-size:0.75rem; min-width: 90px;"
                             >
                               <template #selection="{ index }">
@@ -921,7 +922,7 @@
                                   v-if="index === 0"
                                   class="text-truncate"
                                   :title="ep.brands_arr.join(', ')"
-                                  style="max-width: 100%; display: inline-block;"
+                                  style="max-width: 100%;"
                                 >
                                   <v-chip
                                     size="x-small"
@@ -1871,6 +1872,17 @@ function getGroupBrands(resource: string): string {
 .brand-all-checkbox :deep(.v-label) {
   font-size: 0.7rem;
   opacity: 0.9;
+}
+/* Center the brand chip inside the plain select so it doesn't hug the underline */
+.brand-select :deep(.v-field__input) {
+  align-items: center;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  min-height: 28px;
+}
+.brand-select :deep(.v-field__input > .text-truncate) {
+  display: inline-flex;
+  align-items: center;
 }
 
 .scopes-card {
