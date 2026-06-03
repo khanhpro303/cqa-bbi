@@ -259,6 +259,20 @@ func sendPrivateOrdersPrompt(ctx context.Context, tenantID string, permCtx *engi
 	return adapter.SendMessage(ctx, permCtx.ZaloUserID, text)
 }
 
+// sendOrdersCustomerPickPrompt delivers the ENUMERATED multi-match pick prompt
+// to the staff member, listing each candidate's code + name (reusing the shared
+// debt candidate lookup/rendering) so a token that maps to several codes
+// ("S001" → S001_1, S001_2) shows the real sub-codes instead of the static
+// "ví dụ: S001" prompt. This is the fix for staff picking the parent code by
+// mistake: the parent ("S001") often holds no orders of its own while the
+// sub-accounts ("S001_1"/"S001_2") do, so listing them lets staff pick the one
+// that actually has orders. Falls back to ordersCustomerPickByCodeText when the
+// names cannot be looked up (cache miss), via renderDebtCustomerPickText.
+func sendOrdersCustomerPickPrompt(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, codes []string) error {
+	text := renderDebtCustomerPickText(debtCustomerCandidates(tenantID, codes))
+	return sendPrivateOrdersPrompt(ctx, tenantID, permCtx, text)
+}
+
 // storeOrdersCustomerState persists the orders-by-customer flow state under the
 // worker's session key so the next free-text turn resumes it. No-op when no
 // active OA channel exists.

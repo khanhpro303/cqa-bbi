@@ -2383,41 +2383,59 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					log.Printf("[orders_query] failed to send private orders prompt to %s: %v", permCtx.ZaloUserID, err)
 				}
 			}
+			// pushPickPrompt sends the ENUMERATED multi-match prompt (lists the
+			// real candidate codes + names) so staff pick the sub-account that
+			// actually holds the orders, instead of re-typing the ambiguous prefix.
+			pushPickPrompt := func(codes []string) {
+				if err := sendOrdersCustomerPickPrompt(ctxReq, tenantID, permCtx, codes); err != nil {
+					log.Printf("[orders_query] failed to send private orders pick prompt to %s: %v", permCtx.ZaloUserID, err)
+				}
+			}
 
 			if state, ok := takeOrdersCustomerState(ctxReq, tenantID, permCtx); ok {
 				switch state.Stage {
 				case engine.OrderCustomerStagePick:
-					// This turn names the customer to use. We resolve the reply
-					// against the cache + scope DIRECTLY — not constrained to the
-					// previously-offered set. The old code intersected with
-					// state.Codes (codesContain), so a valid in-scope code that
-					// was never listed (or truncated out of a capped list) could
-					// never be selected and the prompt looped forever.
-					var chosen []string
-					switch {
-					case isAllCustomersReply(search):
-						chosen = state.Codes
-					case exactCustomerCodePick(search, state.Codes) != "":
-						// EXACT pick of a listed code wins before the substring LIKE
-						// resolve — otherwise a code that is a prefix of its siblings
-						// ("S001" vs "S001_1"/"S001_2") re-matches the whole list and
-						// the pick prompt loops forever (mirror of the debt fix).
-						chosen = []string{exactCustomerCodePick(search, state.Codes)}
-					default:
-						chosen = scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCode, allowedCodes)
+					// "tất cả" is the explicit escape: keep every previously-matched
+					// code and advance STRAIGHT to the date step, so a token that
+					// maps to several sub-accounts ("S001" → S001_1, S001_2) always
+					// terminates the pick loop and the summary covers all of them
+					// ("nếu all thì summary hết"). The old code set chosen=state.Codes
+					// here, then fell into the len>1 case below and re-asked the same
+					// pick prompt forever — that loop is the bug this removes.
+					if isAllCustomersReply(search) {
+						storeOrdersCustomerState(ctxReq, tenantID, permCtx, engine.OrderCustomerState{Stage: engine.OrderCustomerStageTimeRange, Codes: state.Codes})
+						pushPrompt(ordersTimeRangePromptText)
+						ordersPromptResponse()
+						return
 					}
+					// EXACT pick of a listed code wins before the substring LIKE
+					// resolve — otherwise a code that is a prefix of its siblings
+					// ("S001" vs "S001_1"/"S001_2") re-matches the whole list and
+					// the pick prompt loops forever (mirror of the debt fix). The
+					// enumerated prompt below lists the real sub-codes so staff can
+					// pick the account that actually holds the orders.
+					if exact := exactCustomerCodePick(search, state.Codes); exact != "" {
+						storeOrdersCustomerState(ctxReq, tenantID, permCtx, engine.OrderCustomerState{Stage: engine.OrderCustomerStageTimeRange, Codes: []string{exact}})
+						pushPrompt(ordersTimeRangePromptText)
+						ordersPromptResponse()
+						return
+					}
+					// Otherwise this turn names a (new) customer. Resolve the reply
+					// against the cache + scope DIRECTLY — not constrained to the
+					// previously-offered set — so any in-scope code advances.
+					chosen := scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCode, allowedCodes)
 					switch {
 					case len(chosen) == 0:
-						// Nothing in scope resolved — ask again for a code.
+						// Nothing in scope resolved — re-list the candidates we have.
 						storeOrdersCustomerState(ctxReq, tenantID, permCtx, state)
-						pushPrompt(ordersCustomerPickByCodeText)
+						pushPickPrompt(state.Codes)
 						ordersPromptResponse()
 						return
 					case len(chosen) > 1:
-						// Still ambiguous — keep asking for an exact code rather
-						// than enumerating the matches.
+						// Still ambiguous — ENUMERATE the matches so staff pick a
+						// concrete sub-code instead of re-typing the prefix.
 						storeOrdersCustomerState(ctxReq, tenantID, permCtx, engine.OrderCustomerState{Stage: engine.OrderCustomerStagePick, Codes: chosen})
-						pushPrompt(ordersCustomerPickByCodeText)
+						pushPickPrompt(chosen)
 						ordersPromptResponse()
 						return
 					}
@@ -2459,7 +2477,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					}
 					if len(approved) > 1 {
 						storeOrdersCustomerState(ctxReq, tenantID, permCtx, engine.OrderCustomerState{Stage: engine.OrderCustomerStagePick, Codes: approved})
-						pushPrompt(ordersCustomerPickByCodeText)
+						pushPickPrompt(approved)
 						ordersPromptResponse()
 						return
 					}

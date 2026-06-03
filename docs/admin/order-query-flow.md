@@ -428,6 +428,15 @@ Không có đơn (O2):
 Anh không có đơn hàng nào trong 7 ngày gần đây.
 ```
 
+> 🔌 **Component bơm thẳng `orders_summary` (2026-06-03).** Response nhánh cửa-sổ-ngày luôn
+> kèm `orders_summary` (kể cả `total_orders: 0`). `ERPGatewayCaller` nay nhận diện
+> `res=="orders"` + `orders_summary` là dict → render câu tóm tắt (khoảng ngày, tổng đơn +
+> trị giá, breakdown theo trạng thái) cho LLM, kể cả khi 0 đơn → trả "Không có đơn hàng nào
+> {của khách …} từ … đến …". Trước đây component rơi vào nhánh `count==0` chung và báo "Không
+> tìm thấy thông tin 'orders' cho từ khóa '…'" (khiến câu trả lời 0-đơn trông như lỗi tra
+> cứu — đúng triệu chứng trong transcript). Tra **1 đơn** (`order_code`, `count:1`) KHÔNG có
+> `orders_summary` nên đi nhánh liệt kê thường, không đổi.
+
 ---
 
 ## F. Bảng tham chiếu file:line
@@ -462,6 +471,8 @@ Anh không có đơn hàng nào trong 7 ngày gần đây.
 | Response JSON khoảng-ngày | `backend/api/handlers/erp.go:2230` (nhánh `days > 0`) | `orders_summary` + `orders[]` |
 | Mock (dev) | `backend/api/handlers/erp.go:2655` (`respondWithMockDataV2`); prompt mơ hồ tự gửi ở `:2731` | cùng định tuyến: `days<=0` → tự gửi prompt; `days>0` → lọc theo ngày |
 | **Private: flow theo khách** | `backend/api/handlers/erp_orders_private.go` | `isPrivateOrdersCustomerQuery` / `resolveOrdersCustomerCodes` / `scopeApprovedOrdersCodes` / `tokenizeOrdersCustomerQuery` / `isAllCustomersReply` / `codesContain` / prompt + store helpers |
+| **Private: pick prompt liệt kê mã** | `backend/api/handlers/erp_orders_private.go` | `sendOrdersCustomerPickPrompt` (dùng chung `debtCustomerCandidates`/`renderDebtCustomerPickText`; `exactCustomerCodePick` chống loop mã cha) |
+| **Private: count==0 → summary sạch** | `ERPGatewayCaller.component.py` | nhánh `res=="orders"` + `orders_summary` (render tóm tắt, kể cả 0 đơn) trước nhánh count==0 chung |
 | **Private: pre-routing trong case orders** | `backend/api/handlers/erp.go` (trong `case "orders"`, ngay sau khối `allowedCodes`) | take state → pick/timerange; nêu khách → resolve+scope; gán `targetCodes` |
 | **Private: state qua lượt** | `backend/engine/session_options.go` | `OrderCustomerState{Stage,Codes}` · `StoreOrderCustomerState` / `TakeOrderCustomerState` · key `:awaiting_order_customer` |
 | **Private: lọc membership** | `backend/api/handlers/erp.go` (nhánh `days > 0`) | `len(targetCodes)>0` → `codesContain(targetCodes, …)`; ngược lại `isOrderAuthorized` |
@@ -511,18 +522,34 @@ Lượt 1 "đơn hàng" (generic, chưa có khách)         → hỏi "mã/tên 
 Lượt 1 "đơn hàng của S001" (nêu khách, chưa ngày)   → resolveOrdersCustomerCodes → scopeApprovedOrdersCodes:
         ├ 0  → 400 trung tính "Không tìm thấy đơn hàng của khách này trong phạm vi của bạn."
         ├ 1  → lưu {timerange,[code]} + hỏi 3/5/7 ngày
-        └ ≥2 → lưu {pick,[codes]} + hỏi MÃ khách cụ thể / "tất cả"  (ordersCustomerPickByCodeText — KHÔNG liệt kê danh sách dài)
-Lượt sau {pick}:  "S005" → resolve+scope TRỰC TIẾP (KHÔNG ràng buộc vào danh sách đã chào, nên mã hợp-scope nào cũng chọn được);
-                  1 khách → {timerange,[code]} + hỏi 3/5/7 ngày;  vẫn ≥2 → hỏi lại mã cụ thể;  "tất cả" → giữ toàn bộ state.Codes
-                  → chuyển {timerange,[codes]} + hỏi 3/5/7 ngày
+        └ ≥2 → lưu {pick,[codes]} + LIỆT KÊ mã+tên các khách khớp (sendOrdersCustomerPickPrompt
+               → renderDebtCustomerPickText) để chọn mã cụ thể (vd S001_1) hoặc "tất cả"
+Lượt sau {pick}:  "tất cả" → giữ TOÀN BỘ state.Codes → {timerange,[codes]} + hỏi 3/5/7 ngày (summary hết);
+                  gõ ĐÚNG một mã đã liệt kê (exactCustomerCodePick, kể cả mã cha tiền tố "S001") →
+                    {timerange,[mã đó]} + hỏi 3/5/7 ngày;
+                  gõ token mới → resolve+scope TRỰC TIẾP (KHÔNG ràng buộc danh sách đã chào):
+                    1 khách → {timerange,[code]} + hỏi ngày;  vẫn ≥2 → LIỆT KÊ lại;  0 → liệt kê lại danh sách cũ
 Lượt sau {timerange}: "7 ngày gần đây" → days=7, targetCodes=state.Codes
                   → kéo cửa sổ ngày, lọc membership ∈ targetCodes, orders_summary  ✅
                   (chưa có ngày → nhắc lại prompt, giữ state;
                    gõ mã đơn ĐH… → nhường nhánh 1-đơn)
 "đơn hàng của S001 7 ngày gần đây" (1 tin)          → resolve+scope 1 khách + days → trả luôn, targetCodes=[S001]
-"tất cả" / "toàn bộ" ở bước hỏi khách               → scope-wide (targetCodes rỗng) → lọc isOrderAuthorized như cũ
+"tất cả" / "toàn bộ" ở bước hỏi khách (chưa có state)→ scope-wide (targetCodes rỗng) → lọc isOrderAuthorized như cũ
 Lượt 1 "đơn ĐH000016" (mã đơn)                       → nhánh 1-đơn cũ (đã scope-check) — KHÔNG đổi
 ```
+
+> 🐛 **Vì sao LIỆT KÊ mã + sửa vòng "tất cả" (2026-06-03).** Mã khách như `S001` thường là
+> **mã cha**, còn ĐƠN HÀNG nằm dưới các **mã con** `S001_1`/`S001_2` (tài khoản phụ). Trước
+> bản vá, prompt pick chỉ là chuỗi tĩnh `ordersCustomerPickByCodeText` ("ví dụ: S001") —
+> KHÔNG liệt kê — nên nhân viên gõ lại đúng **mã cha "S001"**; `exactCustomerCodePick` khớp
+> mã cha → chốt `[S001]` → sang bước ngày → nhưng `codesContain([S001], "S001_1")` so theo
+> leading code `s001 ≠ s001_1` → **lọc rớt hết đơn** → `count 0` → component báo "không tìm
+> thấy thông tin" (đây chính là lỗi trong transcript). Nay orders **liệt kê mã+tên** (mirror
+> debt `renderDebtCustomerPickText`/`debtCustomerCandidates`) để nhân viên thấy và chọn ĐÚNG
+> `S001_1 — Huy`. Đồng thời nhánh **"tất cả"** ở stage `pick` cũ set `chosen=state.Codes` rồi
+> rơi vào case `len>1` → **lặp lại prompt vô hạn**; nay "tất cả" đi THẲNG sang stage
+> `timerange` với toàn bộ mã → summary gộp tất cả. Cùng cấu trúc và cùng bản vá với debt
+> (xem [debt-query-flow mục H](./debt-query-flow.md#h-bot-private-nhân-viên)).
 
 - **Lọc đơn:** nhánh `days > 0`, nếu `len(targetCodes) > 0` → giữ đơn khi
   `codesContain(targetCodes, orderCustomerCode(item))`; ngược lại dùng

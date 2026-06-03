@@ -262,6 +262,34 @@ class ERPGatewayCaller(Component):
                 ))
             return Message(text=f"[RICH_MESSAGE_SENT] {hint}".rstrip())
 
+        # Orders date-window answers carry orders_summary (pre-aggregated count /
+        # value / per-status). Surface it directly — including the 0-order case —
+        # so the LLM reports the summary instead of falling into the generic
+        # count==0 "không tìm thấy thông tin" branch below, which made a valid
+        # "no orders in this window" answer look like a lookup failure. Single
+        # order lookups (order_code, count:1) have NO orders_summary, so they fall
+        # through to the normal listing untouched.
+        if res == "orders" and isinstance(data.get("orders_summary"), dict):
+            summary = data["orders_summary"]
+            frm = self._coerce_text(data.get("from"))
+            to = self._coerce_text(data.get("to"))
+            period = f"từ {frm} đến {to}" if frm and to else "trong khoảng đã chọn"
+            codes = data.get("customer_codes") or []
+            who = f" của khách {', '.join(str(c) for c in codes)}" if codes else ""
+            total_orders = summary.get("total_orders", 0) or 0
+            if not total_orders:
+                return Message(text=f"Không có đơn hàng nào{who} {period}.")
+            total_value = self._format_price(summary.get("total_value"))
+            lines = [f"Đơn hàng{who} {period}: tổng {total_orders} đơn, trị giá {total_value}."]
+            for bucket in summary.get("by_status") or []:
+                name = self._coerce_text(bucket.get("status_name")) or "Không xác định"
+                lines.append(f"- {name}: {bucket.get('count', 0)} đơn")
+            lines.append(
+                "Agent: trả lời ngắn gọn dựa trên các con số trên (khoảng thời gian, "
+                "tổng số đơn + trị giá, rồi breakdown theo trạng thái). KHÔNG tự đếm lại."
+            )
+            return Message(text="\n".join(lines))
+
         if data.get("is_ma_cha"):
             return Message(text=data.get("message", "Dòng sản phẩm này có nhiều phân loại kích thước/màu sắc."))
 
