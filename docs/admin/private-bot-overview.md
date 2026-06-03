@@ -81,7 +81,7 @@ nên mỗi phân hệ tự tokenize theo stopword riêng:
 
 | Phân hệ | Helper resolve theo khách |
 |---|---|
-| `debt` | `resolveCustomerCodesFromCache` / `tokenizeCustomerQuery` / `isPrivateDebtCustomerQuery` / `sendDebtCustomerPrompt` — `api/handlers/erp_debt_private.go` |
+| `debt` | `resolveCustomerCodesFromCache` / `resolveDebtCustomerCodes` / `tokenizeCustomerQuery` / `isPrivateDebtCustomerQuery` / `scopeApprovedDebtCodes` / `sendDebtCustomerPrompt` / `renderDebtCustomerPickText` + `debtCustomerCandidates` + `sendDebtCustomerPickPrompt` (liệt kê mã+tên khi nhiều khách khớp) / `isAllCustomersReply` ("tất cả") — `api/handlers/erp_debt_private.go` |
 | `orders` | `resolveOrdersCustomerCodes` / `tokenizeOrdersCustomerQuery` / `isPrivateOrdersCustomerQuery` / `scopeApprovedOrdersCodes` / `isAllCustomersReply` / `sendPrivateOrdersPrompt` — `api/handlers/erp_orders_private.go` |
 
 > Hiện **`debt`** và **`orders`** đã dùng cache-resolve + prompt mã/tên (xem
@@ -89,11 +89,14 @@ nên mỗi phân hệ tự tokenize theo stopword riêng:
 > [delta orders](./order-query-flow.md#b2-flow-hỏi-đơn-theo-khách-mới--chỉ-private)).
 > Các phân hệ khác có thể tái dùng `resolveCachedCustomerCodesFromTokens` khi cần.
 
-> 🔑 **Khác biệt then chốt giữa hai flow:** debt **không** kiểm scope khi nêu khách
-> (nhân viên debt thường `all`), còn **orders giao mã khách với scope ngay khi
-> resolve** (`scopeApprovedOrdersCodes`) → kể cả scope `all`, query nêu khách chỉ
-> trả đơn của đúng khách đó; `assigned` chặn khách ngoài nhóm bằng 1 thông báo
-> trung tính.
+> 🔑 **Scope khi nêu khách:** cả debt lẫn orders nay **đều giao mã khách với scope
+> ngay khi resolve** — debt qua `scopeApprovedDebtCodes`, orders qua
+> `scopeApprovedOrdersCodes` (cùng quy tắc: `all` giữ mọi mã resolve, `assigned`
+> giao với mã trong nhóm, `own` giao với mã của chính mình, khác → từ chối). Nhờ
+> đó kể cả scope `all`, query nêu khách chỉ trả dữ liệu của đúng khách đó.
+> Khác biệt còn lại: khi **nhiều khách khớp**, orders chặn khách ngoài nhóm
+> (`assigned`) bằng 1 thông báo trung tính, còn debt liệt kê mã+tên các khách
+> trong scope để nhân viên chọn (hoặc "tất cả").
 
 ---
 

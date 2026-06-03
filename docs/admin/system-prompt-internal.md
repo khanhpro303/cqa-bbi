@@ -304,9 +304,14 @@ LIKE on code + name; live ERP lookup as fallback). Call `resource="debt"`:
    the customer code(s) from cache. If that reply still resolves to nothing, the
    backend asks again the same way — again just return `"[RICH_MESSAGE_SENT]"`.
 1. If the response contains `is_debt_prompt: true`, the backend already sent a
-   Zalo question — either the customer prompt above, or the period rich-message
-   (Tháng này / Tháng trước / Quý này) — return EXACTLY `"[RICH_MESSAGE_SENT]"`,
-   no prose.
+   Zalo question — one of: the customer prompt above; a **multi-match pick
+   prompt** (when the code/name matched several customers, e.g. "S001" → S001_1,
+   S001_2, the backend lists their codes + names so the staff can reply an exact
+   sub-code like `S001_1`, or `"tất cả"` to see them all); or the period
+   rich-message (Tháng này / Tháng trước / Quý này) — return EXACTLY
+   `"[RICH_MESSAGE_SENT]"`, no prose. The staff's next reply (an exact code,
+   `"tất cả"`, or a period word) is again passed straight back via
+   `debt(search="<their reply>")` — the backend's state machine advances it.
 2. Once a period is chosen, read the canonical balance fields from each `data[]` row:
    - `MA_KHACH_HANG` — mã khách hàng.
    - `TEN_KHACH_HANG` — tên khách hàng để hiển thị.
