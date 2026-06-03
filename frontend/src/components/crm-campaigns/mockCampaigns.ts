@@ -175,9 +175,51 @@ export function sendNow(id: string): Promise<{ sent: number }> {
   return delay({ sent })
 }
 
-export function getStats(month: string): Promise<CampaignStats> {
+export function getStats(month: string, campaignId?: string): Promise<CampaignStats> {
   // `month` = 'YYYY-MM'; mock ignores the value beyond realistic numbers.
   void month
+
+  // Per-campaign scope: numbers narrowed to a single campaign for the row drill-down modal.
+  if (campaignId) {
+    const c = campaigns.find((x) => x.id === campaignId)
+    if (!c) {
+      return delay({
+        campaignsThisMonth: 0,
+        messagesSentThisMonth: 0,
+        successRate: 0,
+        upcomingRuns: 0,
+        byDay: [],
+        recent: [],
+      })
+    }
+    // Spread the campaign's monthly total across the last 14 days as a plausible curve.
+    const weights = Array.from({ length: 14 }, () => 0.3 + Math.random())
+    const weightSum = weights.reduce((s, w) => s + w, 0)
+    const byDay = weights.map((w, i) => ({
+      date: isoDaysFromNow(-13 + i).split('T')[0],
+      sent: Math.round((c.sentThisMonth * w) / weightSum),
+    }))
+    const fail = c.status === 'active' ? Math.round(c.sentThisMonth * 0.018) : 0
+    return delay({
+      campaignsThisMonth: c.segments.length, // labelled "Số lượt gửi" via firstCardLabel
+      messagesSentThisMonth: c.sentThisMonth,
+      successRate: c.sentThisMonth > 0 ? 100 - (fail / c.sentThisMonth) * 100 : 100,
+      upcomingRuns: c.status === 'active' ? c.segments.length : 0,
+      byDay,
+      recent: [
+        {
+          id: c.id,
+          name: c.name,
+          status: c.status,
+          sent: c.sentThisMonth,
+          fail,
+          lastRunAt: c.status === 'active' ? isoDaysFromNow(0, 9) : undefined,
+        },
+      ],
+    })
+  }
+
+  // Aggregate scope (overview dashboard at the top of the tab).
   const byDay = Array.from({ length: 14 }, (_, i) => ({
     date: isoDaysFromNow(-13 + i).split('T')[0],
     sent: Math.round(200 + Math.random() * 900),

@@ -575,4 +575,7 @@ export default {
   dash_recent: 'Chiến dịch gần đây',
   dash_fail: 'Lỗi',
   dash_last_run: 'Lần chạy cuối',
+  dash_overview: 'Tổng quan chiến dịch',
+  dash_segments: 'Số lượt gửi',
+  dash_campaign_scope: 'Dashboard chiến dịch',
 }

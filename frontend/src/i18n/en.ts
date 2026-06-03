@@ -574,4 +574,7 @@ export default {
   dash_recent: 'Recent campaigns',
   dash_fail: 'Failed',
   dash_last_run: 'Last run',
+  dash_overview: 'Campaign overview',
+  dash_segments: 'Send runs',
+  dash_campaign_scope: 'Campaign dashboard',
 }

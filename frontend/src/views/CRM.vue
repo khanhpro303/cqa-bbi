@@ -6,9 +6,6 @@
       
       <!-- Action buttons depending on active tab -->
       <template v-if="currentTab === 'campaigns'">
-        <v-btn color="blue-grey" variant="tonal" prepend-icon="mdi-chart-box-outline" class="mr-2" @click="campaignDashboardOpen = true">
-          {{ $t('campaign_dashboard') }}
-        </v-btn>
         <v-btn color="primary" prepend-icon="mdi-bullhorn-outline" @click="campaignListRef?.openCreate()">
           {{ $t('campaign_create') }}
         </v-btn>
@@ -364,12 +361,10 @@
 
       <!-- TAB 5: CRM CAMPAIGNS (Chiến dịch CRM) -->
       <v-window-item value="campaigns" class="pt-2">
+        <CampaignDashboard class="mb-4" />
         <CampaignList ref="campaignListRef" @notify="showSnack" />
       </v-window-item>
     </v-window>
-
-    <!-- Campaign dashboard modal -->
-    <CampaignDashboardModal v-model="campaignDashboardOpen" />
 
     <!-- Dialog 1: Tạo/Sửa nhóm -->
     <v-dialog v-model="groupDialog" max-width="500">
@@ -1042,7 +1037,7 @@ import { useAuthStore } from '../stores/auth'
 import api from '../api'
 import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
 import CampaignList from '../components/crm-campaigns/CampaignList.vue'
-import CampaignDashboardModal from '../components/crm-campaigns/CampaignDashboardModal.vue'
+import CampaignDashboard from '../components/crm-campaigns/CampaignDashboard.vue'
 import { findEndpointsMissingGroups, findEndpointsMissingBrands } from '../utils/erp-permission-validation'
 
 const route = useRoute()
@@ -1065,7 +1060,6 @@ const memberTab = ref('employees')
 
 // CRM Campaigns (Chiến dịch CRM) — list ref drives the create dialog from header.
 const campaignListRef = ref<InstanceType<typeof CampaignList> | null>(null)
-const campaignDashboardOpen = ref(false)
 
 // CRM Groups State
 const groups = ref<any[]>([])

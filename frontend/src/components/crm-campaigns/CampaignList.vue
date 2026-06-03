@@ -13,7 +13,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="c in campaigns" :key="c.id">
+          <tr v-for="c in campaigns" :key="c.id" class="campaign-row" @click="openDashboard(c)">
             <td class="py-3">
               <div class="font-weight-bold text-primary">{{ c.name }}</div>
               <div class="text-caption text-grey-darken-1">{{ c.description || '—' }}</div>
@@ -40,7 +40,7 @@
                 color="success"
                 :loading="busyId === c.id"
                 :title="$t('campaign_send_now')"
-                @click="onSendNow(c)"
+                @click.stop="onSendNow(c)"
               />
               <v-btn
                 v-if="c.status === 'active'"
@@ -49,7 +49,7 @@
                 variant="text"
                 color="warning"
                 :title="$t('campaign_pause')"
-                @click="onToggle(c, 'paused')"
+                @click.stop="onToggle(c, 'paused')"
               />
               <v-btn
                 v-else-if="c.status === 'paused' || c.status === 'draft'"
@@ -58,7 +58,7 @@
                 variant="text"
                 color="success"
                 :title="$t('campaign_activate')"
-                @click="onToggle(c, 'active')"
+                @click.stop="onToggle(c, 'active')"
               />
               <v-btn
                 icon="mdi-pencil"
@@ -66,7 +66,7 @@
                 variant="text"
                 color="blue"
                 :title="$t('edit')"
-                @click="openEdit(c)"
+                @click.stop="openEdit(c)"
               />
               <v-btn
                 icon="mdi-delete"
@@ -74,7 +74,7 @@
                 variant="text"
                 color="error"
                 :title="$t('delete')"
-                @click="confirmId = c.id"
+                @click.stop="confirmId = c.id"
               />
             </td>
           </tr>
@@ -98,6 +98,9 @@
       @error="(key) => $emit('notify', $t(key), 'error')"
     />
 
+    <!-- Per-campaign dashboard (row drill-down) -->
+    <CampaignDashboardModal v-model="dashboardOpen" :campaign="dashboardCampaign" />
+
     <!-- Delete confirm -->
     <v-dialog v-model="confirmOpen" max-width="420">
       <v-card>
@@ -116,6 +119,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import CampaignFormDialog from './CampaignFormDialog.vue'
+import CampaignDashboardModal from './CampaignDashboardModal.vue'
 import {
   listCampaigns,
   sendNow,
@@ -137,6 +141,14 @@ const busyId = ref<string | null>(null)
 
 const formOpen = ref(false)
 const editing = ref<Campaign | null>(null)
+
+const dashboardOpen = ref(false)
+const dashboardCampaign = ref<Campaign | null>(null)
+
+function openDashboard(c: Campaign) {
+  dashboardCampaign.value = c
+  dashboardOpen.value = true
+}
 
 const confirmId = ref<string | null>(null)
 const confirmOpen = computed({
@@ -227,3 +239,13 @@ function formatDateTime(iso?: string): string {
 onMounted(load)
 defineExpose({ openCreate, reload: load })
 </script>
+
+<style scoped>
+.campaign-row {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.campaign-row:hover {
+  background-color: rgba(0, 0, 0, 0.035);
+}
+</style>
