@@ -10,105 +10,122 @@
       <v-divider />
 
       <v-card-text style="max-height: 72vh">
-        <v-form ref="formRef">
-          <!-- Section 1: General -->
-          <div class="section-label">
-            <v-icon size="18" class="mr-1">mdi-information-outline</v-icon>
-            {{ $t('campaign_section_general') }}
-          </div>
-          <v-text-field
-            v-model="form.name"
-            :label="$t('campaign_name') + ' *'"
-            variant="outlined"
-            density="comfortable"
-            :rules="[v => !!(v && v.trim()) || $t('required')]"
-            class="mb-1"
-          />
-          <v-text-field
-            v-model="form.description"
-            :label="$t('campaign_desc')"
-            variant="outlined"
-            density="comfortable"
-            class="mb-1"
-          />
-          <v-select
-            v-model="form.channelId"
-            :items="channels"
-            item-title="name"
-            item-value="id"
-            :label="$t('campaign_channel') + ' *'"
-            variant="outlined"
-            density="comfortable"
-            prepend-inner-icon="mdi-message-text"
-            :rules="[v => !!v || $t('required')]"
-          />
+        <v-stepper v-model="step" :items="stepLabels" hide-actions flat class="campaign-stepper">
+          <!-- Step 1: General -->
+          <template #item.1>
+            <v-form ref="form1Ref" class="pt-2">
+              <v-text-field
+                v-model="form.name"
+                :label="$t('campaign_name') + ' *'"
+                variant="outlined"
+                density="comfortable"
+                :rules="[v => !!(v && v.trim()) || $t('required')]"
+                class="mb-1"
+              />
+              <v-text-field
+                v-model="form.description"
+                :label="$t('campaign_desc')"
+                variant="outlined"
+                density="comfortable"
+                class="mb-1"
+              />
+              <v-select
+                v-model="form.channelId"
+                :items="channels"
+                item-title="name"
+                item-value="id"
+                :label="$t('campaign_channel') + ' *'"
+                variant="outlined"
+                density="comfortable"
+                prepend-inner-icon="mdi-message-text"
+                :rules="[v => !!v || $t('required')]"
+              />
+            </v-form>
+          </template>
 
-          <!-- Section 2: Message -->
-          <div class="section-label mt-4">
-            <v-icon size="18" class="mr-1">mdi-message-text-outline</v-icon>
-            {{ $t('campaign_section_message') }}
-          </div>
-          <MessageComposer ref="composerRef" v-model="form.message" />
+          <!-- Step 2: Message -->
+          <template #item.2>
+            <v-form ref="form2Ref" class="pt-2">
+              <MessageComposer ref="composerRef" v-model="form.message" />
+            </v-form>
+          </template>
 
-          <!-- Section 3: Schedule & segments -->
-          <div class="section-label mt-5">
-            <v-icon size="18" class="mr-1">mdi-calendar-clock</v-icon>
-            {{ $t('campaign_section_schedule') }}
-          </div>
-          <p class="text-caption text-grey-darken-1 mb-3">{{ $t('campaign_schedule_hint') }}</p>
+          <!-- Step 3: Schedule & segments -->
+          <template #item.3>
+            <v-form ref="form3Ref" class="pt-2">
+              <p class="text-caption text-grey-darken-1 mb-3">{{ $t('campaign_schedule_hint') }}</p>
 
-          <SegmentScheduleRow
-            v-for="(seg, i) in form.segments"
-            :key="seg.id"
-            v-model="form.segments[i]"
-            :index="i"
-            :groups="groups"
-            @remove="removeSegment(i)"
-          />
+              <SegmentScheduleRow
+                v-for="(seg, i) in form.segments"
+                :key="seg.id"
+                v-model="form.segments[i]"
+                :index="i"
+                :groups="groups"
+                @remove="removeSegment(i)"
+              />
 
-          <v-alert
-            v-if="form.segments.length === 0"
-            type="info"
-            variant="tonal"
-            density="compact"
-            class="mb-3 text-body-2"
-          >
-            {{ $t('campaign_no_segment') }}
-          </v-alert>
+              <v-alert
+                v-if="form.segments.length === 0"
+                type="info"
+                variant="tonal"
+                density="compact"
+                class="mb-3 text-body-2"
+              >
+                {{ $t('campaign_no_segment') }}
+              </v-alert>
 
-          <v-btn
-            variant="tonal"
-            color="primary"
-            prepend-icon="mdi-plus"
-            size="small"
-            @click="addSegment"
-          >
-            {{ $t('campaign_add_segment') }}
-          </v-btn>
-        </v-form>
+              <v-btn
+                variant="tonal"
+                color="primary"
+                prepend-icon="mdi-plus"
+                size="small"
+                @click="addSegment"
+              >
+                {{ $t('campaign_add_segment') }}
+              </v-btn>
+            </v-form>
+          </template>
+        </v-stepper>
       </v-card-text>
 
       <v-divider />
       <v-card-actions class="py-3 px-4">
+        <v-btn
+          v-if="step > 1"
+          variant="text"
+          prepend-icon="mdi-chevron-left"
+          :disabled="!!saving"
+          @click="step--"
+        >
+          {{ $t('back') }}
+        </v-btn>
         <v-spacer />
         <v-btn variant="text" :disabled="!!saving" @click="close">{{ $t('cancel') }}</v-btn>
-        <v-btn variant="tonal" color="blue-grey" :loading="saving === 'draft'" @click="submit('draft')">
-          {{ $t('campaign_save_draft') }}
+        <v-btn v-if="step < 3" color="primary" append-icon="mdi-chevron-right" @click="next">
+          {{ $t('next') }}
         </v-btn>
-        <v-btn color="primary" :loading="saving === 'active'" @click="submit('active')">
-          {{ $t('campaign_activate') }}
-        </v-btn>
+        <template v-else>
+          <v-btn variant="tonal" color="blue-grey" :loading="saving === 'draft'" @click="submit('draft')">
+            {{ $t('campaign_save_draft') }}
+          </v-btn>
+          <v-btn color="primary" :loading="saving === 'active'" @click="submit('active')">
+            {{ $t('campaign_activate') }}
+          </v-btn>
+        </template>
       </v-card-actions>
     </v-card>
   </v-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import MessageComposer from './MessageComposer.vue'
 import SegmentScheduleRow from './SegmentScheduleRow.vue'
 import { saveCampaign, setCampaignStatus } from './campaignsApi'
 import type { Campaign, CampaignFormState, CampaignSegment, SelectOption } from './types'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   modelValue: boolean
@@ -127,9 +144,18 @@ const open = ref(props.modelValue)
 watch(() => props.modelValue, (v) => { open.value = v; if (v) resetForm() })
 watch(open, (v) => emit('update:modelValue', v))
 
-const formRef = ref<any>(null)
+const step = ref(1)
+const form1Ref = ref<any>(null)
+const form2Ref = ref<any>(null)
+const form3Ref = ref<any>(null)
 const composerRef = ref<{ commit: () => Promise<void> } | null>(null)
 const saving = ref<false | 'draft' | 'active'>(false)
+
+const stepLabels = computed(() => [
+  t('campaign_section_general'),
+  t('campaign_section_message'),
+  t('campaign_section_schedule'),
+])
 
 function emptyForm(): CampaignFormState {
   return {
@@ -154,6 +180,7 @@ function newSegment(): CampaignSegment {
 }
 
 function resetForm() {
+  step.value = 1
   if (props.editing) {
     // Deep-ish clone so edits stay local until saved.
     form.value = {
@@ -181,8 +208,23 @@ function removeSegment(i: number) {
   }
 }
 
+// Validate the current step before advancing; gate forward navigation only.
+async function next() {
+  if (step.value === 1) {
+    const { valid } = (await form1Ref.value?.validate()) || { valid: false }
+    if (valid) step.value = 2
+    return
+  }
+  if (step.value === 2) {
+    const { valid } = (await form2Ref.value?.validate()) || { valid: false }
+    // Fallback guard in case the composer's required rule is absent.
+    if (!valid || !form.value.message.text.trim()) return
+    step.value = 3
+  }
+}
+
 async function submit(target: 'draft' | 'active') {
-  const { valid } = (await formRef.value?.validate()) || { valid: false }
+  const { valid } = (await form3Ref.value?.validate()) || { valid: false }
   if (!valid) return
   if (form.value.segments.length === 0) {
     emit('error', 'campaign_no_segment_error')
@@ -216,12 +258,15 @@ function close() {
 </script>
 
 <style scoped>
-.section-label {
-  display: flex;
-  align-items: center;
-  font-weight: 700;
-  font-size: 0.95rem;
-  color: rgb(var(--v-theme-primary));
-  margin-bottom: 10px;
+/* Stepper sits inside the scrollable card body — drop the elevated card chrome. */
+.campaign-stepper {
+  background: transparent;
+}
+.campaign-stepper :deep(.v-stepper-header) {
+  box-shadow: none;
+  margin-bottom: 4px;
+}
+.campaign-stepper :deep(.v-stepper-window) {
+  margin: 0;
 }
 </style>
