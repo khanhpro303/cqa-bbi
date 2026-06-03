@@ -657,7 +657,7 @@ func ERPQuery(c *gin.Context) {
 	}
 
 	// ── 10. Execute live Cloudify call with filters ───────────────────────
-	respondWithLiveDataV2(c, client, req.Resource, req.Search, req.ParentCode, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx, req.ExactWebName)
+	respondWithLiveDataV2(c, client, req.Resource, req.Search, req.ParentCode, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx, req.ExactWebName, req.Color, req.Size, req.Brand)
 }
 
 // shouldPivotToVariant decides whether a products query must be re-resolved as a
@@ -1933,7 +1933,7 @@ func getFirstNonEmptyMapString(m map[string]interface{}, keys ...string) string 
 	return ""
 }
 
-func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource, search, parentCode, partnerID string, limit int, productGroups []string, scopeType string, tenantID string, permCtx *engine.GroupPermissionContext, exactWebName bool) {
+func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource, search, parentCode, partnerID string, limit int, productGroups []string, scopeType string, tenantID string, permCtx *engine.GroupPermissionContext, exactWebName bool, color, size, brand string) {
 	var (
 		data []map[string]interface{}
 		err  error
@@ -2014,6 +2014,70 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				log.Printf("[inventory_query] exact web-name search error for tenant=%s search=%s: %v", tenantID, search, errExact)
 			}
 			exactRows = filterProductsByGroups(exactRows, productGroups)
+
+			// STOCK continuation guard. When the agent already named a color/size,
+			// the customer has passed the dòng-vs-SKU step (they chose "🔍 Xem theo
+			// mã SKU cụ thể" and typed the variant, e.g. "nardo grey size XL").
+			// Re-presenting the dòng-vs-SKU picker here is the redundant-message bug:
+			// the exact web name "LS2 FF901" has >1 SKU rows, so without this guard
+			// the len>1 branch below fires the picker a SECOND time. Resolve the
+			// matching variant SKU(s) under this exact line and return their live
+			// stock so the agent answers directly. Mirrors the PRICE-intent guard
+			// (isVariantPriceIntent) at the top products branch, but for stock.
+			if hasVariantAttribute(color, size, brand) {
+				variantRows := filterVariantsByAttributes(exactRows, color, size, brand)
+				if len(variantRows) > 0 {
+					var variantData []map[string]interface{}
+					for _, child := range variantRows {
+						childSKU := getMapString(child, "MA", "ma", "ma_hang")
+						if childSKU == "" {
+							continue
+						}
+						skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, stockCache, tenantID, childSKU, inventoryEndpoint, usePostMethod)
+						if errQuery != nil {
+							log.Printf("[inventory_query] exact-web variant stock error for SKU %s: %v", childSKU, errQuery)
+							continue
+						}
+						variantData = append(variantData, map[string]interface{}{
+							"MA":                 childSKU,
+							"ma":                 childSKU,
+							"code":               childSKU,
+							"ma_hang":            childSKU,
+							"product_code":       childSKU,
+							"TEN":                getMapString(child, "TEN", "ten", "ten_hang"),
+							"ten":                getMapString(child, "TEN", "ten", "ten_hang"),
+							"TEN_DONG_BO_WEB":    getMapString(child, "TEN_DONG_BO_WEB", "ten_dong_bo_web"),
+							"TON_KHO":            skuStock,
+							"ton_kho":            skuStock,
+							"MA_CHA":             getMapString(child, "MA_CHA", "ma_cha"),
+							"ma_cha":             getMapString(child, "MA_CHA", "ma_cha"),
+							"THUOC_TINH_1":       getMapString(child, "THUOC_TINH_1", "thuoc_tinh_1"),
+							"THUOC_TINH_2":       getMapString(child, "THUOC_TINH_2", "thuoc_tinh_2"),
+							"DON_GIA_BAN":        getMapFloat(child, "DON_GIA_BAN", "don_gia_ban"),
+							"LINK_ANH":           getMapString(child, "LINK_ANH", "link_anh"),
+							"DVT":                getMapString(child, "DVT", "dvt"),
+							"LIST_TEN_NHOM_VTHH": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
+							"list_ten_nhom_vthh": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
+						})
+					}
+					if len(variantData) > 0 {
+						writeAuditLog(tenantID, permCtx, "inventory", scopeType, productGroups, search, http.StatusOK, len(variantData), c.ClientIP())
+						c.JSON(http.StatusOK, gin.H{
+							"status":   "success",
+							"data":     variantData,
+							"source":   "cloudify_live_exact_web_variant",
+							"resource": "inventory",
+							"count":    len(variantData),
+						})
+						return
+					}
+				}
+				// Color/size named but nothing matched under this exact line → fall
+				// through to the picker so the customer still gets a usable next step
+				// instead of silence.
+				log.Printf("[inventory_query] exact-web variant filter matched 0 for '%s' (color=%q size=%q brand=%q); falling back to dòng-vs-SKU picker", search, color, size, brand)
+			}
+
 			if len(exactRows) > 1 {
 				buttons := []channels.ZaloOAButton{
 					{Title: "📦 Xem theo dòng sản phẩm", Payload: "#show_macha_options_by_web:" + search},

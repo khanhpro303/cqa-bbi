@@ -222,3 +222,47 @@ func TestVariantBelongsToParent(t *testing.T) {
 		})
 	}
 }
+
+// TestExactWebStockContinuation_SkipsRedundantPicker locks the fix for the
+// inventory redundant-disambiguation bug: after the customer chose "🔍 Xem theo
+// mã SKU cụ thể" for "LS2 FF901" and typed a variant ("Nardo Grey size XL"), the
+// agent calls inventory with exact_web_name=true PLUS color/size. The exact-web
+// branch must resolve that single SKU (so the handler returns its stock) instead
+// of re-firing the dòng-vs-SKU picker. The decision pivots on
+// hasVariantAttribute + filterVariantsByAttributes over the exact-web rows, so we
+// assert that decision directly here (the handler's DB/Cloudify wiring is covered
+// by integration, not unit, tests).
+func TestExactWebStockContinuation_SkipsRedundantPicker(t *testing.T) {
+	// Exact-web rows for "LS2 FF901": multiple SKUs share ten_dong_bo_web, which
+	// is exactly why the old code's len(exactRows) > 1 check fired the picker.
+	exactRows := []map[string]interface{}{
+		{"MA": "SP458491", "MA_CHA": "SP458484", "TEN_DONG_BO_WEB": "LS2 FF901", "THUOC_TINH_1": "Trắng", "THUOC_TINH_2": "L"},
+		{"MA": "SP458493", "MA_CHA": "SP458484", "TEN_DONG_BO_WEB": "LS2 FF901", "THUOC_TINH_1": "Nardo Grey", "THUOC_TINH_2": "XL"},
+		{"MA": "SP458496", "MA_CHA": "SP458484", "TEN_DONG_BO_WEB": "LS2 FF901", "THUOC_TINH_1": "Trắng", "THUOC_TINH_2": "L"},
+	}
+
+	t.Run("color+size present resolves the single SKU, no picker", func(t *testing.T) {
+		color, size := "Nardo Grey", "size XL"
+		if !hasVariantAttribute(color, size, "") {
+			t.Fatal("hasVariantAttribute must report true so the guard engages")
+		}
+		got := filterVariantsByAttributes(exactRows, color, size, "")
+		if len(got) != 1 {
+			t.Fatalf("expected exactly 1 matching SKU, got %d", len(got))
+		}
+		if sku := getMapString(got[0], "MA", "ma"); sku != "SP458493" {
+			t.Errorf("resolved wrong SKU: got %q, want SP458493", sku)
+		}
+	})
+
+	t.Run("bare line with no attributes keeps multiple rows so the picker fires", func(t *testing.T) {
+		if hasVariantAttribute("", "", "") {
+			t.Fatal("no attributes must report false so the guard is skipped")
+		}
+		// Without the guard the handler proceeds to the len>1 picker branch — the
+		// correct behaviour for a bare "LS2 FF901" stock question.
+		if len(exactRows) <= 1 {
+			t.Fatal("fixture must have >1 row to exercise the picker path")
+		}
+	})
+}
