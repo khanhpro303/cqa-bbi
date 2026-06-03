@@ -86,6 +86,7 @@
                   <v-btn icon="mdi-account-cog" size="small" variant="text" color="teal" @click="openManageMembersDialog(g)" title="Quản lý thành viên" />
                   <v-btn icon="mdi-shield-lock-outline" size="small" variant="text" color="indigo" @click="openGroupPermissionsDialog(g)" title="Phân quyền Endpoint & Sơ đồ live" />
                   <v-btn icon="mdi-pencil" size="small" variant="text" color="blue" @click="openEditGroupDialog(g)" title="Sửa nhóm" />
+                  <v-btn v-if="isOwner && g.zalo_group_id" icon="mdi-broom" size="small" variant="text" color="orange-darken-2" :loading="clearingSessionId === g.id" @click="clearGroupSession(g)" title="Xoá sạch cache phiên chat của nhóm GMF" />
                   <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="deleteGroup(g.id)" title="Xóa nhóm" />
                 </td>
               </tr>
@@ -982,6 +983,10 @@ const isOwnerOrAdmin = computed(() => {
   return authStore.tenantPerms?.role === 'owner' || authStore.tenantPerms?.role === 'admin'
 })
 
+// Owner-only: the "clear session cache" button on each GMF group row is
+// reserved for the app owner, since it force-resets live bot conversations.
+const isOwner = computed(() => authStore.tenantPerms?.role === 'owner')
+
 const currentTab = ref('groups')
 const memberTab = ref('employees')
 
@@ -1376,6 +1381,27 @@ async function deleteGroup(id: string) {
     await fetchGroups()
   } catch (err) {
     showSnack('Lỗi khi xóa nhóm', 'error')
+  }
+}
+
+// Tracks which group row's clear-session request is in flight (owner-only).
+const clearingSessionId = ref<string | null>(null)
+
+async function clearGroupSession(g: any) {
+  if (!confirm(`Xoá sạch cache phiên chat của nhóm "${g.name}"? Cuộc hội thoại đang chạy của bot sẽ được đặt lại về trạng thái sạch.`)) return
+  clearingSessionId.value = g.id
+  try {
+    const { data } = await api.post(`/tenants/${tenantId.value}/crm/groups/${g.id}/clear-session`)
+    const cleared = data?.cleared ?? 0
+    showSnack(cleared > 0 ? `Đã xoá ${cleared} khoá phiên của nhóm GMF` : 'Nhóm không còn phiên nào để xoá', 'success')
+  } catch (err: any) {
+    const code = err.response?.data?.error
+    const msg = code === 'group_not_linked_to_zalo'
+      ? 'Nhóm chưa liên kết Zalo GMF nên không có phiên để xoá'
+      : 'Lỗi khi xoá cache phiên của nhóm'
+    showSnack(msg, 'error')
+  } finally {
+    clearingSessionId.value = null
   }
 }
 

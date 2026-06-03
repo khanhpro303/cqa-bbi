@@ -68,6 +68,55 @@ func ClearSessionState(ctx context.Context, sessionKey string) error {
 	return db.RedisClient.Del(ctx, keys...).Err()
 }
 
+// groupSessionScanCount is the COUNT hint passed to Redis SCAN when sweeping a
+// group's session keys. It bounds work per round-trip without changing results.
+const groupSessionScanCount = 200
+
+// ClearGroupSessionState wipes every Redis session key belonging to a single
+// GMF group — the base key "zalo_session:<channelID>:group:<zaloGroupID>" and
+// all its flow-state sidecars — across ALL OA channels. Unlike ClearSessionState
+// (which needs the exact session key, hence the channel ID), this is keyed only
+// on the group's Zalo ID, so the owner-facing "clear cache" button truly wipes
+// the group clean even if more than one channel ever served it. Two exact glob
+// patterns are scanned (base + ":<suffix>" sidecars) rather than "<id>*" so a
+// group ID that is a prefix of another can never over-match. Returns the number
+// of keys deleted. No-op (0, nil) when Redis is unavailable.
+func ClearGroupSessionState(ctx context.Context, zaloGroupID string) (int, error) {
+	if db.RedisClient == nil {
+		return 0, nil
+	}
+	if strings.TrimSpace(zaloGroupID) == "" {
+		return 0, fmt.Errorf("clear group session: empty zalo group id")
+	}
+	patterns := []string{
+		fmt.Sprintf("zalo_session:*:group:%s", zaloGroupID),   // base session key
+		fmt.Sprintf("zalo_session:*:group:%s:*", zaloGroupID), // pending_options + awaiting_* sidecars
+	}
+	seen := make(map[string]struct{})
+	keys := make([]string, 0)
+	for _, pattern := range patterns {
+		iter := db.RedisClient.Scan(ctx, 0, pattern, groupSessionScanCount).Iterator()
+		for iter.Next(ctx) {
+			key := iter.Val()
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			keys = append(keys, key)
+		}
+		if err := iter.Err(); err != nil {
+			return 0, fmt.Errorf("clear group session: scan %q: %w", pattern, err)
+		}
+	}
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	if err := db.RedisClient.Del(ctx, keys...).Err(); err != nil {
+		return 0, fmt.Errorf("clear group session: del %d keys: %w", len(keys), err)
+	}
+	return len(keys), nil
+}
+
 // ResolveNumericSelection resolves a bare-number reply against a previously
 // presented numbered option list. It returns:
 //   - payload: the stored postback at index n-1 (only when inRange is true)

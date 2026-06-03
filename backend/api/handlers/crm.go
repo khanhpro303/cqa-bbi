@@ -20,6 +20,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
@@ -282,6 +283,38 @@ func DeleteCRMGroup(c *gin.Context) {
 
 	tx.Commit()
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// ClearCRMGroupSession wipes the live Redis bot-session cache for one GMF group
+// (base session key + every flow-state sidecar, across all OA channels) without
+// touching the DB. Owner-only: lets the app owner force a clean slate for a
+// group whose conversation has gotten stuck on stale pending state, mirroring
+// the automatic teardown that happens when a chat ends. Returns the number of
+// Redis keys removed.
+func ClearCRMGroupSession(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	groupID := c.Param("id")
+
+	var group models.CRMGroup
+	if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "group_not_found"})
+		return
+	}
+
+	if strings.TrimSpace(group.ZaloGroupID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "group_not_linked_to_zalo"})
+		return
+	}
+
+	cleared, err := engine.ClearGroupSessionState(c.Request.Context(), group.ZaloGroupID)
+	if err != nil {
+		log.Printf("[crm] failed to clear session cache for GMF group %s (%s): %v", group.Name, group.ZaloGroupID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_clear_session"})
+		return
+	}
+
+	log.Printf("[crm] cleared %d session key(s) for GMF group %s (%s)", cleared, group.Name, group.ZaloGroupID)
+	c.JSON(http.StatusOK, gin.H{"message": "session_cleared", "cleared": cleared})
 }
 
 func AddGroupMembers(c *gin.Context) {

@@ -50,6 +50,28 @@ func TestClearSessionStateNilRedisSafe(t *testing.T) {
 	}
 }
 
+func TestClearGroupSessionStateNilRedisSafe(t *testing.T) {
+	if db.RedisClient != nil {
+		t.Skip("Redis configured; this test only covers the nil-Redis contract")
+	}
+	cleared, err := ClearGroupSessionState(context.Background(), "g999")
+	if err != nil {
+		t.Errorf("ClearGroupSessionState with nil Redis err = %v; want nil", err)
+	}
+	if cleared != 0 {
+		t.Errorf("ClearGroupSessionState with nil Redis cleared = %d; want 0", cleared)
+	}
+}
+
+func TestClearGroupSessionStateRejectsEmptyID(t *testing.T) {
+	if db.RedisClient == nil {
+		t.Skip("nil Redis short-circuits before the empty-ID guard; needs a live client")
+	}
+	if _, err := ClearGroupSessionState(context.Background(), "   "); err == nil {
+		t.Error("ClearGroupSessionState with blank group id err = nil; want error")
+	}
+}
+
 func TestResolveNumericSelection(t *testing.T) {
 	opts := []string{
 		"#show_macha_options_by_web:Áo gió",

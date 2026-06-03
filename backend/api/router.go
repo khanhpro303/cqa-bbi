@@ -222,6 +222,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/crm/groups", middleware.RequireRole("owner", "admin"), handlers.CreateCRMGroup)
 			tenant.PUT("/crm/groups/:id", middleware.RequireRole("owner", "admin"), handlers.UpdateCRMGroup)
 			tenant.DELETE("/crm/groups/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteCRMGroup)
+			tenant.POST("/crm/groups/:id/clear-session", middleware.RequireRole("owner"), handlers.ClearCRMGroupSession)
 			tenant.GET("/crm/groups/:id/members", handlers.ListGroupMembers)
 			tenant.POST("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.AddGroupMembers)
 			tenant.DELETE("/crm/groups/:id/members", middleware.RequireRole("owner", "admin"), handlers.RemoveGroupMembers)
