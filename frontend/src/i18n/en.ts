@@ -520,6 +520,7 @@ export default {
   chatbot_status_on: 'ON',
   chatbot_status_off: 'OFF',
   chatbot_channel_autoreply_label: 'Per-channel auto-reply',
+  chatbot_channel_autoreply_short: 'Auto-reply',
   chatbot_channels_summary: '{active}/{total} channels enabled',
   chatbot_master_off_hint: 'Disabled by master switch',
   chatbot_all_oa_channels: 'All active OA channels',

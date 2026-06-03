@@ -30,13 +30,13 @@
       </v-card>
     </v-dialog>
 
-    <!-- Chatbot Toggle Panel (Admin/Owner only) -->
-    <v-card v-if="isAdmin" class="pa-4 mb-4" variant="tonal" color="primary">
+    <!-- Chatbot Toggle Panel (Admin/Owner only) — master switch only -->
+    <v-card v-if="isAdmin" class="pa-4 mb-4" variant="tonal" :color="chatbotActive ? 'primary' : 'grey-lighten-2'">
       <!-- Master switch -->
       <div class="d-flex align-center flex-wrap ga-3">
-        <v-icon color="primary" size="large">mdi-robot</v-icon>
+        <v-icon :color="chatbotActive ? 'primary' : 'grey'" size="large">mdi-robot</v-icon>
         <div>
-          <div class="text-subtitle-2 font-weight-bold text-primary">{{ $t('chatbot_master_label') }}</div>
+          <div class="text-subtitle-2 font-weight-bold" :class="chatbotActive ? 'text-primary' : 'text-grey-darken-1'">{{ $t('chatbot_master_label') }}</div>
           <div class="text-caption text-grey-darken-1">{{ $t('chatbot_master_desc') }}</div>
         </div>
         <v-spacer />
@@ -55,40 +55,6 @@
           />
         </div>
       </div>
-
-      <!-- Per-channel auto-reply switches (active OA webhook channels only) -->
-      <template v-if="webhookChannels.length">
-        <v-divider class="my-3" />
-        <div class="d-flex align-center mb-1 px-1">
-          <span class="text-caption font-weight-medium text-grey-darken-1">{{ $t('chatbot_channel_autoreply_label') }}</span>
-          <v-spacer />
-          <span class="text-caption text-grey-darken-1">
-            {{ $t('chatbot_channels_summary', { active: activeAutoReplyCount, total: webhookChannels.length }) }}
-          </span>
-        </div>
-        <v-list density="compact" bg-color="transparent" class="py-0">
-          <v-list-item v-for="ch in webhookChannels" :key="ch.id" class="px-1">
-            <template #prepend>
-              <v-icon size="small" class="mr-2" :color="ch.channel_type === 'facebook' ? 'blue' : 'light-blue-darken-2'">
-                {{ ch.channel_type === 'facebook' ? 'mdi-facebook' : 'mdi-chat' }}
-              </v-icon>
-            </template>
-            <v-list-item-title class="text-body-2">{{ ch.name }}</v-list-item-title>
-            <template #append>
-              <span v-if="!chatbotActive" class="text-caption text-grey mr-2">{{ $t('chatbot_master_off_hint') }}</span>
-              <v-switch
-                :model-value="ch.auto_reply_enabled"
-                color="success"
-                hide-details
-                density="compact"
-                :loading="togglingChannelId === ch.id"
-                :disabled="!chatbotActive || togglingChannelId === ch.id"
-                @update:model-value="(v: any) => toggleChannelAutoReply(ch, !!v)"
-              />
-            </template>
-          </v-list-item>
-        </v-list>
-      </template>
     </v-card>
 
     <div class="d-flex flex-wrap align-center mb-4 ga-2">
@@ -299,7 +265,6 @@ import { Line } from 'vue-chartjs'
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend } from 'chart.js'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
-import { useChannelStore, type Channel } from '../stores/channels'
 import AiCostCarousel from '../components/dashboard/AiCostCarousel.vue'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend)
@@ -315,22 +280,8 @@ const isAdmin = computed(() => {
   return role === 'owner' || role === 'admin'
 })
 
-const channelStore = useChannelStore()
 const chatbotActive = ref(true)
 const togglingChatbot = ref(false)
-const togglingChannelId = ref<string | null>(null)
-
-// Channels that can run a webhook-based chatbot: OA-type AND currently active.
-// Personal Zalo (no webhook) and deactivated channels are never shown/controllable.
-const WEBHOOK_CHANNEL_TYPES = ['zalo_oa', 'facebook']
-const webhookChannels = computed(() =>
-  channelStore.channels.filter(
-    (c) => WEBHOOK_CHANNEL_TYPES.includes(c.channel_type) && c.is_active
-  )
-)
-const activeAutoReplyCount = computed(
-  () => webhookChannels.value.filter((c) => c.auto_reply_enabled).length
-)
 
 async function fetchChatbotStatus() {
   if (!isAdmin.value) return
@@ -338,13 +289,6 @@ async function fetchChatbotStatus() {
     const { data } = await api.get(`/tenants/${tenantId.value}/settings`)
     chatbotActive.value = data?.settings?.chatbot_active !== 'false'
   } catch { /* ignore */ }
-}
-
-async function fetchChannelsForPanel() {
-  if (!isAdmin.value) return
-  try {
-    await channelStore.fetchChannels(tenantId.value)
-  } catch { /* ignore — panel simply renders empty */ }
 }
 
 async function toggleChatbot(val: any) {
@@ -359,18 +303,6 @@ async function toggleChatbot(val: any) {
     alert(t('chatbot_toggle_error') + ': ' + (e.response?.data?.error || e.message))
   } finally {
     togglingChatbot.value = false
-  }
-}
-
-async function toggleChannelAutoReply(ch: Channel, val: boolean) {
-  togglingChannelId.value = ch.id
-  try {
-    await channelStore.updateChannel(tenantId.value, ch.id, { auto_reply_enabled: val })
-  } catch (e: any) {
-    ch.auto_reply_enabled = !val
-    alert(t('chatbot_toggle_error') + ': ' + (e.response?.data?.error || e.message))
-  } finally {
-    togglingChannelId.value = null
   }
 }
 
@@ -566,7 +498,6 @@ onMounted(() => {
   loadDemoStatus()
   loadDashboard()
   fetchChatbotStatus()
-  fetchChannelsForPanel()
 })
 
 function timeAgo(dateStr: string) {

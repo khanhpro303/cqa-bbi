@@ -48,6 +48,27 @@
               </span>
             </div>
           </div>
+
+          <!-- Per-channel auto-reply (webhook channels only) — separate from "hoạt động" -->
+          <div v-if="WEBHOOK_CHANNEL_TYPES.includes(ch.channel_type)" class="d-flex align-center justify-space-between mb-2">
+            <span class="text-caption text-grey">{{ $t('chatbot_channel_autoreply_short') }}</span>
+            <div class="d-flex align-center ga-1" @click.stop>
+              <span v-if="!chatbotActive" class="text-caption text-grey">{{ $t('chatbot_master_off_hint') }}</span>
+              <v-switch
+                :model-value="ch.auto_reply_enabled"
+                hide-details
+                density="compact"
+                color="success"
+                :loading="togglingAutoReplyId === ch.id"
+                :disabled="!authStore.canEdit('channels') || !ch.is_active || !chatbotActive || togglingAutoReplyId === ch.id"
+                @update:model-value="(v: any) => toggleAutoReply(ch, !!v)"
+              />
+              <span class="text-caption font-weight-medium" :class="ch.auto_reply_enabled ? 'text-success' : 'text-grey'">
+                {{ ch.auto_reply_enabled ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
+              </span>
+            </div>
+          </div>
+
           <div class="d-flex align-center justify-space-between mb-2">
             <span class="text-caption text-grey">{{ $t('sync_status') }}</span>
             <v-chip size="x-small" :color="syncColor(ch.last_sync_status)" variant="tonal">
@@ -290,6 +311,32 @@ const snackbar = ref(false)
 const snackText = ref('')
 const snackColor = ref('success')
 
+// Per-channel auto-reply: only webhook channels expose the toggle; the tenant
+// master switch (chatbot_active) gates them all.
+const WEBHOOK_CHANNEL_TYPES = ['zalo_oa', 'facebook']
+const togglingAutoReplyId = ref('')
+const chatbotActive = ref(true)
+
+async function fetchChatbotStatus() {
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/settings`)
+    chatbotActive.value = data?.settings?.chatbot_active !== 'false'
+  } catch { /* ignore — default to enabled */ }
+}
+
+async function toggleAutoReply(ch: any, val: boolean) {
+  togglingAutoReplyId.value = ch.id
+  try {
+    await channelStore.updateChannel(tenantId.value, ch.id, { auto_reply_enabled: val })
+    showSnack(val ? t('chatbot_status_on') : t('chatbot_status_off'), 'success')
+    await channelStore.fetchChannels(tenantId.value)
+  } catch (e: any) {
+    showSnack(e?.response?.data?.error || t('error'), 'error')
+  } finally {
+    togglingAutoReplyId.value = ''
+  }
+}
+
 const newChannel = reactive({
   channel_type: 'zalo_oa',
   name: '',
@@ -301,6 +348,7 @@ const newChannel = reactive({
 
 onMounted(() => {
   channelStore.fetchChannels(tenantId.value)
+  fetchChatbotStatus()
 
   // Check if returning from OAuth callback
   const params = new URLSearchParams(window.location.search)

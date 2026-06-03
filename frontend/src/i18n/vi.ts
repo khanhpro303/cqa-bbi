@@ -520,6 +520,7 @@ export default {
   chatbot_status_on: 'ĐANG BẬT',
   chatbot_status_off: 'ĐANG TẮT',
   chatbot_channel_autoreply_label: 'Tự động trả lời theo kênh',
+  chatbot_channel_autoreply_short: 'Tự động trả lời',
   chatbot_channels_summary: '{active}/{total} kênh đang bật',
   chatbot_master_off_hint: 'Đang tắt bởi công tắc tổng',
   chatbot_all_oa_channels: 'Tất cả kênh OA đang hoạt động',
