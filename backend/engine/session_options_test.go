@@ -156,3 +156,33 @@ func TestOrderCustomerSuffixStable(t *testing.T) {
 		t.Errorf("AwaitingOrderCustomerSuffix = %q; want \":awaiting_order_customer\"", AwaitingOrderCustomerSuffix)
 	}
 }
+
+// TestDebtCustomerStateNilRedisSafe verifies the debt-by-customer state helpers
+// are nil-safe: with no Redis configured Store is a no-op and Take returns
+// ok=false without panicking.
+func TestDebtCustomerStateNilRedisSafe(t *testing.T) {
+	if db.RedisClient != nil {
+		t.Skip("Redis configured; this test only covers the nil-Redis contract")
+	}
+	ctx := context.Background()
+	const sessionKey = "zalo_session:ch1:u123"
+
+	StoreDebtCustomerState(ctx, sessionKey, DebtCustomerState{Stage: DebtCustomerStagePeriod, Codes: []string{"S001"}}, 10)
+	StoreDebtCustomerState(ctx, sessionKey, DebtCustomerState{}, 10) // empty stage is a no-op
+
+	if _, ok := TakeDebtCustomerState(ctx, sessionKey); ok {
+		t.Errorf("TakeDebtCustomerState with nil Redis ok = true; want false")
+	}
+}
+
+// TestDebtCustomerSuffixStable pins the debt-flow Redis key suffix and asserts
+// it differs from the orders suffix, so an in-flight orders flow and an
+// in-flight debt flow can never collide on the same session key.
+func TestDebtCustomerSuffixStable(t *testing.T) {
+	if AwaitingDebtCustomerSuffix != ":awaiting_debt_customer" {
+		t.Errorf("AwaitingDebtCustomerSuffix = %q; want \":awaiting_debt_customer\"", AwaitingDebtCustomerSuffix)
+	}
+	if AwaitingDebtCustomerSuffix == AwaitingOrderCustomerSuffix {
+		t.Errorf("debt and orders suffixes must differ; both = %q", AwaitingDebtCustomerSuffix)
+	}
+}

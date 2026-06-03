@@ -2713,8 +2713,15 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			data, err = client.SearchPartners(search, limit)
 		}
 	case "debt":
+		// Shared across the private debt-by-customer state machine (below) and
+		// the legacy resolution that follows: the resolved customer codes and a
+		// flag marking that the private driver already produced them (so the
+		// legacy block is skipped and does not re-resolve the period word).
+		var targetCustomerCodes []string
+		privateDebtResolved := false
+
 		if isGenericDebtSearch(search) {
-			promptText := "Bạn muốn xem đối chiếu công nợ trong khoảng thời gian nào? Vui lòng nhắn: \"tháng này\", \"tháng trước\" hoặc \"quý này\"."
+			promptText := debtPeriodPromptText
 
 			// Deliver the period question to the customer ourselves, exactly like
 			// the inventory dòng-vs-SKU picker above. The Langflow agent only ever
@@ -2778,69 +2785,26 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			return
 		}
 
-		var targetCustomerCodes []string
-		if scopeType == "own" {
-			ownCode := permCtx.CustomerCode
-			if ownCode == "" {
+		// PRIVATE bot "debt by customer" flow. The staff member names a customer,
+		// the backend resolves it against the local cache + scope, then asks which
+		// PERIOD (tháng này / tháng trước / quý này) before returning the ledger —
+		// instead of silently defaulting to the current month. Carried across turns
+		// via the debt-customer session state. Mirrors the orders-by-customer flow
+		// in erp_orders_private.go. Placed AFTER the generic/customer prompts above
+		// because a continuation reply (a bare code, or a period word) matches
+		// neither, so it always reaches this driver. See docs/admin/debt-query-flow.md.
+		if permCtx.AgentType == "private" && partnerID == "" {
+			ctxReq := c.Request.Context()
+			ownCode := leadingCustomerCode(resolveOwnCustomerCode(permCtx, tenantID))
+			var allowedDebtCodes []string
+			if scopeType == "assigned" {
 				var groupIDs []string
 				for _, grp := range permCtx.Groups {
 					groupIDs = append(groupIDs, grp.GroupID)
 				}
-				ownCode = resolveGroupCustomerCode(tenantID, groupIDs)
+				allowedDebtCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
 			}
-			if ownCode != "" {
-				targetCustomerCodes = []string{ownCode}
-			}
-		} else {
-			if partnerID != "" {
-				code, errCode := resolveCustomerCodeFromPartnerID(client, partnerID)
-				if errCode == nil && code != "" {
-					targetCustomerCodes = []string{code}
-				}
-			} else if search != "" {
-				_, _, isPeriod := parseDebtPeriodFromSearch(search)
-				if !isPeriod {
-					// PRIVATE bot: resolve the customer code/name against the local
-					// MySQL cache (cached_customers) first — fast, no ERP round-trip.
-					if permCtx.AgentType == "private" {
-						targetCustomerCodes = resolveCustomerCodesFromCache(tenantID, search)
-					}
-					// Fallback to the live ERP lookup on a cache miss (also the only
-					// path for non-private scopes) — preserves the original behaviour.
-					if len(targetCustomerCodes) == 0 {
-						partners, errPartners := client.SearchPartners(search, 5)
-						if errPartners == nil {
-							for _, p := range partners {
-								maVal := getMapString(p, "MA", "code", "ma")
-								if maVal != "" {
-									targetCustomerCodes = append(targetCustomerCodes, maVal)
-								}
-							}
-						}
-					}
-				}
-			}
-
-			if len(targetCustomerCodes) == 0 && scopeType == "assigned" {
-				var groupIDs []string
-				for _, grp := range permCtx.Groups {
-					groupIDs = append(groupIDs, grp.GroupID)
-				}
-				targetCustomerCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
-			}
-		}
-
-		// PRIVATE bot safety net: a specific code/name that resolved to nothing
-		// (cache miss + ERP miss) must NOT fall through with an empty DS_KHACH_HANG,
-		// which would return EVERY customer's debt. Ask again for the code/name
-		// instead. Period queries are exempt — they legitimately span all customers.
-		if permCtx.AgentType == "private" && partnerID == "" && len(targetCustomerCodes) == 0 {
-			if _, _, isPeriod := parseDebtPeriodFromSearch(search); !isPeriod {
-				if errPrompt := sendDebtCustomerPrompt(c.Request.Context(), tenantID, permCtx); errPrompt != nil {
-					log.Printf("[debt_query] cannot send customer prompt to %s: %v", permCtx.ZaloUserID, errPrompt)
-				} else {
-					log.Printf("[debt_query] sent công nợ customer prompt (unresolved) to %s", permCtx.ZaloUserID)
-				}
+			debtPromptResponse := func() {
 				c.JSON(http.StatusOK, gin.H{
 					"status":         "success",
 					"is_debt_prompt": true,
@@ -2848,9 +2812,157 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					"message":        "zalo_rich_message_sent_directly",
 					"count":          0,
 				})
-				return
+			}
+			pushDebtPrompt := func(text string) {
+				if err := sendPrivateDebtPrompt(ctxReq, tenantID, permCtx, text); err != nil {
+					log.Printf("[debt_query] failed to send private debt prompt to %s: %v", permCtx.ZaloUserID, err)
+				}
+			}
+
+			if state, ok := takeDebtCustomerState(ctxReq, tenantID, permCtx); ok {
+				switch state.Stage {
+				case engine.DebtCustomerStagePick:
+					// This turn names the customer to use. Resolve the reply
+					// against the cache + scope DIRECTLY (not constrained to the
+					// previously-offered set) so any in-scope code advances
+					// instead of looping forever on a code that was never listed.
+					chosen := scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID, search), scopeType, ownCode, allowedDebtCodes)
+					switch {
+					case len(chosen) == 0:
+						storeDebtCustomerState(ctxReq, tenantID, permCtx, state)
+						pushDebtPrompt(debtCustomerPickByCodeText)
+						debtPromptResponse()
+						return
+					case len(chosen) > 1:
+						storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePick, Codes: chosen})
+						pushDebtPrompt(debtCustomerPickByCodeText)
+						debtPromptResponse()
+						return
+					}
+					// Exactly one customer resolved — advance to the period step.
+					storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePeriod, Codes: chosen})
+					pushDebtPrompt(debtPeriodPromptText)
+					debtPromptResponse()
+					return
+				case engine.DebtCustomerStagePeriod:
+					if _, _, isPeriod := parseDebtPeriodFromSearch(search); isPeriod {
+						// Period supplied — replay the scope-approved codes and
+						// fall through to the query (period parsed from search).
+						targetCustomerCodes = state.Codes
+						privateDebtResolved = true
+					} else {
+						storeDebtCustomerState(ctxReq, tenantID, permCtx, state)
+						pushDebtPrompt(debtPeriodPromptText)
+						debtPromptResponse()
+						return
+					}
+				}
+			} else if _, _, isPeriod := parseDebtPeriodFromSearch(search); !isPeriod {
+				// Fresh turn naming a concrete customer (not a period word — a bare
+				// period with no in-flight state is a scope-wide continuation left
+				// to the legacy resolution below). Generic "công nợ của khách hàng"
+				// was already answered by the customer prompt above.
+				if len(tokenizeCustomerQuery(search)) > 0 {
+					approved := scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID, search), scopeType, ownCode, allowedDebtCodes)
+					switch {
+					case len(approved) == 0:
+						// Nothing in scope — ask again for a code/name (the legacy
+						// safety net's behaviour, kept here for the resolved path).
+						pushDebtPrompt(debtCustomerPromptText)
+						debtPromptResponse()
+						return
+					case len(approved) > 1:
+						storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePick, Codes: approved})
+						pushDebtPrompt(debtCustomerPickByCodeText)
+						debtPromptResponse()
+						return
+					}
+					// Exactly one customer resolved and (per the outer guard) no
+					// period named yet → ask which period before querying. A
+					// customer named together with a period in one message is rare
+					// and falls through to the legacy scope-wide path, as before.
+					storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePeriod, Codes: approved})
+					pushDebtPrompt(debtPeriodPromptText)
+					debtPromptResponse()
+					return
+				}
 			}
 		}
+
+		if !privateDebtResolved {
+			if scopeType == "own" {
+				ownCode := permCtx.CustomerCode
+				if ownCode == "" {
+					var groupIDs []string
+					for _, grp := range permCtx.Groups {
+						groupIDs = append(groupIDs, grp.GroupID)
+					}
+					ownCode = resolveGroupCustomerCode(tenantID, groupIDs)
+				}
+				if ownCode != "" {
+					targetCustomerCodes = []string{ownCode}
+				}
+			} else {
+				if partnerID != "" {
+					code, errCode := resolveCustomerCodeFromPartnerID(client, partnerID)
+					if errCode == nil && code != "" {
+						targetCustomerCodes = []string{code}
+					}
+				} else if search != "" {
+					_, _, isPeriod := parseDebtPeriodFromSearch(search)
+					if !isPeriod {
+						// PRIVATE bot: resolve the customer code/name against the local
+						// MySQL cache (cached_customers) first — fast, no ERP round-trip.
+						if permCtx.AgentType == "private" {
+							targetCustomerCodes = resolveCustomerCodesFromCache(tenantID, search)
+						}
+						// Fallback to the live ERP lookup on a cache miss (also the only
+						// path for non-private scopes) — preserves the original behaviour.
+						if len(targetCustomerCodes) == 0 {
+							partners, errPartners := client.SearchPartners(search, 5)
+							if errPartners == nil {
+								for _, p := range partners {
+									maVal := getMapString(p, "MA", "code", "ma")
+									if maVal != "" {
+										targetCustomerCodes = append(targetCustomerCodes, maVal)
+									}
+								}
+							}
+						}
+					}
+				}
+
+				if len(targetCustomerCodes) == 0 && scopeType == "assigned" {
+					var groupIDs []string
+					for _, grp := range permCtx.Groups {
+						groupIDs = append(groupIDs, grp.GroupID)
+					}
+					targetCustomerCodes, _ = resolveGroupCustomerCodes(tenantID, groupIDs)
+				}
+			}
+
+			// PRIVATE bot safety net: a specific code/name that resolved to nothing
+			// (cache miss + ERP miss) must NOT fall through with an empty DS_KHACH_HANG,
+			// which would return EVERY customer's debt. Ask again for the code/name
+			// instead. Period queries are exempt — they legitimately span all customers.
+			if permCtx.AgentType == "private" && partnerID == "" && len(targetCustomerCodes) == 0 {
+				if _, _, isPeriod := parseDebtPeriodFromSearch(search); !isPeriod {
+					if errPrompt := sendDebtCustomerPrompt(c.Request.Context(), tenantID, permCtx); errPrompt != nil {
+						log.Printf("[debt_query] cannot send customer prompt to %s: %v", permCtx.ZaloUserID, errPrompt)
+					} else {
+						log.Printf("[debt_query] sent công nợ customer prompt (unresolved) to %s", permCtx.ZaloUserID)
+					}
+					c.JSON(http.StatusOK, gin.H{
+						"status":         "success",
+						"is_debt_prompt": true,
+						"data":           []map[string]interface{}{},
+						"message":        "zalo_rich_message_sent_directly",
+						"count":          0,
+					})
+					return
+				}
+			}
+		} // end if !privateDebtResolved
 
 		tuNgay, denNgay, _ := parseDebtPeriodFromSearch(search)
 		if tuNgay == "" || denNgay == "" {

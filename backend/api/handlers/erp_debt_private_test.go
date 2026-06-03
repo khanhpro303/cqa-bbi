@@ -57,6 +57,39 @@ func TestTokenizeCustomerQuery(t *testing.T) {
 	}
 }
 
+func TestScopeApprovedDebtCodes(t *testing.T) {
+	allowed := []string{"S052 - Phượt 4P", "EG05"}
+	tests := []struct {
+		name      string
+		resolved  []string
+		scopeType string
+		ownCode   string
+		allowed   []string
+		want      []string
+	}{
+		{"all keeps resolved", []string{"S001", "S002"}, "all", "", nil, []string{"S001", "S002"}},
+		{"all strips labels + dedupes", []string{"S001 - A", "S001"}, "all", "", nil, []string{"S001"}},
+		{"assigned in group", []string{"S052"}, "assigned", "", allowed, []string{"S052"}},
+		{"assigned out of group", []string{"S999"}, "assigned", "", allowed, []string{}},
+		{"assigned mixed keeps only in-group", []string{"S052", "S999", "EG05"}, "assigned", "", allowed, []string{"EG05", "S052"}},
+		{"own matches own", []string{"S001"}, "own", "S001", nil, []string{"S001"}},
+		{"own rejects other", []string{"S002"}, "own", "S001", nil, []string{}},
+		{"unknown scope denies", []string{"S001"}, "weird", "", allowed, []string{}},
+		{"empty resolved", nil, "all", "", nil, []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := scopeApprovedDebtCodes(tt.resolved, tt.scopeType, tt.ownCode, tt.allowed)
+			if len(got) == 0 && len(tt.want) == 0 {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("scopeApprovedDebtCodes(%v, %q) = %v, want %v", tt.resolved, tt.scopeType, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFoldDebtSearch(t *testing.T) {
 	tests := []struct {
 		in   string

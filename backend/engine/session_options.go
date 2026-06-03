@@ -232,3 +232,69 @@ func TakeOrderCustomerState(ctx context.Context, sessionKey string) (OrderCustom
 	}
 	return state, true
 }
+
+// AwaitingDebtCustomerSuffix is the debt-flow twin of
+// AwaitingOrderCustomerSuffix: it carries the private-bot "debt by customer"
+// flow across turns. The staff member first names a customer, then answers the
+// "tháng này / tháng trước / quý này" prompt; only that second turn carries the
+// resolved codes (the reply "tháng trước" has no customer token), so the codes
+// are stashed here. A separate suffix keeps an in-flight orders flow and an
+// in-flight debt flow from colliding on the same session key.
+const AwaitingDebtCustomerSuffix = ":awaiting_debt_customer"
+
+// Debt-customer flow stages stored in DebtCustomerState.Stage.
+const (
+	// DebtCustomerStagePick — the name matched several customers; the next
+	// turn picks one (a code/name). Mirrors OrderCustomerStagePick.
+	DebtCustomerStagePick = "pick"
+	// DebtCustomerStagePeriod — the customer is resolved; the next turn
+	// supplies the period (tháng này / tháng trước / quý này).
+	DebtCustomerStagePeriod = "period"
+)
+
+// DebtCustomerState is the cross-turn payload for the private-bot debt flow.
+// Codes are bare customer codes (e.g. "S001") that have ALREADY been
+// intersected with the staff member's scope when stored, so replaying them on
+// a later turn cannot leak another customer's debt.
+type DebtCustomerState struct {
+	Stage string   `json:"stage"`
+	Codes []string `json:"codes"`
+}
+
+// StoreDebtCustomerState persists the debt-by-customer flow state under the
+// session key so the next free-text turn (a customer pick or a period word)
+// can resume it. TTL follows the session timeout plus a 1-minute grace. No-op
+// when Redis is unavailable or the stage is empty.
+func StoreDebtCustomerState(ctx context.Context, sessionKey string, state DebtCustomerState, timeoutMinutes int) {
+	if db.RedisClient == nil || strings.TrimSpace(state.Stage) == "" {
+		return
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		log.Printf("[session_options] failed to marshal debt-customer state for %s: %v", sessionKey, err)
+		return
+	}
+	ttl := time.Duration(timeoutMinutes)*time.Minute + 1*time.Minute
+	db.RedisClient.Set(ctx, sessionKey+AwaitingDebtCustomerSuffix, raw, ttl)
+}
+
+// TakeDebtCustomerState returns and deletes (single-use) the debt-by-customer
+// flow state. ok is false when no state is set, Redis is unavailable, or the
+// stored value cannot be decoded. Single-use semantics keep a stale customer
+// scope from leaking into unrelated later turns.
+func TakeDebtCustomerState(ctx context.Context, sessionKey string) (DebtCustomerState, bool) {
+	if db.RedisClient == nil {
+		return DebtCustomerState{}, false
+	}
+	key := sessionKey + AwaitingDebtCustomerSuffix
+	val, err := db.RedisClient.Get(ctx, key).Result()
+	if err != nil || strings.TrimSpace(val) == "" {
+		return DebtCustomerState{}, false
+	}
+	db.RedisClient.Del(ctx, key)
+	var state DebtCustomerState
+	if err := json.Unmarshal([]byte(val), &state); err != nil || strings.TrimSpace(state.Stage) == "" {
+		return DebtCustomerState{}, false
+	}
+	return state, true
+}

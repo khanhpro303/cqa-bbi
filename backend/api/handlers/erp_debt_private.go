@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"log"
 	"sort"
 	"strings"
 	"unicode"
@@ -23,6 +24,17 @@ import (
 // worker stores the awaiting-followup marker on the [RICH_MESSAGE_SENT] reply
 // and the staff member's next turn ("S001") is not swallowed as CASUAL.
 const debtCustomerPromptText = "Anh/chị cho mình mã hoặc tên khách hàng cần tra cứu nhé."
+
+// debtPeriodPromptText is the period question reused by both the generic-debt
+// branch (bare "công nợ") and the private after-customer step. Kept identical
+// to the literal the generic branch sends so staff see one consistent question.
+const debtPeriodPromptText = "Anh/chị muốn xem đối chiếu công nợ trong khoảng thời gian nào? Vui lòng nhắn: \"tháng này\", \"tháng trước\" hoặc \"quý này\"."
+
+// debtCustomerPickByCodeText asks the staff member for an exact customer code
+// when a name/keyword matched several customers, instead of dumping the full
+// list. Mirrors ordersCustomerPickByCodeText: their next reply resolves directly
+// against the cache + scope in the Pick stage, so any in-scope code advances.
+const debtCustomerPickByCodeText = "Có nhiều khách khớp. Anh/chị cho mình mã khách cụ thể nhé (ví dụ: S001)."
 
 // customerCacheResolveLimit caps how many customer codes a single private-bot
 // debt lookup may resolve from the local cache, keeping DS_KHACH_HANG bounded.
@@ -208,4 +220,79 @@ func sendDebtCustomerPrompt(ctx context.Context, tenantID string, permCtx *engin
 		return adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, debtCustomerPromptText)
 	}
 	return adapter.SendMessage(ctx, permCtx.ZaloUserID, debtCustomerPromptText)
+}
+
+// sendPrivateDebtPrompt delivers an arbitrary plain-text prompt (pick / period)
+// to the staff member via the active Zalo OA adapter, preferring the matched
+// CRM group chat over the direct user thread. Mirrors sendPrivateOrdersPrompt so
+// the debt pick/period steps use the same delivery path as the orders flow.
+func sendPrivateDebtPrompt(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, text string) error {
+	adapter, _, err := loadActiveZaloOAAdapter(tenantID)
+	if err != nil {
+		return err
+	}
+	if groupID := resolveZaloGroupID(tenantID, permCtx); groupID != "" {
+		return adapter.SendGroupMessage(ctx, groupID, text)
+	}
+	return adapter.SendMessage(ctx, permCtx.ZaloUserID, text)
+}
+
+// resolveDebtCustomerCodes resolves a private-bot debt query ("S001", "Huy",
+// "S001 Huy") to bare customer codes using the local MySQL customer cache,
+// reusing the shared cache-resolve core with the debt-specific tokenizer.
+// Returns nil on a full cache miss.
+func resolveDebtCustomerCodes(tenantID, search string) []string {
+	return resolveCachedCustomerCodesFromTokens(tenantID, tokenizeCustomerQuery(search))
+}
+
+// scopeApprovedDebtCodes intersects cache-resolved customer codes with the staff
+// member's scope so a named-customer debt lookup can never widen access. Mirrors
+// scopeApprovedOrdersCodes:
+//   - all      → every resolved code
+//   - assigned → resolved ∩ allowedCodes
+//   - own      → resolved ∩ {ownCode}
+//   - other    → none (deny)
+//
+// Returned codes are bare (label stripped) and de-duplicated. An empty result
+// means the staff member may not see any of the named customers.
+func scopeApprovedDebtCodes(resolved []string, scopeType, ownCode string, allowedCodes []string) []string {
+	if len(resolved) == 0 {
+		return nil
+	}
+	switch scopeType {
+	case "all":
+		return dedupeBareCodes(resolved)
+	case "assigned":
+		return intersectBareCodes(resolved, allowedCodes)
+	case "own":
+		return intersectBareCodes(resolved, []string{ownCode})
+	default:
+		return nil
+	}
+}
+
+// storeDebtCustomerState persists the debt-by-customer flow state under the
+// worker's session key so the next free-text turn resumes it. No-op when no
+// active OA channel exists.
+func storeDebtCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, state engine.DebtCustomerState) {
+	_, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
+	if err != nil || activeChannel == nil {
+		log.Printf("[debt_query] cannot store debt-customer state (no active OA channel): %v", err)
+		return
+	}
+	groupID := resolveZaloGroupID(tenantID, permCtx)
+	sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
+	engine.StoreDebtCustomerState(ctx, sessionKey, state, orderCustomerSessionTimeout())
+}
+
+// takeDebtCustomerState returns and clears any stored debt-by-customer flow
+// state for this staff member's session.
+func takeDebtCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext) (engine.DebtCustomerState, bool) {
+	_, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
+	if err != nil || activeChannel == nil {
+		return engine.DebtCustomerState{}, false
+	}
+	groupID := resolveZaloGroupID(tenantID, permCtx)
+	sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
+	return engine.TakeDebtCustomerState(ctx, sessionKey)
 }

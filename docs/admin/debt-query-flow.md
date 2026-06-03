@@ -391,9 +391,13 @@ Không có dữ liệu công nợ trong khoảng anh hỏi.
 | | `backend/api/handlers/erp_test.go:334` | `TestParseDebtPeriodFromSearch` |
 | | `backend/api/handlers/erp_test.go:383` | `TestMapDebtItemForLLM` |
 | Private: detect generic | `backend/api/handlers/erp_debt_private.go` | `isPrivateDebtCustomerQuery` |
-| Private: resolve cache | `backend/api/handlers/erp_debt_private.go` | `resolveCustomerCodesFromCache` (AND→OR) |
-| Private: gửi prompt mã/tên | `backend/api/handlers/erp_debt_private.go` | `sendDebtCustomerPrompt` |
-| Private: tests | `backend/api/handlers/erp_debt_private_test.go` | `TestIsPrivateDebtCustomerQuery` / `TestTokenizeCustomerQuery` / `TestFoldDebtSearch` |
+| Private: resolve cache | `backend/api/handlers/erp_debt_private.go` | `resolveDebtCustomerCodes` / `resolveCustomerCodesFromCache` (AND→OR) |
+| Private: scope GIAO | `backend/api/handlers/erp_debt_private.go` | `scopeApprovedDebtCodes` |
+| Private: gửi prompt | `backend/api/handlers/erp_debt_private.go` | `sendDebtCustomerPrompt` / `sendPrivateDebtPrompt` |
+| Private: state kỳ/pick | `backend/engine/session_options.go` | `DebtCustomerState` (`:awaiting_debt_customer`, stages `pick`/`period`) |
+| Private: driver | `backend/api/handlers/erp.go` (`case "debt"`) | take state → Pick/Period; mặc định `tháng này` CHỈ cho nhánh kỳ-toàn-scope |
+| Private: tests | `backend/api/handlers/erp_debt_private_test.go` | `TestIsPrivateDebtCustomerQuery` / `TestTokenizeCustomerQuery` / `TestScopeApprovedDebtCodes` / `TestFoldDebtSearch` |
+| | `backend/engine/session_options_test.go` | `TestDebtCustomerStateNilRedisSafe` / `TestDebtCustomerSuffixStable` |
 
 ---
 
@@ -415,27 +419,49 @@ Staff: "Công nợ của khách hàng bao nhiêu"
 
 Staff: "S001"   (hoặc "Huy", "S001 Huy")
   → TakeAwaitingFollowup ép IN_SCOPE (không bị nuốt) → debt(search="S001")
-  • isPrivateDebtCustomerQuery=false → nhánh resolve:
-      resolveCustomerCodesFromCache(tenantID,"S001")  ← cache MySQL cached_customers
-        mỗi token: ma LIKE %tok% OR ho_va_ten LIKE %tok%
-        ghép GIAO (AND); giao rỗng → lùi HỢP (OR); cap 20
-      cache miss hoàn toàn → fallback client.SearchPartners (hành vi cũ)
-  → targetCustomerCodes=[S001] → parse kỳ (mặc định tháng này) → th_cong_no_phai_thu/search
+  • không có state → nhánh resolve cụ thể (driver private):
+      approved = scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID,"S001"), scope…)
+        cache MySQL cached_customers; mỗi token ma LIKE %tok% OR ho_va_ten LIKE %tok%
+        GIAO (AND) → rỗng thì HỢP (OR); cap 20; rồi GIAO với scope (assigned/all/own)
+  • len(approved) > 1  → lưu DebtCustomerState{Pick} → hỏi "cho mình mã khách cụ thể"
+  • len(approved) == 1 → lưu DebtCustomerState{Period} → HỎI KỲ
+      "Anh/chị muốn xem công nợ trong khoảng thời gian nào? tháng này / tháng trước / quý này"
+
+Staff: "tháng trước"   ← KHÔNG còn tự đoán "tháng này" nữa
+  → TakeAwaitingFollowup ép IN_SCOPE → debt(search="tháng trước")
+  • TakeDebtCustomerState → stage Period, Codes=[S001] (đã GIAO scope khi lưu)
+  • parseDebtPeriodFromSearch("tháng trước") ok → targetCustomerCodes=[S001]
+  → th_cong_no_phai_thu/search (TU_NGAY/DEN_NGAY = tháng trước) → đầu kỳ / cuối kỳ
 ```
 
-**Ba thay đổi so với public** (đều gate cứng `permCtx.AgentType == "private"`,
-nằm trong `case "debt"` nhánh `else`):
+**State machine `debt` theo khách** (gate cứng `permCtx.AgentType == "private"`,
+soi gương flow orders trong `erp_orders_private.go`):
 
-1. **Prompt mã/tên** khi câu hỏi nhắc khách chung chung mà chưa có mã/tên/kỳ
-   (`isPrivateDebtCustomerQuery`). Trả đúng shape `is_debt_prompt` → marker phủ
-   lượt sau (xem [overview §D](./private-bot-overview.md)).
-2. **Resolve từ cache trước** (`resolveCustomerCodesFromCache`), `SearchPartners`
-   chỉ còn là **fallback** khi cache miss → nhanh, không phụ thuộc mạng ERP.
-3. **Lưới an toàn:** token cụ thể nhưng resolve rỗng (cache + ERP đều miss) và
-   không phải kỳ → **hỏi lại mã/tên** thay vì để `DS_KHACH_HANG=""` (vốn sẽ trả
-   công nợ **toàn bộ** khách). Câu kỳ thuần ("công nợ tháng này", scope `all`) vẫn
-   cho `DS_KHACH_HANG=""` để xem toàn bộ — đúng ý định.
+1. **Hỏi KỲ sau khi chốt khách** — đây là điểm khác lớn nhất so với trước. Cũ:
+   gõ "S001" → tự mặc định `tháng này` rồi trả luôn (nhân viên không bao giờ
+   được hỏi kỳ). Nay: 1 khách → lưu `DebtCustomerState{Period}` và gửi
+   `debtPeriodPromptText`; chỉ khi lượt sau là từ-kỳ hợp lệ
+   (`parseDebtPeriodFromSearch` ok) mới query. Mặc định `tháng này` chỉ còn áp cho
+   nhánh kỳ-toàn-scope (bare "công nợ"), **không** cho nhánh theo-khách.
+2. **Pick by code** — tên/khoá khớp nhiều khách → lưu `DebtCustomerState{Pick}`
+   và hỏi mã cụ thể (`debtCustomerPickByCodeText`) thay vì trả nợ của tất cả rồi
+   để LLM tự phân giải. Lượt Pick resolve **trực tiếp** vào cache + scope (không
+   giới hạn trong danh sách đã liệt kê) nên mã in-scope nào cũng tiến được, không
+   lặp vô hạn — đúng bài học từ flow orders.
+3. **State riêng, single-use, có scope** — `DebtCustomerState` lưu dưới
+   `:awaiting_debt_customer` (khác `:awaiting_order_customer` để debt và orders
+   không đụng nhau giữa chừng). `Codes` đã GIAO scope **khi lưu**, nên replay ở
+   lượt kỳ không thể nới quyền. Take là single-use (xoá sau khi đọc).
+4. **Prompt mã/tên** khi câu hỏi nhắc khách chung chung mà chưa có mã/tên/kỳ
+   (`isPrivateDebtCustomerQuery`) — không đổi.
+5. **Lưới an toàn cũ** vẫn còn ở khối legacy (`if !privateDebtResolved`): token
+   cụ thể resolve rỗng và không phải kỳ → hỏi lại mã/tên thay vì `DS_KHACH_HANG=""`.
 
-> 🔒 **Không đụng public:** khách lẻ luôn `scope == "own"` → đi nhánh `if scopeType
-> == "own"`, không bao giờ chạm 3 khối trên. Toàn bộ helper private cô lập trong
-> `erp_debt_private.go`.
+> ⚙️ **Vì sao đặt driver SAU prompt generic/customer:** lượt tiếp diễn (một mã
+> trần, hoặc một từ-kỳ) KHÔNG khớp `isGenericDebtSearch` lẫn `isPrivateDebtCustomerQuery`,
+> nên luôn tới được driver. Một từ-kỳ trần **không** có state là kỳ-toàn-scope
+> (bare "công nợ" → hỏi kỳ) → driver bỏ qua, để khối legacy xử lý scope-wide.
+
+> 🔒 **Không đụng public:** khách lẻ luôn `scope == "own"` → AgentType ≠ private →
+> không bao giờ chạm driver trên. Toàn bộ helper private cô lập trong
+> `erp_debt_private.go`; state trong `engine/session_options.go`.
