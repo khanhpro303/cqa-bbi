@@ -235,7 +235,10 @@ async function submit(target: 'draft' | 'active') {
     // Upload any pending images first, then persist the campaign with their paths.
     try {
       await composerRef.value?.commit()
-    } catch {
+    } catch (err) {
+      // Surface the real cause (HTTP status + backend error body, or a 413 from
+      // the proxy) so upload failures are diagnosable instead of swallowed.
+      console.error('[crm-campaign] image upload failed', err)
       emit('error', 'campaign_image_upload_error')
       return
     }
