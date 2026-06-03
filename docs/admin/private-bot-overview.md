@@ -89,6 +89,14 @@ nên mỗi phân hệ tự tokenize theo stopword riêng:
 > [delta orders](./order-query-flow.md#b2-flow-hỏi-đơn-theo-khách-mới--chỉ-private)).
 > Các phân hệ khác có thể tái dùng `resolveCachedCustomerCodesFromTokens` khi cần.
 
+> 🔑 **Thứ tự hỏi (private): KHÁCH trước, KỲ/khoảng-ngày sau.** Với `debt`, ngay cả
+> câu mơ hồ **bare "công nợ"** (qua `isGenericDebtSearch`) cũng gửi prompt-khách
+> trước cho bot private — KHÔNG hỏi kỳ trước như bot public/own (2026-06-03). Cùng
+> shape `zalo_rich_message_sent_directly` → có marker `awaiting_followup` → mã khách
+> ở lượt sau ("S001") không bị classifier chấm CASUAL. Trước bản vá, private bare
+> "công nợ" hỏi KỲ trước → mất đồng bộ marker → "S001" rớt → bot im. Chi tiết ở
+> [delta debt](./debt-query-flow.md#bot-private-nhân-viên).
+
 > 🔑 **Scope khi nêu khách:** cả debt lẫn orders nay **đều giao mã khách với scope
 > ngay khi resolve** — debt qua `scopeApprovedDebtCodes`, orders qua
 > `scopeApprovedOrdersCodes` (cùng quy tắc: `all` giữ mọi mã resolve, `assigned`

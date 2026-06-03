@@ -2728,6 +2728,31 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		privateDebtResolved := false
 
 		if isGenericDebtSearch(search) {
+			// PRIVATE bot: a bare "công nợ" names no customer yet, and staff must
+			// scope debt to a customer. Ask WHICH CUSTOMER first (not the period) so
+			// the order is customer → period, matching the private state machine
+			// below. The public/own bot keeps asking the period straight away
+			// because a customer only ever sees their own ledger. Sending the
+			// customer prompt here (same zalo_rich_message_sent_directly shape) is
+			// also what makes the worker store the awaiting-followup marker, so the
+			// staff member's next reply ("S001") is forced IN_SCOPE instead of being
+			// dropped as CASUAL by the intent classifier.
+			if permCtx.AgentType == "private" && partnerID == "" {
+				if errPrompt := sendDebtCustomerPrompt(c.Request.Context(), tenantID, permCtx); errPrompt != nil {
+					log.Printf("[debt_query] cannot send customer prompt (generic private) to %s: %v", permCtx.ZaloUserID, errPrompt)
+				} else {
+					log.Printf("[debt_query] sent công nợ customer prompt (generic private) to %s", permCtx.ZaloUserID)
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"status":         "success",
+					"is_debt_prompt": true,
+					"data":           []map[string]interface{}{},
+					"message":        "zalo_rich_message_sent_directly",
+					"count":          0,
+				})
+				return
+			}
+
 			promptText := debtPeriodPromptText
 
 			// Deliver the period question to the customer ourselves, exactly like

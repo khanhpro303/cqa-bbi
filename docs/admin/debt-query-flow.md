@@ -133,6 +133,19 @@ orders, customers, debt}`. Với công nợ:
 > "công nợ", không kèm kỳ) → đi nhánh **TRÁI**: bot hỏi lại kỳ. Nếu đã có kỳ → đi
 > nhánh **PHẢI**: tìm mã khách, chốt khoảng ngày, gọi ERP, chuẩn hoá số liệu rồi
 > trả về.
+>
+> 🔀 **Nhánh TRÁI rẽ đôi theo agent type (2026-06-03).** Bare "công nợ" đi nhánh
+> YES, nhưng:
+> - **public (own / khách lẻ):** hỏi **KỲ** ngay (khách chỉ xem nợ của chính mình,
+>   không cần nêu khách) — như cũ.
+> - **private (nhân viên):** hỏi **KHÁCH trước** (`sendDebtCustomerPrompt`), vì nhân
+>   viên bắt buộc phải chốt khách. Thứ tự đúng là **khách → kỳ**, khớp state machine
+>   ở mục H. Trước đây bare "công nợ" private bị `isGenericDebtSearch` cướp lượt và
+>   hỏi KỲ trước; rồi lượt kỳ trả nợ toàn scope, **LLM tự đẻ câu hỏi khách** (prose,
+>   không phải shape `zalo_rich_message_sent_directly`) nên worker **không lưu marker
+>   awaiting_followup** → lượt sau gõ "S001" bị classifier chấm CASUAL → **bot im**.
+>   Sửa: private bare "công nợ" gửi đúng prompt-khách (shape rich) → có marker → "S001"
+>   không bị nuốt.
 
 ```
                   respondWithLiveDataV2 → case "debt" (erp.go:2361)
@@ -145,8 +158,9 @@ orders, customers, debt}`. Với công nợ:
                     YES│                            NO │
                        ▼                               ▼
         ┌───────────────────────────┐     1) Resolve targetCustomerCodes (mục D)
-        │ Backend TỰ GỬI tin text    │         (erp.go:2406-2445)
-        │ hỏi kỳ tới Zalo qua        │     2) parseDebtPeriodFromSearch(search)
+        │ public (own): hỏi KỲ       │         (erp.go:2406-2445)
+        │ private (NV): hỏi KHÁCH    │     2) parseDebtPeriodFromSearch(search)
+        │ Backend TỰ GỬI tin text    │
         │ adapter.SendMessage /      │         (erp_debt.go:26) — mặc định "tháng này"
         │ SendGroupMessage           │         (erp.go:2449-2451)
         │ (PLAIN TEXT, không buttons)│     3) branchName ← setting erp_branch_name
@@ -372,7 +386,8 @@ Không có dữ liệu công nợ trong khoảng anh hỏi.
 | Nhánh debt (thật) | `backend/api/handlers/erp.go:2361` | `case "debt"` |
 | Nhánh debt (mock) | `backend/api/handlers/erp.go:2859` | `case "debt"` đường `mock_erp` (ERP chưa bật) |
 | Generic detect | `backend/api/handlers/erp_debt.go:14` | `isGenericDebtSearch` (gồm cả "check công nợ") |
-| Prompt kỳ (backend tự gửi) | `backend/api/handlers/erp.go:2362-2403` | gửi text qua `adapter.SendMessage`/`SendGroupMessage` → trả `is_debt_prompt` + `message="zalo_rich_message_sent_directly"`, `data=[]`, `count=0` |
+| Generic private → prompt-khách | `backend/api/handlers/erp.go` (đầu nhánh YES, gate `AgentType=="private" && partnerID==""`) | bare "công nợ" private gửi `sendDebtCustomerPrompt` (hỏi KHÁCH trước, không hỏi kỳ) → `is_debt_prompt` + `message="zalo_rich_message_sent_directly"` |
+| Prompt kỳ public (backend tự gửi) | `backend/api/handlers/erp.go` (nhánh YES, public/own) | gửi text qua `adapter.SendMessage`/`SendGroupMessage` → trả `is_debt_prompt` + `message="zalo_rich_message_sent_directly"`, `data=[]`, `count=0` |
 | Resolve mã khách | `backend/api/handlers/erp.go:2406-2445` | own / assigned / all |
 | Own + fallback nhóm | `backend/api/handlers/erp.go:2406-2417` | `permCtx.CustomerCode` → `resolveGroupCustomerCode` (số ít) |
 | Partner theo ID | `backend/api/handlers/erp_debt.go:84` | `resolveCustomerCodeFromPartnerID` (erp.go:2421) |
@@ -412,10 +427,21 @@ Mục C/D ở trên trace bot **public** (khách lẻ, `scope == "own"`: chỉ t
 chính mình). Bot **private** (nhân viên) đi nhánh `else` (`assigned`/`all`) và tra
 công nợ **theo mã/tên khách** mình gõ. Hội thoại điển hình:
 
+> 🔑 **Hỏi KHÁCH trước, KỲ sau (2026-06-03).** Có **hai cửa vào** đều ra prompt-khách:
+> - **bare "công nợ"** → `isGenericDebtSearch=true`; với private, nhánh YES gửi luôn
+>   `sendDebtCustomerPrompt` (KHÔNG hỏi kỳ). Đây là bản vá lỗi "S001 im": trước đây
+>   private bare "công nợ" bị hỏi KỲ trước, mất đồng bộ marker → "S001" rớt CASUAL.
+> - **"công nợ của khách hàng"** (nhắc "khách" chung chung) → `isPrivateDebtCustomerQuery=true`
+>   cũng gửi `sendDebtCustomerPrompt`.
+>
+> Cả hai dùng đúng shape `zalo_rich_message_sent_directly` → agent trả
+> `[RICH_MESSAGE_SENT]` → worker lưu marker → lượt sau ("S001") ép `IN_SCOPE`.
+
 ```
-Staff: "Công nợ của khách hàng bao nhiêu"
+Staff: "công nợ"   (hoặc "công nợ của khách hàng")
   → debt(search="…")  • permCtx.AgentType=="private" • partnerID=="" 
-  • isPrivateDebtCustomerQuery(search)=true (nhắc "khách" chung chung, chưa có mã/tên/kỳ)
+  • bare "công nợ"  → isGenericDebtSearch=true → nhánh YES (private) gửi prompt-khách
+  • "…của khách"    → isPrivateDebtCustomerQuery=true → gửi prompt-khách
   → backend TỰ GỬI "Anh/chị cho mình mã hoặc tên khách hàng cần tra cứu nhé."
     (sendDebtCustomerPrompt) → is_debt_prompt → [RICH_MESSAGE_SENT] → worker lưu marker
 
