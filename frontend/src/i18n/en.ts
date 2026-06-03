@@ -607,6 +607,7 @@ export default {
   dash_success_rate: 'Success rate',
   dash_upcoming: 'Upcoming runs',
   dash_by_day: 'Messages by day',
+  dash_no_chart_data: 'No data yet',
   dash_recent: 'Recent campaigns',
   dash_fail: 'Failed',
   dash_last_run: 'Last run',

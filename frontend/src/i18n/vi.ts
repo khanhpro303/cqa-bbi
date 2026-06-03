@@ -608,6 +608,7 @@ export default {
   dash_success_rate: 'Tỉ lệ thành công',
   dash_upcoming: 'Lượt gửi sắp tới',
   dash_by_day: 'Tin gửi theo ngày',
+  dash_no_chart_data: 'Chưa có dữ liệu',
   dash_recent: 'Chiến dịch gần đây',
   dash_fail: 'Lỗi',
   dash_last_run: 'Lần chạy cuối',

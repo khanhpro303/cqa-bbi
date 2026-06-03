@@ -20,16 +20,20 @@
         :model-value="dateFrom"
         type="date"
         density="compact"
+        variant="outlined"
         hide-details
-        style="max-width: 150px"
+        class="date-time-field"
+        style="max-width: 165px"
         @update:model-value="(v: string) => emit('update:dateFrom', v)"
       />
       <v-text-field
         :model-value="dateTo"
         type="date"
         density="compact"
+        variant="outlined"
         hide-details
-        style="max-width: 150px"
+        class="date-time-field"
+        style="max-width: 165px"
         @update:model-value="(v: string) => emit('update:dateTo', v)"
       />
     </div>
@@ -66,7 +70,11 @@
     <v-card variant="outlined" class="pa-3 mb-3">
       <div class="text-body-2 font-weight-bold mb-2">{{ $t('dash_by_day') }}</div>
       <div style="height: 240px">
-        <Bar v-if="chartData.labels.length" :data="chartData" :options="chartOptions" />
+        <Bar v-if="hasChartData" :data="chartData" :options="chartOptions" />
+        <div v-else class="chart-empty">
+          <v-icon size="48" color="grey-lighten-1">mdi-chart-bar</v-icon>
+          <div class="chart-empty-text">{{ $t('dash_no_chart_data') }}</div>
+        </div>
       </div>
     </v-card>
 
@@ -154,6 +162,13 @@ const chartData = computed(() => ({
   ],
 }))
 
+// Treat "no rows" and "all-zero rows" alike — both should show the empty mask
+// instead of a flat baseline chart.
+const hasChartData = computed(() => {
+  const days = props.stats?.byDay ?? []
+  return days.length > 0 && days.some((d) => d.sent > 0)
+})
+
 const chartOptions = {
   responsive: true,
   maintainAspectRatio: false,
@@ -191,5 +206,36 @@ function statusColor(s: CampaignStatus): string {
   font-size: 0.75rem;
   opacity: 0.85;
   margin-top: 4px;
+}
+
+/* Empty-state mask for the by-day chart. */
+.chart-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed rgba(var(--v-border-color), 0.4);
+  border-radius: 8px;
+  background: rgba(var(--v-theme-on-surface), 0.02);
+}
+.chart-empty-text {
+  font-size: 0.85rem;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+
+/* Give the native calendar picker icon room from the field border. */
+.date-time-field :deep(input[type='date']) {
+  padding-right: 4px;
+}
+.date-time-field :deep(input[type='date']::-webkit-calendar-picker-indicator) {
+  margin-inline-start: 8px;
+  margin-inline-end: 2px;
+  opacity: 0.65;
+  cursor: pointer;
+}
+.date-time-field :deep(input[type='date']::-webkit-calendar-picker-indicator:hover) {
+  opacity: 1;
 }
 </style>
