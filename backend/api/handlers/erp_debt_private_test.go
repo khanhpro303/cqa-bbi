@@ -95,8 +95,10 @@ func TestScopeApprovedDebtCodes(t *testing.T) {
 		want      []string
 	}{
 		{"all keeps resolved", []string{"S001", "S002"}, "all", "", nil, []string{"S001", "S002"}},
-		{"all strips labels + dedupes", []string{"S001 - A", "S001"}, "all", "", nil, []string{"S001"}},
+		{"all keeps full label, dedupes by code", []string{"S001 - A", "S001"}, "all", "", nil, []string{"S001 - A"}},
+		{"all preserves label for ERP", []string{"S001_1 - Huy"}, "all", "", nil, []string{"S001_1 - Huy"}},
 		{"assigned in group", []string{"S052"}, "assigned", "", allowed, []string{"S052"}},
+		{"assigned keeps label when in group", []string{"S052 - Phượt 4P"}, "assigned", "", allowed, []string{"S052 - Phượt 4P"}},
 		{"assigned out of group", []string{"S999"}, "assigned", "", allowed, []string{}},
 		{"assigned mixed keeps only in-group", []string{"S052", "S999", "EG05"}, "assigned", "", allowed, []string{"EG05", "S052"}},
 		{"own matches own", []string{"S001"}, "own", "S001", nil, []string{"S001"}},
@@ -136,6 +138,13 @@ func TestExactCustomerCodePick(t *testing.T) {
 		{"empty search", "", codes, ""},
 		{"empty codes", "S001", nil, ""},
 		{"trims candidate label whitespace", "S001", []string{" S001 "}, "S001"},
+		// Labelled candidates: a bare-code reply maps to the FULL stored value so
+		// the " - <name>" label survives to the ERP query, and the bare leading
+		// code never selects a sibling.
+		{"bare reply returns full label", "S001_1", []string{"S001_1 - Huy"}, "S001_1 - Huy"},
+		{"full reply returns full label", "S001_1 - Huy", []string{"S001_1 - Huy"}, "S001_1 - Huy"},
+		{"bare prefix does not select sibling", "S001", []string{"S001_1 - Huy", "S001_2 - Nam"}, ""},
+		{"bare reply picks exact among labelled siblings", "S001_2", []string{"S001_1 - Huy", "S001_2 - Nam"}, "S001_2 - Nam"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

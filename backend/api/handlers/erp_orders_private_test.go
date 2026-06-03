@@ -96,7 +96,8 @@ func TestScopeApprovedOrdersCodes(t *testing.T) {
 		want      []string
 	}{
 		{"all keeps resolved", []string{"S001", "S002"}, "all", "", nil, []string{"S001", "S002"}},
-		{"all strips labels + dedupes", []string{"S001 - A", "S001"}, "all", "", nil, []string{"S001"}},
+		{"all keeps full label, dedupes by code", []string{"S001 - A", "S001"}, "all", "", nil, []string{"S001 - A"}},
+		{"all preserves label", []string{"S001_1 - Huy"}, "all", "", nil, []string{"S001_1 - Huy"}},
 		{"assigned in group", []string{"S052"}, "assigned", "", allowed, []string{"S052"}},
 		{"assigned out of group", []string{"S999"}, "assigned", "", allowed, []string{}},
 		{"assigned mixed keeps only in-group", []string{"S052", "S999", "EG05"}, "assigned", "", allowed, []string{"EG05", "S052"}},

@@ -393,7 +393,8 @@ Không có dữ liệu công nợ trong khoảng anh hỏi.
 | Private: detect generic | `backend/api/handlers/erp_debt_private.go` | `isPrivateDebtCustomerQuery` |
 | Private: resolve cache | `backend/api/handlers/erp_debt_private.go` | `resolveDebtCustomerCodes` / `resolveCustomerCodesFromCache` (AND→OR) |
 | Private: scope GIAO | `backend/api/handlers/erp_debt_private.go` | `scopeApprovedDebtCodes` |
-| Private: exact pick (loop-killer) | `backend/api/handlers/erp_debt_private.go` | `exactCustomerCodePick` (chặn LIKE khi gõ đúng mã liệt kê; dùng chung debt + orders) |
+| Private: exact pick (loop-killer) | `backend/api/handlers/erp_debt_private.go` | `exactCustomerCodePick` (chặn LIKE khi gõ đúng mã liệt kê; nhận mã rút gọn/đầy đủ, trả chuỗi MA đầy đủ; dùng chung debt + orders) |
+| Private: giữ nhãn MA cho ERP | `backend/api/handlers/erp_orders_private.go` | `dedupeCustomerCodes` / `intersectCustomerCodes` (gộp/giao theo leading code nhưng giữ `"<mã> - <tên>"` đầy đủ; `scopeApprovedDebtCodes`/`scopeApprovedOrdersCodes` gọi) |
 | Private: gửi prompt | `backend/api/handlers/erp_debt_private.go` | `sendDebtCustomerPrompt` / `sendPrivateDebtPrompt` |
 | Private: state kỳ/pick | `backend/engine/session_options.go` | `DebtCustomerState` (`:awaiting_debt_customer`, stages `pick`/`period`) |
 | Private: driver | `backend/api/handlers/erp.go` (`case "debt"`) | take state → Pick/Period; mặc định `tháng này` CHỈ cho nhánh kỳ-toàn-scope |
@@ -450,9 +451,10 @@ soi gương flow orders trong `erp_orders_private.go`):
    `cached_customers` qua `debtCustomerCandidates`) thay vì trả nợ của tất cả rồi
    để LLM tự phân giải. Thoát vòng pick chắc chắn bằng 3 lối:
    - **(a) gõ ĐÚNG một mã đã liệt kê** (`exactCustomerCodePick`, so khớp chính xác
-     `state.Codes`, không phân biệt hoa/thường) → chọn **đúng mã đó**, sang bước kỳ.
-     Đây là lối thoát quan trọng nhất và là **bản vá vòng lặp**: mã liệt kê đã GIAO
-     scope khi lưu nên khớp đúng là hợp lệ, không cần re-scope.
+     `state.Codes` theo mã rút gọn HOẶC chuỗi đầy đủ, không phân biệt hoa/thường) →
+     chọn **đúng khách đó** (trả về chuỗi MA đầy đủ kèm nhãn), sang bước kỳ. Đây là
+     lối thoát quan trọng nhất và là **bản vá vòng lặp**: mã liệt kê đã GIAO scope
+     khi lưu nên khớp đúng là hợp lệ, không cần re-scope.
    - **(b)** gõ một token mới (vd tên/mã khác) → resolve **trực tiếp** vào cache +
      scope (không giới hạn danh sách đã liệt kê) nên mã in-scope nào cũng tiến được;
      còn khớp nhiều thì liệt kê lại.
@@ -467,6 +469,23 @@ soi gương flow orders trong `erp_orders_private.go`):
    > picking đúng mã tiền tố vẫn lặp. `exactCustomerCodePick` chặn trước bước LIKE
    > nên gõ đúng mã nào trong danh sách (kể cả mã cha tiền tố) đều tiến được. Lối
    > thoát này được mirror sang orders (cùng cấu trúc, cùng lỗi tiềm ẩn).
+   >
+   > 🐛 **GIỮ NGUYÊN NHÃN mã khách (2026-06-03).** `cached_customers.ma` của tenant
+   > này lưu **cả nhãn** dạng `"<mã> - <tên>"` (vd `"S001_1 - Huy"`), và báo cáo
+   > `th_cong_no_phai_thu` khớp `DS_KHACH_HANG` theo **đúng chuỗi MA đầy đủ** đó.
+   > Trước đây `scopeApprovedDebtCodes` gọi `dedupeBareCodes`/`intersectBareCodes`
+   > (qua `leadingCustomerCode`) **cắt nhãn** còn `"S001_1"` rồi lưu vào `state.Codes`
+   > → khi chốt kỳ gửi `DS_KHACH_HANG="S001_1"` → ERP trả rỗng/báo "mã khách hàng
+   > S001_1 không tồn tại" → bot báo lỗi. Nay hai helper đổi tên thành
+   > `dedupeCustomerCodes`/`intersectCustomerCodes`: vẫn **gộp/giao theo leading
+   > code** nhưng **giữ nguyên giá trị MA đầy đủ** (kèm nhãn) để gửi lên ERP. Pick
+   > list vẫn hiển thị **mã rút gọn** (`leadingCustomerCode`) cho gọn, và
+   > `exactCustomerCodePick` nhận **mã rút gọn HOẶC chuỗi đầy đủ**, luôn trả về
+   > **chuỗi đầy đủ** — nên gõ "S001_1" vẫn chốt đúng `"S001_1 - Huy"`, mà "S001"
+   > không lỡ chọn nhầm anh em `"S001_1"`. Cùng lúc sửa cả tên hiển thị trong pick
+   > (trước đây `debtCustomerCandidates` dò `WHERE ma IN (mã rút gọn)` không khớp
+   > `ma` đầy đủ nên không có tên). Đổi này dùng chung debt + orders (orders lọc qua
+   > `codesContain` theo leading code nên không đổi hành vi).
 3. **State riêng, single-use, có scope** — `DebtCustomerState` lưu dưới
    `:awaiting_debt_customer` (khác `:awaiting_order_customer` để debt và orders
    không đụng nhau giữa chừng). `Codes` đã GIAO scope **khi lưu**, nên replay ở

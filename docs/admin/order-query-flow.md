@@ -499,6 +499,13 @@ Redis key `:awaiting_order_customer` (payload `{stage, codes}`, `engine.OrderCus
 > còn `assigned` chỉ chấp nhận khách **trong nhóm được giao**. Lượt trả time range
 > về sau chỉ replay `codes` đã-duyệt → không thể nới quyền.
 
+> 🔑 **Giữ nhãn MA (2026-06-03):** `scopeApprovedOrdersCodes` (qua
+> `dedupeCustomerCodes`/`intersectCustomerCodes`) **gộp & giao theo leading code
+> nhưng giữ nguyên chuỗi MA đầy đủ** `"<mã> - <tên>"`. Orders lọc đơn client-side
+> qua `codesContain` (so theo leading code) nên hành vi không đổi; việc giữ nhãn là
+> để dùng chung với debt — nơi chuỗi MA đầy đủ được gửi thẳng lên `DS_KHACH_HANG`
+> (xem [debt-query-flow](./debt-query-flow.md#h-bot-private-nhân-viên)).
+
 ```
 Lượt 1 "đơn hàng" (generic, chưa có khách)         → hỏi "mã/tên khách hàng?"   (ordersCustomerPromptText)
 Lượt 1 "đơn hàng của S001" (nêu khách, chưa ngày)   → resolveOrdersCustomerCodes → scopeApprovedOrdersCodes:

@@ -142,61 +142,80 @@ func resolveOrdersCustomerCodes(tenantID, search string) []string {
 //   - own      → resolved ∩ {ownCode}
 //   - other    → none (deny)
 //
-// Returned codes are bare (label stripped) and de-duplicated. An empty result
-// means the staff member may not see any of the named customers.
+// Returned codes KEEP the full MA value Cloudify shipped (including any
+// " - <name>" label) and are de-duplicated by leading code. The full value is
+// preserved on purpose: the ERP debt report (th_cong_no_phai_thu) matches
+// DS_KHACH_HANG against the full MA string, so stripping the label here sends a
+// code ERP cannot find (e.g. "S001_1" instead of "S001_1 - Huy"). Orders still
+// compares by leading code via codesContain, so keeping the label is safe there
+// too. An empty result means the staff member may not see any of the named
+// customers.
 func scopeApprovedOrdersCodes(resolved []string, scopeType, ownCode string, allowedCodes []string) []string {
 	if len(resolved) == 0 {
 		return nil
 	}
 	switch scopeType {
 	case "all":
-		return dedupeBareCodes(resolved)
+		return dedupeCustomerCodes(resolved)
 	case "assigned":
-		return intersectBareCodes(resolved, allowedCodes)
+		return intersectCustomerCodes(resolved, allowedCodes)
 	case "own":
-		return intersectBareCodes(resolved, []string{ownCode})
+		return intersectCustomerCodes(resolved, []string{ownCode})
 	default:
 		return nil
 	}
 }
 
-// dedupeBareCodes strips any "CODE - Name" labels and removes duplicates,
-// preserving a deterministic (sorted) order.
-func dedupeBareCodes(codes []string) []string {
-	set := make(map[string]bool, len(codes))
+// dedupeCustomerCodes removes duplicates by leading code (the "<code>" part of
+// "<code> - <name>") while KEEPING the full MA value, so the " - <name>" label
+// Cloudify ships survives all the way to the ERP query. When several entries
+// share a leading code the most complete (longest) value wins, so a labelled
+// variant is never replaced by a bare one. Output is sorted for determinism.
+func dedupeCustomerCodes(codes []string) []string {
+	byKey := make(map[string]string, len(codes))
 	for _, c := range codes {
-		if bare := leadingCustomerCode(c); strings.TrimSpace(bare) != "" {
-			set[bare] = true
+		full := strings.TrimSpace(c)
+		key := strings.ToLower(leadingCustomerCode(full))
+		if key == "" {
+			continue
+		}
+		if existing, ok := byKey[key]; !ok || len(full) > len(existing) {
+			byKey[key] = full
 		}
 	}
-	out := make([]string, 0, len(set))
-	for c := range set {
-		out = append(out, c)
+	out := make([]string, 0, len(byKey))
+	for _, v := range byKey {
+		out = append(out, v)
 	}
 	sort.Strings(out)
 	return out
 }
 
-// intersectBareCodes returns the bare codes present in BOTH resolved and
-// allowed (case-insensitive, labels stripped on both sides), sorted and
-// de-duplicated.
-func intersectBareCodes(resolved, allowed []string) []string {
+// intersectCustomerCodes returns the resolved codes whose leading code is also
+// present in allowed (compared by leading code, case-insensitive), KEEPING the
+// full resolved MA value (label included) so the ERP query receives the exact
+// string. Sorted and de-duplicated by leading code.
+func intersectCustomerCodes(resolved, allowed []string) []string {
 	allowedSet := make(map[string]bool, len(allowed))
 	for _, a := range allowed {
-		if bare := strings.ToLower(leadingCustomerCode(a)); bare != "" {
-			allowedSet[bare] = true
+		if key := strings.ToLower(leadingCustomerCode(a)); key != "" {
+			allowedSet[key] = true
 		}
 	}
-	set := make(map[string]bool)
+	byKey := make(map[string]string)
 	for _, r := range resolved {
-		bare := leadingCustomerCode(r)
-		if bare != "" && allowedSet[strings.ToLower(bare)] {
-			set[bare] = true
+		full := strings.TrimSpace(r)
+		key := strings.ToLower(leadingCustomerCode(full))
+		if key == "" || !allowedSet[key] {
+			continue
+		}
+		if existing, ok := byKey[key]; !ok || len(full) > len(existing) {
+			byKey[key] = full
 		}
 	}
-	out := make([]string, 0, len(set))
-	for c := range set {
-		out = append(out, c)
+	out := make([]string, 0, len(byKey))
+	for _, v := range byKey {
+		out = append(out, v)
 	}
 	sort.Strings(out)
 	return out

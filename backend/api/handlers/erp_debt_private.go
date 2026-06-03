@@ -259,7 +259,11 @@ func renderDebtCustomerPickText(candidates []debtCustomerCandidate) string {
 	var b strings.Builder
 	b.WriteString("Có nhiều khách khớp. Anh/chị chọn giúp mình mã khách cụ thể (hoặc nhắn \"tất cả\"):")
 	for _, c := range candidates {
-		code := strings.TrimSpace(c.Code)
+		// c.Code may carry the full "S001_1 - Huy" label (it is the stored value
+		// the ERP query needs); show only the leading code so the list stays
+		// clean. exactCustomerCodePick accepts either the bare code shown here or
+		// the full value, so the displayed short code resolves correctly.
+		code := leadingCustomerCode(strings.TrimSpace(c.Code))
 		if code == "" {
 			continue
 		}
@@ -315,23 +319,29 @@ func resolveDebtCustomerCodes(tenantID, search string) []string {
 	return resolveCachedCustomerCodesFromTokens(tenantID, tokenizeCustomerQuery(search))
 }
 
-// exactCustomerCodePick reports the candidate code the staff member picked when
-// their reply is exactly one of the already-offered codes, else "". Used by the
-// pick stage (debt + orders) so an EXACT pick wins outright before the substring
-// LIKE resolve runs. This is the loop-killer for codes that are a prefix of
-// their siblings: "S001" LIKE-matches "S001", "S001_1", "S001_2", so resolving
-// the reply never narrows below the full list and the prompt repeats forever.
-// `codes` are the candidates stored in the pick state (already scope-approved),
-// so an exact match is inherently in scope — no re-scoping needed. The returned
-// value is the canonical code from `codes` (not the raw reply). Pure → testable.
+// exactCustomerCodePick reports the candidate the staff member picked when their
+// reply matches one of the already-offered codes exactly, else "". A reply may
+// be either the FULL stored value ("S001_1 - Huy") or just its leading code
+// ("S001_1") — the prompt lists the bare leading code, so staff naturally type
+// that — and either way the returned value is the FULL stored candidate so the
+// label survives to the ERP query (th_cong_no_phai_thu matches DS_KHACH_HANG on
+// the full MA string). Used by the pick stage (debt + orders) so an EXACT pick
+// wins outright before the substring LIKE resolve runs. This is the loop-killer
+// for codes that are a prefix of their siblings: "S001" LIKE-matches "S001",
+// "S001_1", "S001_2", so resolving the reply never narrows below the full list
+// and the prompt repeats forever. `codes` are the candidates stored in the pick
+// state (already scope-approved), so an exact match is inherently in scope — no
+// re-scoping needed. Matching is strict (full or leading code, case-insensitive)
+// so a bare "S001" never selects a sibling "S001_1". Pure → testable.
 func exactCustomerCodePick(search string, codes []string) string {
 	reply := strings.TrimSpace(search)
 	if reply == "" {
 		return ""
 	}
 	for _, code := range codes {
-		if strings.EqualFold(reply, strings.TrimSpace(code)) {
-			return strings.TrimSpace(code)
+		full := strings.TrimSpace(code)
+		if strings.EqualFold(reply, full) || strings.EqualFold(reply, leadingCustomerCode(full)) {
+			return full
 		}
 	}
 	return ""
@@ -345,19 +355,21 @@ func exactCustomerCodePick(search string, codes []string) string {
 //   - own      → resolved ∩ {ownCode}
 //   - other    → none (deny)
 //
-// Returned codes are bare (label stripped) and de-duplicated. An empty result
-// means the staff member may not see any of the named customers.
+// Returned codes KEEP the full MA value (label included), de-duplicated and
+// scoped by leading code — the debt report matches DS_KHACH_HANG on the full MA
+// string, so stripping "S001_1 - Huy" down to "S001_1" makes ERP return nothing.
+// An empty result means the staff member may not see any of the named customers.
 func scopeApprovedDebtCodes(resolved []string, scopeType, ownCode string, allowedCodes []string) []string {
 	if len(resolved) == 0 {
 		return nil
 	}
 	switch scopeType {
 	case "all":
-		return dedupeBareCodes(resolved)
+		return dedupeCustomerCodes(resolved)
 	case "assigned":
-		return intersectBareCodes(resolved, allowedCodes)
+		return intersectCustomerCodes(resolved, allowedCodes)
 	case "own":
-		return intersectBareCodes(resolved, []string{ownCode})
+		return intersectCustomerCodes(resolved, []string{ownCode})
 	default:
 		return nil
 	}

@@ -98,6 +98,15 @@ nên mỗi phân hệ tự tokenize theo stopword riêng:
 > (`assigned`) bằng 1 thông báo trung tính, còn debt liệt kê mã+tên các khách
 > trong scope để nhân viên chọn (hoặc "tất cả").
 
+> 🔑 **Giữ nguyên nhãn MA (2026-06-03).** `cached_customers.ma` có thể chứa cả nhãn
+> `"<mã> - <tên>"` (vd `"S001_1 - Huy"`); báo cáo ERP (`th_cong_no_phai_thu`,
+> `saorders`) khớp theo **đúng chuỗi MA đầy đủ**. Vì vậy `scopeApprovedDebtCodes`/
+> `scopeApprovedOrdersCodes` (qua `dedupeCustomerCodes`/`intersectCustomerCodes`)
+> **gộp & giao theo leading code nhưng giữ nguyên chuỗi MA đầy đủ** thay vì cắt còn
+> mã trần — cắt nhãn khiến `DS_KHACH_HANG` không khớp và ERP trả rỗng. Pick list
+> hiển thị mã rút gọn cho gọn; `exactCustomerCodePick` nhận mã rút gọn hoặc chuỗi
+> đầy đủ và luôn trả về **chuỗi đầy đủ**.
+
 ---
 
 ## D. Cơ chế prompt + marker (dùng chung public & private)
