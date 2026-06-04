@@ -98,6 +98,11 @@ Tool `ERPGatewayCaller` nhận: `resource` ∈ {`inventory`, `products`,
 | **B** | Tồn của **variant cụ thể** (có màu/size) | `products` → `product_variants(parent_code,color,size,brand)` → đọc `data[0].ma` → `inventory(search=MA)` → đọc `ton_kho` |
 | **C** | **Giá** của variant cụ thể | Như B nhưng **DỪNG** ở `product_variants`, đọc `price`. Không gọi inventory |
 | **D** | Tồn **cả dòng** (đã biết MA_CHA, không màu/size) | `inventory(search=MA_CHA)` — backend tự lặp các SKU con và cộng tồn live |
+| **B'** | Tồn/"còn size nào" khi **có màu, KHÔNG size** ("đen bóng còn size nào", "tồn các size màu đen bóng") | `products` → copy `parent_codes[0]` → `product_variants(parent_code, color, size="", include_stock=true)` → backend trả **mọi size** kèm `ton_kho`. Trả bảng `size → tồn`, **KHÔNG** gọi inventory từng SKU |
+
+> 🆕 **B' không đi qua picker dòng-vs-SKU (2026-06-04).** Câu "có màu, thiếu size"
+> được trả thẳng bằng `product_variants(..., size="", include_stock=true)` — mỗi size
+> kèm tồn trong 1 call. `include_stock` do LLM bật (backend không tự đoán intent).
 
 ---
 

@@ -162,6 +162,12 @@ func ERPQuery(c *gin.Context) {
 		// numeric pick replays the captured intent verbatim — the worker no
 		// longer keyword-classifies. See engine.BuildStockPickPendingButtons.
 		Intent string `json:"intent" form:"intent"`
+		// IncludeStock asks product_variants to enrich each returned variant row
+		// with its live ERP stock (ton_kho). The Agent sets it when the customer
+		// wants quantities per size (e.g. "đen bóng còn size nào", "tồn các size
+		// màu đen bóng"); left false for a pure price/size listing. The backend
+		// makes NO intent guess — it only honours this explicit flag.
+		IncludeStock bool `json:"include_stock" form:"include_stock"`
 	}
 
 	if c.Request.Method == "POST" {
@@ -549,13 +555,21 @@ func ERPQuery(c *gin.Context) {
 			}(req.Search, slim)
 		}
 
+		// Surface the resolved line's parent SKU(s) so the agent can chain to
+		// product_variants WITHOUT the customer having to re-pick a line. The
+		// exact-web short-circuit above already returns parent_codes (erp.go:347);
+		// the normal single-group/fuzzy path dropped them, leaving the agent with
+		// no ma_cha after slimProductsForLLM collapses by web name — the root cause
+		// of "chưa có mã cha để tách đúng biến thể". Mirror the same shape here.
+		parentCodes := collectParentCodesFromProducts(filteredCached)
 		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(slim), c.ClientIP())
 		c.JSON(http.StatusOK, gin.H{
-			"status":   "success",
-			"data":     slim,
-			"source":   "astradb_cache",
-			"resource": req.Resource,
-			"count":    len(slim),
+			"status":       "success",
+			"data":         slim,
+			"parent_codes": parentCodes,
+			"source":       "astradb_cache",
+			"resource":     req.Resource,
+			"count":        len(slim),
 		})
 		return
 	}
@@ -584,6 +598,23 @@ func ERPQuery(c *gin.Context) {
 			})
 			writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusInternalServerError, 0, c.ClientIP())
 			return
+		}
+
+		// Optional live-stock enrichment. The Agent (not the backend) decides this
+		// via include_stock=true, so a "còn size nào / tồn các size" question can be
+		// answered with one product_variants call returning every size + its stock.
+		// Pure price/size listings leave the flag false and skip the ERP round trip.
+		// Stock is live in Cloudify (not the product cache), so this needs ERP
+		// credentials; when absent (dev/mock) we degrade to variants-without-stock.
+		if req.IncludeStock {
+			if rows, ok := response["data"].([]map[string]interface{}); ok && len(rows) > 0 {
+				if erpURL, erpDB, erpLogin, erpPassword, credErr := loadCloudifyCredentials(tenantID, cfg); credErr == nil && erpURL != "" && erpLogin != "" && erpPassword != "" {
+					stockClient := &pkg.CloudifyClient{BaseURL: erpURL, DB: erpDB, Login: erpLogin, Password: erpPassword}
+					enrichVariantsWithLiveStock(c.Request.Context(), stockClient, tenantID, rows)
+				} else if credErr != nil {
+					log.Printf("[erp_query] include_stock skipped, credential error: %v", credErr)
+				}
+			}
 		}
 
 		count, _ := response["count"].(int)
@@ -3360,6 +3391,48 @@ func fetchInventoryStockForSKU(
 
 	cache.Set(ctx, tenantID, sku, total)
 	return total, nil
+}
+
+// maxVariantStockEnrichment caps how many variant SKUs get a live stock lookup
+// in one product_variants(include_stock=true) response. It is a fan-out safety
+// limit only — never a flow decision — so a colour with an unusually long size
+// run can't trigger an unbounded burst of ERP calls. Cached SKUs are cheap on
+// repeat, so a normal size run (S..XXL) stays well under this.
+const maxVariantStockEnrichment = 12
+
+// enrichVariantsWithLiveStock attaches a "ton_kho" field to each variant row in
+// place by resolving its live ERP stock via fetchInventoryStockForSKU. It powers
+// the colour-only "còn size nào / tồn các size" answer: one product_variants call
+// returns every size already paired with its quantity, so the agent needs no
+// per-SKU inventory round trips. A per-SKU lookup error is logged and that row is
+// left without ton_kho rather than failing the whole response.
+func enrichVariantsWithLiveStock(ctx context.Context, client *pkg.CloudifyClient, tenantID string, rows []map[string]interface{}) {
+	inventoryEndpoint, usePostMethod := engine.ResolveInventoryEndpoint(ctx, tenantID)
+	stockCache := engine.DefaultInventoryStockCache()
+	enrichVariantRowsWithStock(ctx, client, stockCache, tenantID, inventoryEndpoint, usePostMethod, rows)
+}
+
+// enrichVariantRowsWithStock is the injectable core of enrichVariantsWithLiveStock:
+// the inventory endpoint and stock cache are passed in so the per-row stock logic
+// (cap + per-SKU error tolerance) is unit-testable without the DB-backed endpoint
+// resolution. A per-SKU lookup error is logged and that row is left without
+// ton_kho rather than failing the whole response.
+func enrichVariantRowsWithStock(ctx context.Context, client *pkg.CloudifyClient, cache *engine.InventoryStockCache, tenantID, inventoryEndpoint string, usePostMethod bool, rows []map[string]interface{}) {
+	for i, row := range rows {
+		if i >= maxVariantStockEnrichment {
+			break
+		}
+		sku := getFirstNonEmptyMapString(row, "ma", "MA", "ma_hang")
+		if strings.TrimSpace(sku) == "" {
+			continue
+		}
+		stock, err := fetchInventoryStockForSKU(ctx, client, cache, tenantID, sku, inventoryEndpoint, usePostMethod)
+		if err != nil {
+			log.Printf("[erp_query] include_stock lookup failed sku=%s: %v", sku, err)
+			continue
+		}
+		row["ton_kho"] = stock
+	}
 }
 
 func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, allowedGroups []string, scopeType string, customerCode string, tenantID string, groups []engine.GroupPermission, zaloUserID string) {

@@ -116,6 +116,13 @@ orders, customers, debt}`. Với sản phẩm có **hai** resource liên quan:
 | **P2** | Khách đã chọn 1 tên web cụ thể từ danh sách trước | `products(search="<tên web>", exact_web_name=true)` → backend khớp đúng web name, **không** đẩy lại danh sách |
 | **P3** | "storm 3 bao nhiêu" / "FF901 giá bao nhiêu" (mã/tên, **không** màu/size) | `products(search="storm 3", intent="price")` (đặt `intent="price"` vì câu hỏi GIÁ) → backend fuzzy (hybrid → LLM) → **cả họ** + `price_range`. Nếu ra disambiguation, `intent` đã chụp giúp cú gõ-số trả khoảng giá thay vì hỏi tồn |
 | **P4** | "FF901 **đen bóng size L** giá bao nhiêu" / "FF800 **trắng L**" (mã cha + thuộc tính cụ thể) | `product_variants(parent_code="FF901", color="đen bóng", size="L")` → trả đúng SKU + giá đơn (mục G). **HOẶC** (price-pivot) 1 call `products(search="FF901", color="đen bóng", size="L", intent="price")` → backend tự pivot, trả đúng đơn giá SKU (`pivoted_from="products"`) |
+| **P4'** | "FF901 **đen bóng còn size nào** / **tồn các size màu đen bóng**" (**có màu, KHÔNG size**) | `products(search="FF901")` → copy `parent_codes[0]` (response echo `parent_codes: [...]`); rồi `product_variants(parent_code=<...>, color="đen bóng", size="", include_stock=true)` → backend trả **mọi size** của màu đó, mỗi dòng kèm `ton_kho`. Agent trả bảng `size → tồn`, **không** đòi 1 size. `include_stock` do LLM quyết (chỉ bật khi hỏi tồn) |
+
+> 🆕 **`products` luôn echo `parent_codes` (2026-06-04).** Mọi response `products`
+> (kể cả single-line/fuzzy, không chỉ `exact_web_name`) nay trả top-level
+> `parent_codes: [...]`. Agent copy `parent_codes[0]` nguyên văn để chain sang
+> `product_variants`. Nếu chỉ 1 mã cha → dùng luôn, KHÔNG bắt khách chọn lại dòng.
+> Đây là fix gốc cho lỗi "chưa có mã cha để tách đúng biến thể".
 
 > 🧠 **Agent KHÔNG cần tự match mã.** Chỉ cần phân biệt theo **có màu/size hay
 > không**: có màu/size cụ thể → `product_variants` (P4, pinpoint 1 SKU); chỉ mã/tên

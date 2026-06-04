@@ -70,6 +70,18 @@ wording in Vietnamese to match the rest of the prompt.
    → KHÔNG BAO GIỜ truyền raw "<color> <size>" làm search cho resource="inventory"
      dù đã có parent_code — backend không fuzzy-match attributes ở nhánh inventory.
 
+4'. User hỏi TỒN/"còn size nào" khi CHỈ nêu MÀU, KHÔNG nêu size (vd: "Shiba đen bóng
+    còn size nào?", "tồn các size màu đen bóng?")
+   → BƯỚC 1: resource="products", search=<từ khoá> → copy parent_codes[0] (response
+     echo dòng `parent_codes: [...]`). Nếu chỉ 1 mã cha → dùng luôn, KHÔNG bắt user
+     chọn lại dòng.
+   → BƯỚC 2: resource="product_variants", parent_code=<MA_CHA>, color=<màu>, size=""
+     (để TRỐNG size), include_stock="true" → backend trả MỌI size của màu đó, mỗi
+     dòng kèm ton_kho.
+   → BƯỚC 3: trả BẢNG "size → tồn" cho tất cả size. KHÔNG đòi 1 size cụ thể, KHÔNG
+     gọi inventory từng SKU (tồn đã có sẵn ở bước 2). Chỉ set include_stock="true"
+     khi user hỏi số lượng tồn; để trống cho câu hỏi giá/size đơn thuần.
+
 ## Khi gọi ERPGatewayCaller cho câu hỏi về đơn hàng
 
 5. User hỏi đơn hàng chung (vd: "đơn hàng tôi sao rồi?", "kiểm tra đơn hàng",

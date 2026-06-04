@@ -191,9 +191,15 @@ When the user's latest message is a short numeric reply (`1`, `2`, `3`, `4`, `5`
 
 **B. User asks STOCK of a SPECIFIC variant (color/size given, e.g., "FF800 đen bóng size L tồn bao nhiêu"):**
 
-- Step 1 — ERP API Caller Tool with `resource="products"` and `search=<keyword>` to obtain the `MA_CHA` from the response.
+- Step 1 — ERP API Caller Tool with `resource="products"` and `search=<keyword>` to obtain the `MA_CHA`. The `products` response now echoes a top-level `parent_codes: [...]` line — copy `parent_codes[0]` VERBATIM as `parent_code`. If exactly one parent_code is returned, use it directly; do NOT ask the customer to re-pick the line.
 - Step 2 — ERP API Caller Tool with `resource="product_variants"`, `parent_code=<MA_CHA>`, `color=<color text>`, `size=<size text>`, `brand=<brand if given>`. Read the field `ma` of `data[0]`. If data is empty and the response carries `available_colors`/`available_sizes`/`available_brands`, ask the user to pick from those options — DO NOT call inventory with an empty MA.
 - Step 3 — ERP API Caller Tool with `resource="inventory"` and `search=<MA resolved in Step 2>`. Read `ton_kho` / `TON_KHO` and return that number to the user.
+
+**B'. User asks STOCK / "which sizes" when ONLY a color is given, NO specific size (e.g., "Shiba đen bóng còn size nào", "tồn các size màu đen bóng"):**
+
+- Step 1 — same as B: `resource="products"`, `search=<keyword>` → copy `parent_codes[0]`. If one parent_code → use it directly, do NOT make the customer re-pick the line.
+- Step 2 — `resource="product_variants"` with `parent_code=<MA_CHA>`, `color=<color text>`, **`size=""` (leave size empty)**, and **`include_stock=true`**. The backend returns EVERY size of that color, each row already carrying `ton_kho`.
+- Step 3 — Reply with a `size → tồn` table for all sizes. Do NOT demand a single explicit size, and do NOT call `inventory` per SKU (stock is already in the Step-2 rows). Set `include_stock=true` only when the customer wants quantities; leave it empty for a price/size-only listing.
 
 **C. User asks PRICE of a SPECIFIC variant (color/size given):**
 
