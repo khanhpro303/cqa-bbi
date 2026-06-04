@@ -116,9 +116,9 @@
                 @click="selectConversation(conv.id)"
               >
                 <template #prepend>
-                  <v-avatar :color="conv.channel_type === 'facebook' ? 'blue' : 'green'" size="32" class="mr-3">
+                  <v-avatar :color="channelTypeColor(conv.channel_type)" size="32" class="mr-3">
                     <v-icon color="white" size="16">
-                      {{ conv.channel_type === 'facebook' ? 'mdi-facebook-messenger' : 'mdi-chat' }}
+                      {{ channelTypeIcon(conv.channel_type) }}
                     </v-icon>
                   </v-avatar>
                 </template>
@@ -127,9 +127,10 @@
                   {{ conv.customer_name || $t('msg_unknown_customer') }}
                 </v-list-item-title>
                 <v-list-item-subtitle class="text-caption">
-                  <v-chip size="x-small" :color="conv.channel_type === 'facebook' ? 'blue' : 'green'" variant="tonal" class="mr-1">
-                    {{ conv.channel_type === 'facebook' ? 'FB' : 'Zalo' }}
+                  <v-chip size="x-small" :color="channelTypeColor(conv.channel_type)" variant="tonal" class="mr-1">
+                    {{ channelTypeLabel(conv.channel_type, $t) }}
                   </v-chip>
+                  <span v-if="conv.channel_name" class="text-grey-darken-1 mr-1" :title="conv.channel_name">{{ conv.channel_name }} ·</span>
                   <v-chip v-if="evaluationMap[conv.id]" size="x-small" :color="evaluationMap[conv.id] === 'PASS' ? 'success' : 'error'" variant="tonal" class="mr-1">
                     {{ evaluationMap[conv.id] === 'PASS' ? 'Đạt' : 'Không đạt' }}
                   </v-chip>
@@ -164,9 +165,9 @@
           <!-- Header -->
           <v-card-title class="d-flex align-center pa-4">
             <v-btn icon="mdi-arrow-left" variant="text" size="small" class="d-md-none mr-2" @click="closeConversation" />
-            <v-avatar :color="selectedConvChannelType === 'facebook' ? 'blue' : 'green'" size="36" class="mr-3">
+            <v-avatar :color="channelTypeColor(selectedConvChannelType)" size="36" class="mr-3">
               <v-icon color="white" size="18">
-                {{ selectedConvChannelType === 'facebook' ? 'mdi-facebook-messenger' : 'mdi-chat' }}
+                {{ channelTypeIcon(selectedConvChannelType) }}
               </v-icon>
             </v-avatar>
             <div class="flex-grow-1">
@@ -174,6 +175,10 @@
                 {{ conversationStore.currentConversation?.customer_name || $t('msg_unknown_customer') }}
               </div>
               <div class="text-caption text-grey">
+                <v-chip size="x-small" :color="channelTypeColor(selectedConvChannelType)" variant="tonal" class="mr-1">
+                  {{ channelTypeLabel(selectedConvChannelType, $t) }}
+                </v-chip>
+                <span v-if="selectedConvChannelName" class="mr-1">{{ selectedConvChannelName }} ·</span>
                 {{ conversationStore.currentConversation?.message_count }} {{ $t('msg_messages_count') }}
               </div>
             </div>
@@ -437,6 +442,7 @@ import {
   type ThirdPartyLinkMessageView,
 } from '../utils/message-render'
 import api from '../api'
+import { channelTypeColor, channelTypeIcon, channelTypeLabel } from '../utils/channel'
 
 const route = useRoute()
 const router = useRouter()
@@ -452,6 +458,7 @@ const loading = ref(false)
 const loadingMessages = ref(false)
 const selectedConvId = ref<string | null>(null)
 const selectedConvChannelType = ref('')
+const selectedConvChannelName = ref('')
 const currentPage = ref(1)
 const detailTab = ref('messages')
 
@@ -706,7 +713,10 @@ async function selectConversation(convId: string, tab?: string) {
   selectedConvId.value = convId
   detailTab.value = tab === 'evaluation' ? 'qc' : tab === 'classification' ? 'classification' : 'messages'
   const conv = conversationStore.conversations.find(c => c.id === convId)
-  if (conv) selectedConvChannelType.value = conv.channel_type
+  if (conv) {
+    selectedConvChannelType.value = conv.channel_type
+    selectedConvChannelName.value = conv.channel_name || ''
+  }
 
   loadingMessages.value = true
   try {
