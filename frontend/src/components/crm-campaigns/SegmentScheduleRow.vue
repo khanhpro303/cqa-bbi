@@ -69,76 +69,14 @@
           />
         </v-col>
       </v-row>
-
-      <!-- Tag (mention) thành viên trong nhóm GMF -->
-      <v-divider class="my-4" />
-      <div class="d-flex align-center mb-2">
-        <v-icon size="16" class="mr-1 text-primary">mdi-at</v-icon>
-        <span class="text-caption font-weight-medium">{{ $t('campaign_mention_title') }}</span>
-        <v-spacer />
-        <v-btn
-          v-if="groupId"
-          :title="$t('campaign_mention_sync')"
-          icon="mdi-refresh"
-          size="x-small"
-          variant="text"
-          :loading="membersLoading"
-          @click="loadMembers(true)"
-        />
-      </div>
-
-      <v-btn-toggle
-        v-model="mentionMode"
-        mandatory
-        divided
-        density="comfortable"
-        color="primary"
-        class="mention-toggle mb-1"
-      >
-        <v-btn value="none" size="small">{{ $t('campaign_mention_none') }}</v-btn>
-        <v-btn value="all" size="small">{{ $t('campaign_mention_all') }}</v-btn>
-        <v-btn value="selected" size="small">{{ $t('campaign_mention_selected') }}</v-btn>
-      </v-btn-toggle>
-
-      <!-- 'all' mode: show how many members will be tagged -->
-      <div v-if="mentionMode === 'all'" class="text-caption text-grey-darken-1 mt-1">
-        <template v-if="membersLoading">{{ $t('campaign_mention_loading') }}</template>
-        <template v-else-if="!groupId">{{ $t('campaign_mention_pick_group_first') }}</template>
-        <template v-else>
-          {{ $t('campaign_mention_all_count', { n: memberOptions.length }) }}
-          <span v-if="memberOptions.length >= 50"> · {{ $t('campaign_mention_cap_hint') }}</span>
-        </template>
-      </div>
-
-      <!-- 'selected' mode: pick specific members -->
-      <v-autocomplete
-        v-if="mentionMode === 'selected'"
-        v-model="mentionUserIds"
-        :items="memberOptions"
-        item-title="name"
-        item-value="zaloUserId"
-        :label="$t('campaign_mention_select_label')"
-        :no-data-text="groupId ? $t('campaign_mention_no_members') : $t('campaign_mention_pick_group_first')"
-        :loading="membersLoading"
-        :disabled="!groupId"
-        multiple
-        chips
-        closable-chips
-        variant="outlined"
-        density="comfortable"
-        prepend-inner-icon="mdi-account-multiple-check"
-        hide-details="auto"
-        class="mt-2"
-      />
     </v-card-text>
   </v-card>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import CronPicker from '../CronPicker.vue'
-import { listGroupMembers } from './campaignsApi'
-import type { CampaignSegment, GroupMember, MentionMode, ScheduleKind, SelectOption } from './types'
+import type { CampaignSegment, ScheduleKind, SelectOption } from './types'
 
 const props = defineProps<{
   index: number
@@ -157,60 +95,9 @@ const groupId = computed({
   get: () => model.value.groupId,
   set: (v) => {
     const name = props.groups.find((g) => g.id === v)?.name ?? ''
-    // Switching group: drop any selected member IDs (they are group-scoped).
-    patch({ groupId: v, groupName: name, mentionUserIds: [] })
+    patch({ groupId: v, groupName: name })
   },
 })
-
-// ---- Mention (tag) state -------------------------------------------------
-const mentionMode = computed<MentionMode>({
-  get: () => model.value.mentionMode ?? 'none',
-  set: (v) => patch({ mentionMode: v }),
-})
-
-const mentionUserIds = computed<string[]>({
-  get: () => model.value.mentionUserIds ?? [],
-  set: (v) => patch({ mentionUserIds: v }),
-})
-
-const memberOptions = ref<GroupMember[]>([])
-const membersLoading = ref(false)
-let loadedForGroup = ''
-
-// loadMembers fetches the GMF group's taggable members (employees + customers).
-// `force` re-fetches even if already loaded for the current group (the sync button).
-async function loadMembers(force = false): Promise<void> {
-  const gid = groupId.value
-  if (!gid) {
-    memberOptions.value = []
-    loadedForGroup = ''
-    return
-  }
-  if (!force && loadedForGroup === gid) return
-  membersLoading.value = true
-  try {
-    const { employees, customers } = await listGroupMembers(gid)
-    memberOptions.value = [...employees, ...customers]
-    loadedForGroup = gid
-    // Drop any previously-selected IDs that are no longer group members.
-    const valid = new Set(memberOptions.value.map((m) => m.zaloUserId))
-    const pruned = mentionUserIds.value.filter((id) => valid.has(id))
-    if (pruned.length !== mentionUserIds.value.length) mentionUserIds.value = pruned
-  } catch {
-    memberOptions.value = []
-  } finally {
-    membersLoading.value = false
-  }
-}
-
-// Load members when the group changes or when a mode needing them is active.
-watch(
-  [groupId, mentionMode],
-  ([gid, mode]) => {
-    if (gid && (mode === 'selected' || mode === 'all')) loadMembers()
-  },
-  { immediate: true },
-)
 
 const scheduleKind = computed<ScheduleKind>({
   get: () => model.value.scheduleKind,
@@ -260,12 +147,6 @@ function combine(date: string, time: string): string | undefined {
 </script>
 
 <style scoped>
-/* Let the mention mode toggle wrap instead of overflowing on narrow dialogs. */
-.mention-toggle {
-  flex-wrap: wrap;
-  height: auto;
-}
-
 /* Give the native calendar/clock picker icon breathing room from the field
    border so it doesn't look glued to the edge. */
 .date-time-field :deep(input[type='date']),

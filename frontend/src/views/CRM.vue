@@ -7,10 +7,9 @@
       <!-- Action buttons depending on active tab -->
       <template v-if="currentTab === 'campaigns'">
         <v-btn
-          v-if="campaignSubtab === 'management'"
           color="primary"
           prepend-icon="mdi-bullhorn-outline"
-          @click="campaignListRef?.openCreate()"
+          @click="startCreateCampaign"
         >
           {{ $t('campaign_create') }}
         </v-btn>
@@ -1055,7 +1054,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useUserStore } from '../stores/users'
@@ -1101,6 +1100,17 @@ const campaignSubtab = ref<'dashboard' | 'management'>('dashboard')
 // CRM Campaigns (Chiến dịch CRM) — list ref drives the create dialog from header.
 const campaignListRef = ref<InstanceType<typeof CampaignList> | null>(null)
 const campaignDashboardRef = ref<InstanceType<typeof CampaignDashboard> | null>(null)
+
+// Open the create-campaign dialog from the header button regardless of which
+// campaign sub-tab is active. The dialog lives on CampaignList (the "management"
+// window-item), so switch there first; after saving the user lands on the list.
+async function startCreateCampaign() {
+  if (campaignSubtab.value !== 'management') {
+    campaignSubtab.value = 'management'
+    await nextTick()
+  }
+  campaignListRef.value?.openCreate()
+}
 
 // CRM Groups State
 const groups = ref<any[]>([])

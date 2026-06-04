@@ -43,6 +43,16 @@ export interface CampaignMessage {
   mentionPlacement?: MentionPlacement // mặc định 'prefix'
   // Lời chào dùng cho placement 'prefix' (vd "Xin chào").
   mentionGreeting?: string
+  // --- Tag config gom về campaign-level (chỉ là UI source-of-truth) ---------
+  // Người dùng chọn ai được tag ngay ở bước Nội dung. Lúc lưu, CampaignFormDialog
+  // mirror các giá trị này xuống MỌI segment (CampaignSegment.mentionMode/IDs) nên
+  // backend + runner giữ nguyên (vẫn áp tag theo từng nhóm). Backend bỏ qua các
+  // field này trên message.
+  mentionMode?: MentionMode // mặc định 'none'
+  mentionUserIds?: string[] // zaloUserId khi mode = 'selected'
+  // Nhóm GMF dùng để tải danh sách thành viên cho preview & là gốc của các id
+  // 'selected'. Không gửi/khôi phục từ backend — chỉ phục vụ editor.
+  mentionGroupId?: string
 }
 
 export interface Campaign {

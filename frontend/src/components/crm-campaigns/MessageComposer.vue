@@ -94,53 +94,140 @@
       </div>
     </v-expand-transition>
 
-    <!-- Mention/Tag placement (WHO is chosen per-segment in the schedule step) -->
+    <!-- Tag thành viên — gom toàn bộ cấu hình tag tại đây; mock render bên dưới -->
     <v-divider class="my-3" />
-    <div class="d-flex align-center flex-wrap ga-2">
-      <v-icon size="16" class="text-primary">mdi-at</v-icon>
-      <span class="text-caption font-weight-medium">{{ $t('campaign_mention_placement_title') }}</span>
-      <v-btn-toggle
-        v-model="mentionPlacement"
-        mandatory
-        divided
-        density="comfortable"
-        color="primary"
-        class="ml-auto"
-      >
-        <v-btn value="prefix" size="small">{{ $t('campaign_mention_placement_prefix') }}</v-btn>
-        <v-btn value="inline" size="small">{{ $t('campaign_mention_placement_inline') }}</v-btn>
-      </v-btn-toggle>
+    <div class="d-flex align-center flex-wrap ga-2 mb-2">
+      <v-icon size="18" class="text-primary">mdi-at</v-icon>
+      <span class="text-subtitle-2 font-weight-medium">{{ $t('campaign_mention_mode_title') }}</span>
     </div>
 
-    <v-text-field
-      v-if="mentionPlacement === 'prefix'"
-      v-model="mentionGreeting"
-      :label="$t('campaign_mention_greeting_label')"
-      :placeholder="$t('campaign_mention_greeting_default')"
-      variant="outlined"
-      density="compact"
-      prepend-inner-icon="mdi-hand-wave-outline"
-      class="mt-2"
-      hide-details="auto"
-      clearable
-    />
-
-    <div v-else class="mt-2">
-      <v-btn
-        size="small"
-        variant="tonal"
-        color="primary"
-        prepend-icon="mdi-code-tags"
-        @click="insertTag"
-      >
-        {{ $t('campaign_mention_insert_tag') }}
+    <v-btn-toggle
+      v-model="mentionMode"
+      mandatory
+      divided
+      density="comfortable"
+      color="primary"
+      class="tag-toggle"
+    >
+      <v-btn value="none" size="small" prepend-icon="mdi-tag-off-outline">
+        {{ $t('campaign_mention_none') }}
       </v-btn>
-    </div>
+      <v-btn value="all" size="small" prepend-icon="mdi-account-group">
+        {{ $t('campaign_mention_all') }}
+      </v-btn>
+      <v-btn value="selected" size="small" prepend-icon="mdi-account-multiple-check">
+        {{ $t('campaign_mention_selected') }}
+      </v-btn>
+    </v-btn-toggle>
 
-    <div class="text-caption text-grey-darken-1 mt-1">
-      <v-icon size="12" class="mr-1">mdi-information-outline</v-icon>
-      {{ $t('campaign_mention_placement_hint') }}
-    </div>
+    <!-- Khi 'Không tag' thì ẩn toàn bộ phần vị trí/lời chào/nhóm xem trước -->
+    <v-expand-transition>
+      <div v-if="mentionMode !== 'none'" class="tag-config mt-3">
+        <!-- Nhóm xem trước: tải thành viên thật để render mock đúng tên -->
+        <div class="d-flex align-center ga-2">
+          <v-select
+            v-model="mentionGroupId"
+            :items="groups"
+            item-title="name"
+            item-value="id"
+            :label="$t('campaign_mention_preview_group')"
+            variant="outlined"
+            density="comfortable"
+            prepend-inner-icon="mdi-account-group-outline"
+            hide-details="auto"
+            class="flex-grow-1"
+          />
+          <v-btn
+            v-if="mentionGroupId"
+            :title="$t('campaign_mention_sync')"
+            icon="mdi-refresh"
+            size="small"
+            variant="tonal"
+            color="primary"
+            :loading="membersLoading"
+            @click="loadMembers(true)"
+          />
+        </div>
+
+        <!-- 'all': số thành viên sẽ tag -->
+        <div v-if="mentionMode === 'all'" class="text-caption text-grey-darken-1 mt-2">
+          <template v-if="membersLoading">{{ $t('campaign_mention_loading') }}</template>
+          <template v-else-if="!mentionGroupId">{{ $t('campaign_mention_pick_group_first') }}</template>
+          <template v-else>
+            {{ $t('campaign_mention_all_count', { n: memberOptions.length }) }}
+            <span v-if="memberOptions.length >= 50"> · {{ $t('campaign_mention_cap_hint') }}</span>
+          </template>
+        </div>
+
+        <!-- 'selected': chọn thành viên cụ thể -->
+        <v-autocomplete
+          v-if="mentionMode === 'selected'"
+          v-model="mentionUserIds"
+          :items="memberOptions"
+          item-title="name"
+          item-value="zaloUserId"
+          :label="$t('campaign_mention_select_label')"
+          :no-data-text="mentionGroupId ? $t('campaign_mention_no_members') : $t('campaign_mention_pick_group_first')"
+          :loading="membersLoading"
+          :disabled="!mentionGroupId"
+          multiple
+          chips
+          closable-chips
+          variant="outlined"
+          density="comfortable"
+          prepend-inner-icon="mdi-account-multiple-check"
+          hide-details="auto"
+          class="mt-2"
+        />
+
+        <!-- Vị trí mention -->
+        <div class="d-flex align-center flex-wrap ga-2 mt-3">
+          <v-icon size="16" class="text-primary">mdi-format-text-variant</v-icon>
+          <span class="text-caption font-weight-medium">{{ $t('campaign_mention_placement_title') }}</span>
+          <v-btn-toggle
+            v-model="mentionPlacement"
+            mandatory
+            divided
+            density="comfortable"
+            color="primary"
+            class="ml-auto tag-toggle"
+          >
+            <v-btn value="prefix" size="small">{{ $t('campaign_mention_placement_prefix') }}</v-btn>
+            <v-btn value="inline" size="small">{{ $t('campaign_mention_placement_inline') }}</v-btn>
+          </v-btn-toggle>
+        </div>
+
+        <v-text-field
+          v-if="mentionPlacement === 'prefix'"
+          v-model="mentionGreeting"
+          :label="$t('campaign_mention_greeting_label')"
+          :placeholder="$t('campaign_mention_greeting_default')"
+          variant="outlined"
+          density="compact"
+          prepend-inner-icon="mdi-hand-wave-outline"
+          class="mt-2"
+          hide-details="auto"
+          clearable
+        />
+
+        <div v-else class="mt-2">
+          <v-btn
+            size="small"
+            variant="tonal"
+            color="primary"
+            prepend-icon="mdi-code-tags"
+            @click="insertTag"
+          >
+            {{ $t('campaign_mention_insert_tag') }}
+          </v-btn>
+        </div>
+
+        <div class="text-caption text-grey-darken-1 mt-1">
+          <v-icon size="12" class="mr-1">mdi-information-outline</v-icon>
+          {{ $t('campaign_mention_placement_hint') }}
+        </div>
+      </div>
+    </v-expand-transition>
 
     <!-- Selected images (thumbnails + reorder/remove) -->
     <div v-if="items.length" class="image-grid mt-3">
@@ -236,10 +323,19 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ZALO_MAX_TEXT_RUNES, type CampaignMessage, type MentionPlacement } from './types'
-import { uploadCampaignImages } from './campaignsApi'
+import {
+  ZALO_MAX_TEXT_RUNES,
+  type CampaignMessage,
+  type GroupMember,
+  type MentionMode,
+  type MentionPlacement,
+  type SelectOption,
+} from './types'
+import { listGroupMembers, uploadCampaignImages } from './campaignsApi'
 
 const MENTION_TOKEN = '{tag}'
+// How many real names to show in the preview before collapsing to "+N người khác".
+const MAX_PREVIEW_NAMES = 5
 
 // One image in the composer: either an already-uploaded server path or a local
 // File pending upload. `url` is a previewable blob/object URL.
@@ -255,6 +351,7 @@ const MAX_IMAGE_BYTES = 2 * 1024 * 1024
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 
 const model = defineModel<CampaignMessage>({ required: true })
+const props = defineProps<{ groups: SelectOption[] }>()
 const { t } = useI18n()
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -287,6 +384,59 @@ const mentionGreeting = computed({
   set: (v) => { model.value = { ...model.value, mentionGreeting: v || undefined } },
 })
 
+// --- Tag (mention) state, now campaign-level (was per-segment) -------------
+const mentionMode = computed<MentionMode>({
+  get: () => model.value.mentionMode ?? 'none',
+  set: (v) => { model.value = { ...model.value, mentionMode: v } },
+})
+const mentionUserIds = computed<string[]>({
+  get: () => model.value.mentionUserIds ?? [],
+  set: (v) => { model.value = { ...model.value, mentionUserIds: v } },
+})
+const mentionGroupId = computed<string | undefined>({
+  get: () => model.value.mentionGroupId,
+  set: (v) => { model.value = { ...model.value, mentionGroupId: v || undefined } },
+})
+
+// Members of the chosen preview group — drives both the "selected" picker and
+// the realistic name preview. Reuses the live CRM group members endpoint.
+const memberOptions = ref<GroupMember[]>([])
+const membersLoading = ref(false)
+let loadedForGroup = ''
+
+async function loadMembers(force = false): Promise<void> {
+  const gid = mentionGroupId.value
+  if (!gid) {
+    memberOptions.value = []
+    loadedForGroup = ''
+    return
+  }
+  if (!force && loadedForGroup === gid) return
+  membersLoading.value = true
+  try {
+    const { employees, customers } = await listGroupMembers(gid)
+    memberOptions.value = [...employees, ...customers]
+    loadedForGroup = gid
+    // Drop selected IDs that are no longer members of this group.
+    const valid = new Set(memberOptions.value.map((m) => m.zaloUserId))
+    const pruned = mentionUserIds.value.filter((id) => valid.has(id))
+    if (pruned.length !== mentionUserIds.value.length) mentionUserIds.value = pruned
+  } catch {
+    memberOptions.value = []
+  } finally {
+    membersLoading.value = false
+  }
+}
+
+// Load members whenever the preview group changes (or a mode needing them turns on).
+watch(
+  [mentionGroupId, mentionMode],
+  ([gid, mode]) => {
+    if (gid && (mode === 'selected' || mode === 'all')) void loadMembers()
+  },
+  { immediate: true },
+)
+
 // Insert the {tag} token at the caret in the message body (inline placement).
 // Falls back to appending when the underlying <textarea> caret is unavailable.
 function insertTag(): void {
@@ -312,16 +462,37 @@ const overLimit = computed(() => runeCount.value > ZALO_MAX_TEXT_RUNES)
 const reminderRuneCount = computed(() => [...(reminderText.value || '')].length)
 const reminderOverLimit = computed(() => reminderRuneCount.value > ZALO_MAX_TEXT_RUNES)
 
-// Best-effort preview: render the {tag} placeholder (and, for prefix placement, a
-// sample greeting line) as a sample mention so the literal token never shows.
-// WHO is tagged is decided per-segment, so this only illustrates placement.
+// The actual @mention names to render in the preview, mirroring how the message
+// will be sent: real member names from the selected group (capped with a
+// "+N người khác" tail). Empty until a preview group is chosen / members load.
+function mentionNames(): string[] {
+  if (mentionMode.value === 'none') return []
+  const members =
+    mentionMode.value === 'selected'
+      ? memberOptions.value.filter((m) => mentionUserIds.value.includes(m.zaloUserId))
+      : memberOptions.value
+  const names = members.map((m) => `@${m.name}`.trim()).filter((n) => n.length > 1)
+  if (names.length <= MAX_PREVIEW_NAMES) return names
+  return [...names.slice(0, MAX_PREVIEW_NAMES), t('campaign_mention_more', { n: names.length - MAX_PREVIEW_NAMES })]
+}
+
+// Render the message exactly as it will look when sent: prefix puts a greeting +
+// the @names on a lead line; inline replaces the {tag} token with the @names.
+// With no tagging (or no names resolved yet) it just shows the clean body.
 const previewText = computed(() => {
-  const sample = t('campaign_mention_sample')
   const body = (text.value || '').trim()
-  if (mentionPlacement.value === 'inline') {
-    return body.split(MENTION_TOKEN).join(sample)
+  const names = mentionNames()
+  if (mentionMode.value === 'none' || names.length === 0) {
+    return mentionPlacement.value === 'inline' ? body.split(MENTION_TOKEN).join('').trim() : body
   }
-  return body
+  const tags = names.join(' ')
+  if (mentionPlacement.value === 'inline') {
+    return body.includes(MENTION_TOKEN)
+      ? body.split(MENTION_TOKEN).join(tags)
+      : `${body} ${tags}`.trim()
+  }
+  const greeting = (mentionGreeting.value || t('campaign_mention_greeting_default')).trim()
+  return `${greeting} ${tags}\n${body}`.trim()
 })
 
 // Re-init the thumbnail list whenever the model's saved image paths change
@@ -433,6 +604,27 @@ defineExpose({ commit })
 </script>
 
 <style scoped>
+/* Tag mode + placement toggles: wrap on narrow dialogs, real-text casing, and a
+   clear filled active state so the chosen option reads unambiguously. */
+.tag-toggle {
+  flex-wrap: wrap;
+  height: auto;
+  border-radius: 10px;
+}
+.tag-toggle :deep(.v-btn) {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+.tag-toggle :deep(.v-btn--active) {
+  background-color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+/* Indent the tag config under its mode toggle so the grouping reads as one unit. */
+.tag-config {
+  border-left: 2px solid rgba(var(--v-theme-primary), 0.35);
+  padding-left: 12px;
+}
 .image-grid {
   display: flex;
   flex-wrap: wrap;

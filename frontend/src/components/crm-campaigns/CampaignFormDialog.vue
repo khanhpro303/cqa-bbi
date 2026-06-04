@@ -46,7 +46,7 @@
           <!-- Step 2: Message -->
           <template #item.2>
             <v-form ref="form2Ref" class="pt-2">
-              <MessageComposer ref="composerRef" v-model="form.message" />
+              <MessageComposer ref="composerRef" v-model="form.message" :groups="groups" />
             </v-form>
           </template>
 
@@ -171,6 +171,9 @@ function emptyForm(): CampaignFormState {
       reminderText: undefined,
       mentionPlacement: 'prefix',
       mentionGreeting: undefined,
+      mentionMode: 'none',
+      mentionUserIds: [],
+      mentionGroupId: undefined,
     },
     segments: [],
   }
@@ -193,14 +196,24 @@ function newSegment(): CampaignSegment {
 function resetForm() {
   step.value = 1
   if (props.editing) {
+    // Tag is stored per-segment on the backend but edited campaign-level now, so
+    // reconstruct the message-level tag state from the segments (first segment
+    // wins; the group holding selected members is preferred for re-loading names).
+    const segs = props.editing.segments
+    const tagSeg = segs.find((s) => (s.mentionUserIds?.length ?? 0) > 0) ?? segs[0]
     // Deep-ish clone so edits stay local until saved.
     form.value = {
       id: props.editing.id,
       name: props.editing.name,
       description: props.editing.description ?? '',
       channelId: props.editing.channelId,
-      message: { ...props.editing.message },
-      segments: props.editing.segments.map((s) => ({ ...s })),
+      message: {
+        ...props.editing.message,
+        mentionMode: tagSeg?.mentionMode ?? 'none',
+        mentionUserIds: tagSeg?.mentionUserIds ?? [],
+        mentionGroupId: tagSeg?.groupId || undefined,
+      },
+      segments: segs.map((s) => ({ ...s })),
     }
   } else {
     form.value = emptyForm()
@@ -253,6 +266,21 @@ async function submit(target: 'draft' | 'active') {
       emit('error', 'campaign_image_upload_error')
       return
     }
+    // Tag is configured campaign-level (on the message) but the backend + runner
+    // apply it per-segment. Mirror the message-level mode/members onto every
+    // segment so the contract is unchanged. "selected" IDs only resolve in the
+    // group they belong to; other groups simply tag no one for those IDs.
+    const tagMode = form.value.message.mentionMode ?? 'none'
+    const tagIds = tagMode === 'selected' ? (form.value.message.mentionUserIds ?? []) : []
+    form.value = {
+      ...form.value,
+      segments: form.value.segments.map((s) => ({
+        ...s,
+        mentionMode: tagMode,
+        mentionUserIds: tagIds,
+      })),
+    }
+
     let saved = await saveCampaign(form.value)
 
     // Editing an active campaign onto a missing/disabled channel auto-pauses it
