@@ -199,13 +199,38 @@ func SendCampaignNow(ctx context.Context, campaignID, tenantID string) (sent, fa
 		return 0, 0, err
 	}
 
+	consumedOnce := false
+	hasFutureRun := false
 	for i := range b.campaign.Segments {
-		s, f := b.fireSegment(ctx, b.campaign.Segments[i])
+		seg := b.campaign.Segments[i]
+		s, f := b.fireSegment(ctx, seg)
 		sent += s
 		fail += f
+
+		if seg.ScheduleKind == "once" {
+			// Sending manually completes the one-time job: mark it consumed so the
+			// scheduler won't fire it again at its RunAt (mirrors fireCampaignSegment).
+			db.DB.Model(&models.CampaignSegment{}).Where("id = ?", seg.ID).Update("next_run_at", nil)
+			consumedOnce = true
+		} else if strings.TrimSpace(seg.Cron) != "" {
+			hasFutureRun = true
+		}
 	}
 
-	db.DB.Model(b.campaign).Updates(map[string]interface{}{"status": "active", "updated_at": time.Now()})
+	// A campaign whose only schedule was a one-time send is finished once that send
+	// is consumed; one that still has recurring segments keeps running.
+	status := "active"
+	if consumedOnce && !hasFutureRun {
+		status = "done"
+	}
+	db.DB.Model(b.campaign).Updates(map[string]interface{}{"status": status, "updated_at": time.Now()})
+
+	// Drop any pending OneTimeJob for the once-segments we just consumed.
+	if consumedOnce {
+		if sched := GetDefaultScheduler(); sched != nil {
+			sched.ReloadCampaignJobs()
+		}
+	}
 	return sent, fail, nil
 }
 

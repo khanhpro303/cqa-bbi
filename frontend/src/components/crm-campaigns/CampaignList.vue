@@ -124,6 +124,30 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Send-before-scheduled-time warning (chỉ với lượt gửi 1 lần chưa tới hẹn) -->
+    <v-dialog v-model="sendConfirmOpen" max-width="460">
+      <v-card>
+        <v-card-title class="text-subtitle-1 font-weight-bold px-6 pt-5">
+          {{ $t('campaign_send_early_title') }}
+        </v-card-title>
+        <v-card-text class="px-6 pb-0">
+          <v-alert type="warning" variant="tonal" density="comfortable" class="mb-3">
+            {{ $t('campaign_send_early_warning', { time: sendConfirmInfo?.time ?? '', group: sendConfirmInfo?.groupName ?? '' }) }}
+          </v-alert>
+          <div class="text-body-2 text-grey-darken-1">{{ $t('campaign_send_early_note') }}</div>
+        </v-card-text>
+        <v-card-actions class="px-6 pb-5 pt-3 ga-2">
+          <v-spacer />
+          <v-btn variant="text" :disabled="busyId === sendConfirm?.id" @click="sendConfirm = null">
+            {{ $t('cancel') }}
+          </v-btn>
+          <v-btn color="success" variant="flat" :loading="busyId === sendConfirm?.id" @click="confirmSendNow">
+            {{ $t('campaign_send_now') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -231,7 +255,47 @@ async function onSaved() {
   emit('notify', 'Đã lưu chiến dịch', 'success')
 }
 
-async function onSendNow(c: Campaign) {
+// "Gửi trước giờ hẹn" warning modal — only for one-time segments not yet due.
+const sendConfirm = ref<Campaign | null>(null)
+const sendConfirmOpen = computed({
+  get: () => sendConfirm.value !== null,
+  set: (v) => { if (!v) sendConfirm.value = null },
+})
+
+// Earliest one-time segment whose scheduled time hasn't arrived yet, if any.
+function earliestPendingOnce(c: Campaign): { time: string; groupName: string } | null {
+  const now = Date.now()
+  const pending = c.segments
+    .filter((s) => s.scheduleKind === 'once')
+    .map((s) => ({ at: s.nextRunAt ?? s.runAt, groupName: s.groupName }))
+    .filter((s): s is { at: string; groupName: string } => !!s.at && new Date(s.at).getTime() > now)
+    .sort((a, b) => a.at.localeCompare(b.at))
+  if (pending.length === 0) return null
+  return { time: formatDateTime(pending[0].at), groupName: pending[0].groupName }
+}
+
+const sendConfirmInfo = computed(() =>
+  sendConfirm.value ? earliestPendingOnce(sendConfirm.value) : null,
+)
+
+function onSendNow(c: Campaign) {
+  // Warn before sending a one-time campaign ahead of its scheduled time;
+  // otherwise (recurring, or already due) send immediately as before.
+  if (earliestPendingOnce(c)) {
+    sendConfirm.value = c
+    return
+  }
+  void doSendNow(c)
+}
+
+async function confirmSendNow() {
+  const c = sendConfirm.value
+  if (!c) return
+  sendConfirm.value = null
+  await doSendNow(c)
+}
+
+async function doSendNow(c: Campaign) {
   busyId.value = c.id
   try {
     const { sent } = await sendNow(c.id)

@@ -42,8 +42,10 @@ func (s *Scheduler) loadCampaignJobs() {
 			var def gocron.JobDefinition
 			switch {
 			case seg.ScheduleKind == "once":
-				if seg.RunAt == nil || !seg.RunAt.After(now) {
-					continue // missed or unscheduled once-segment: skip
+				// NextRunAt==nil marks a consumed once-segment (fired on schedule or
+				// completed early via "Gửi ngay") — never re-register it.
+				if seg.RunAt == nil || !seg.RunAt.After(now) || seg.NextRunAt == nil {
+					continue // missed, unscheduled, or already consumed once-segment: skip
 				}
 				def = gocron.OneTimeJob(gocron.OneTimeJobStartDateTime(*seg.RunAt))
 			default: // recurring
