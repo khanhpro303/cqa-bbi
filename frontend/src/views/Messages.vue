@@ -163,7 +163,7 @@
         <v-card variant="outlined" class="d-flex flex-column" style="height: calc(100vh - 140px)">
           <!-- Header -->
           <v-card-title class="d-flex align-center pa-4">
-            <v-btn icon="mdi-arrow-left" variant="text" size="small" class="d-md-none mr-2" @click="selectedConvId = null" />
+            <v-btn icon="mdi-arrow-left" variant="text" size="small" class="d-md-none mr-2" @click="closeConversation" />
             <v-avatar :color="selectedConvChannelType === 'facebook' ? 'blue' : 'green'" size="36" class="mr-3">
               <v-icon color="white" size="18">
                 {{ selectedConvChannelType === 'facebook' ? 'mdi-facebook-messenger' : 'mdi-chat' }}
@@ -179,6 +179,7 @@
             </div>
             <v-btn icon="mdi-share-variant" variant="text" size="small" color="primary" @click="shareConversation" />
             <v-btn icon="mdi-download" variant="text" size="small" color="primary" @click="downloadConversation" />
+            <v-btn icon="mdi-close" variant="text" size="small" :title="$t('back')" @click="closeConversation" />
           </v-card-title>
 
           <v-divider />
@@ -420,7 +421,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useDisplay } from 'vuetify'
 import { useConversationStore, type Message } from '../stores/conversations'
@@ -438,6 +439,7 @@ import {
 import api from '../api'
 
 const route = useRoute()
+const router = useRouter()
 const { mdAndUp } = useDisplay()
 const conversationStore = useConversationStore()
 const channelStore = useChannelStore()
@@ -725,6 +727,19 @@ async function selectConversation(convId: string, tab?: string) {
     evaluation.value = null
   } finally {
     loadingEvaluation.value = false
+  }
+}
+
+function closeConversation() {
+  selectedConvId.value = null
+  detailTab.value = 'messages'
+  evaluation.value = null
+  // Clear deep-link query params so the detail doesn't reopen on refresh
+  if (route.query.conv || route.query.tab) {
+    const query = { ...route.query }
+    delete query.conv
+    delete query.tab
+    router.replace({ query })
   }
 }
 
