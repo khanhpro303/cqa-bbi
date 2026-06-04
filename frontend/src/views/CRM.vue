@@ -5,8 +5,13 @@
       <v-spacer />
       
       <!-- Action buttons depending on active tab -->
-      <template v-if="currentTab === 'campaigns' && campaignSubtab === 'management'">
-        <v-btn color="primary" prepend-icon="mdi-bullhorn-outline" @click="campaignListRef?.openCreate()">
+      <template v-if="currentTab === 'campaigns'">
+        <v-btn
+          v-if="campaignSubtab === 'management'"
+          color="primary"
+          prepend-icon="mdi-bullhorn-outline"
+          @click="campaignListRef?.openCreate()"
+        >
           {{ $t('campaign_create') }}
         </v-btn>
       </template>
