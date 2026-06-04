@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 
@@ -97,6 +98,9 @@ func InviteUser(c *gin.Context) {
 	}
 	db.DB.Create(&ut)
 
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "user.invited", "user", user.ID,
+		fmt.Sprintf("Mời %s (%s) vào tenant với vai trò %s", user.Name, user.Email, req.Role), "", c.ClientIP())
+
 	c.JSON(http.StatusOK, TenantUserResponse{
 		UserID: user.ID,
 		Email:  user.Email,
@@ -145,6 +149,11 @@ func UpdateUserRole(c *gin.Context) {
 		Where("user_id = ? AND tenant_id = ?", userID, tenantID).
 		Updates(updates)
 
+	if req.Role != targetUT.Role {
+		db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "user.role_changed", "user", userID,
+			fmt.Sprintf("Đổi vai trò user %s: %s→%s", userID, targetUT.Role, req.Role), "", c.ClientIP())
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "role_updated"})
 }
 
@@ -189,6 +198,8 @@ func ResetUserPassword(c *gin.Context) {
 	}
 
 	log.Printf("[security] password reset: user=%s reset_by=%s tenant=%s", userID, middleware.GetUserID(c), tenantID)
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "user.password_reset", "user", userID,
+		fmt.Sprintf("Admin đặt lại mật khẩu cho user %s", userID), "", c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"message": "password_reset"})
 }
 
@@ -209,6 +220,9 @@ func RemoveUserFromTenant(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user_not_in_tenant"})
 		return
 	}
+
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "user.removed", "user", userID,
+		fmt.Sprintf("Gỡ user %s khỏi tenant", userID), "", c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "user_removed"})
 }

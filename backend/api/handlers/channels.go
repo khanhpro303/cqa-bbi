@@ -185,6 +185,9 @@ func CreateChannel(c *gin.Context) {
 		return
 	}
 
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "channel.create", "channel", channel.ID,
+		fmt.Sprintf("Tạo kênh '%s' (loại: %s)", channel.Name, channel.ChannelType), "", c.ClientIP())
+
 	resp := channelToResponse(channel)
 	enrichPersonalZaloImportResponse(c, &resp, channel, cfg, true)
 	c.JSON(http.StatusCreated, resp)
@@ -262,6 +265,25 @@ func UpdateChannel(c *gin.Context) {
 	if result.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "channel_not_found"})
 		return
+	}
+
+	// Audit: ghi lại thay đổi toggle (cũ→mới). `channel` vẫn giữ giá trị cũ vì Updates dùng map.
+	uid, uemail, ip := middleware.GetUserID(c), middleware.GetUserEmail(c), c.ClientIP()
+	if req.IsActive != nil && *req.IsActive != channel.IsActive {
+		db.LogActivity(tenantID, uid, uemail, "channel.toggle_active", "channel", channelID,
+			fmt.Sprintf("Channel '%s': is_active %v→%v", channel.Name, channel.IsActive, *req.IsActive), "", ip)
+	}
+	// auto_reply có thể đổi trực tiếp hoặc bị ép tắt khi vô hiệu hóa kênh (xem nhánh ở trên).
+	newAutoReply := channel.AutoReplyEnabled
+	if req.AutoReplyEnabled != nil {
+		newAutoReply = *req.AutoReplyEnabled
+	}
+	if req.IsActive != nil && !*req.IsActive {
+		newAutoReply = false
+	}
+	if newAutoReply != channel.AutoReplyEnabled {
+		db.LogActivity(tenantID, uid, uemail, "channel.toggle_auto_reply", "channel", channelID,
+			fmt.Sprintf("Channel '%s': auto_reply %v→%v", channel.Name, channel.AutoReplyEnabled, newAutoReply), "", ip)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "updated"})
@@ -483,6 +505,9 @@ func ZaloOAuthCallback(c *gin.Context) {
 	}
 	db.DB.Model(&models.Channel{}).Where("id = ?", channelID).Updates(updates)
 
+	db.LogActivity(tenantID, "", "system", "channel.credentials_updated", "channel", channelID,
+		"Đã làm mới token Zalo OA (OAuth callback)", "", c.ClientIP())
+
 	// Redirect back to channel detail page with success
 	c.Redirect(http.StatusFound, fmt.Sprintf("/%s/channels/%s?zalo_auth=success", tenantID, channelID))
 }
@@ -642,6 +667,9 @@ func ReauthChannel(c *gin.Context) {
 		return
 	}
 
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "channel.reauth", "channel", channelID,
+		fmt.Sprintf("Khởi tạo cấp quyền lại kênh '%s' (loại: %s)", channel.Name, channel.ChannelType), "", c.ClientIP())
+
 	c.JSON(http.StatusOK, gin.H{"redirect_url": redirectURL})
 }
 
@@ -686,6 +714,9 @@ func SyncChannelNow(c *gin.Context) {
 		"last_sync_error":  "",
 		"updated_at":       time.Now(),
 	})
+
+	db.LogActivity(tenantID, userID, userEmail, "channel.sync_now", "channel", channelID,
+		fmt.Sprintf("Kích hoạt đồng bộ thủ công kênh '%s'", channel.Name), "", clientIP)
 
 	// Run sync in background to avoid Nginx/proxy gateway timeout
 	go func() {
@@ -801,6 +832,9 @@ func FacebookOAuthCallback(c *gin.Context) {
 		"name":                  pageName,
 		"updated_at":            time.Now(),
 	})
+
+	db.LogActivity(tenantID, "", "system", "channel.credentials_updated", "channel", channelID,
+		"Đã làm mới token Facebook Page (OAuth callback)", "", c.ClientIP())
 
 	// Redirect back to channel detail page with success
 	c.Redirect(http.StatusFound, fmt.Sprintf("/%s/channels/%s?fb_auth=success", tenantID, channelID))

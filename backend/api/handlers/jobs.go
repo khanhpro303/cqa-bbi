@@ -119,6 +119,9 @@ func CreateJob(c *gin.Context) {
 		return
 	}
 
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "job.create", "job", job.ID,
+		fmt.Sprintf("Tạo job '%s' (loại: %s, lịch: %s)", job.Name, job.JobType, job.ScheduleType), "", c.ClientIP())
+
 	// Reload cron jobs if this is a scheduled job
 	if job.ScheduleType == "cron" {
 		if sched := engine.GetDefaultScheduler(); sched != nil {
@@ -188,6 +191,15 @@ func UpdateJob(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job_not_found"})
 		return
 	}
+
+	changedFields := make([]string, 0, len(req))
+	for k := range req {
+		if k != "updated_at" {
+			changedFields = append(changedFields, k)
+		}
+	}
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "job.update", "job", jobID,
+		"Cập nhật job, trường đổi: "+strings.Join(changedFields, ", "), "", c.ClientIP())
 
 	// Reload cron jobs if schedule changed
 	if _, ok := req["schedule_type"]; ok {

@@ -169,6 +169,9 @@ func CreateCRMGroup(c *gin.Context) {
 	}
 	tx.Commit()
 
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "crm_group.create", "crm_group", group.ID,
+		fmt.Sprintf("Tạo nhóm GMF '%s' (zalo_group_id=%s, khách=%s)", group.Name, group.ZaloGroupID, group.CustomerCode), "", c.ClientIP())
+
 	// Preload associations for response
 	db.DB.Preload("Employees").Preload("Customers").Preload("Channel").First(&group, "id = ?", group.ID)
 
@@ -204,6 +207,9 @@ func UpdateCRMGroup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_update_group"})
 		return
 	}
+
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "crm_group.update", "crm_group", group.ID,
+		fmt.Sprintf("Cập nhật nhóm GMF '%s' (khách=%s)", group.Name, group.CustomerCode), "", c.ClientIP())
 
 	c.JSON(http.StatusOK, group)
 }
@@ -282,6 +288,10 @@ func DeleteCRMGroup(c *gin.Context) {
 	}
 
 	tx.Commit()
+
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "crm_group.delete", "crm_group", groupID,
+		fmt.Sprintf("Xóa/giải tán nhóm GMF '%s' (zalo_group_id=%s)", group.Name, group.ZaloGroupID), "", c.ClientIP())
+
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 

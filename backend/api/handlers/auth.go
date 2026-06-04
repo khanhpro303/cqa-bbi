@@ -202,6 +202,8 @@ func Login(c *gin.Context) {
 	lockoutKey := req.Email + ":" + c.ClientIP()
 	if checkLockout(lockoutKey) {
 		log.Printf("[security] brute force lockout: email=%s ip=%s", req.Email, c.ClientIP())
+		db.LogActivity(resolveFirstTenantByEmail(req.Email), "", req.Email, "user.account_locked", "user", "",
+			"Tài khoản bị khóa tạm thời (brute-force) từ IP "+c.ClientIP(), "", c.ClientIP())
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "account_locked", "message": "Tài khoản bị khóa tạm thời do đăng nhập sai nhiều lần. Vui lòng thử lại sau 15 phút."})
 		return
 	}
@@ -210,6 +212,8 @@ func Login(c *gin.Context) {
 	if err := db.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
 		recordFailedLogin(lockoutKey)
 		log.Printf("[security] failed login: email=%s ip=%s reason=user_not_found", req.Email, c.ClientIP())
+		db.LogActivity("", "", req.Email, "user.login_failed", "user", "",
+			"Đăng nhập thất bại (user_not_found) từ IP "+c.ClientIP(), "", c.ClientIP())
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_credentials"})
 		return
 	}
@@ -217,6 +221,8 @@ func Login(c *gin.Context) {
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
 		recordFailedLogin(lockoutKey)
 		log.Printf("[security] failed login: email=%s ip=%s reason=wrong_password", req.Email, c.ClientIP())
+		db.LogActivity(resolveFirstTenantByEmail(user.Email), user.ID, user.Email, "user.login_failed", "user", user.ID,
+			"Đăng nhập thất bại (wrong_password) từ IP "+c.ClientIP(), "", c.ClientIP())
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_credentials"})
 		return
 	}
@@ -285,7 +291,25 @@ func clearRefreshCookie(c *gin.Context) {
 
 func Logout(c *gin.Context) {
 	clearRefreshCookie(c)
+	if uid := middleware.GetUserID(c); uid != "" {
+		db.LogActivity(resolveFirstTenantByEmail(middleware.GetUserEmail(c)), uid, middleware.GetUserEmail(c),
+			"user.logout", "user", uid, "Đăng xuất từ IP "+c.ClientIP(), "", c.ClientIP())
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "logged_out"})
+}
+
+// resolveFirstTenantByEmail trả về tenant đầu tiên của user theo email (best-effort,
+// rỗng nếu không tìm thấy). Dùng để gắn các sự kiện auth vào đúng tenant.
+func resolveFirstTenantByEmail(email string) string {
+	var u models.User
+	if email == "" || db.DB.Where("email = ?", email).First(&u).Error != nil {
+		return ""
+	}
+	var ut models.UserTenant
+	if db.DB.Where("user_id = ?", u.ID).First(&ut).Error != nil {
+		return ""
+	}
+	return ut.TenantID
 }
 
 func Register(c *gin.Context) {
@@ -495,6 +519,9 @@ func ChangeProfilePassword(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update_failed"})
 		return
 	}
+
+	db.LogActivity(resolveFirstTenantByEmail(user.Email), user.ID, user.Email, "user.password_changed", "user", user.ID,
+		"Người dùng tự đổi mật khẩu", "", c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "password_changed"})
 }

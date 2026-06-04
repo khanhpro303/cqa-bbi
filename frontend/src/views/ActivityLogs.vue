@@ -88,10 +88,16 @@ function onDeleted(count: number) {
 }
 
 const actionOptions = [
+  { title: 'Kênh & Chatbot', value: 'channel' },
+  { title: 'Cấu hình AI', value: 'ai' },
+  { title: 'Cấu hình ERP', value: 'erp' },
+  { title: 'Chiến dịch', value: 'campaign' },
+  { title: 'Nhóm GMF', value: 'crm_group' },
+  { title: 'Người dùng & bảo mật', value: 'user' },
+  { title: 'Job', value: 'job' },
   { title: 'Job Run', value: 'job.run' },
   { title: 'Job Create', value: 'job.create' },
   { title: 'Job Delete', value: 'job.delete' },
-  { title: 'AI Error', value: 'ai.error' },
   { title: 'Notification', value: 'notification' },
   { title: 'Settings', value: 'settings' },
 ]
@@ -117,9 +123,12 @@ function formatTime(d: string) {
 }
 
 function actionColor(action: string) {
-  if (action.includes('error')) return 'error'
-  if (action.includes('delete')) return 'warning'
-  if (action.includes('create')) return 'success'
+  if (action.includes('error') || action.includes('login_failed')) return 'error'
+  if (action.includes('locked')) return 'error'
+  if (action.includes('delete') || action.includes('removed')) return 'warning'
+  if (action.includes('create') || action.includes('invited')) return 'success'
+  if (action.includes('toggle') || action.includes('updated') || action.includes('update')) return 'info'
+  if (action.includes('status_changed') || action.includes('role_changed')) return 'primary'
   return 'info'
 }
 </script>

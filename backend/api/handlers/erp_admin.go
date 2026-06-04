@@ -91,6 +91,16 @@ func SaveERPSettings(c *gin.Context) {
 
 	cfg, _ := config.Load()
 
+	// Audit: chụp giá trị cũ trước khi ghi đè để so sánh cũ→mới.
+	oldURL := getPlainSetting(tenantID, "erp_api_url")
+	oldDB := getPlainSetting(tenantID, "erp_api_db")
+	oldUsername := getPlainSetting(tenantID, "erp_api_username")
+	oldPublicActive := getPlainSetting(tenantID, "erp_public_active")
+	oldPrivateActive := getPlainSetting(tenantID, "erp_private_active")
+	oldMethodPerms := getPlainSetting(tenantID, "erp_global_method_permissions")
+	passwordChanged := req.Password != "" && !isMaskedSecret(req.Password)
+	tokenChanged := req.Token != "" && !isMaskedSecret(req.Token)
+
 	// ── Connection (shared) ──────────────────────────────────────────────
 	if req.URL != "" {
 		upsertSetting(tenantID, "erp_api_url", req.URL, nil)
@@ -200,6 +210,50 @@ func SaveERPSettings(c *gin.Context) {
 		overallActive = "true"
 	}
 	upsertSetting(tenantID, "erp_integration_active", overallActive, nil)
+
+	// ── Audit ──────────────────────────────────────────────────────────────
+	uid, uemail, ip := middleware.GetUserID(c), middleware.GetUserEmail(c), c.ClientIP()
+
+	var changed []string
+	if req.URL != oldURL {
+		changed = append(changed, "url")
+	}
+	if req.DBName != oldDB {
+		changed = append(changed, "db")
+	}
+	if req.Username != oldUsername {
+		changed = append(changed, "username")
+	}
+	if passwordChanged {
+		changed = append(changed, "password (đã đổi)")
+	}
+	if tokenChanged {
+		changed = append(changed, "token (đã đổi)")
+	}
+	if len(changed) > 0 {
+		db.LogActivity(tenantID, uid, uemail, "erp.settings_updated", "settings", "erp",
+			"Cập nhật kết nối ERP: "+strings.Join(changed, ", "), "", ip)
+	}
+
+	newMethodPerms := oldMethodPerms
+	if req.GlobalMethodPermissions != nil {
+		if b, err := json.Marshal(req.GlobalMethodPermissions); err == nil {
+			newMethodPerms = string(b)
+		}
+	}
+	if newMethodPerms != oldMethodPerms {
+		db.LogActivity(tenantID, uid, uemail, "erp.method_permissions_updated", "settings", "erp_global_method_permissions",
+			"Cập nhật quyền GET/POST các endpoint ERP", "", ip)
+	}
+
+	if req.PublicActive != oldPublicActive {
+		db.LogActivity(tenantID, uid, uemail, "erp.toggle_active", "settings", "erp_public_active",
+			fmt.Sprintf("ERP public bot: %s→%s", oldPublicActive, req.PublicActive), "", ip)
+	}
+	if req.PrivateActive != oldPrivateActive {
+		db.LogActivity(tenantID, uid, uemail, "erp.toggle_active", "settings", "erp_private_active",
+			fmt.Sprintf("ERP private bot: %s→%s", oldPrivateActive, req.PrivateActive), "", ip)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})
 }

@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -118,6 +120,11 @@ func SaveAISettings(c *gin.Context) {
 
 	cfg, _ := config.Load()
 
+	// Audit: giá trị cũ để ghi cũ→mới.
+	oldProvider := getPlainSetting(tenantID, "ai_provider")
+	oldModel := getPlainSetting(tenantID, "ai_model")
+	apiKeyChanged := false
+
 	// Save model (plain)
 	if req.Model != "" {
 		upsertSetting(tenantID, "ai_model", req.Model, nil)
@@ -158,6 +165,7 @@ func SaveAISettings(c *gin.Context) {
 			return
 		}
 		upsertSetting(tenantID, providerKey, "", encrypted)
+		apiKeyChanged = true
 	}
 
 	// Save provider (plain)
@@ -169,6 +177,20 @@ func SaveAISettings(c *gin.Context) {
 	}
 	if req.BatchSize != "" {
 		upsertSetting(tenantID, "ai_batch_size", req.BatchSize, nil)
+	}
+
+	uid, uemail, ip := middleware.GetUserID(c), middleware.GetUserEmail(c), c.ClientIP()
+	if req.Provider != oldProvider {
+		db.LogActivity(tenantID, uid, uemail, "ai.provider_changed", "settings", "ai_provider",
+			fmt.Sprintf("AI provider: %s→%s", oldProvider, req.Provider), "", ip)
+	}
+	if req.Model != "" && req.Model != oldModel {
+		db.LogActivity(tenantID, uid, uemail, "ai.model_changed", "settings", "ai_model",
+			fmt.Sprintf("AI model: %s→%s", oldModel, req.Model), "", ip)
+	}
+	if apiKeyChanged {
+		db.LogActivity(tenantID, uid, uemail, "ai.api_key_rotated", "settings", "ai_api_key",
+			fmt.Sprintf("API key (provider %s) đã thay đổi", req.Provider), "", ip)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})
@@ -218,6 +240,10 @@ func SaveAIEnginesSettings(c *gin.Context) {
 	}
 
 	cfg, _ := config.Load()
+
+	// Audit: hash prompt cũ để ghi cũ→mới (không bao giờ log nội dung prompt).
+	oldPrompt := getPlainSetting(tenantID, "ai_engine_system_prompt")
+	oldPromptInternal := getPlainSetting(tenantID, "ai_engine_system_prompt_internal")
 
 	// Base URL
 	if req.LangflowBaseURL != "" {
@@ -312,6 +338,16 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		}
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = 'astradb_token'", tenantID).Delete(&models.AppSetting{})
+	}
+
+	uid, uemail, ip := middleware.GetUserID(c), middleware.GetUserEmail(c), c.ClientIP()
+	if req.SystemPrompt != oldPrompt {
+		db.LogActivity(tenantID, uid, uemail, "ai.system_prompt_updated", "settings", "ai_engine_system_prompt",
+			fmt.Sprintf("System prompt (public): hash %s→%s", shortHash(oldPrompt), shortHash(req.SystemPrompt)), "", ip)
+	}
+	if req.SystemPromptInternal != oldPromptInternal {
+		db.LogActivity(tenantID, uid, uemail, "ai.system_prompt_updated", "settings", "ai_engine_system_prompt_internal",
+			fmt.Sprintf("System prompt (internal): hash %s→%s", shortHash(oldPromptInternal), shortHash(req.SystemPromptInternal)), "", ip)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})
@@ -641,6 +677,24 @@ func upsertSetting(tenantID, key, plainValue string, encryptedValue []byte) {
 
 func isMaskedSecret(v string) bool {
 	return strings.TrimSpace(v) == "••••••••"
+}
+
+// getPlainSetting trả về giá trị plain hiện tại của một setting (rỗng nếu chưa có).
+func getPlainSetting(tenantID, key string) string {
+	var s models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&s).Error; err == nil {
+		return s.ValuePlain
+	}
+	return ""
+}
+
+// shortHash trả về 8 ký tự đầu của SHA-256 để ghi audit prompt mà không lộ nội dung.
+func shortHash(s string) string {
+	if s == "" {
+		return "(rỗng)"
+	}
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 func getFirstSettingByKeys(tenantID string, keys []string) (*models.AppSetting, error) {

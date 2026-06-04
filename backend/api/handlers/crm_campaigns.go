@@ -149,6 +149,9 @@ func CreateCampaign(c *gin.Context) {
 	}
 	reloadCampaignScheduler()
 
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "campaign.create", "campaign", campaign.ID,
+		fmt.Sprintf("Tạo chiến dịch '%s' (%d phân khúc)", campaign.Name, len(campaign.Segments)), "", c.ClientIP())
+
 	groupNames := loadGroupNames(tenantID)
 	c.JSON(http.StatusCreated, toCampaignDTO(&campaign, groupNames, 0))
 }
@@ -206,6 +209,9 @@ func UpdateCampaign(c *gin.Context) {
 	}
 	reloadCampaignScheduler()
 
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "campaign.update", "campaign", campaign.ID,
+		fmt.Sprintf("Cập nhật chiến dịch '%s'", campaign.Name), "", c.ClientIP())
+
 	groupNames := loadGroupNames(tenantID)
 	c.JSON(http.StatusOK, toCampaignDTO(&campaign, groupNames, sentThisMonthByCampaign(tenantID)[campaign.ID]))
 }
@@ -235,6 +241,9 @@ func DeleteCampaign(c *gin.Context) {
 	}
 	reloadCampaignScheduler()
 
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "campaign.delete", "campaign", id,
+		fmt.Sprintf("Xóa chiến dịch '%s'", campaign.Name), "", c.ClientIP())
+
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
@@ -262,6 +271,7 @@ func SetCampaignStatus(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "campaign_not_found"})
 		return
 	}
+	oldStatus := campaign.Status
 	campaign.Status = req.Status
 	campaign.UpdatedAt = time.Now()
 	if err := db.DB.Model(&campaign).Updates(map[string]interface{}{"status": req.Status, "updated_at": campaign.UpdatedAt}).Error; err != nil {
@@ -269,6 +279,11 @@ func SetCampaignStatus(c *gin.Context) {
 		return
 	}
 	reloadCampaignScheduler()
+
+	if req.Status != oldStatus {
+		db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "campaign.status_changed", "campaign", id,
+			fmt.Sprintf("Chiến dịch '%s': trạng thái %s→%s", campaign.Name, oldStatus, req.Status), "", c.ClientIP())
+	}
 
 	groupNames := loadGroupNames(tenantID)
 	c.JSON(http.StatusOK, toCampaignDTO(&campaign, groupNames, sentThisMonthByCampaign(tenantID)[campaign.ID]))
@@ -294,6 +309,9 @@ func SendNow(c *gin.Context) {
 		}
 		return
 	}
+
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "campaign.send_now", "campaign", id,
+		fmt.Sprintf("Gửi chiến dịch ngay: %d thành công, %d lỗi", sent, fail), "", c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"sent": sent, "fail": fail})
 }
