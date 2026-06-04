@@ -41,9 +41,10 @@ var allowedCampaignImageExt = map[string]bool{
 // ---- Response/request DTOs (camelCase to match frontend crm-campaigns/types.ts) ----
 
 type campaignMessageDTO struct {
-	Text   string   `json:"text"`
-	Link   string   `json:"link,omitempty"`
-	Images []string `json:"images,omitempty"`
+	Text         string   `json:"text"`
+	Link         string   `json:"link,omitempty"`
+	Images       []string `json:"images,omitempty"`
+	ReminderText string   `json:"reminderText,omitempty"`
 }
 
 type campaignSegmentDTO struct {
@@ -82,9 +83,10 @@ type campaignFormBody struct {
 	Description string `json:"description"`
 	ChannelID   string `json:"channelId" binding:"required"`
 	Message     struct {
-		Text   string   `json:"text"`
-		Link   string   `json:"link"`
-		Images []string `json:"images"`
+		Text         string   `json:"text"`
+		Link         string   `json:"link"`
+		Images       []string `json:"images"`
+		ReminderText string   `json:"reminderText"`
 	} `json:"message"`
 	Segments []campaignFormSegment `json:"segments"`
 }
@@ -129,17 +131,18 @@ func CreateCampaign(c *gin.Context) {
 
 	now := time.Now()
 	campaign := models.Campaign{
-		ID:            uuid.New().String(),
-		TenantID:      tenantID,
-		Name:          body.Name,
-		Description:   body.Description,
-		ChannelID:     body.ChannelID,
-		Status:        "draft",
-		MessageText:   body.Message.Text,
-		MessageLink:   body.Message.Link,
-		MessageImages: images,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:                  uuid.New().String(),
+		TenantID:            tenantID,
+		Name:                body.Name,
+		Description:         body.Description,
+		ChannelID:           body.ChannelID,
+		Status:              "draft",
+		MessageText:         body.Message.Text,
+		MessageLink:         body.Message.Link,
+		MessageImages:       images,
+		MessageReminderText: body.Message.ReminderText,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 	campaign.Segments = buildSegments(campaign.ID, body.Segments, tenantID)
 
@@ -184,6 +187,7 @@ func UpdateCampaign(c *gin.Context) {
 	campaign.MessageText = body.Message.Text
 	campaign.MessageLink = body.Message.Link
 	campaign.MessageImages = images
+	campaign.MessageReminderText = body.Message.ReminderText
 	campaign.MessageImageName = "" // migrated to MessageImages
 	campaign.UpdatedAt = time.Now()
 
@@ -590,9 +594,10 @@ func toCampaignDTO(c *models.Campaign, groupNames map[string]string, sentThisMon
 		ChannelID:   c.ChannelID,
 		Status:      c.Status,
 		Message: campaignMessageDTO{
-			Text:   c.MessageText,
-			Link:   c.MessageLink,
-			Images: c.Images(),
+			Text:         c.MessageText,
+			Link:         c.MessageLink,
+			Images:       c.Images(),
+			ReminderText: c.MessageReminderText,
 		},
 		Segments:      segs,
 		SentThisMonth: sentThisMonth,

@@ -164,7 +164,7 @@ function emptyForm(): CampaignFormState {
     name: '',
     description: '',
     channelId: props.channels[0]?.id ?? '',
-    message: { text: '', link: undefined, images: [] },
+    message: { text: '', link: undefined, images: [], reminderText: undefined },
     segments: [],
   }
 }

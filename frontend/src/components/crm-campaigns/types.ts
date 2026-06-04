@@ -27,6 +27,9 @@ export interface CampaignMessage {
   // Tenant-relative paths of uploaded images (served via /api/v1/files/<path>).
   // Populated after upload; broadcast attaches them in order via Zalo.
   images?: string[]
+  // Optional text-only "nhắc lại" message. When set, each segment's first
+  // successful send uses `text`; every later (recurring) send uses this instead.
+  reminderText?: string
 }
 
 export interface Campaign {

@@ -61,6 +61,10 @@ type Campaign struct {
 	Status      string `gorm:"type:varchar(20);not null;default:draft" json:"status"`
 	MessageText string `gorm:"type:text" json:"-"`
 	MessageLink string `gorm:"type:text" json:"-"`
+	// MessageReminderText is an optional text-only "nhắc lại" message. When set, the
+	// first successful send to each segment's group uses the main message and every
+	// later (recurring) send uses this reminder instead — see engine.fireSegment.
+	MessageReminderText string `gorm:"type:text" json:"-"`
 	// MessageImageName is the legacy single-image column, kept only so existing
 	// rows can be backfilled into MessageImages. New writes leave it empty.
 	MessageImageName string          `gorm:"type:varchar(255)" json:"-"`
@@ -94,9 +98,9 @@ type CampaignSegment struct {
 	GroupID    string `gorm:"type:char(36);index" json:"group_id"` // -> crm_groups.id
 	// ScheduleKind: recurring | once
 	ScheduleKind string     `gorm:"type:varchar(20);not null;default:recurring" json:"schedule_kind"`
-	Cron         string     `gorm:"type:varchar(120)" json:"cron,omitempty"`     // when recurring
-	RunAt        *time.Time `gorm:"" json:"run_at,omitempty"`                    // when once
-	NextRunAt    *time.Time `gorm:"" json:"next_run_at,omitempty"`               // computed
+	Cron         string     `gorm:"type:varchar(120)" json:"cron,omitempty"` // when recurring
+	RunAt        *time.Time `gorm:"" json:"run_at,omitempty"`                // when once
+	NextRunAt    *time.Time `gorm:"" json:"next_run_at,omitempty"`           // computed
 }
 
 func (CampaignSegment) TableName() string {

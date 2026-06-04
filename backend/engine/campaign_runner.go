@@ -41,7 +41,11 @@ type campaignBroadcast struct {
 	// attachmentIDs are Zalo attachment_ids for the campaign's images, uploaded
 	// once per broadcast (not per group) so each group send just references them.
 	attachmentIDs []string
-	tenantID      string
+	// reminderContent is the optional text-only "nhắc lại" message. When non-empty,
+	// a segment that already has a successful run sends this instead of the main
+	// content (and without images) — see fireSegment.
+	reminderContent string
+	tenantID        string
 }
 
 // prepareCampaignBroadcast loads the campaign + segments, runs the channel guard
@@ -88,12 +92,13 @@ func prepareCampaignBroadcast(ctx context.Context, campaignID, tenantID string) 
 	})
 
 	return &campaignBroadcast{
-		campaign:      &campaign,
-		channel:       &channel,
-		adapter:       adapter,
-		content:       buildBroadcastContent(&campaign),
-		attachmentIDs: uploadCampaignImages(ctx, adapter, campaign.Images()),
-		tenantID:      tenantID,
+		campaign:        &campaign,
+		channel:         &channel,
+		adapter:         adapter,
+		content:         buildBroadcastContent(&campaign),
+		attachmentIDs:   uploadCampaignImages(ctx, adapter, campaign.Images()),
+		reminderContent: strings.TrimSpace(campaign.MessageReminderText),
+		tenantID:        tenantID,
 	}, nil
 }
 
@@ -142,6 +147,14 @@ func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.Campaign
 		Status:     "running",
 	}
 
+	// Pick the message for this send: the main content (+images) on the first
+	// successful delivery to this group, the text-only reminder on every later
+	// send. A campaign with no reminder text always sends the main content.
+	content, attachmentIDs := pickContent(
+		b.content, b.attachmentIDs, b.reminderContent,
+		segmentHasSuccessfulRun(b.tenantID, seg.ID),
+	)
+
 	var group models.CRMGroup
 	gErr := db.DB.Where("id = ? AND tenant_id = ?", seg.GroupID, b.tenantID).First(&group).Error
 	switch {
@@ -152,7 +165,7 @@ func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.Campaign
 		run.Status, run.FailCount, run.ErrorMessage = "error", 1, "group_has_no_zalo_group"
 		fail = 1
 	default:
-		if sErr := b.sendToGroup(ctx, group.ZaloGroupID); sErr != nil {
+		if sErr := b.sendToGroup(ctx, group.ZaloGroupID, content, attachmentIDs); sErr != nil {
 			run.Status, run.FailCount, run.ErrorMessage = "error", 1, sErr.Error()
 			fail = 1
 		} else {
@@ -172,23 +185,45 @@ func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.Campaign
 // image errors are aggregated into a single descriptive error so the caller
 // records the run as failed with an actionable message ("text sent but N image(s)
 // failed: ..."). A fully successful send returns nil.
-func (b *campaignBroadcast) sendToGroup(ctx context.Context, zaloGroupID string) error {
-	if strings.TrimSpace(b.content) != "" {
-		if err := b.adapter.SendGroupMessage(ctx, zaloGroupID, b.content); err != nil {
+func (b *campaignBroadcast) sendToGroup(ctx context.Context, zaloGroupID, content string, attachmentIDs []string) error {
+	if strings.TrimSpace(content) != "" {
+		if err := b.adapter.SendGroupMessage(ctx, zaloGroupID, content); err != nil {
 			return err
 		}
 	}
 	var imgErrs []string
-	for i, attachmentID := range b.attachmentIDs {
+	for i, attachmentID := range attachmentIDs {
 		if err := b.adapter.SendGroupImage(ctx, zaloGroupID, attachmentID); err != nil {
-			imgErrs = append(imgErrs, fmt.Sprintf("image %d/%d: %v", i+1, len(b.attachmentIDs), err))
+			imgErrs = append(imgErrs, fmt.Sprintf("image %d/%d: %v", i+1, len(attachmentIDs), err))
 		}
 	}
 	if len(imgErrs) > 0 {
 		return fmt.Errorf("text sent but %d/%d image(s) failed: %s",
-			len(imgErrs), len(b.attachmentIDs), strings.Join(imgErrs, "; "))
+			len(imgErrs), len(attachmentIDs), strings.Join(imgErrs, "; "))
 	}
 	return nil
+}
+
+// pickContent chooses the message + images for a single send. The text-only
+// reminder is used only when it is non-empty AND the segment already delivered
+// successfully at least once; otherwise the main content (with its images) is
+// used. Reminders never carry images. Kept pure (no DB) so it is unit-testable.
+func pickContent(mainContent string, mainAttachments []string, reminderContent string, hasPriorSuccess bool) (content string, attachmentIDs []string) {
+	if reminderContent != "" && hasPriorSuccess {
+		return reminderContent, nil
+	}
+	return mainContent, mainAttachments
+}
+
+// segmentHasSuccessfulRun reports whether a segment already has at least one
+// successful broadcast (sent_count > 0). Used to decide between the main message
+// (first delivery) and the reminder message (every later send).
+func segmentHasSuccessfulRun(tenantID, segmentID string) bool {
+	var n int64
+	db.DB.Model(&models.CampaignRun{}).
+		Where("tenant_id = ? AND segment_id = ? AND sent_count > 0", tenantID, segmentID).
+		Limit(1).Count(&n)
+	return n > 0
 }
 
 // SendCampaignNow fires every segment of a campaign immediately. Used by the

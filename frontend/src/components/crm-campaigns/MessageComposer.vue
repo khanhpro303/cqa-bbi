@@ -53,6 +53,46 @@
       {{ $t('campaign_over_limit_warn') }}
     </v-alert>
 
+    <!-- Reminder message (text-only) for follow-up sends -->
+    <div class="mt-3">
+      <v-btn
+        size="small"
+        variant="tonal"
+        color="primary"
+        prepend-icon="mdi-bell-ring-outline"
+        @click="showReminderField = !showReminderField"
+      >
+        {{ $t('campaign_reminder_add') }}
+      </v-btn>
+    </div>
+
+    <v-expand-transition>
+      <div v-if="showReminderField" class="mt-2">
+        <v-textarea
+          v-model="reminderText"
+          :label="$t('campaign_reminder_label')"
+          variant="outlined"
+          rows="3"
+          auto-grow
+          counter
+          hide-details="auto"
+        />
+        <div class="d-flex align-center flex-wrap ga-2 mt-1">
+          <span class="text-caption text-grey-darken-1">
+            <v-icon size="12" class="mr-1">mdi-information-outline</v-icon>
+            {{ $t('campaign_reminder_hint') }}
+          </span>
+          <v-spacer />
+          <span
+            class="text-caption"
+            :class="reminderOverLimit ? 'text-error font-weight-bold' : 'text-grey-darken-1'"
+          >
+            {{ reminderRuneCount.toLocaleString() }} / {{ ZALO_MAX_TEXT_RUNES.toLocaleString() }}
+          </span>
+        </div>
+      </div>
+    </v-expand-transition>
+
     <!-- Selected images (thumbnails + reorder/remove) -->
     <div v-if="items.length" class="image-grid mt-3">
       <div v-for="(it, i) in items" :key="it.key" class="image-chip">
@@ -168,6 +208,7 @@ const { t } = useI18n()
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const showLinkField = ref<boolean>(!!model.value.link)
+const showReminderField = ref<boolean>(!!model.value.reminderText)
 const dragging = ref(false)
 const items = ref<ImageItem[]>([])
 const error = ref('')
@@ -181,10 +222,16 @@ const link = computed({
   get: () => model.value.link ?? '',
   set: (v) => { model.value = { ...model.value, link: v || undefined } },
 })
+const reminderText = computed({
+  get: () => model.value.reminderText ?? '',
+  set: (v) => { model.value = { ...model.value, reminderText: v || undefined } },
+})
 
 // Rune-accurate count (matches backend chunking which counts runes, not bytes).
 const runeCount = computed(() => [...(text.value || '')].length)
 const overLimit = computed(() => runeCount.value > ZALO_MAX_TEXT_RUNES)
+const reminderRuneCount = computed(() => [...(reminderText.value || '')].length)
+const reminderOverLimit = computed(() => reminderRuneCount.value > ZALO_MAX_TEXT_RUNES)
 const previewText = computed(() => text.value?.trim() || '')
 
 // Re-init the thumbnail list whenever the model's saved image paths change
