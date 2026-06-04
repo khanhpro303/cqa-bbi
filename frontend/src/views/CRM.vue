@@ -5,7 +5,7 @@
       <v-spacer />
       
       <!-- Action buttons depending on active tab -->
-      <template v-if="currentTab === 'campaigns'">
+      <template v-if="currentTab === 'campaigns' && campaignSubtab === 'management'">
         <v-btn color="primary" prepend-icon="mdi-bullhorn-outline" @click="campaignListRef?.openCreate()">
           {{ $t('campaign_create') }}
         </v-btn>
@@ -361,12 +361,29 @@
 
       <!-- TAB 5: CRM CAMPAIGNS (Chiến dịch CRM) -->
       <v-window-item value="campaigns" class="pt-2">
-        <CampaignDashboard ref="campaignDashboardRef" class="mb-4" />
-        <CampaignList
-          ref="campaignListRef"
-          @notify="showSnack"
-          @changed="campaignDashboardRef?.reload()"
-        />
+        <v-tabs v-model="campaignSubtab" color="primary" class="mb-4">
+          <v-tab value="dashboard">
+            <v-icon start>mdi-view-dashboard-outline</v-icon>
+            Dashboard
+          </v-tab>
+          <v-tab value="management">
+            <v-icon start>mdi-format-list-bulleted</v-icon>
+            Quản lý chiến dịch
+          </v-tab>
+        </v-tabs>
+
+        <v-window v-model="campaignSubtab">
+          <v-window-item value="dashboard" class="pt-2">
+            <CampaignDashboard ref="campaignDashboardRef" />
+          </v-window-item>
+          <v-window-item value="management" class="pt-2">
+            <CampaignList
+              ref="campaignListRef"
+              @notify="showSnack"
+              @changed="campaignDashboardRef?.reload()"
+            />
+          </v-window-item>
+        </v-window>
       </v-window-item>
     </v-window>
 
@@ -1072,6 +1089,9 @@ watch(
   },
 )
 const memberTab = ref('employees')
+
+// Chiến dịch CRM — subtab: 'dashboard' | 'management'
+const campaignSubtab = ref<'dashboard' | 'management'>('dashboard')
 
 // CRM Campaigns (Chiến dịch CRM) — list ref drives the create dialog from header.
 const campaignListRef = ref<InstanceType<typeof CampaignList> | null>(null)
