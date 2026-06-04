@@ -319,6 +319,12 @@ function close(): void {
   width: 50%;
   transition: background-color 0.2s;
 }
+/* Vuetify gives .v-selection-control flex:1 0, so the checkbox grabs half the
+   row and shoves the label to the middle. Pin it to its own width so the text
+   sits left, right after the checkbox. */
+.col-item :deep(.v-selection-control) {
+  flex: 0 0 auto;
+}
 .col-item:hover {
   background-color: rgba(0, 0, 0, 0.02);
 }

@@ -57,6 +57,9 @@
       </div>
     </v-card>
 
+    <!-- Banner image carousel -->
+    <BannerCarousel />
+
     <div class="d-flex flex-wrap align-center mb-4 ga-2">
       <h1 class="text-h5 font-weight-bold d-none d-md-block">{{ $t('dashboard') }}</h1>
       <v-spacer class="d-none d-md-block" />
@@ -241,8 +244,8 @@
             <v-icon start size="small" color="primary">mdi-message-text-clock</v-icon>
             {{ $t('messages_by_day') }}
           </div>
-          <div v-if="messagesChartData.labels.length" class="flex-grow-1" style="min-height: 250px">
-            <Line :data="messagesChartData" :options="chartOptions" style="max-height: 250px; height: 100%" />
+          <div v-if="messagesChartData.labels.length" class="flex-grow-1" style="position: relative; min-height: 250px">
+            <Line :data="messagesChartData" :options="chartOptions" style="height: 100%" />
           </div>
           <div v-else class="text-center text-grey pa-4 flex-grow-1 d-flex flex-column justify-center align-center" style="min-height: 250px">
             <v-icon size="40" color="grey-lighten-2" class="mb-2">mdi-chart-box-outline</v-icon>
@@ -266,6 +269,7 @@ import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 import AiCostCarousel from '../components/dashboard/AiCostCarousel.vue'
+import BannerCarousel from '../components/dashboard/BannerCarousel.vue'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend)
 
