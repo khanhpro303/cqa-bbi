@@ -112,6 +112,19 @@ class ERPGatewayCaller(Component):
             tool_mode=True
         ),
         MessageTextInput(
+            name="include_stock",
+            display_name="Include Stock",
+            info=(
+                "Đặt 'true' khi cần TỒN của TỪNG size (vd 'còn size nào', 'tồn các "
+                "size màu X'). Dùng với resource=product_variants + color + size để "
+                "TRỐNG: backend trả MỌI size của màu đó, mỗi dòng kèm ton_kho trong 1 "
+                "call (không cần gọi inventory từng SKU). Bỏ trống cho câu hỏi giá/size "
+                "thường."
+            ),
+            required=False,
+            tool_mode=True
+        ),
+        MessageTextInput(
             name="zalo_user_id",
             display_name="Zalo User ID",
             info="Zalo user ID của khách hàng",
@@ -152,21 +165,37 @@ class ERPGatewayCaller(Component):
     def _format_variant_response(self, data: dict, parent_code: str, color: str, size: str) -> str:
         items = data.get("data") or []
         if items:
+            # When the agent asked include_stock=true, the backend already attached
+            # ton_kho to each row (colour-only "còn size nào / tồn các size" flow), so
+            # the answer is the size→tồn table here — no per-SKU inventory chaining.
+            has_stock = any(v.get("ton_kho") is not None for v in items)
             lines = [f"Tìm thấy {len(items)} variant khớp parent={parent_code} color='{color}' size='{size}':"]
             for v in items:
+                ton = v.get("ton_kho")
+                ton_txt = ""
+                if ton is not None:
+                    ton_val = int(ton) if isinstance(ton, (int, float)) else ton
+                    ton_txt = f" | tồn={ton_val}"
                 lines.append(
                     f"- ma={v.get('ma','')} | màu={v.get('color','')} | size={v.get('size','')} "
-                    f"| giá={self._format_price(v.get('price'))} | dvt={v.get('dvt','')} "
+                    f"| giá={self._format_price(v.get('price'))}{ton_txt} | dvt={v.get('dvt','')} "
                     f"| brand={v.get('nhan_hieu_name','')}"
                 )
-            lines.append(
-                "Agent: ĐÂY LÀ BƯỚC GIỮA, chưa chắc là câu trả lời cuối. Đọc `ma` của data[0]. "
-                "Nếu intent là TỒN/CÒN HÀNG/SỐ LƯỢNG (kể cả khi khách đã bấm 'xem theo mã SKU "
-                "cụ thể' rồi mới nhập màu/size) → BẮT BUỘC gọi tiếp resource='inventory', "
-                "search=<ma> để đọc ton_kho/TON_KHO; TUYỆT ĐỐI KHÔNG dừng ở giá vì response "
-                "product_variants KHÔNG chứa tồn kho. Chỉ khi khách hỏi GIÁ rõ ràng mới chốt "
-                "`price` của variant khớp và dừng tại đây."
-            )
+            if has_stock:
+                lines.append(
+                    "Agent: response ĐÃ kèm cột tồn cho từng size. Trả BẢNG 'size → tồn' cho "
+                    "TẤT CẢ size của màu này, KHÔNG hỏi lại 1 size và KHÔNG gọi inventory lại "
+                    "(tồn đã có sẵn ở trên). Nếu khách hỏi 1 size cụ thể → chốt tồn của size đó."
+                )
+            else:
+                lines.append(
+                    "Agent: ĐÂY LÀ BƯỚC GIỮA, chưa chắc là câu trả lời cuối. Đọc `ma` của data[0]. "
+                    "Nếu intent là TỒN/CÒN HÀNG/SỐ LƯỢNG (kể cả khi khách đã bấm 'xem theo mã SKU "
+                    "cụ thể' rồi mới nhập màu/size) → BẮT BUỘC gọi tiếp resource='inventory', "
+                    "search=<ma> để đọc ton_kho/TON_KHO; TUYỆT ĐỐI KHÔNG dừng ở giá vì response "
+                    "product_variants KHÔNG chứa tồn kho. Chỉ khi khách hỏi GIÁ rõ ràng mới chốt "
+                    "`price` của variant khớp và dừng tại đây."
+                )
             return "\n".join(lines)
 
         colors = data.get("available_colors") or []
@@ -199,6 +228,8 @@ class ERPGatewayCaller(Component):
         exact_web_raw = self._coerce_text(getattr(self, "exact_web_name", ""))
         exact_web = exact_web_raw.lower() in ("true", "1", "yes", "có", "co")
         intent = self._coerce_text(getattr(self, "intent", "")).strip().lower() or "stock"
+        include_stock_raw = self._coerce_text(getattr(self, "include_stock", ""))
+        include_stock = include_stock_raw.lower() in ("true", "1", "yes", "có", "co")
         zalo_id = self._coerce_text(getattr(self, "zalo_user_id", ""))
         perm_token = self._coerce_text(getattr(self, "permission_token", ""))
 
@@ -218,6 +249,7 @@ class ERPGatewayCaller(Component):
             "brand": brand,
             "exact_web_name": exact_web,
             "intent": intent,
+            "include_stock": include_stock,
             "zalo_user_id": zalo_id,
             "limit": 10,
         }
