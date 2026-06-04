@@ -361,8 +361,12 @@
 
       <!-- TAB 5: CRM CAMPAIGNS (Chiến dịch CRM) -->
       <v-window-item value="campaigns" class="pt-2">
-        <CampaignDashboard class="mb-4" />
-        <CampaignList ref="campaignListRef" @notify="showSnack" />
+        <CampaignDashboard ref="campaignDashboardRef" class="mb-4" />
+        <CampaignList
+          ref="campaignListRef"
+          @notify="showSnack"
+          @changed="campaignDashboardRef?.reload()"
+        />
       </v-window-item>
     </v-window>
 
@@ -1071,6 +1075,7 @@ const memberTab = ref('employees')
 
 // CRM Campaigns (Chiến dịch CRM) — list ref drives the create dialog from header.
 const campaignListRef = ref<InstanceType<typeof CampaignList> | null>(null)
+const campaignDashboardRef = ref<InstanceType<typeof CampaignDashboard> | null>(null)
 
 // CRM Groups State
 const groups = ref<any[]>([])

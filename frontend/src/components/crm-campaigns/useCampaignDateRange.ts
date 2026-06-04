@@ -19,8 +19,13 @@ export const CAMPAIGN_DATE_PRESETS: DatePreset[] = [
 
 const DEFAULT_PRESET = '28days'
 
+// Format as a LOCAL calendar date (YYYY-MM-DD). Using toISOString() here would
+// shift to UTC and, for ICT (UTC+7) users near midnight, push the bound back a
+// day — dropping today's sends out of the range. Backend treats these bounds in
+// the tenant timezone, so local components are the correct source.
 function formatDate(d: Date): string {
-  return d.toISOString().split('T')[0]
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
 export interface CampaignDateRange {

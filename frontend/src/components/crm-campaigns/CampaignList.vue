@@ -168,7 +168,7 @@ import { useChannelStore } from '../../stores/channels'
 import { useCampaignWarningsStore } from '../../stores/campaignWarnings'
 import type { Campaign, CampaignStatus, SelectOption } from './types'
 
-const emit = defineEmits<{ notify: [text: string, color: string] }>()
+const emit = defineEmits<{ notify: [text: string, color: string]; changed: [] }>()
 
 const route = useRoute()
 const { t } = useI18n()
@@ -252,6 +252,7 @@ const affectedByInactiveChannel = computed(() =>
 async function onSaved() {
   await load()
   await warningsStore.refresh()
+  emit('changed')
   emit('notify', 'Đã lưu chiến dịch', 'success')
 }
 
@@ -300,6 +301,7 @@ async function doSendNow(c: Campaign) {
   try {
     const { sent } = await sendNow(c.id)
     await load()
+    emit('changed')
     emit('notify', `Đã gửi ${sent.toLocaleString()} tin`, 'success')
   } catch (e: any) {
     const code = e?.response?.data?.error
@@ -316,6 +318,7 @@ async function doSendNow(c: Campaign) {
 async function onToggle(c: Campaign, status: CampaignStatus) {
   await setCampaignStatus(c.id, status)
   await load()
+  emit('changed')
 }
 
 async function onDelete() {
@@ -324,6 +327,7 @@ async function onDelete() {
   confirmId.value = null
   await load()
   await warningsStore.refresh()
+  emit('changed')
   emit('notify', 'Đã xóa chiến dịch', 'success')
 }
 

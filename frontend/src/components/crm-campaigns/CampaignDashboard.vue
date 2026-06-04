@@ -56,4 +56,8 @@ function onTo(v: string) {
 }
 
 onMounted(load)
+
+// Let the parent (CRM.vue) re-pull stats after campaign mutations / sends so the
+// overview never drifts from the list below it.
+defineExpose({ reload: load })
 </script>
