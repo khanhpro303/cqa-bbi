@@ -590,7 +590,7 @@ export default {
   campaign_mention_greeting_label: 'Greeting before the tag list',
   campaign_mention_greeting_default: 'Hi',
   campaign_mention_insert_tag: "Insert {'{tag}'}",
-  campaign_mention_sample: '@Member',
+  campaign_mention_sample: "{'@'}Member",
   campaign_mention_title: 'Tag group members',
   campaign_mention_sync: 'Sync list from Zalo',
   campaign_mention_none: 'No tag',

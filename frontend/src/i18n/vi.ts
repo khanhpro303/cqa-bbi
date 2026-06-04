@@ -591,7 +591,7 @@ export default {
   campaign_mention_greeting_label: 'Lời chào trước danh sách tag',
   campaign_mention_greeting_default: 'Xin chào',
   campaign_mention_insert_tag: "Chèn {'{tag}'}",
-  campaign_mention_sample: '@Thành viên',
+  campaign_mention_sample: "{'@'}Thành viên",
   campaign_mention_title: 'Tag thành viên nhóm',
   campaign_mention_sync: 'Đồng bộ danh sách từ Zalo',
   campaign_mention_none: 'Không tag',
