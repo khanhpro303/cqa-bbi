@@ -104,6 +104,11 @@ Tool `ERPGatewayCaller` nhận: `resource` ∈ {`inventory`, `products`,
 > được trả thẳng bằng `product_variants(..., size="", include_stock=true)` — mỗi size
 > kèm tồn trong 1 call. `include_stock` do LLM bật (backend không tự đoán intent).
 
+> 🆕 **B đã đủ màu+size → KHÔNG picker (2026-06-04).** Đường chuẩn vẫn là 3 bước B.
+> Nhưng nếu Agent đi tắt gọi thẳng `inventory(search=<mã dòng>)` mà **kèm `color`+`size`**,
+> Branch-2 backend nay lọc đúng SKU và trả tồn thẳng (khi variant về 1 dòng) — picker
+> dòng-vs-SKU chỉ còn xuất hiện cho câu TỒN **mơ hồ** (chỉ mã/tên dòng, chưa có màu+size).
+
 ---
 
 ## C. Kịch bản 1 — "FF901 tồn bao nhiêu" (mơ hồ, không màu/size)
@@ -380,6 +385,22 @@ Bước 3 — đọc tồn live của đúng SKU đó
 > thứ tự), cùng shape với web-groups. Prompt "KHÓA ĐÚNG DÒNG" giờ thực thi được nguyên văn. Test:
 > `TestCollectParentCodesFromProducts` (`api/handlers/erp_parent_codes_test.go`).
 
+> 🐞 **Bug đã sửa (2026-06-04) — câu hỏi đã đủ màu+size vẫn rơi vào picker dòng-vs-SKU:** khách hỏi
+> "Shiba đen bóng size XXL tồn bao nhiêu?" (đủ **màu + size + ý định TỒN**) nhưng bot trả picker
+> "tồn kho cho 'SP461294' theo dòng sản phẩm hay mã SKU cụ thể?". **Root cause:** Agent đi tắt — gọi
+> `inventory(search="SP461294")` (mã dòng) thay vì chạy nhánh B; tại **Branch-2** (nhánh LIKE generic,
+> `searchProductsByWebNameFromCache` → `len(matchedProducts) > 1`) backend **bỏ qua hoàn toàn color/size**
+> rồi bắn picker, trong khi **Branch-0** (exact-web) đã có guard `hasVariantAttribute` +
+> `filterVariantsByAttributes` để chốt SKU. **Đã siết hai tầng:** (a) **backend** — Branch-2 nay có guard
+> color/size y hệt Branch-0: lọc `matchedProducts` theo màu/size; chỉ chốt tồn SKU thẳng (qua
+> `resolveVariantStockDirect`, helper trích chung với Branch-0) khi các variant về **một dòng** duy nhất
+> (`distinctMaChaCount==1`) — tránh LIKE rộng dính dòng anh em; lọc 0 / spanning nhiều dòng / không
+> màu+size → giữ picker như cũ (no-op, luồng "FF901 trần" bất biến). (b) **prompt** (`system-prompt.md` +
+> `…-internal.md`) + **tool** (`ERPGatewayCaller.component.py`) — ép Agent chạy nhánh B khi đã có màu+size,
+> và nếu vẫn gọi `inventory` với mã dòng thì BẮT BUỘC kèm `color`+`size` để backend pin SKU. Test:
+> `TestGenericStockGuard_DistinctMaCha` + `TestExactWebStockContinuation_SkipsRedundantPicker`
+> (`api/handlers/erp_variants_test.go`).
+
 ---
 
 ## E. Chi tiết nhánh `inventory` backend (`respondWithLiveDataV2`, erp.go:1700)
@@ -427,7 +448,11 @@ case "inventory":
  │                                          (embedding fuzzy → LLM fuzzy)
  │       • specific=true → trả specificSKU → search=SKU đó, matchedProducts=nil
  │                          → single-SKU (🛡️ guard, bỏ qua phân loại dưới)
- │       • len>1  → disambiguation buttons, is_inventory_rich, return (mục C)
+ │       • len>1  → 🛡️ GUARD màu/size (mirror Branch-0): nếu hasVariantAttribute
+ │                  (color/size/brand) → filterVariantsByAttributes(matchedProducts)
+ │                  + distinctMaChaCount==1 → resolveVariantStockDirect → tồn SKU
+ │                  thẳng, return (KHÔNG picker). Lọc 0 / spanning >1 dòng / không
+ │                  màu+size → rơi xuống disambiguation buttons như cũ (mục C)
  │       • len==1 → search = SKU đó
  │
  └─ classifyDominantMaCha(matchedProducts) (erp.go:3101) ← dùng lại rows trên, KHÔNG query lại

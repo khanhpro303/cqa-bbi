@@ -266,3 +266,66 @@ func TestExactWebStockContinuation_SkipsRedundantPicker(t *testing.T) {
 		}
 	})
 }
+
+// TestGenericStockGuard_DistinctMaCha locks the Branch-2 (generic LIKE) guard
+// that fixes "Shiba đen bóng size XXL tồn bao nhiêu?" → redundant dòng-vs-SKU
+// picker. The generic inventory path now mirrors the exact-web guard: when the
+// customer named color+size it filters the LIKE-matched rows by attribute and,
+// IF they resolve to a single product line (distinctMaChaCount == 1), answers
+// that SKU's stock directly instead of firing the picker. A broad LIKE that
+// pulls sibling lines (distinctMaChaCount > 1) stays disambiguated.
+func TestGenericStockGuard_DistinctMaCha(t *testing.T) {
+	t.Run("color+size on one line resolves a single SKU and line", func(t *testing.T) {
+		// LIKE "Shiba" → all sizes of one parent line (SP461294).
+		rows := []map[string]interface{}{
+			{"MA": "SP461290", "MA_CHA": "SP461294", "THUOC_TINH_1": "Đen bóng", "THUOC_TINH_2": "L"},
+			{"MA": "SP461292", "MA_CHA": "SP461294", "THUOC_TINH_1": "Đen bóng", "THUOC_TINH_2": "XL"},
+			{"MA": "SP461293", "MA_CHA": "SP461294", "THUOC_TINH_1": "Đen bóng", "THUOC_TINH_2": "XXL"},
+		}
+		got := filterVariantsByAttributes(rows, "đen bóng", "XXL", "")
+		if len(got) != 1 {
+			t.Fatalf("expected exactly 1 matching SKU, got %d", len(got))
+		}
+		if n := distinctMaChaCount(got); n != 1 {
+			t.Fatalf("expected single line (ma_cha), got %d", n)
+		}
+		if sku := getMapString(got[0], "MA", "ma"); sku != "SP461293" {
+			t.Errorf("resolved wrong SKU: got %q, want SP461293", sku)
+		}
+	})
+
+	t.Run("color+size spanning sibling lines stays ambiguous", func(t *testing.T) {
+		// A broad keyword that LIKE-matches two distinct lines, both carrying the
+		// same color+size variant. The guard must NOT short-circuit here.
+		rows := []map[string]interface{}{
+			{"MA": "SP100001", "MA_CHA": "SP100000", "THUOC_TINH_1": "Đen bóng", "THUOC_TINH_2": "XXL"},
+			{"MA": "SP200001", "MA_CHA": "SP200000", "THUOC_TINH_1": "Đen bóng", "THUOC_TINH_2": "XXL"},
+		}
+		got := filterVariantsByAttributes(rows, "đen bóng", "XXL", "")
+		if len(got) != 2 {
+			t.Fatalf("expected 2 matching SKUs across lines, got %d", len(got))
+		}
+		if n := distinctMaChaCount(got); n != 2 {
+			t.Fatalf("expected 2 distinct lines so the picker is kept, got %d", n)
+		}
+	})
+
+	t.Run("size mismatch matches nothing so the picker fires", func(t *testing.T) {
+		rows := []map[string]interface{}{
+			{"MA": "SP461290", "MA_CHA": "SP461294", "THUOC_TINH_1": "Đen bóng", "THUOC_TINH_2": "L"},
+		}
+		if got := filterVariantsByAttributes(rows, "đen bóng", "XXL", ""); len(got) != 0 {
+			t.Fatalf("expected 0 matches for absent size, got %d", len(got))
+		}
+	})
+
+	t.Run("distinctMaChaCount falls back to ma when ma_cha empty", func(t *testing.T) {
+		rows := []map[string]interface{}{
+			{"MA": "SP300001", "THUOC_TINH_1": "Đỏ", "THUOC_TINH_2": "M"},
+			{"MA": "SP300001", "THUOC_TINH_1": "Đỏ", "THUOC_TINH_2": "M"},
+		}
+		if n := distinctMaChaCount(rows); n != 1 {
+			t.Fatalf("expected 1 distinct key by ma fallback, got %d", n)
+		}
+	})
+}

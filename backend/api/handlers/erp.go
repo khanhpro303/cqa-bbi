@@ -1997,6 +1997,73 @@ func getFirstNonEmptyMapString(m map[string]interface{}, keys ...string) string 
 	return ""
 }
 
+// resolveVariantStockDirect reads live stock for each variant row (color/size
+// already resolved by the caller) and writes the inventory JSON response. It is
+// the shared "answer the exact SKU(s) directly" path used by both the exact-web
+// guard (Branch-0) and the generic-search guard (Branch-2) so a customer who
+// already named color+size never sees the redundant dòng-vs-SKU picker. Returns
+// true when it answered (≥1 SKU resolved); false (no response written) lets the
+// caller fall through to the picker.
+func resolveVariantStockDirect(
+	c *gin.Context,
+	client *pkg.CloudifyClient,
+	stockCache *engine.InventoryStockCache,
+	tenantID string,
+	permCtx *engine.GroupPermissionContext,
+	productGroups []string,
+	scopeType string,
+	search string,
+	inventoryEndpoint string,
+	usePostMethod bool,
+	variantRows []map[string]interface{},
+) bool {
+	var variantData []map[string]interface{}
+	for _, child := range variantRows {
+		childSKU := getMapString(child, "MA", "ma", "ma_hang")
+		if childSKU == "" {
+			continue
+		}
+		skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, stockCache, tenantID, childSKU, inventoryEndpoint, usePostMethod)
+		if errQuery != nil {
+			log.Printf("[inventory_query] variant stock error for SKU %s: %v", childSKU, errQuery)
+			continue
+		}
+		variantData = append(variantData, map[string]interface{}{
+			"MA":                 childSKU,
+			"ma":                 childSKU,
+			"code":               childSKU,
+			"ma_hang":            childSKU,
+			"product_code":       childSKU,
+			"TEN":                getMapString(child, "TEN", "ten", "ten_hang"),
+			"ten":                getMapString(child, "TEN", "ten", "ten_hang"),
+			"TEN_DONG_BO_WEB":    getMapString(child, "TEN_DONG_BO_WEB", "ten_dong_bo_web"),
+			"TON_KHO":            skuStock,
+			"ton_kho":            skuStock,
+			"MA_CHA":             getMapString(child, "MA_CHA", "ma_cha"),
+			"ma_cha":             getMapString(child, "MA_CHA", "ma_cha"),
+			"THUOC_TINH_1":       getMapString(child, "THUOC_TINH_1", "thuoc_tinh_1"),
+			"THUOC_TINH_2":       getMapString(child, "THUOC_TINH_2", "thuoc_tinh_2"),
+			"DON_GIA_BAN":        getMapFloat(child, "DON_GIA_BAN", "don_gia_ban"),
+			"LINK_ANH":           getMapString(child, "LINK_ANH", "link_anh"),
+			"DVT":                getMapString(child, "DVT", "dvt"),
+			"LIST_TEN_NHOM_VTHH": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
+			"list_ten_nhom_vthh": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
+		})
+	}
+	if len(variantData) == 0 {
+		return false
+	}
+	writeAuditLog(tenantID, permCtx, "inventory", scopeType, productGroups, search, http.StatusOK, len(variantData), c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{
+		"status":   "success",
+		"data":     variantData,
+		"source":   "cloudify_live_exact_web_variant",
+		"resource": "inventory",
+		"count":    len(variantData),
+	})
+	return true
+}
+
 func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource, search, parentCode, partnerID string, limit int, productGroups []string, scopeType string, tenantID string, permCtx *engine.GroupPermissionContext, exactWebName bool, color, size, brand string) {
 	var (
 		data []map[string]interface{}
@@ -2099,48 +2166,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			if hasVariantAttribute(color, size, brand) {
 				variantRows := filterVariantsByAttributes(exactRows, color, size, brand)
 				if len(variantRows) > 0 {
-					var variantData []map[string]interface{}
-					for _, child := range variantRows {
-						childSKU := getMapString(child, "MA", "ma", "ma_hang")
-						if childSKU == "" {
-							continue
-						}
-						skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, stockCache, tenantID, childSKU, inventoryEndpoint, usePostMethod)
-						if errQuery != nil {
-							log.Printf("[inventory_query] exact-web variant stock error for SKU %s: %v", childSKU, errQuery)
-							continue
-						}
-						variantData = append(variantData, map[string]interface{}{
-							"MA":                 childSKU,
-							"ma":                 childSKU,
-							"code":               childSKU,
-							"ma_hang":            childSKU,
-							"product_code":       childSKU,
-							"TEN":                getMapString(child, "TEN", "ten", "ten_hang"),
-							"ten":                getMapString(child, "TEN", "ten", "ten_hang"),
-							"TEN_DONG_BO_WEB":    getMapString(child, "TEN_DONG_BO_WEB", "ten_dong_bo_web"),
-							"TON_KHO":            skuStock,
-							"ton_kho":            skuStock,
-							"MA_CHA":             getMapString(child, "MA_CHA", "ma_cha"),
-							"ma_cha":             getMapString(child, "MA_CHA", "ma_cha"),
-							"THUOC_TINH_1":       getMapString(child, "THUOC_TINH_1", "thuoc_tinh_1"),
-							"THUOC_TINH_2":       getMapString(child, "THUOC_TINH_2", "thuoc_tinh_2"),
-							"DON_GIA_BAN":        getMapFloat(child, "DON_GIA_BAN", "don_gia_ban"),
-							"LINK_ANH":           getMapString(child, "LINK_ANH", "link_anh"),
-							"DVT":                getMapString(child, "DVT", "dvt"),
-							"LIST_TEN_NHOM_VTHH": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
-							"list_ten_nhom_vthh": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
-						})
-					}
-					if len(variantData) > 0 {
-						writeAuditLog(tenantID, permCtx, "inventory", scopeType, productGroups, search, http.StatusOK, len(variantData), c.ClientIP())
-						c.JSON(http.StatusOK, gin.H{
-							"status":   "success",
-							"data":     variantData,
-							"source":   "cloudify_live_exact_web_variant",
-							"resource": "inventory",
-							"count":    len(variantData),
-						})
+					if resolveVariantStockDirect(c, client, stockCache, tenantID, permCtx, productGroups, scopeType, search, inventoryEndpoint, usePostMethod, variantRows) {
 						return
 					}
 				}
@@ -2240,6 +2266,26 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				matchedProducts = rows
 				log.Printf("[inventory_query] Astra DB search for tenant=%s search=%s returned %d products", tenantID, search, len(matchedProducts))
 				if len(matchedProducts) > 1 {
+					// STOCK short-circuit guard (mirrors the exact-web Branch-0 guard
+					// above). When the customer already named a color/size, the
+					// dòng-vs-SKU picker is redundant — they want the specific SKU,
+					// not the line sum. Filter the matched rows by attribute and
+					// answer that SKU's live stock directly. Conservative: only
+					// short-circuit when the filtered variants resolve to a SINGLE
+					// product line (one ma_cha) so a broad LIKE that spans sibling
+					// lines (e.g. "Shiba" vs "Shiba Carbon") stays disambiguated.
+					// No-op when color/size are empty, so the bare-keyword picker
+					// ("FF901 tồn bao nhiêu") is unchanged.
+					if hasVariantAttribute(color, size, brand) {
+						variantRows := filterVariantsByAttributes(matchedProducts, color, size, brand)
+						if len(variantRows) > 0 && distinctMaChaCount(variantRows) == 1 {
+							if resolveVariantStockDirect(c, client, stockCache, tenantID, permCtx, productGroups, scopeType, search, inventoryEndpoint, usePostMethod, variantRows) {
+								return
+							}
+						}
+						log.Printf("[inventory_query] generic variant filter color=%q size=%q matched %d row(s) across %d line(s) — falling back to dòng-vs-SKU picker", color, size, len(variantRows), distinctMaChaCount(variantRows))
+					}
+
 					maChaCounts := make(map[string]int)
 					for _, p := range matchedProducts {
 						maChaVal := getMapString(p, "MA_CHA", "ma_cha")

@@ -215,6 +215,16 @@ If the response from Step 2 contains a `bilingual_match` object (color/size/bran
 
 NEVER pass a raw `<color> <size>` description as the `search` parameter for `resource="inventory"`, even when `parent_code` is known. The inventory branch does not fuzzy-match color/size attributes; you MUST go through `resource="product_variants"` first to resolve the concrete `MA`.
 
+> 🔒 **STOCK câu hỏi đã đủ MÀU + SIZE → đi thẳng tồn, KHÔNG được rơi vào picker dòng-vs-SKU.**
+> Khi câu hỏi TỒN ngay từ đầu đã nêu **cả màu lẫn size** (vd "Shiba đen bóng size XXL tồn bao
+> nhiêu?"), đường đúng là **nhánh B đầy đủ** (`products` → `product_variants(parent_code,color,size)`
+> → `inventory(search=<ma>)`). TUYỆT ĐỐI KHÔNG đi tắt bằng `inventory(search=<MA_CHA/mã dòng>)`
+> rồi để backend hỏi lại "theo dòng sản phẩm hay mã SKU cụ thể" — khách đã nêu rõ biến thể nên
+> picker đó là thừa. **Nếu** vì lý do nào đó bạn gọi `inventory` với mã dòng/parent, BẮT BUỘC kèm
+> `color` + `size` (nguyên văn khách viết) trên chính call đó: backend sẽ lọc đúng SKU và trả tồn
+> thẳng, không bắn picker. Picker dòng-vs-SKU chỉ dành cho câu hỏi TỒN **mơ hồ** (chỉ có mã/tên
+> dòng, CHƯA có màu+size) — xem nhánh D.
+
 **Inventory disambiguation already handled by backend (CRITICAL):** If an `resource="inventory"` response contains `is_inventory_rich: true` (it will also carry `data: []` and `count: 0`), the backend has ALREADY sent a Zalo message asking the user to pick *dòng sản phẩm* vs *mã SKU cụ thể*. The tool response carries NO stock number. DO NOT reply with prose, DO NOT invent a stock figure, and DO NOT make another tool call — return `"[RICH_MESSAGE_SENT]"` so the channel layer suppresses your text. Wait for the user's next reply (their button tap / number choice is handled by the backend directly).
 
 ## Orders / Đơn hàng Response Rules (Mandatory)

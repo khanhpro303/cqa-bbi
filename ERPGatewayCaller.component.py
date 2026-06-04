@@ -60,14 +60,28 @@ class ERPGatewayCaller(Component):
         MessageTextInput(
             name="color",
             display_name="Color",
-            info="Màu sắc/thuộc tính 1 (vd: 'đen bóng', 'xanh navy'). Dùng với resource=product_variants, HOẶC kèm resource=products+intent=price để backend pivot ra đúng đơn giá biến thể. Bỏ trống nếu user không nêu.",
+            info=(
+                "Màu sắc/thuộc tính 1 (vd: 'đen bóng', 'xanh navy'). Dùng với "
+                "resource=product_variants, HOẶC kèm resource=products+intent=price "
+                "để backend pivot ra đúng đơn giá biến thể. CŨNG truyền kèm "
+                "resource=inventory khi câu hỏi TỒN đã nêu màu+size (vd 'Shiba đen "
+                "bóng size XXL tồn bao nhiêu') — backend chốt đúng SKU và trả tồn "
+                "thẳng, KHÔNG bắn picker dòng-vs-SKU. Bỏ trống nếu user không nêu."
+            ),
             required=False,
             tool_mode=True
         ),
         MessageTextInput(
             name="size",
             display_name="Size",
-            info="Kích thước/thuộc tính 2 (vd: 'L', 'XL'). Dùng với resource=product_variants, HOẶC kèm resource=products+intent=price để backend pivot ra đúng đơn giá biến thể. Bỏ trống nếu user không nêu.",
+            info=(
+                "Kích thước/thuộc tính 2 (vd: 'L', 'XL'). Dùng với "
+                "resource=product_variants, HOẶC kèm resource=products+intent=price "
+                "để backend pivot ra đúng đơn giá biến thể. CŨNG truyền kèm "
+                "resource=inventory khi câu hỏi TỒN đã nêu màu+size — backend chốt "
+                "đúng SKU và trả tồn thẳng, KHÔNG bắn picker dòng-vs-SKU. Bỏ trống "
+                "nếu user không nêu."
+            ),
             required=False,
             tool_mode=True
         ),

@@ -298,6 +298,25 @@ func filterVariantsByAttributes(variants []map[string]interface{}, color, size, 
 	return out
 }
 
+// distinctMaChaCount returns how many distinct product lines (ma_cha) the rows
+// span, falling back to the SKU code (ma) when a row has no ma_cha. The generic
+// inventory guard uses it to stay conservative: a color+size filter is only
+// answered directly when it resolves to ONE line, so a broad LIKE that pulls
+// sibling lines still routes through the dòng-vs-SKU picker.
+func distinctMaChaCount(rows []map[string]interface{}) int {
+	seen := make(map[string]struct{})
+	for _, r := range rows {
+		key := getFirstNonEmptyMapString(r, "MA_CHA", "ma_cha")
+		if key == "" {
+			key = getFirstNonEmptyMapString(r, "MA", "ma_hang", "ma")
+		}
+		if key != "" {
+			seen[key] = struct{}{}
+		}
+	}
+	return len(seen)
+}
+
 // normalizeSizeFilter strips common prefixes ("size ", "size-", "kích cỡ ")
 // and trims surrounding whitespace so that "size L" and "L" both compare
 // equally against the stored thuoc_tinh_2 value.
