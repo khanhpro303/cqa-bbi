@@ -78,6 +78,12 @@
             <div>{{ metadata.sync_scope === 'direct' ? 'Chỉ tin 1:1' : metadata.sync_scope === 'group' ? 'Chỉ tin nhóm' : 'Tất cả' }}</div>
           </v-col>
         </template>
+        <v-col v-if="channel.channel_type === 'zalo_oa'" cols="6" sm="3">
+          <div class="text-caption text-grey">Cảnh báo lỗi chiến dịch</div>
+          <v-chip size="small" :color="metadata.campaign_alerts_enabled ? 'success' : 'grey'" variant="tonal">
+            {{ metadata.campaign_alerts_enabled ? 'Bật' : 'Tắt' }}
+          </v-chip>
+        </v-col>
         <v-col cols="6" sm="3">
           <div class="text-caption text-grey">Ngày tạo</div>
           <div>{{ formatDateTime(channel.created_at) }}</div>
@@ -364,6 +370,28 @@
             <v-select v-model="editForm.sync_interval" :items="syncIntervalOptions" label="Chu kỳ đồng bộ" density="compact" class="mb-2" />
             <v-switch v-model="editForm.sync_files" label="Lưu file/ảnh" density="compact" color="primary" />
           </template>
+          <template v-if="channel.channel_type === 'zalo_oa'">
+            <v-divider class="my-3" />
+            <div class="text-body-2 font-weight-medium mb-1">Cảnh báo lỗi gửi chiến dịch</div>
+            <v-switch
+              v-model="editForm.campaign_alerts_enabled"
+              label="Gửi cảnh báo qua Zalo khi chiến dịch gửi lỗi"
+              density="compact"
+              color="primary"
+              class="mb-1"
+            />
+            <v-select
+              v-if="editForm.campaign_alerts_enabled"
+              v-model="editForm.campaign_alert_group_id"
+              :items="alertGroupOptions"
+              :loading="loadingAlertGroups"
+              :no-data-text="loadingAlertGroups ? 'Đang tải…' : 'Chưa có nhóm GMF nào đã liên kết Zalo'"
+              label="Nhóm GMF nhận cảnh báo"
+              density="compact"
+              hint="Một tin tổng hợp sẽ gửi vào nhóm này khi có lượt gửi lỗi"
+              persistent-hint
+            />
+          </template>
           <template v-else>
             <v-select
               v-model="editForm.sync_scope"
@@ -429,6 +457,7 @@ import { useChannelStore } from '../../stores/channels'
 import type { PersonalZaloGatewayState } from '../../stores/channels'
 import { useAuthStore } from '../../stores/auth'
 import { useUserStore } from '../../stores/users'
+import api from '../../api'
 
 const route = useRoute()
 const router = useRouter()
@@ -483,7 +512,25 @@ const gatewayLoading = ref(false)
 const gatewayActionLoading = ref<'connect' | 'reconnect' | 'sync' | ''>('')
 let gatewayPollTimer: number | null = null
 
-const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all' })
+const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '' })
+
+// Alert recipient options: this channel's GMF groups that have a linked Zalo group.
+const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
+const loadingAlertGroups = ref(false)
+
+async function loadAlertGroupOptions() {
+  loadingAlertGroups.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups`)
+    alertGroupOptions.value = (Array.isArray(data) ? data : [])
+      .filter((g: any) => g.zalo_group_id && (!g.channel_id || g.channel_id === channelId.value))
+      .map((g: any) => ({ title: g.name, value: g.id }))
+  } catch {
+    alertGroupOptions.value = []
+  } finally {
+    loadingAlertGroups.value = false
+  }
+}
 
 const syncIntervalOptions = [
   { title: '1 phút', value: 1 },
@@ -727,10 +774,17 @@ async function saveEdit() {
       name: editForm.value.name,
       is_active: editForm.value.is_active,
     }
-    if (channel.value?.channel_type !== 'personal_zalo_import') {
-      payload.metadata = JSON.stringify({ sync_interval: editForm.value.sync_interval, sync_files: editForm.value.sync_files })
-    } else {
+    if (channel.value?.channel_type === 'personal_zalo_import') {
       payload.metadata = JSON.stringify({ sync_scope: editForm.value.sync_scope })
+    } else if (channel.value?.channel_type === 'zalo_oa') {
+      payload.metadata = JSON.stringify({
+        sync_interval: editForm.value.sync_interval,
+        sync_files: editForm.value.sync_files,
+        campaign_alerts_enabled: editForm.value.campaign_alerts_enabled,
+        campaign_alert_group_id: editForm.value.campaign_alerts_enabled ? editForm.value.campaign_alert_group_id : '',
+      })
+    } else {
+      payload.metadata = JSON.stringify({ sync_interval: editForm.value.sync_interval, sync_files: editForm.value.sync_files })
     }
     await channelStore.updateChannel(tenantId.value, channelId.value, payload)
     editDialog.value = false
@@ -810,6 +864,11 @@ watch(editDialog, (v) => {
       sync_interval: metadata.value.sync_interval || 5,
       sync_files: metadata.value.sync_files || false,
       sync_scope: metadata.value.sync_scope || 'all',
+      campaign_alerts_enabled: metadata.value.campaign_alerts_enabled || false,
+      campaign_alert_group_id: metadata.value.campaign_alert_group_id || '',
+    }
+    if (channel.value.channel_type === 'zalo_oa') {
+      loadAlertGroupOptions()
     }
   }
 })

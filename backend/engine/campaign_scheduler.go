@@ -132,8 +132,16 @@ func (s *Scheduler) fireCampaignSegment(segmentID string) {
 		return
 	}
 
-	sent, fail := b.fireSegment(ctx, seg)
+	sent, fail, run := b.fireSegment(ctx, seg)
 	log.Printf("[scheduler] campaign %s segment %s fired: sent=%d fail=%d", campaign.ID, segmentID, sent, fail)
+
+	// Proactively alert on failure. Each segment is its own job, so apply the
+	// dedupe window to collapse a burst of segments sharing one cron tick into
+	// roughly one alert. channel_inactive is handled above (no adapter) and is
+	// surfaced separately by the campaign warning bell, so it never reaches here.
+	if run.Status == "error" && shouldSendCampaignAlert(campaign.TenantID, campaign.ID) {
+		b.notifyFailures(ctx, []models.CampaignRun{run})
+	}
 
 	// Advance NextRunAt so the dashboard "upcoming runs" stays accurate.
 	if seg.ScheduleKind == "once" {

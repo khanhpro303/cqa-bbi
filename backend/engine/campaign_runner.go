@@ -136,9 +136,11 @@ func uploadCampaignImages(ctx context.Context, adapter *channels.ZaloOAAdapter, 
 }
 
 // fireSegment sends the campaign content to one segment's GMF group and writes a
-// CampaignRun row. Mirrors the inner loop of the original SendNow handler.
-func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.CampaignSegment) (sent, fail int) {
-	run := models.CampaignRun{
+// CampaignRun row. Mirrors the inner loop of the original SendNow handler. It
+// also returns the persisted run so callers can drive failure alerts off
+// run.Status / run.ErrorMessage without re-querying.
+func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.CampaignSegment) (sent, fail int, run models.CampaignRun) {
+	run = models.CampaignRun{
 		ID:         uuid.New().String(),
 		TenantID:   b.tenantID,
 		CampaignID: b.campaign.ID,
@@ -182,7 +184,7 @@ func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.Campaign
 	finished := time.Now()
 	run.FinishedAt = &finished
 	db.DB.Create(&run)
-	return sent, fail
+	return sent, fail, run
 }
 
 // sendToGroup sends the campaign's text (if any) then each uploaded image in
@@ -242,11 +244,15 @@ func SendCampaignNow(ctx context.Context, campaignID, tenantID string) (sent, fa
 
 	consumedOnce := false
 	hasFutureRun := false
+	var failedRuns []models.CampaignRun
 	for i := range b.campaign.Segments {
 		seg := b.campaign.Segments[i]
-		s, f := b.fireSegment(ctx, seg)
+		s, f, run := b.fireSegment(ctx, seg)
 		sent += s
 		fail += f
+		if run.Status == "error" {
+			failedRuns = append(failedRuns, run)
+		}
 
 		if seg.ScheduleKind == "once" {
 			// Sending manually completes the one-time job: mark it consumed so the
@@ -272,6 +278,10 @@ func SendCampaignNow(ctx context.Context, campaignID, tenantID string) (sent, fa
 			sched.ReloadCampaignJobs()
 		}
 	}
+
+	// One aggregated alert per "Gửi ngay" broadcast (no dedupe needed — this path
+	// already fires all segments in a single pass).
+	b.notifyFailures(ctx, failedRuns)
 	return sent, fail, nil
 }
 

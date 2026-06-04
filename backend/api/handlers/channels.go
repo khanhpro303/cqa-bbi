@@ -250,13 +250,31 @@ func UpdateChannel(c *gin.Context) {
 	}
 	if req.Metadata != "" {
 		metadata := req.Metadata
-		if channel.ChannelType == "personal_zalo_import" {
+		switch channel.ChannelType {
+		case "personal_zalo_import":
 			mergedMetadata, err := mergePersonalZaloMetadataPreservingAccountOwners(channel.Metadata, req.Metadata)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata", "details": err.Error()})
 				return
 			}
 			metadata = mergedMetadata
+		case "zalo_oa":
+			// Merge incoming keys over existing so the campaign-alert config
+			// (campaign_alerts_enabled / campaign_alert_group_id) never clobbers
+			// other zalo_oa metadata.
+			merged, err := mergeChannelMetadata(channel.Metadata, req.Metadata)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata", "details": err.Error()})
+				return
+			}
+			if gid, _ := merged["campaign_alert_group_id"].(string); strings.TrimSpace(gid) != "" {
+				if err := validateAlertGroup(tenantID, strings.TrimSpace(gid)); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_alert_group", "details": err.Error()})
+					return
+				}
+			}
+			out, _ := json.Marshal(merged)
+			metadata = string(out)
 		}
 		updates["metadata"] = metadata
 	}
@@ -287,6 +305,36 @@ func UpdateChannel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "updated"})
+}
+
+// mergeChannelMetadata decodes existing + incoming channel metadata JSON and
+// returns the merge with incoming keys winning. Either side may be empty.
+func mergeChannelMetadata(existingRaw, incomingRaw string) (map[string]interface{}, error) {
+	existing, err := decodeMetadataObject(existingRaw)
+	if err != nil {
+		return nil, fmt.Errorf("existing metadata: %w", err)
+	}
+	incoming, err := decodeMetadataObject(incomingRaw)
+	if err != nil {
+		return nil, fmt.Errorf("incoming metadata: %w", err)
+	}
+	for k, v := range incoming {
+		existing[k] = v
+	}
+	return existing, nil
+}
+
+// validateAlertGroup ensures the campaign-alert recipient group exists for the
+// tenant and is linked to a Zalo group, so alerts can actually be delivered.
+func validateAlertGroup(tenantID, groupID string) error {
+	var group models.CRMGroup
+	if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+		return fmt.Errorf("alert group not found")
+	}
+	if strings.TrimSpace(group.ZaloGroupID) == "" {
+		return fmt.Errorf("alert group has no linked Zalo group")
+	}
+	return nil
 }
 
 func DeleteChannel(c *gin.Context) {
