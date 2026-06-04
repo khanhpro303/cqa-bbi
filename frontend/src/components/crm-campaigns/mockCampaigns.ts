@@ -53,7 +53,7 @@ let campaigns: Campaign[] = [
     message: {
       text: 'BBI FLASH SALE 6.6 🔥 Giảm đến 40% toàn bộ nón fullface. Xem ngay:',
       link: 'https://bulldoghelmets.vn/flash-sale',
-      imageName: 'flash-sale-66.jpg',
+      images: ['flash-sale-66.jpg'],
     },
     segments: [
       {
