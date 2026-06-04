@@ -41,20 +41,24 @@ var allowedCampaignImageExt = map[string]bool{
 // ---- Response/request DTOs (camelCase to match frontend crm-campaigns/types.ts) ----
 
 type campaignMessageDTO struct {
-	Text         string   `json:"text"`
-	Link         string   `json:"link,omitempty"`
-	Images       []string `json:"images,omitempty"`
-	ReminderText string   `json:"reminderText,omitempty"`
+	Text             string   `json:"text"`
+	Link             string   `json:"link,omitempty"`
+	Images           []string `json:"images,omitempty"`
+	ReminderText     string   `json:"reminderText,omitempty"`
+	MentionPlacement string   `json:"mentionPlacement,omitempty"` // prefix | inline
+	MentionGreeting  string   `json:"mentionGreeting,omitempty"`
 }
 
 type campaignSegmentDTO struct {
-	ID           string `json:"id"`
-	GroupID      string `json:"groupId"`
-	GroupName    string `json:"groupName"`
-	ScheduleKind string `json:"scheduleKind"`
-	Cron         string `json:"cron,omitempty"`
-	RunAt        string `json:"runAt,omitempty"`
-	NextRunAt    string `json:"nextRunAt,omitempty"`
+	ID             string   `json:"id"`
+	GroupID        string   `json:"groupId"`
+	GroupName      string   `json:"groupName"`
+	ScheduleKind   string   `json:"scheduleKind"`
+	Cron           string   `json:"cron,omitempty"`
+	RunAt          string   `json:"runAt,omitempty"`
+	NextRunAt      string   `json:"nextRunAt,omitempty"`
+	MentionMode    string   `json:"mentionMode,omitempty"`    // none | all | selected
+	MentionUserIds []string `json:"mentionUserIds,omitempty"` // Zalo user IDs when selected
 }
 
 type campaignDTO struct {
@@ -70,12 +74,14 @@ type campaignDTO struct {
 }
 
 type campaignFormSegment struct {
-	ID           string `json:"id"`
-	GroupID      string `json:"groupId"`
-	GroupName    string `json:"groupName"`
-	ScheduleKind string `json:"scheduleKind"`
-	Cron         string `json:"cron"`
-	RunAt        string `json:"runAt"`
+	ID             string   `json:"id"`
+	GroupID        string   `json:"groupId"`
+	GroupName      string   `json:"groupName"`
+	ScheduleKind   string   `json:"scheduleKind"`
+	Cron           string   `json:"cron"`
+	RunAt          string   `json:"runAt"`
+	MentionMode    string   `json:"mentionMode"`
+	MentionUserIds []string `json:"mentionUserIds"`
 }
 
 type campaignFormBody struct {
@@ -83,10 +89,12 @@ type campaignFormBody struct {
 	Description string `json:"description"`
 	ChannelID   string `json:"channelId" binding:"required"`
 	Message     struct {
-		Text         string   `json:"text"`
-		Link         string   `json:"link"`
-		Images       []string `json:"images"`
-		ReminderText string   `json:"reminderText"`
+		Text             string   `json:"text"`
+		Link             string   `json:"link"`
+		Images           []string `json:"images"`
+		ReminderText     string   `json:"reminderText"`
+		MentionPlacement string   `json:"mentionPlacement"`
+		MentionGreeting  string   `json:"mentionGreeting"`
 	} `json:"message"`
 	Segments []campaignFormSegment `json:"segments"`
 }
@@ -141,6 +149,8 @@ func CreateCampaign(c *gin.Context) {
 		MessageLink:         body.Message.Link,
 		MessageImages:       images,
 		MessageReminderText: body.Message.ReminderText,
+		MentionPlacement:    normalizeMentionPlacement(body.Message.MentionPlacement),
+		MentionGreeting:     strings.TrimSpace(body.Message.MentionGreeting),
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}
@@ -188,6 +198,8 @@ func UpdateCampaign(c *gin.Context) {
 	campaign.MessageLink = body.Message.Link
 	campaign.MessageImages = images
 	campaign.MessageReminderText = body.Message.ReminderText
+	campaign.MentionPlacement = normalizeMentionPlacement(body.Message.MentionPlacement)
+	campaign.MentionGreeting = strings.TrimSpace(body.Message.MentionGreeting)
 	campaign.MessageImageName = "" // migrated to MessageImages
 	campaign.UpdatedAt = time.Now()
 
@@ -450,6 +462,47 @@ func sanitizeCampaignImages(in []string) models.JSONStringSlice {
 	return out
 }
 
+// normalizeMentionMode validates the per-segment tag mode, defaulting unknown or
+// empty values to "none" (no @mention).
+func normalizeMentionMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "all":
+		return "all"
+	case "selected":
+		return "selected"
+	default:
+		return "none"
+	}
+}
+
+// normalizeMentionPlacement validates the message-level mention placement,
+// defaulting unknown or empty values to "prefix" (lead-in greeting line).
+func normalizeMentionPlacement(placement string) string {
+	if strings.TrimSpace(placement) == "inline" {
+		return "inline"
+	}
+	return "prefix"
+}
+
+// sanitizeMentionUserIDs trims, drops blanks, and de-duplicates the selected
+// Zalo user-ID list coming from the form body.
+func sanitizeMentionUserIDs(in []string) models.JSONStringSlice {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make(models.JSONStringSlice, 0, len(in))
+	for _, id := range in {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
 const maxChartDays = 31
 
 // GetCampaignStats aggregates CampaignRun rows for the dashboard.
@@ -529,11 +582,18 @@ func buildSegments(campaignID string, in []campaignFormSegment, tenantID string)
 	out := make([]models.CampaignSegment, 0, len(in))
 	for _, s := range in {
 		seg := models.CampaignSegment{
-			ID:           uuid.New().String(),
-			CampaignID:   campaignID,
-			GroupID:      s.GroupID,
-			ScheduleKind: s.ScheduleKind,
-			Cron:         s.Cron,
+			ID:             uuid.New().String(),
+			CampaignID:     campaignID,
+			GroupID:        s.GroupID,
+			ScheduleKind:   s.ScheduleKind,
+			Cron:           s.Cron,
+			MentionMode:    normalizeMentionMode(s.MentionMode),
+			MentionUserIDs: sanitizeMentionUserIDs(s.MentionUserIds),
+		}
+		// Only the "selected" mode persists an explicit user-ID list; clear it
+		// otherwise so a leftover selection can't tag people after switching modes.
+		if seg.MentionMode != "selected" {
+			seg.MentionUserIDs = nil
 		}
 		if s.ScheduleKind == "once" {
 			if t := parseISO(s.RunAt); t != nil {
@@ -578,13 +638,15 @@ func toCampaignDTO(c *models.Campaign, groupNames map[string]string, sentThisMon
 	segs := make([]campaignSegmentDTO, 0, len(c.Segments))
 	for _, s := range c.Segments {
 		segs = append(segs, campaignSegmentDTO{
-			ID:           s.ID,
-			GroupID:      s.GroupID,
-			GroupName:    groupNames[s.GroupID],
-			ScheduleKind: s.ScheduleKind,
-			Cron:         s.Cron,
-			RunAt:        isoOrEmpty(s.RunAt),
-			NextRunAt:    isoOrEmpty(s.NextRunAt),
+			ID:             s.ID,
+			GroupID:        s.GroupID,
+			GroupName:      groupNames[s.GroupID],
+			ScheduleKind:   s.ScheduleKind,
+			Cron:           s.Cron,
+			RunAt:          isoOrEmpty(s.RunAt),
+			NextRunAt:      isoOrEmpty(s.NextRunAt),
+			MentionMode:    s.MentionMode,
+			MentionUserIds: s.MentionUserIDs,
 		})
 	}
 	return campaignDTO{
@@ -594,10 +656,12 @@ func toCampaignDTO(c *models.Campaign, groupNames map[string]string, sentThisMon
 		ChannelID:   c.ChannelID,
 		Status:      c.Status,
 		Message: campaignMessageDTO{
-			Text:         c.MessageText,
-			Link:         c.MessageLink,
-			Images:       c.Images(),
-			ReminderText: c.MessageReminderText,
+			Text:             c.MessageText,
+			Link:             c.MessageLink,
+			Images:           c.Images(),
+			ReminderText:     c.MessageReminderText,
+			MentionPlacement: c.MentionPlacement,
+			MentionGreeting:  c.MentionGreeting,
 		},
 		Segments:      segs,
 		SentThisMonth: sentThisMonth,

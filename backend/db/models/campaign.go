@@ -69,8 +69,16 @@ type Campaign struct {
 	// rows can be backfilled into MessageImages. New writes leave it empty.
 	MessageImageName string          `gorm:"type:varchar(255)" json:"-"`
 	MessageImages    JSONStringSlice `gorm:"type:json" json:"-"`
-	CreatedAt        time.Time       `gorm:"not null" json:"created_at"`
-	UpdatedAt        time.Time       `gorm:"not null" json:"updated_at"`
+	// MentionPlacement controls WHERE a segment's selected mentions land in the
+	// sent text: "prefix" prepends a "<greeting> <tags>," line; "inline" replaces
+	// the literal {tag} token in the body. WHO is tagged is per-segment (see
+	// CampaignSegment.MentionMode). See engine.applyMentions.
+	MentionPlacement string `gorm:"type:varchar(20);not null;default:prefix" json:"-"` // prefix | inline
+	// MentionGreeting is the lead-in used for prefix placement (e.g. "Xin chào").
+	// Empty falls back to a default greeting at send time.
+	MentionGreeting string    `gorm:"type:varchar(255)" json:"-"`
+	CreatedAt       time.Time `gorm:"not null" json:"created_at"`
+	UpdatedAt       time.Time `gorm:"not null" json:"updated_at"`
 
 	Segments []CampaignSegment `gorm:"foreignKey:CampaignID" json:"segments,omitempty"`
 }
@@ -101,6 +109,15 @@ type CampaignSegment struct {
 	Cron         string     `gorm:"type:varchar(120)" json:"cron,omitempty"` // when recurring
 	RunAt        *time.Time `gorm:"" json:"run_at,omitempty"`                // when once
 	NextRunAt    *time.Time `gorm:"" json:"next_run_at,omitempty"`           // computed
+	// MentionMode controls whether/who this segment tags in the GMF group message:
+	//   none     — no @mention (default)
+	//   all      — tag every current group member (resolved live at send time)
+	//   selected — tag only the Zalo user IDs in MentionUserIDs
+	// Zalo user IDs are group-scoped, which is why the selection lives on the
+	// segment (one segment = one group), not on the campaign. See engine.buildMentionTags.
+	MentionMode string `gorm:"type:varchar(20);not null;default:none" json:"mention_mode"` // none | all | selected
+	// MentionUserIDs holds the chosen Zalo user IDs when MentionMode is "selected".
+	MentionUserIDs JSONStringSlice `gorm:"type:json" json:"mention_user_ids,omitempty"`
 }
 
 func (CampaignSegment) TableName() string {

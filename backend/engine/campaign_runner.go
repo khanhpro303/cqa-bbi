@@ -165,6 +165,12 @@ func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.Campaign
 		run.Status, run.FailCount, run.ErrorMessage = "error", 1, "group_has_no_zalo_group"
 		fail = 1
 	default:
+		// Tag (mention) members in this segment's group. WHO is per-segment
+		// (seg.MentionMode/MentionUserIDs); WHERE is per-message (campaign
+		// MentionPlacement/MentionGreeting). Applied to whichever text we send
+		// (main or reminder) — see applyMentions.
+		tags := b.buildMentionTags(ctx, group, seg)
+		content = applyMentions(content, tags, b.campaign.MentionPlacement, b.campaign.MentionGreeting)
 		if sErr := b.sendToGroup(ctx, group.ZaloGroupID, content, attachmentIDs); sErr != nil {
 			run.Status, run.FailCount, run.ErrorMessage = "error", 1, sErr.Error()
 			fail = 1
@@ -276,6 +282,100 @@ func buildBroadcastContent(c *models.Campaign) string {
 		parts = append(parts, link)
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+const (
+	// mentionPlaceholder is the literal token a setup person drops into the
+	// message body to control where the @mention list expands (inline placement).
+	mentionPlaceholder = "{tag}"
+	// maxMentionsPerMessage caps how many members a single send tags. It keeps the
+	// mention list inside the first 1800-rune chunk (so chunkMessageText can't cut
+	// it in half) and matches Zalo's max members-per-page (50) for the "all" mode.
+	maxMentionsPerMessage = 50
+	// defaultMentionGreeting leads a prefix-placed mention line when the campaign
+	// has no custom greeting set.
+	defaultMentionGreeting = "Xin chào"
+)
+
+// buildMentionTags returns the Zalo mention tokens ("[@<userID>]") for one
+// segment, according to its MentionMode:
+//   - none     → nil
+//   - selected → the segment's stored Zalo user IDs (capped)
+//   - all      → every current group member, fetched live (capped). A fetch error
+//     is logged and treated as "no tags" so a transient Zalo hiccup never blocks
+//     the broadcast.
+func (b *campaignBroadcast) buildMentionTags(ctx context.Context, group models.CRMGroup, seg models.CampaignSegment) []string {
+	switch seg.MentionMode {
+	case "selected":
+		return mentionTokens(seg.MentionUserIDs, maxMentionsPerMessage)
+	case "all":
+		members, err := b.adapter.GetGMFGroupMembers(ctx, group.ZaloGroupID, 0, maxMentionsPerMessage)
+		if err != nil {
+			log.Printf("[campaign] mention 'all' skipped for group %q: list members failed: %v", group.ZaloGroupID, err)
+			return nil
+		}
+		ids := make([]string, 0, len(members))
+		for _, m := range members {
+			if uid := strings.TrimSpace(m.UserID); uid != "" {
+				ids = append(ids, uid)
+			}
+		}
+		return mentionTokens(ids, maxMentionsPerMessage)
+	default:
+		return nil
+	}
+}
+
+// mentionTokens converts up to `cap` Zalo user IDs into "[@id]" tokens, skipping
+// blanks. Kept pure for unit testing.
+func mentionTokens(userIDs []string, cap int) []string {
+	out := make([]string, 0, len(userIDs))
+	for _, id := range userIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("[@%s]", id))
+		if cap > 0 && len(out) >= cap {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// applyMentions weaves the mention tokens into the message content. WHERE they
+// land is driven by placement:
+//   - "inline": the literal {tag} token in the body is replaced with the tag list.
+//   - "prefix" (or "inline" when the body has no {tag}): a "<greeting> <tags>,"
+//     line is prepended.
+//
+// When there are no tags, any stray {tag} token is stripped and the content is
+// returned otherwise unchanged. Pure (no I/O) so it is fully unit-testable.
+func applyMentions(content string, tags []string, placement, greeting string) string {
+	if len(tags) == 0 {
+		// No one to tag: remove an unfilled placeholder so it never ships literally.
+		return strings.TrimSpace(strings.ReplaceAll(content, mentionPlaceholder, ""))
+	}
+
+	tagStr := strings.Join(tags, " ")
+
+	if placement == "inline" && strings.Contains(content, mentionPlaceholder) {
+		return strings.ReplaceAll(content, mentionPlaceholder, tagStr)
+	}
+
+	// Prefix placement (or inline fallback when the body lacks {tag}).
+	greeting = strings.TrimSpace(greeting)
+	if greeting == "" {
+		greeting = defaultMentionGreeting
+	}
+	prefix := fmt.Sprintf("%s %s,", greeting, tagStr)
+	if strings.TrimSpace(content) == "" {
+		return prefix
+	}
+	return prefix + "\n" + content
 }
 
 // nextCampaignRun computes the next fire time for a 5-field cron expression in

@@ -164,7 +164,14 @@ function emptyForm(): CampaignFormState {
     name: '',
     description: '',
     channelId: props.channels[0]?.id ?? '',
-    message: { text: '', link: undefined, images: [], reminderText: undefined },
+    message: {
+      text: '',
+      link: undefined,
+      images: [],
+      reminderText: undefined,
+      mentionPlacement: 'prefix',
+      mentionGreeting: undefined,
+    },
     segments: [],
   }
 }
@@ -178,6 +185,8 @@ function newSegment(): CampaignSegment {
     groupName: '',
     scheduleKind: 'recurring',
     cron: '0 9 * * *',
+    mentionMode: 'none',
+    mentionUserIds: [],
   }
 }
 

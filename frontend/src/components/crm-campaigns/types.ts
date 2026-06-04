@@ -9,6 +9,11 @@ export const ZALO_MAX_TEXT_RUNES = 1800
 export type ScheduleKind = 'recurring' | 'once'
 export type CampaignStatus = 'draft' | 'active' | 'paused' | 'done'
 
+// Per-segment tag mode (WHO gets @mentioned in the GMF group message).
+export type MentionMode = 'none' | 'all' | 'selected'
+// Message-level tag placement (WHERE the mentions land in the sent text).
+export type MentionPlacement = 'prefix' | 'inline'
+
 // One "lượt gửi": a GMF group paired with its own schedule.
 // A campaign holds many of these (đa phân khúc).
 export interface CampaignSegment {
@@ -19,6 +24,10 @@ export interface CampaignSegment {
   cron?: string // khi recurring — cron string từ CronPicker
   runAt?: string // ISO datetime — khi once
   nextRunAt?: string // tính sẵn ở mock để hiển thị "lượt gửi kế tiếp"
+  // Tag thành viên trong đúng nhóm GMF này. zaloUserId gắn theo nhóm nên lựa chọn
+  // nằm ở segment (mỗi segment = 1 nhóm).
+  mentionMode?: MentionMode // mặc định 'none'
+  mentionUserIds?: string[] // các zaloUserId khi mode = 'selected'
 }
 
 export interface CampaignMessage {
@@ -30,6 +39,10 @@ export interface CampaignMessage {
   // Optional text-only "nhắc lại" message. When set, each segment's first
   // successful send uses `text`; every later (recurring) send uses this instead.
   reminderText?: string
+  // Vị trí chèn @mention: 'prefix' = dòng chào đầu tin; 'inline' = thay token {tag}.
+  mentionPlacement?: MentionPlacement // mặc định 'prefix'
+  // Lời chào dùng cho placement 'prefix' (vd "Xin chào").
+  mentionGreeting?: string
 }
 
 export interface Campaign {
@@ -76,6 +89,21 @@ export interface CampaignRecentRow {
 export interface SelectOption {
   id: string
   name: string
+}
+
+// One taggable member of a GMF group, resolved live from Zalo + CRM names.
+// Backend: GET /tenants/:tenantId/crm/groups/:id/members.
+export interface GroupMember {
+  zaloUserId: string
+  name: string
+  avatar?: string
+  isEmployee?: boolean
+  customerCode?: string
+}
+
+export interface GroupMembersResponse {
+  employees: GroupMember[]
+  customers: GroupMember[]
 }
 
 // Form shape used by CampaignFormDialog before it becomes a Campaign.

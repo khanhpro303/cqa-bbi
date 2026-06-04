@@ -2,6 +2,7 @@
   <div>
     <!-- Message body -->
     <v-textarea
+      ref="bodyField"
       v-model="text"
       :label="$t('campaign_message_content')"
       variant="outlined"
@@ -92,6 +93,54 @@
         </div>
       </div>
     </v-expand-transition>
+
+    <!-- Mention/Tag placement (WHO is chosen per-segment in the schedule step) -->
+    <v-divider class="my-3" />
+    <div class="d-flex align-center flex-wrap ga-2">
+      <v-icon size="16" class="text-primary">mdi-at</v-icon>
+      <span class="text-caption font-weight-medium">{{ $t('campaign_mention_placement_title') }}</span>
+      <v-btn-toggle
+        v-model="mentionPlacement"
+        mandatory
+        divided
+        density="comfortable"
+        color="primary"
+        class="ml-auto"
+      >
+        <v-btn value="prefix" size="small">{{ $t('campaign_mention_placement_prefix') }}</v-btn>
+        <v-btn value="inline" size="small">{{ $t('campaign_mention_placement_inline') }}</v-btn>
+      </v-btn-toggle>
+    </div>
+
+    <v-text-field
+      v-if="mentionPlacement === 'prefix'"
+      v-model="mentionGreeting"
+      :label="$t('campaign_mention_greeting_label')"
+      :placeholder="$t('campaign_mention_greeting_default')"
+      variant="outlined"
+      density="compact"
+      prepend-inner-icon="mdi-hand-wave-outline"
+      class="mt-2"
+      hide-details="auto"
+      clearable
+    />
+
+    <div v-else class="mt-2">
+      <v-btn
+        size="small"
+        variant="tonal"
+        color="primary"
+        prepend-icon="mdi-code-tags"
+        @click="insertTag"
+      >
+        {{ $t('campaign_mention_insert_tag') }}
+      </v-btn>
+    </div>
+
+    <div class="text-caption text-grey-darken-1 mt-1">
+      <v-icon size="12" class="mr-1">mdi-information-outline</v-icon>
+      {{ $t('campaign_mention_placement_hint') }}
+    </div>
 
     <!-- Selected images (thumbnails + reorder/remove) -->
     <div v-if="items.length" class="image-grid mt-3">
@@ -185,10 +234,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ZALO_MAX_TEXT_RUNES, type CampaignMessage } from './types'
+import { ZALO_MAX_TEXT_RUNES, type CampaignMessage, type MentionPlacement } from './types'
 import { uploadCampaignImages } from './campaignsApi'
+
+const MENTION_TOKEN = '{tag}'
 
 // One image in the composer: either an already-uploaded server path or a local
 // File pending upload. `url` is a previewable blob/object URL.
@@ -207,6 +258,7 @@ const model = defineModel<CampaignMessage>({ required: true })
 const { t } = useI18n()
 
 const fileInput = ref<HTMLInputElement | null>(null)
+const bodyField = ref<{ $el: HTMLElement } | null>(null)
 const showLinkField = ref<boolean>(!!model.value.link)
 const showReminderField = ref<boolean>(!!model.value.reminderText)
 const dragging = ref(false)
@@ -226,13 +278,51 @@ const reminderText = computed({
   get: () => model.value.reminderText ?? '',
   set: (v) => { model.value = { ...model.value, reminderText: v || undefined } },
 })
+const mentionPlacement = computed<MentionPlacement>({
+  get: () => model.value.mentionPlacement ?? 'prefix',
+  set: (v) => { model.value = { ...model.value, mentionPlacement: v } },
+})
+const mentionGreeting = computed({
+  get: () => model.value.mentionGreeting ?? '',
+  set: (v) => { model.value = { ...model.value, mentionGreeting: v || undefined } },
+})
+
+// Insert the {tag} token at the caret in the message body (inline placement).
+// Falls back to appending when the underlying <textarea> caret is unavailable.
+function insertTag(): void {
+  const el = bodyField.value?.$el?.querySelector('textarea') as HTMLTextAreaElement | null
+  const cur = text.value || ''
+  if (el && typeof el.selectionStart === 'number') {
+    const start = el.selectionStart
+    const end = el.selectionEnd
+    text.value = cur.slice(0, start) + MENTION_TOKEN + cur.slice(end)
+    void nextTick(() => {
+      el.focus()
+      const pos = start + MENTION_TOKEN.length
+      el.setSelectionRange(pos, pos)
+    })
+  } else {
+    text.value = cur ? `${cur} ${MENTION_TOKEN}` : MENTION_TOKEN
+  }
+}
 
 // Rune-accurate count (matches backend chunking which counts runes, not bytes).
 const runeCount = computed(() => [...(text.value || '')].length)
 const overLimit = computed(() => runeCount.value > ZALO_MAX_TEXT_RUNES)
 const reminderRuneCount = computed(() => [...(reminderText.value || '')].length)
 const reminderOverLimit = computed(() => reminderRuneCount.value > ZALO_MAX_TEXT_RUNES)
-const previewText = computed(() => text.value?.trim() || '')
+
+// Best-effort preview: render the {tag} placeholder (and, for prefix placement, a
+// sample greeting line) as a sample mention so the literal token never shows.
+// WHO is tagged is decided per-segment, so this only illustrates placement.
+const previewText = computed(() => {
+  const sample = t('campaign_mention_sample')
+  const body = (text.value || '').trim()
+  if (mentionPlacement.value === 'inline') {
+    return body.split(MENTION_TOKEN).join(sample)
+  }
+  return body
+})
 
 // Re-init the thumbnail list whenever the model's saved image paths change
 // (e.g. the dialog loads a different campaign). Text/link edits keep the paths
