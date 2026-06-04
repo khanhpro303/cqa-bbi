@@ -136,7 +136,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [boolean]
-  saved: [Campaign]
+  // Second arg is an optional i18n warning key (e.g. saved but channel disabled),
+  // letting the parent show a warning toast instead of the default success one.
+  saved: [Campaign, string?]
   error: [string]
 }>()
 
@@ -243,8 +245,29 @@ async function submit(target: 'draft' | 'active') {
       return
     }
     let saved = await saveCampaign(form.value)
+
+    // Editing an active campaign onto a missing/disabled channel auto-pauses it
+    // server-side (UpdateCampaign). Surface why instead of a silent status flip.
+    if (props.editing?.status === 'active' && saved.status === 'paused') {
+      emit('saved', saved, 'campaign_autopaused_channel_inactive')
+      open.value = false
+      return
+    }
+
     if (target === 'active') {
-      saved = (await setCampaignStatus(saved.id, 'active')) ?? saved
+      try {
+        saved = (await setCampaignStatus(saved.id, 'active')) ?? saved
+      } catch (e: any) {
+        // The campaign is already persisted (as draft) — only activation failed
+        // because the channel is off. Refresh the list and tell the user why.
+        const code = e?.response?.data?.error
+        if (code === 'channel_inactive' || code === 'channel_not_found') {
+          emit('saved', saved, 'campaign_saved_but_channel_inactive')
+          open.value = false
+          return
+        }
+        throw e
+      }
     }
     emit('saved', saved)
     open.value = false

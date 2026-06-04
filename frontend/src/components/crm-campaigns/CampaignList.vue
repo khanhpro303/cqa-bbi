@@ -249,11 +249,15 @@ const affectedByInactiveChannel = computed(() =>
   campaigns.value.filter((c) => inactiveChannelIds.value.has(c.channelId)),
 )
 
-async function onSaved() {
+async function onSaved(_saved?: Campaign, warnKey?: string) {
   await load()
   await warningsStore.refresh()
   emit('changed')
-  emit('notify', 'Đã lưu chiến dịch', 'success')
+  if (warnKey) {
+    emit('notify', t(warnKey), 'warning')
+  } else {
+    emit('notify', 'Đã lưu chiến dịch', 'success')
+  }
 }
 
 // "Gửi trước giờ hẹn" warning modal — only for one-time segments not yet due.
@@ -316,9 +320,24 @@ async function doSendNow(c: Campaign) {
 }
 
 async function onToggle(c: Campaign, status: CampaignStatus) {
-  await setCampaignStatus(c.id, status)
-  await load()
-  emit('changed')
+  busyId.value = c.id
+  try {
+    await setCampaignStatus(c.id, status)
+    await load()
+    emit('changed')
+  } catch (e: any) {
+    // The backend refuses to activate a campaign whose Zalo OA channel is missing
+    // or disabled (its jobs would fire but send nothing). Surface a clear reason
+    // instead of failing silently.
+    const code = e?.response?.data?.error
+    if (code === 'channel_inactive' || code === 'channel_not_found') {
+      emit('notify', t('campaign_activate_channel_inactive'), 'error')
+    } else {
+      emit('notify', t('campaign_status_update_failed'), 'error')
+    }
+  } finally {
+    busyId.value = null
+  }
 }
 
 async function onDelete() {

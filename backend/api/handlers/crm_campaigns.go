@@ -187,6 +187,19 @@ func UpdateCampaign(c *gin.Context) {
 	campaign.MessageImageName = "" // migrated to MessageImages
 	campaign.UpdatedAt = time.Now()
 
+	// If an active campaign is repointed at a missing/disabled channel, demote it to
+	// paused — otherwise it would stay "active" while every scheduled send dies at
+	// the channel guard (channel_inactive). Mirrors the activation block in
+	// SetCampaignStatus so the two paths can never disagree.
+	autoPaused := false
+	if campaign.Status == "active" {
+		if err := assertCampaignChannelActive(campaign.ChannelID, tenantID); err != nil &&
+			(errors.Is(err, engine.ErrCampaignChannelInactive) || errors.Is(err, engine.ErrCampaignChannelNotFound)) {
+			campaign.Status = "paused"
+			autoPaused = true
+		}
+	}
+
 	err := db.DB.Transaction(func(tx *gorm.DB) error {
 		if e := tx.Save(&campaign).Error; e != nil {
 			return e
@@ -211,6 +224,10 @@ func UpdateCampaign(c *gin.Context) {
 
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "campaign.update", "campaign", campaign.ID,
 		fmt.Sprintf("Cập nhật chiến dịch '%s'", campaign.Name), "", c.ClientIP())
+	if autoPaused {
+		db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "campaign.auto_paused", "campaign", campaign.ID,
+			fmt.Sprintf("Chiến dịch '%s' tự chuyển sang tạm dừng: kênh Zalo OA đã tắt", campaign.Name), "", c.ClientIP())
+	}
 
 	groupNames := loadGroupNames(tenantID)
 	c.JSON(http.StatusOK, toCampaignDTO(&campaign, groupNames, sentThisMonthByCampaign(tenantID)[campaign.ID]))
@@ -271,6 +288,26 @@ func SetCampaignStatus(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "campaign_not_found"})
 		return
 	}
+
+	// Refuse to activate a campaign whose Zalo OA channel is missing or disabled.
+	// Without this guard the scheduler still registers the segment jobs and they
+	// fire on schedule, but every send dies at the channel guard in
+	// engine.prepareCampaignBroadcast (channel_inactive) — the campaign looks
+	// "active" while silently sending nothing. Block it at the source instead.
+	if req.Status == "active" {
+		if err := assertCampaignChannelActive(campaign.ChannelID, tenantID); err != nil {
+			switch {
+			case errors.Is(err, engine.ErrCampaignChannelNotFound):
+				c.JSON(http.StatusConflict, gin.H{"error": "channel_not_found"})
+			case errors.Is(err, engine.ErrCampaignChannelInactive):
+				c.JSON(http.StatusConflict, gin.H{"error": "channel_inactive"})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_check_channel"})
+			}
+			return
+		}
+	}
+
 	oldStatus := campaign.Status
 	campaign.Status = req.Status
 	campaign.UpdatedAt = time.Now()
@@ -505,6 +542,25 @@ func buildSegments(campaignID string, in []campaignFormSegment, tenantID string)
 		out = append(out, seg)
 	}
 	return out
+}
+
+// assertCampaignChannelActive checks that the campaign's Zalo OA channel exists
+// and is active, mirroring the guard in engine.prepareCampaignBroadcast so the
+// activation path and the send path agree. Returns engine.ErrCampaignChannelNotFound
+// or engine.ErrCampaignChannelInactive so callers can map to the same responses.
+func assertCampaignChannelActive(channelID, tenantID string) error {
+	var channel models.Channel
+	if err := db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ?", channelID, tenantID, "zalo_oa").
+		First(&channel).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return engine.ErrCampaignChannelNotFound
+		}
+		return fmt.Errorf("check campaign channel: %w", err)
+	}
+	if !channel.IsActive {
+		return engine.ErrCampaignChannelInactive
+	}
+	return nil
 }
 
 // reloadCampaignScheduler re-registers campaign segment jobs after a mutation.
