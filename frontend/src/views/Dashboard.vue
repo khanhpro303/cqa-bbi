@@ -58,7 +58,7 @@
     </v-card>
 
     <!-- Banner image carousel -->
-    <BannerCarousel />
+    <BannerCarousel :offsets="bannerOffsets" :can-edit="isAdmin" :tenant-id="tenantId" />
 
     <div class="d-flex flex-wrap align-center mb-4 ga-2">
       <h1 class="text-h5 font-weight-bold d-none d-md-block">{{ $t('dashboard') }}</h1>
@@ -332,6 +332,7 @@ const costToday = ref(0)
 const costMonth = ref(0)
 const costByDay = ref<any[]>([])
 const exchangeRate = ref(26000)
+const bannerOffsets = ref<string | null>(null)
 const services = ref([
   { name: 'API Server', ok: true },
   { name: 'Database', ok: true },
@@ -462,6 +463,7 @@ async function loadDashboard() {
     costMonth.value = data.cost_this_month || 0
     costByDay.value = data.cost_by_day || []
     exchangeRate.value = data.exchange_rate || 26000
+    bannerOffsets.value = data.banner_offsets ?? null
 
     qcAlerts.value = data.qc_alerts || []
     classRecent.value = data.classification_recent || []

@@ -623,6 +623,7 @@ var allowedSettingKeys = map[string]bool{
 	"default_ai_provider":  true,
 	"default_ai_model":     true,
 	"chatbot_active":       true,
+	"banner_offsets":       true,
 }
 
 // SaveSetting saves a single key-value setting

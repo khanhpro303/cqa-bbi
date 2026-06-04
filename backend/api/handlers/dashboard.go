@@ -126,6 +126,14 @@ func GetDashboard(c *gin.Context) {
 		}
 	}
 
+	// Banner carousel vertical focal points (shared across all viewers). Stored as
+	// a JSON array of percentages, e.g. "[50,30,70]". Empty when never customized.
+	bannerOffsets := ""
+	var bannerSetting models.AppSetting
+	if db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "banner_offsets").First(&bannerSetting).Error == nil {
+		bannerOffsets = bannerSetting.ValuePlain
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"total_conversations":      totalConversations,
 		"active_channels":          activeChannels,
@@ -139,6 +147,7 @@ func GetDashboard(c *gin.Context) {
 		"cost_by_day":              costByDay,
 		"messages_by_day":          messagesByDay,
 		"exchange_rate":            exchangeRate,
+		"banner_offsets":           bannerOffsets,
 	})
 }
 
