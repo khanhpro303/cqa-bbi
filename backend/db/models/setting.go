@@ -21,7 +21,12 @@ type NotificationLog struct {
 	TenantID     string    `gorm:"type:char(36);not null;index:idx_notiflog_tenant_sent" json:"tenant_id"`
 	JobID        string    `gorm:"type:char(36)" json:"job_id"`
 	JobRunID     string    `gorm:"type:char(36)" json:"job_run_id"`
-	ChannelType  string    `gorm:"type:varchar(20);not null" json:"channel_type"` // telegram | email
+	ChannelType  string    `gorm:"type:varchar(20);not null" json:"channel_type"` // telegram | email | zalo | zalo_oa
+	// Source distinguishes the origin of the notification: "job" (AI task output
+	// dispatched via notifications.Dispatcher) or "campaign" (CRM campaign failure
+	// alert). Defaults to "job" so pre-existing rows keep their original meaning
+	// after migration; campaign rows are backfilled in AutoMigrate.
+	Source       string    `gorm:"type:varchar(20);default:'job';index:idx_notiflog_tenant_source" json:"source"`
 	Recipient    string    `gorm:"type:varchar(500);not null" json:"recipient"`
 	Subject      string    `gorm:"type:varchar(500)" json:"subject"`
 	Body         string    `gorm:"type:text;not null" json:"body"`

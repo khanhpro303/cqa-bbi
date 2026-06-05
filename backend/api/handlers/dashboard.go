@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -205,11 +207,24 @@ func ListNotificationLogs(c *gin.Context) {
 		perPage = 100
 	}
 
+	// Optional origin filter: "job" (AI task outputs) or "campaign" (CRM campaign
+	// failure alerts). Any other value is ignored so the list stays unfiltered.
+	// scope is applied to a fresh builder for both the count and page queries so
+	// GORM never carries statement state between them.
+	source := c.Query("source")
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Where("tenant_id = ?", tenantID)
+		if source == "job" || source == "campaign" {
+			q = q.Where("source = ?", source)
+		}
+		return q
+	}
+
 	var total int64
-	db.DB.Model(&models.NotificationLog{}).Where("tenant_id = ?", tenantID).Count(&total)
+	scope(db.DB.Model(&models.NotificationLog{})).Count(&total)
 
 	var logs []models.NotificationLog
-	db.DB.Where("tenant_id = ?", tenantID).Order("sent_at DESC").
+	scope(db.DB.Model(&models.NotificationLog{})).Order("sent_at DESC").
 		Offset((page - 1) * perPage).Limit(perPage).Find(&logs)
 
 	c.JSON(http.StatusOK, gin.H{

@@ -93,6 +93,16 @@ func AutoMigrate() error {
 		log.Printf("[db] failed to backfill channels.auto_reply_enabled: %v", err)
 	}
 
+	// Backfill: NotificationLog.Source defaults to 'job', but historical campaign
+	// failure alerts (the GMF group destination) were written with channel_type
+	// "zalo_oa". Relabel those as 'campaign' so the logs view filter is accurate.
+	// Idempotent: re-runs only touch rows still defaulted to 'job'.
+	if err := DB.Model(&models.NotificationLog{}).
+		Where("channel_type = ? AND source = ?", "zalo_oa", "job").
+		Update("source", "campaign").Error; err != nil {
+		log.Printf("[db] failed to backfill notification_logs.source: %v", err)
+	}
+
 	// Clean up deprecated database schema from older versions
 	cleanupDeprecatedSchema()
 

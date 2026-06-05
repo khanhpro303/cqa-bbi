@@ -161,6 +161,7 @@ func recordCampaignAlertLog(tenantID, campaignID, channelType, recipient, subjec
 		TenantID:     tenantID,
 		JobID:        campaignID,
 		ChannelType:  channelType,
+		Source:       "campaign",
 		Recipient:    recipient,
 		Subject:      subject,
 		Body:         body,

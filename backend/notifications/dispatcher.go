@@ -195,6 +195,7 @@ func (d *Dispatcher) writeNotificationLog(job models.Job, runID string, output O
 		JobID:        job.ID,
 		JobRunID:     runID,
 		ChannelType:  output.Type,
+		Source:       "job",
 		Recipient:    recipientFor(output),
 		Subject:      subject,
 		Body:         body,
