@@ -1963,9 +1963,14 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string) (strin
 	// Define system prompt
 	systemPrompt := `Bạn là trợ lý lọc tin nhắn thông minh cho Chatbot doanh nghiệp BBI.
 Nhiệm vụ của bạn là phân loại tin nhắn của khách hàng thành một trong ba nhãn sau:
-1. "IN_SCOPE": Tin nhắn hỏi về thông tin sản phẩm, tồn kho, giá cả, đơn hàng, công nợ (financial debt), hoặc các vấn đề liên quan trực tiếp đến hoạt động mua bán của doanh nghiệp BBI mà RAG Bot có thể tự trả lời dựa trên tài liệu sản phẩm hoặc dữ liệu tồn kho/công nợ.
+1. "IN_SCOPE": Bất kỳ tin nhắn nào hỏi về nghiệp vụ HOẶC kiến thức sản phẩm mà RAG Bot có thể tự trả lời dựa trên tài liệu sản phẩm và dữ liệu tồn kho/công nợ. Bao gồm:
+   - Câu hỏi giao dịch: tồn kho, giá cả, đơn hàng, công nợ (financial debt).
+   - Câu hỏi KIẾN THỨC / THÔNG SỐ / CẤU TẠO / CÔNG DỤNG / HƯỚNG DẪN sử dụng sản phẩm, kể cả khi không gắn với một giao dịch cụ thể. Ví dụ: "mũ bảo hiểm có bao nhiêu bộ phận", "sản phẩm này làm bằng chất liệu gì", "size áo tương ứng cân nặng bao nhiêu", "cách bảo quản giày".
+   Nếu câu hỏi là về sản phẩm/ngành hàng và tài liệu RAG có thể có câu trả lời, hãy chọn IN_SCOPE.
 2. "HANDOVER": Tin nhắn phàn nàn về chất lượng dịch vụ, sản phẩm lỗi, chậm giao hàng, thái độ phục vụ, yêu cầu gặp nhân viên hoặc các vấn đề nghiêm trọng cần con người giải quyết.
-3. "CASUAL": Tin nhắn chào hỏi xã giao, cảm ơn, đồng ý (ví dụ: "ok", "dạ", "cảm ơn", "hello", "hi") hoặc các câu nói bâng quơ không yêu cầu bot xử lý nghiệp vụ.
+3. "CASUAL": CHỈ dùng cho tin nhắn chào hỏi xã giao, cảm ơn, đồng ý (ví dụ: "ok", "dạ", "cảm ơn", "hello", "hi") hoặc câu nói bâng quơ KHÔNG hề hỏi về sản phẩm hay nghiệp vụ.
+
+QUY TẮC AN TOÀN: Nếu bạn không chắc chắn giữa IN_SCOPE và CASUAL, hãy LUÔN chọn IN_SCOPE. Lý do: chọn nhầm IN_SCOPE thì RAG Bot vẫn có thể trả lời hoặc từ chối nhẹ nhàng, nhưng chọn nhầm CASUAL sẽ đóng phiên và bỏ rơi câu hỏi thật của khách. CASUAL chỉ dành cho trường hợp rõ ràng là không có ý hỏi gì.
 
 Định dạng trả về duy nhất là một đối tượng JSON:
 {
