@@ -30,6 +30,13 @@ const (
 	zaloMaxTextRunes = 1800
 )
 
+// ChunkText is the exported entry point to the package's rune-safe, newline-
+// preferring splitter so other packages (e.g. notifications/telegram) can reuse
+// the same well-tested chunking instead of byte-truncating long messages.
+func ChunkText(text string, maxRunes int) []string {
+	return chunkMessageText(text, maxRunes)
+}
+
 // chunkMessageText splits text into ordered pieces, each at most maxRunes long,
 // preferring to break on newline boundaries so a stock breakdown stays readable.
 // A single line longer than the cap is hard-split on rune boundaries so a chunk
