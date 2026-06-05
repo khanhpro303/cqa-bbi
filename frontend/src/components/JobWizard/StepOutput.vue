@@ -5,8 +5,8 @@
 
     <v-card v-for="(output, idx) in outputs" :key="idx" variant="outlined" class="pa-4 mb-3">
       <div class="d-flex align-center mb-3">
-        <v-chip :color="output.type === 'telegram' ? 'blue' : 'orange'" variant="tonal" size="small">
-          {{ output.type === 'telegram' ? $t('output_telegram') : $t('output_email') }}
+        <v-chip :color="outputTypeColor(output.type)" variant="tonal" size="small">
+          {{ outputTypeLabel(output.type) }}
         </v-chip>
         <v-chip v-if="testPassed[idx]" color="success" variant="tonal" size="x-small" class="ml-2">
           <v-icon start size="x-small">mdi-check</v-icon>
@@ -18,10 +18,11 @@
 
       <v-select
         v-model="output.type"
-        :items="[{ title: $t('output_telegram'), value: 'telegram' }, { title: $t('output_email'), value: 'email' }]"
+        :items="[{ title: $t('output_telegram'), value: 'telegram' }, { title: $t('output_email'), value: 'email' }, { title: 'Zalo (nhóm GMF)', value: 'zalo' }]"
         label="Type"
         density="compact"
         class="mb-2"
+        @update:model-value="resetTest(idx)"
       />
 
       <!-- Telegram -->
@@ -42,6 +43,34 @@
           :rules="[v => !!v || 'Group ID là bắt buộc']"
           density="compact"
           hint="Thêm bot @RawDataBot vào group Telegram, bot sẽ gửi lại Group ID (số âm, ví dụ: -1001234567890)"
+          persistent-hint
+          @update:model-value="resetTest(idx)"
+        />
+      </template>
+
+      <!-- Zalo (nhóm GMF) -->
+      <template v-else-if="output.type === 'zalo'">
+        <v-select
+          v-model="output.channel_id"
+          :items="zaloChannelOptions"
+          :loading="loadingZaloRefs"
+          label="Kênh Zalo OA"
+          density="compact"
+          class="mb-2"
+          :no-data-text="loadingZaloRefs ? 'Đang tải…' : 'Chưa có kênh Zalo OA nào'"
+          hint="Kênh OA dùng để gửi kết quả vào nhóm GMF"
+          persistent-hint
+          @update:model-value="onZaloChannelChange(output, idx)"
+        />
+        <v-select
+          v-model="output.group_id"
+          :items="groupOptionsFor(output.channel_id)"
+          :loading="loadingZaloRefs"
+          :disabled="!output.channel_id"
+          label="Nhóm GMF nhận kết quả"
+          density="compact"
+          :no-data-text="loadingZaloRefs ? 'Đang tải…' : 'Chưa có nhóm GMF nào đã liên kết Zalo'"
+          hint="Kết quả phân tích sẽ gửi vào nhóm này"
           persistent-hint
           @update:model-value="resetTest(idx)"
         />
@@ -121,9 +150,11 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import api from '../../api'
 
 const route = useRoute()
+const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
 const form = defineModel<Record<string, any>>('form', { required: true })
 
@@ -137,8 +168,21 @@ interface OutputItem {
   smtp_pass?: string
   from?: string
   to?: string
+  channel_id?: string
+  group_id?: string
   template?: string
   custom_template?: string
+}
+
+function outputTypeColor(type: string): string {
+  if (type === 'telegram') return 'blue'
+  if (type === 'zalo') return 'green'
+  return 'orange'
+}
+function outputTypeLabel(type: string): string {
+  if (type === 'telegram') return t('output_telegram')
+  if (type === 'zalo') return 'Zalo (nhóm GMF)'
+  return t('output_email')
 }
 
 const templateHelpText = `Biến có thể dùng:
@@ -146,6 +190,16 @@ const templateHelpText = `Biến có thể dùng:
 {{content}} — Nội dung đánh giá chi tiết | {{link}} — Link xem trên hệ thống`
 
 function getDefaultTemplate(outputType: string) {
+  // Zalo group messages are plain text — no HTML tags.
+  if (outputType === 'zalo') {
+    return `Kết quả phân tích: {{job_name}}
+
+Tổng: {{total}} cuộc | Đạt: {{passed}} | Không đạt: {{failed}} | Vấn đề: {{issues}}
+
+{{content}}
+
+Xem chi tiết: {{link}}`
+  }
   const linkLine = outputType === 'email'
     ? `<a href="{{link}}">Xem chi tiết trên hệ thống</a>`
     : `Xem chi tiết: {{link}}`
@@ -156,6 +210,44 @@ Tổng: {{total}} cuộc | Đạt: {{passed}} | Không đạt: {{failed}} | Vấ
 {{content}}
 
 ${linkLine}`
+}
+
+// Zalo reference data: OA channels + GMF groups (loaded once for the zalo output type).
+const zaloChannelOptions = ref<Array<{ title: string; value: string }>>([])
+const zaloGroups = ref<Array<{ id: string; name: string; zalo_group_id?: string; channel_id?: string }>>([])
+const loadingZaloRefs = ref(false)
+
+async function loadZaloRefs() {
+  loadingZaloRefs.value = true
+  try {
+    const [chRes, grpRes] = await Promise.all([
+      api.get(`/tenants/${tenantId.value}/channels`),
+      api.get(`/tenants/${tenantId.value}/crm/groups`),
+    ])
+    const channels = Array.isArray(chRes.data) ? chRes.data : (chRes.data?.data ?? [])
+    zaloChannelOptions.value = channels
+      .filter((c: any) => c.channel_type === 'zalo_oa')
+      .map((c: any) => ({ title: c.name, value: c.id }))
+    zaloGroups.value = Array.isArray(grpRes.data) ? grpRes.data : (grpRes.data?.data ?? [])
+  } catch {
+    zaloChannelOptions.value = []
+    zaloGroups.value = []
+  } finally {
+    loadingZaloRefs.value = false
+  }
+}
+
+function groupOptionsFor(channelId?: string): Array<{ title: string; value: string }> {
+  return zaloGroups.value
+    .filter((g) => g.zalo_group_id && (!g.channel_id || g.channel_id === channelId))
+    .map((g) => ({ title: g.name, value: g.id }))
+}
+
+function onZaloChannelChange(output: OutputItem, idx: number) {
+  // Drop a group selection that no longer belongs to the chosen channel.
+  const valid = groupOptionsFor(output.channel_id).some((o) => o.value === output.group_id)
+  if (!valid) output.group_id = ''
+  resetTest(idx)
 }
 
 const outputs = ref<OutputItem[]>([])
@@ -170,6 +262,9 @@ function isOutputValid(output: OutputItem): boolean {
   }
   if (output.type === 'email') {
     return !!(output.smtp_host?.trim() && output.smtp_port && output.from?.trim() && output.to?.trim())
+  }
+  if (output.type === 'zalo') {
+    return !!(output.channel_id?.trim() && output.group_id?.trim())
   }
   return false
 }
@@ -204,6 +299,7 @@ function tryParseOutputs() {
 onMounted(() => {
   tryParseOutputs()
   syncValidation()
+  loadZaloRefs()
 })
 
 watch(() => form.value.outputs, () => {
@@ -240,6 +336,8 @@ async function testSend(idx: number) {
       type: output.type,
       bot_token: output.bot_token,
       chat_id: output.chat_id,
+      channel_id: output.channel_id,
+      group_id: output.group_id,
     })
     testResult.value = { idx, success: true, message: 'Gửi thành công!' }
     testPassed.value[idx] = true

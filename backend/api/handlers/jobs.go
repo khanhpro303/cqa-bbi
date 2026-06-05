@@ -441,9 +441,11 @@ func ListJobRuns(c *gin.Context) {
 
 func TestOutput(c *gin.Context) {
 	var req struct {
-		Type     string `json:"type" binding:"required,oneof=telegram email"`
-		BotToken string `json:"bot_token"`
-		ChatID   string `json:"chat_id"`
+		Type      string `json:"type" binding:"required,oneof=telegram email zalo"`
+		BotToken  string `json:"bot_token"`
+		ChatID    string `json:"chat_id"`
+		ChannelID string `json:"channel_id"` // zalo: OA channel
+		GroupID   string `json:"group_id"`   // zalo: CRM group
 		// Email fields can be added later
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -466,6 +468,18 @@ func TestOutput(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "Telegram message sent"})
+	case "zalo":
+		tenantID := middleware.GetTenantID(c)
+		notifier, err := notifications.BuildZaloGroupNotifier(tenantID, req.ChannelID, req.GroupID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := notifier.Send(ctx, "", "Đây là tin nhắn thử nghiệm từ Chat Quality Agent.\nKết nối Zalo nhóm GMF thành công!"); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "Zalo group message sent"})
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported output type"})
 	}
@@ -1005,5 +1019,3 @@ func ClearJobERPCustomerCache(c *gin.Context) {
 		"message": "Xoá cache khách hàng ERP thành công",
 	})
 }
-
-

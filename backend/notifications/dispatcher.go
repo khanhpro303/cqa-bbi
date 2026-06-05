@@ -26,6 +26,8 @@ type OutputConfig struct {
 	To             string `json:"to"`              // email (comma-separated)
 	Template       string `json:"template"`        // "default" | "custom"
 	CustomTemplate string `json:"custom_template"` // user-defined template (HTML)
+	ChannelID      string `json:"channel_id"`      // zalo: OA channel id
+	GroupID        string `json:"group_id"`        // zalo: CRM group id (resolved to zalo_group_id)
 }
 
 // Dispatcher sends notifications for job results and logs every send.
@@ -69,7 +71,7 @@ func (d *Dispatcher) SendJobResults(ctx context.Context, job models.Job, run mod
 	subject := fmt.Sprintf("[CQA] %s - %d issues found", job.Name, issues)
 
 	for _, output := range outputs {
-		notifier, err := d.createNotifier(output)
+		notifier, err := d.createNotifier(job.TenantID, output)
 		if err != nil {
 			log.Printf("[dispatcher] create notifier failed for %s: %v", output.Type, err)
 			continue
@@ -96,8 +98,11 @@ func (d *Dispatcher) SendJobResults(ctx context.Context, job models.Job, run mod
 
 		// Log notification
 		recipient := output.ChatID
-		if output.Type == "email" {
+		switch output.Type {
+		case "email":
 			recipient = output.To
+		case "zalo":
+			recipient = output.GroupID
 		}
 		logEntry := models.NotificationLog{
 			ID:           pkg.NewUUID(),
@@ -124,7 +129,7 @@ func (d *Dispatcher) SendJobResults(ctx context.Context, job models.Job, run mod
 	return nil
 }
 
-func (d *Dispatcher) createNotifier(cfg OutputConfig) (Notifier, error) {
+func (d *Dispatcher) createNotifier(tenantID string, cfg OutputConfig) (Notifier, error) {
 	switch cfg.Type {
 	case "telegram":
 		return NewTelegramNotifier(cfg.BotToken, cfg.ChatID), nil
@@ -134,13 +139,24 @@ func (d *Dispatcher) createNotifier(cfg OutputConfig) (Notifier, error) {
 			cfg.SMTPUser, cfg.SMTPPass,
 			cfg.From, splitComma(cfg.To),
 		), nil
+	case "zalo":
+		return BuildZaloGroupNotifier(tenantID, cfg.ChannelID, cfg.GroupID)
 	default:
 		return nil, fmt.Errorf("unsupported output type: %s", cfg.Type)
 	}
 }
 
 func (d *Dispatcher) buildNotificationBody(job models.Job, results []models.JobResult, outputType string) string {
-	body := fmt.Sprintf("<b>Kết quả phân tích: %s</b>\n\n", job.Name)
+	// Telegram (HTML parse mode) and email (HTML) render <b>; Zalo group
+	// messages are plain text, so drop the tags for that destination.
+	bold := func(s string) string {
+		if outputType == "zalo" {
+			return s
+		}
+		return "<b>" + s + "</b>"
+	}
+
+	body := bold("Kết quả phân tích: "+job.Name) + "\n\n"
 
 	for i, r := range results {
 		if i >= 10 {
@@ -153,9 +169,9 @@ func (d *Dispatcher) buildNotificationBody(job models.Job, results []models.JobR
 			if r.Severity == "NGHIEM_TRONG" {
 				emoji = "🔴"
 			}
-			body += fmt.Sprintf("%s <b>%s</b> — %s\n📌 %s\n\n", emoji, r.Severity, r.RuleName, r.Evidence)
+			body += fmt.Sprintf("%s %s — %s\n📌 %s\n\n", emoji, bold(r.Severity), r.RuleName, r.Evidence)
 		case "classification_tag":
-			body += fmt.Sprintf("🏷 <b>%s</b> (%.0f%%)\n📌 %s\n\n", r.RuleName, r.Confidence*100, r.Evidence)
+			body += fmt.Sprintf("🏷 %s (%.0f%%)\n📌 %s\n\n", bold(r.RuleName), r.Confidence*100, r.Evidence)
 		}
 	}
 
