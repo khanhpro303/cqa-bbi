@@ -150,7 +150,7 @@ func resolveOrdersCustomerCodes(tenantID, search string) []string {
 // compares by leading code via codesContain, so keeping the label is safe there
 // too. An empty result means the staff member may not see any of the named
 // customers.
-func scopeApprovedOrdersCodes(resolved []string, scopeType, ownCode string, allowedCodes []string) []string {
+func scopeApprovedOrdersCodes(resolved []string, scopeType string, ownCodes []string, allowedCodes []string) []string {
 	if len(resolved) == 0 {
 		return nil
 	}
@@ -160,7 +160,7 @@ func scopeApprovedOrdersCodes(resolved []string, scopeType, ownCode string, allo
 	case "assigned":
 		return intersectCustomerCodes(resolved, allowedCodes)
 	case "own":
-		return intersectCustomerCodes(resolved, []string{ownCode})
+		return intersectCustomerCodes(resolved, ownCodes)
 	default:
 		return nil
 	}

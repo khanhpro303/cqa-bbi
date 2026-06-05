@@ -210,15 +210,18 @@ orders, customers, debt}`. Với công nợ:
 ## D. Định danh & xác định danh sách mã khách (erp.go:2406-2445)
 
 > 🗣️ **Hiểu nhanh:** bot phải biết "ai đang hỏi" để chỉ trả nợ của đúng người đó.
-> - **Khách lẻ (own):** chỉ thấy nợ của **chính mình**. Nếu chưa map được mã khách
->   riêng, bot thử lấy mã khách gắn với **nhóm** của họ.
+> - **Khách lẻ (own):** chỉ thấy nợ của **chính mình** — gồm **tất cả cửa hàng** mà
+>   khách sở hữu. Một khách làm chủ nhiều cửa hàng (nhiều mã KH) sẽ được trả **nợ
+>   gộp** của các cửa hàng đó trong 1 lần. Nếu chưa map được mã riêng, bot thử lấy
+>   mã khách gắn với **nhóm** của họ (nhóm cũng có thể phục vụ nhiều mã).
 > - **Nhân viên (assigned/all):** có thể tra nợ theo **tên khách** họ gõ, hoặc theo
 >   **đối tượng khách (partner)**; nếu không có thì lấy toàn bộ khách trong nhóm
 >   được giao.
 
 Định danh khách: **ZaloUserID** (người gửi) → tra `zalo_customers`
-(`status='approved'`, `workers/tasks.go:526`) → **CustomerCode**, nạp vào
-`permCtx.CustomerCode`. `scopeType` lấy từ `IsResourceAllowed("debt")`
+(`status='approved'`, `workers/tasks.go:526`) → **CustomerCode** (mã chính) +
+**toàn bộ mã** từ `zalo_customer_codes`, nạp vào `permCtx.CustomerCode` /
+`permCtx.CustomerCodes`. `scopeType` lấy từ `IsResourceAllowed("debt")`
 (`permission_context.go:269`). Khác với orders (lọc từng đơn sau khi query), debt
 xác định **trước** danh sách mã khách rồi đẩy vào tham số `DS_KHACH_HANG`.
 
@@ -230,31 +233,32 @@ xác định **trước** danh sách mã khách rồi đẩy vào tham số `DS_
    (erp.go:2406-2417)            (erp.go:2418-2445)
         │                              │
         ▼                              ▼
- ownCode = permCtx.CustomerCode  ┌─ partnerID != "" ────────────────────────────┐
-        │                        │  resolveCustomerCodeFromPartnerID(partnerID)  │
- nếu ownCode == "":              │  (erp_debt.go:84) → SearchPartners, lấy "MA"  │
-   resolveGroupCustomerCode(...) │  → [code]                                     │
-   (erp.go:1570, số ÍT)          ├─ else search != "" & KHÔNG phải kỳ ──────────┤
-   → mã khách của nhóm           │  SearchPartners(search,5) → gom mọi "MA"      │
-        │                        │  (tra công nợ theo tên/đối tượng khách)       │
- targetCustomerCodes =           └───────────────────────────────────────────────┘
-   [ownCode] (nếu có)                    │
-   (khách chỉ thấy nợ            nếu vẫn rỗng & scope=="assigned":
-    của chính mình)               resolveGroupCustomerCodes(tenantID, groupIDs)
-        │                         (erp.go:1601, số NHIỀU — nhân viên thấy nợ
-        │                          của cả nhóm khách được giao)
+ ownCodes =                      ┌─ partnerID != "" ────────────────────────────┐
+   resolveOwnCustomerCodes(...)  │  resolveCustomerCodeFromPartnerID(partnerID)  │
+   (erp.go, số NHIỀU)            │  (erp_debt.go:84) → SearchPartners, lấy "MA"  │
+        │                        │  → [code]                                     │
+ ưu tiên permCtx.CustomerCodes;  ├─ else search != "" & KHÔNG phải kỳ ──────────┤
+ rồi [permCtx.CustomerCode];     │  SearchPartners(search,5) → gom mọi "MA"      │
+ rồi mã của nhóm (GetGroup...)   │  (tra công nợ theo tên/đối tượng khách)       │
+        │                        └───────────────────────────────────────────────┘
+ targetCustomerCodes =                  │
+   ownCodes (tất cả cửa hàng)    nếu vẫn rỗng & scope=="assigned":
+   (khách thấy nợ GỘP             resolveGroupCustomerCodes(tenantID, groupIDs)
+    của mọi cửa hàng mình         (erp.go:1601, số NHIỀU — nhân viên thấy nợ
+    sở hữu)                        của cả nhóm khách được giao)
         └──────────────┬───────────────┘
                        ▼
         dsKhachHang = strings.Join(targetCustomerCodes, ",")   (erp.go:2484)
-        → tham số DS_KHACH_HANG gửi Cloudify
+        → tham số DS_KHACH_HANG gửi Cloudify (nhiều mã → gộp các cửa hàng)
 ```
 
-> Với scope `own`: ưu tiên `permCtx.CustomerCode`; nếu rỗng (chưa map được mã khách
-> riêng) thì **mới đây bổ sung** bước thử `resolveGroupCustomerCode` (số ít,
-> `erp.go:1570`, lấy 1 mã từ nhóm). Nếu cả hai đều rỗng thì `targetCustomerCodes`
-> rỗng → `DS_KHACH_HANG=""`; báo cáo ERP sẽ không bị giới hạn theo mã khách, nên
-> việc map ZaloUserID → CustomerCode ở worker vẫn là điều kiện tiên quyết để khách
-> chỉ thấy nợ của mình.
+> Với scope `own`: dùng `resolveOwnCustomerCodes` (số NHIỀU) — ưu tiên
+> `permCtx.CustomerCodes` (toàn bộ mã KH khách sở hữu, worker ký vào token), rồi
+> `[permCtx.CustomerCode]`, rồi mã gắn với **nhóm** của khách. Nhờ đó chủ nhiều cửa
+> hàng được trả nợ **gộp** trong 1 lần (nhiều mã join vào `DS_KHACH_HANG`). Nếu tất
+> cả đều rỗng thì `targetCustomerCodes` rỗng → `DS_KHACH_HANG=""`; báo cáo ERP sẽ
+> không bị giới hạn theo mã khách, nên việc map ZaloUserID → CustomerCode(s) ở
+> worker vẫn là điều kiện tiên quyết để khách chỉ thấy nợ của mình.
 
 ---
 

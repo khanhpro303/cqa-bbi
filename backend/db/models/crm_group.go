@@ -15,6 +15,11 @@ type CRMGroup struct {
 	CreatedAt     time.Time      `gorm:"not null" json:"created_at"`
 	UpdatedAt     time.Time      `gorm:"not null" json:"updated_at"`
 
+	// CustomerCodes is the full mã KH set the group serves (a group can serve
+	// several shops), populated by list handlers from crm_group_customer_codes.
+	// Not a DB column.
+	CustomerCodes []string `gorm:"-" json:"customer_codes,omitempty"`
+
 	Employees []ZaloWhitelist `gorm:"many2many:crm_group_employees;joinForeignKey:GroupID;joinReferences:ZaloWhitelistID" json:"employees,omitempty"`
 	Customers []ZaloCustomer  `gorm:"many2many:crm_group_customers;joinForeignKey:GroupID;joinReferences:ZaloCustomerID" json:"customers,omitempty"`
 	Channel   *Channel        `gorm:"foreignKey:ChannelID" json:"channel,omitempty"`

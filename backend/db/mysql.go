@@ -72,9 +72,11 @@ func AutoMigrate() error {
 		&models.ZaloWhitelist{},
 		&models.ERPEndpoint{},
 		&models.ZaloCustomer{},
+		&models.ZaloCustomerCode{},
 		&models.CRMGroup{},
 		&models.CRMGroupEmployee{},
 		&models.CRMGroupCustomer{},
+		&models.CRMGroupCustomerCode{},
 		&models.ERPAuditLog{},
 		&models.ERPGroupRateLimit{},
 		&models.Campaign{},
@@ -93,6 +95,10 @@ func AutoMigrate() error {
 
 	// Clean up deprecated database schema from older versions
 	cleanupDeprecatedSchema()
+
+	// Seed the multi-code join tables from the legacy single CustomerCode field
+	// so customers/groups approved before the feature resolve identically.
+	backfillCustomerCodes()
 
 	// Add unique constraints that GORM can't express directly
 	addUniqueConstraints()
@@ -144,6 +150,46 @@ func backfillCampaignImages() {
 		log.Printf("[db] failed to backfill campaign message_images: %v", res.Error)
 	} else if res.RowsAffected > 0 {
 		log.Printf("[db] backfilled message_images for %d campaign(s)", res.RowsAffected)
+	}
+}
+
+// backfillCustomerCodes seeds zalo_customer_codes / crm_group_customer_codes
+// from the legacy single CustomerCode column for rows that have a code but no
+// join row yet. Idempotent (the NOT EXISTS guard skips already-seeded rows), so
+// running it on every boot is harmless. UUIDs come from MySQL UUID().
+func backfillCustomerCodes() {
+	if DB.Migrator().HasTable(&models.ZaloCustomerCode{}) {
+		res := DB.Exec(`
+			INSERT INTO zalo_customer_codes (id, tenant_id, zalo_customer_id, customer_code, is_primary, created_at, updated_at)
+			SELECT UUID(), zc.tenant_id, zc.id, zc.customer_code, 1, NOW(), NOW()
+			FROM zalo_customers zc
+			WHERE zc.customer_code IS NOT NULL AND zc.customer_code <> ''
+			  AND NOT EXISTS (
+			      SELECT 1 FROM zalo_customer_codes zcc WHERE zcc.zalo_customer_id = zc.id
+			  )
+		`)
+		if res.Error != nil {
+			log.Printf("[db] failed to backfill zalo_customer_codes: %v", res.Error)
+		} else if res.RowsAffected > 0 {
+			log.Printf("[db] backfilled zalo_customer_codes for %d customer(s)", res.RowsAffected)
+		}
+	}
+
+	if DB.Migrator().HasTable(&models.CRMGroupCustomerCode{}) {
+		res := DB.Exec(`
+			INSERT INTO crm_group_customer_codes (id, tenant_id, group_id, customer_code, is_primary, created_at, updated_at)
+			SELECT UUID(), g.tenant_id, g.id, g.customer_code, 1, NOW(), NOW()
+			FROM crm_groups g
+			WHERE g.customer_code IS NOT NULL AND g.customer_code <> ''
+			  AND NOT EXISTS (
+			      SELECT 1 FROM crm_group_customer_codes gcc WHERE gcc.group_id = g.id
+			  )
+		`)
+		if res.Error != nil {
+			log.Printf("[db] failed to backfill crm_group_customer_codes: %v", res.Error)
+		} else if res.RowsAffected > 0 {
+			log.Printf("[db] backfilled crm_group_customer_codes for %d group(s)", res.RowsAffected)
+		}
 	}
 }
 

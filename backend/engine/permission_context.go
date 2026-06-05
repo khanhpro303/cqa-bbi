@@ -21,8 +21,13 @@ type GroupPermissionContext struct {
 	TenantID     string            `json:"tenant_id"`
 	ZaloUserID   string            `json:"zalo_user_id"`
 	CustomerCode string            `json:"customer_code"`
-	AgentType    string            `json:"agent_type"` // "public" | "private"
-	Groups       []GroupPermission `json:"groups"`
+	// CustomerCodes carries the FULL set of mã KH bound to the caller when they
+	// own multiple shops (the worker signs it into the token). CustomerCode stays
+	// the primary for backward-compat; readers prefer CustomerCodes and fall back
+	// to [CustomerCode]. Omitted from old tokens → still decodes.
+	CustomerCodes []string          `json:"customer_codes,omitempty"`
+	AgentType     string            `json:"agent_type"` // "public" | "private"
+	Groups        []GroupPermission `json:"groups"`
 }
 
 // GroupPermission holds the permissions for a single CRM group.

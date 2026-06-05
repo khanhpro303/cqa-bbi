@@ -23,13 +23,14 @@ func extractOrderCode(search string) string {
 }
 
 // isOrderAuthorized reports whether an order with customer code itemCustCode
-// is visible under the given scope. own → only the verified customer's own
-// code; assigned → any code in allowedCodes (compared on the bare code);
-// all → always visible (internal staff). Any other scope denies by default.
-func isOrderAuthorized(itemCustCode, scopeType, ownCode string, allowedCodes []string) bool {
+// is visible under the given scope. own → any of the verified customer's own
+// codes (a store owner with several shops has several); assigned → any code in
+// allowedCodes (compared on the bare code); all → always visible (internal
+// staff). Any other scope denies by default.
+func isOrderAuthorized(itemCustCode, scopeType string, ownCodes []string, allowedCodes []string) bool {
 	switch scopeType {
 	case "own":
-		return strings.EqualFold(itemCustCode, ownCode)
+		return codesContain(ownCodes, itemCustCode)
 	case "assigned":
 		for _, ac := range allowedCodes {
 			if strings.EqualFold(leadingCustomerCode(ac), itemCustCode) {

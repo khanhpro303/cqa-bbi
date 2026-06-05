@@ -359,7 +359,7 @@ func exactCustomerCodePick(search string, codes []string) string {
 // scoped by leading code — the debt report matches DS_KHACH_HANG on the full MA
 // string, so stripping "S001_1 - Huy" down to "S001_1" makes ERP return nothing.
 // An empty result means the staff member may not see any of the named customers.
-func scopeApprovedDebtCodes(resolved []string, scopeType, ownCode string, allowedCodes []string) []string {
+func scopeApprovedDebtCodes(resolved []string, scopeType string, ownCodes []string, allowedCodes []string) []string {
 	if len(resolved) == 0 {
 		return nil
 	}
@@ -369,7 +369,7 @@ func scopeApprovedDebtCodes(resolved []string, scopeType, ownCode string, allowe
 	case "assigned":
 		return intersectCustomerCodes(resolved, allowedCodes)
 	case "own":
-		return intersectCustomerCodes(resolved, []string{ownCode})
+		return intersectCustomerCodes(resolved, ownCodes)
 	default:
 		return nil
 	}

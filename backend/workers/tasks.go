@@ -507,10 +507,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		isCustomer := false
 		customerCode := ""
+		// customerCodes carries the full set of mã KH for owners of multiple shops
+		// (single-store customers resolve to exactly one). It is signed into the
+		// permission token so scope="own" can aggregate debt/orders across shops.
+		var customerCodes []string
 		var customerRec models.ZaloCustomer
 		if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", matchedChannel.TenantID, payload.Sender.ID, "approved").First(&customerRec).Error; err == nil {
 			isCustomer = true
 			customerCode = customerRec.CustomerCode
+			customerCodes = db.GetZaloCustomerCodes(matchedChannel.TenantID, customerRec.ID, customerRec.CustomerCode)
 		}
 
 		// GMF Group Chat Context Detection & CustomerCode Override
@@ -548,8 +553,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 
 			if isMember && matchedGroup.CustomerCode != "" {
+				// Group context narrows to the group's shop(s): a group serving
+				// multiple mã KH overrides the personal set with the group's full set.
 				customerCode = matchedGroup.CustomerCode
-				log.Printf("[worker] GMF group chat detected: %s (ID: %s). Overriding customerCode to %s for sender %s", matchedGroup.Name, matchedGroup.ZaloGroupID, customerCode, payload.Sender.ID)
+				customerCodes = db.GetGroupCustomerCodes(matchedChannel.TenantID, []string{matchedGroup.ID})
+				if len(customerCodes) == 0 {
+					customerCodes = []string{matchedGroup.CustomerCode}
+				}
+				log.Printf("[worker] GMF group chat detected: %s (ID: %s). Overriding customerCode to %s (codes=%v) for sender %s", matchedGroup.Name, matchedGroup.ZaloGroupID, customerCode, customerCodes, payload.Sender.ID)
 			} else if !isMember {
 				log.Printf("[worker] Zalo user %s is not a member of GMF group %s (ID: %s). Skipping override.", payload.Sender.ID, matchedGroup.Name, matchedGroup.ZaloGroupID)
 			}
@@ -798,6 +809,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		systemPromptToUse := selectSystemPrompt(agentType, meta.SystemPrompt, meta.SystemPromptInternal)
 
 		permCtx := engine.ResolvePermissionsWithGroup(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType, matchedGroup.ID)
+		// Carry the full mã KH set (owners of multiple shops) into the signed token
+		// so scope="own" aggregates across shops. CustomerCode remains the primary.
+		permCtx.CustomerCodes = customerCodes
 
 		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
 		// presented numbered menu (inventory ten_dong_bo_web options). On a valid

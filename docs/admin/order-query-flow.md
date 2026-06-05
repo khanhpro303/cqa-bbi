@@ -179,18 +179,17 @@ orders, customers, debt}`. Với đơn hàng:
 (`permission_context.go:269`). Việc lọc đơn dựa trên **mã khách hàng**, được
 phân giải khác nhau theo scope.
 
-**Mã khách của chính người hỏi (scope `own`, `resolveOwnCustomerCode`,
-erp.go:1590):** mã KH gán cho **CRM group (GMF)** là nguồn chân lý — mỗi group
-ứng với đúng **một** `CustomerCode` khớp mã trên Cloudify.
+**Mã khách của chính người hỏi (scope `own`, `resolveOwnCustomerCodes` →
+`ownCustomerCodesLeading`, erp.go):** một khách có thể sở hữu **nhiều cửa hàng
+(nhiều mã KH)** — đơn của **mọi** cửa hàng mình sở hữu đều được giữ lại (gộp).
 
-1. Ưu tiên `permCtx.CustomerCode` — worker đã ký mã này vào permission token
-   ở bước 4.
-2. Nếu rỗng (call không kèm token), fallback đọc trực tiếp
-   `resolveGroupCustomerCode(tenantID, groupIDs)` → `CRMGroup.CustomerCode`
-   (erp.go:1570).
+1. Ưu tiên `permCtx.CustomerCodes` — worker đã ký **toàn bộ** mã KH vào permission
+   token ở bước 4 (chủ nhiều cửa hàng); rồi `[permCtx.CustomerCode]`.
+2. Nếu rỗng (call không kèm token), fallback đọc mã gắn với **nhóm**
+   (`db.GetGroupCustomerCodes`) — một nhóm GMF cũng có thể phục vụ nhiều mã.
 
 Cuối cùng đưa qua `leadingCustomerCode` để về **mã trần** trước khi so khớp.
-Cả nhánh 1-đơn (mục D′) lẫn nhánh cửa sổ ngày đều gọi `resolveOwnCustomerCode`.
+Cả nhánh 1-đơn (mục D′) lẫn nhánh cửa sổ ngày đều gọi `ownCustomerCodesLeading`.
 
 > ⚠️ **Đã bỏ cổng `SearchPartners` cho scope `own`** (commit `e385f3f`).
 > Trước đây handler gọi `SearchPartners` để xác thực partner trước khi trả
@@ -213,25 +212,25 @@ Cả nhánh 1-đơn (mục D′) lẫn nhánh cửa sổ ngày đều gọi `res
    scope = "own"             scope = "assigned"            scope = "all"
         │                          │                            │
         ▼                          ▼                            ▼
- resolveOwnCustomer       resolveGroupCustomerCodes        giữ tất cả
-   Code (erp.go:1590):    (erp.go:1601, join              (không lọc —
-   permCtx.CustomerCode   crm_group_customers →            nội bộ/nhân viên)
-   ?: resolveGroup        zalo_customers approved)
-   CustomerCode (GMF)     → allowedCodes
+ ownCustomerCodes         resolveGroupCustomerCodes        giữ tất cả
+   Leading (erp.go):      (erp.go:1601, join              (không lọc —
+   permCtx.CustomerCodes  crm_group_customers →            nội bộ/nhân viên)
+   ?: [CustomerCode]      zalo_customers approved)
+   ?: mã của nhóm (GMF)   → allowedCodes
         │                          │
         ▼                          │
- giữ đơn nếu                       ▼
- itemCustCode ==          giữ đơn nếu itemCustCode ∈ allowedCodes
- leadingCustomerCode      (so khớp qua leadingCustomerCode)
-   (ownCode)              (nhân viên thấy đơn của nhóm khách được giao)
- (khách chỉ thấy
-  đơn của mình)
+ giữ đơn nếu itemCustCode          ▼
+ ∈ ownCodes (BẤT KỲ       giữ đơn nếu itemCustCode ∈ allowedCodes
+ cửa hàng nào của         (so khớp qua leadingCustomerCode)
+ khách) → đơn của các     (nhân viên thấy đơn của nhóm khách được giao)
+ cửa hàng được GỘP
 ```
 
 > Cả nhánh khoảng-ngày lẫn nhánh 1-đơn đều gọi chung
-> `isOrderAuthorized(itemCustCode, scopeType, ownCode, allowedCodes)`
-> (erp_orders.go) — `own`: khớp `ownCode`; `assigned`: thuộc `allowedCodes`;
-> `all`: luôn thấy; scope rỗng/khác → **từ chối** (an toàn).
+> `isOrderAuthorized(itemCustCode, scopeType, ownCodes, allowedCodes)`
+> (erp_orders.go) — `own`: `itemCustCode` thuộc **bất kỳ** mã trong `ownCodes`
+> (qua `codesContain`); `assigned`: thuộc `allowedCodes`; `all`: luôn thấy; scope
+> rỗng/khác → **từ chối** (an toàn).
 
 ### Scope `assigned` chi tiết
 

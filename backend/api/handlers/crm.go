@@ -26,6 +26,32 @@ import (
 
 // CRM Group CRUD
 
+// mergeRequestCustomerCodes combines the legacy single customer_code field with
+// the customer_codes[] list into one ordered, de-duplicated set, with the single
+// code (or the first list element) as the primary. Blank entries are dropped.
+func mergeRequestCustomerCodes(single string, list []string) []string {
+	ordered := make([]string, 0, len(list)+1)
+	if s := strings.TrimSpace(single); s != "" {
+		ordered = append(ordered, s)
+	}
+	ordered = append(ordered, list...)
+	seen := make(map[string]bool, len(ordered))
+	out := make([]string, 0, len(ordered))
+	for _, c := range ordered {
+		v := strings.TrimSpace(c)
+		if v == "" {
+			continue
+		}
+		key := strings.ToLower(v)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, v)
+	}
+	return out
+}
+
 func ListCRMGroups(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
@@ -33,6 +59,14 @@ func ListCRMGroups(c *gin.Context) {
 	if err := db.DB.Preload("Employees").Preload("Customers").Preload("Channel").Where("tenant_id = ?", tenantID).Find(&groups).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_list_groups"})
 		return
+	}
+	// Enrich with the full mã KH set so the UI can show every shop a group serves
+	// and intersect against customers when assigning members.
+	for i := range groups {
+		groups[i].CustomerCodes = db.GetGroupCustomerCodes(tenantID, []string{groups[i].ID})
+		for j := range groups[i].Customers {
+			groups[i].Customers[j].CustomerCodes = db.GetZaloCustomerCodes(tenantID, groups[i].Customers[j].ID, groups[i].Customers[j].CustomerCode)
+		}
 	}
 
 	c.JSON(http.StatusOK, groups)
@@ -42,14 +76,20 @@ func CreateCRMGroup(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
 	var req struct {
-		Name         string `json:"name" binding:"required"`
-		Description  string `json:"description"`
-		AssetID      string `json:"asset_id"`
-		ChannelID    string `json:"channel_id"`
-		CustomerCode string `json:"customer_code" binding:"required"`
+		Name          string   `json:"name" binding:"required"`
+		Description   string   `json:"description"`
+		AssetID       string   `json:"asset_id"`
+		ChannelID     string   `json:"channel_id"`
+		CustomerCode  string   `json:"customer_code"`
+		CustomerCodes []string `json:"customer_codes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
+		return
+	}
+	codes := mergeRequestCustomerCodes(req.CustomerCode, req.CustomerCodes)
+	if len(codes) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": "customer_code or customer_codes is required"})
 		return
 	}
 
@@ -156,7 +196,7 @@ func CreateCRMGroup(c *gin.Context) {
 		ZaloGroupID:   zGroupID,
 		ZaloGroupLink: zGroupLink,
 		ZaloAssetID:   assetID,
-		CustomerCode:  req.CustomerCode,
+		CustomerCode:  codes[0],
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -165,6 +205,12 @@ func CreateCRMGroup(c *gin.Context) {
 	if err := tx.Create(&group).Error; err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_create_group"})
+		return
+	}
+	// Persist the group's full mã KH set (a group can serve several shops).
+	if _, err := db.SetGroupCustomerCodes(tx, tenantID, group.ID, codes, codes[0]); err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_set_group_codes"})
 		return
 	}
 	tx.Commit()
@@ -183,12 +229,18 @@ func UpdateCRMGroup(c *gin.Context) {
 	groupID := c.Param("id")
 
 	var req struct {
-		Name         string `json:"name" binding:"required"`
-		Description  string `json:"description"`
-		CustomerCode string `json:"customer_code" binding:"required"`
+		Name          string   `json:"name" binding:"required"`
+		Description   string   `json:"description"`
+		CustomerCode  string   `json:"customer_code"`
+		CustomerCodes []string `json:"customer_codes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
+		return
+	}
+	codes := mergeRequestCustomerCodes(req.CustomerCode, req.CustomerCodes)
+	if len(codes) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": "customer_code or customer_codes is required"})
 		return
 	}
 
@@ -198,18 +250,26 @@ func UpdateCRMGroup(c *gin.Context) {
 		return
 	}
 
+	tx := db.DB.Begin()
 	group.Name = req.Name
 	group.Description = req.Description
-	group.CustomerCode = req.CustomerCode
 	group.UpdatedAt = time.Now()
-
-	if err := db.DB.Save(&group).Error; err != nil {
+	if err := tx.Save(&group).Error; err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_update_group"})
 		return
 	}
+	// Rewrite the group's mã KH set (also syncs primary onto CustomerCode).
+	if _, err := db.SetGroupCustomerCodes(tx, tenantID, group.ID, codes, codes[0]); err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_set_group_codes"})
+		return
+	}
+	tx.Commit()
+	group.CustomerCode = codes[0]
 
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "crm_group.update", "crm_group", group.ID,
-		fmt.Sprintf("Cập nhật nhóm GMF '%s' (khách=%s)", group.Name, group.CustomerCode), "", c.ClientIP())
+		fmt.Sprintf("Cập nhật nhóm GMF '%s' (khách=%s)", group.Name, strings.Join(codes, ", ")), "", c.ClientIP())
 
 	c.JSON(http.StatusOK, group)
 }
@@ -372,8 +432,10 @@ func AddGroupMembers(c *gin.Context) {
 				return
 			}
 		}
-		if group.CustomerCode != "" {
-			if err := tx.Model(&models.ZaloCustomer{}).Where("id = ? AND tenant_id = ?", custID, tenantID).Update("customer_code", group.CustomerCode).Error; err != nil {
+		// Extend (not overwrite) the customer's shops with the group's mã KH set,
+		// so a customer added to a multi-shop group keeps any codes they already had.
+		if groupCodes := db.GetGroupCustomerCodes(tenantID, []string{groupID}); len(groupCodes) > 0 {
+			if err := db.MergeZaloCustomerCodes(tx, tenantID, custID, groupCodes); err != nil {
 				tx.Rollback()
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_update_customer_code"})
 				return
@@ -587,6 +649,12 @@ func ListZaloCustomers(c *gin.Context) {
 		return
 	}
 
+	// Enrich with the full mã KH set (owners of multiple shops) so the UI shows
+	// every shop and can intersect against a group's codes when assigning members.
+	for i := range customers {
+		customers[i].CustomerCodes = db.GetZaloCustomerCodes(tenantID, customers[i].ID, customers[i].CustomerCode)
+	}
+
 	// Try to sync Zalo profile details (avatar, correct name) for active customers if missing or placeholder
 	var channel models.Channel
 	if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error; err == nil {
@@ -674,12 +742,20 @@ func ApproveZaloCustomer(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	id := c.Param("id")
 
+	// Accept either a single customer_code (legacy) or a customer_codes[] list
+	// (a store owner with several shops). The first code is the primary.
 	var req struct {
-		CustomerCode string   `json:"customer_code" binding:"required"`
-		GroupIDs     []string `json:"group_ids"`
+		CustomerCode  string   `json:"customer_code"`
+		CustomerCodes []string `json:"customer_codes"`
+		GroupIDs      []string `json:"group_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
+		return
+	}
+	codes := mergeRequestCustomerCodes(req.CustomerCode, req.CustomerCodes)
+	if len(codes) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": "customer_code or customer_codes is required"})
 		return
 	}
 
@@ -691,7 +767,6 @@ func ApproveZaloCustomer(c *gin.Context) {
 
 	tx := db.DB.Begin()
 	customer.Status = "approved"
-	customer.CustomerCode = req.CustomerCode
 	customer.UpdatedAt = time.Now()
 
 	if err := tx.Save(&customer).Error; err != nil {
@@ -699,6 +774,15 @@ func ApproveZaloCustomer(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_approve_customer"})
 		return
 	}
+
+	// Replace the customer's full mã KH set (also syncs the primary onto
+	// ZaloCustomer.CustomerCode for backward-compat).
+	if _, err := db.SetZaloCustomerCodes(tx, tenantID, customer.ID, codes, codes[0]); err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_set_customer_codes"})
+		return
+	}
+	customer.CustomerCode = codes[0]
 
 	// Add to groups if provided
 	for _, groupID := range req.GroupIDs {

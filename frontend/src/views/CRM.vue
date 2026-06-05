@@ -77,8 +77,8 @@
                     <v-chip v-if="g.channel" size="x-small" color="blue-grey" class="font-weight-bold" variant="outlined">
                       OA: {{ g.channel.name }}
                     </v-chip>
-                    <v-chip v-if="g.customer_code" size="x-small" color="indigo" class="font-weight-bold" variant="flat">
-                      Mã KH: {{ g.customer_code }}
+                    <v-chip v-for="code in groupCodes(g)" :key="code" size="x-small" color="indigo" class="font-weight-bold" variant="flat">
+                      Mã KH: {{ code }}
                     </v-chip>
                   </div>
                 </td>
@@ -142,8 +142,8 @@
                 </td>
                 <td>{{ c.phone_number || '—' }}</td>
                 <td>
-                  <v-chip color="success" size="small" variant="flat" class="font-weight-black">
-                    {{ c.customer_code }}
+                  <v-chip v-for="code in customerCodesOf(c)" :key="code" color="success" size="small" variant="flat" class="font-weight-black mr-1 mb-1">
+                    {{ code }}
                   </v-chip>
                 </td>
                 <td>
@@ -402,17 +402,21 @@
             <v-text-field v-model="groupForm.name" label="Tên nhóm *" :rules="[v => !!v || 'Tên nhóm là bắt buộc']" class="mb-3" />
             <v-textarea v-model="groupForm.description" label="Mô tả nhóm" class="mb-3" rows="3" />
 
-            <!-- Customer Code Selector (Required for both create & edit) -->
+            <!-- Customer Code Selector (Required for both create & edit).
+                 Multiple → một nhóm phục vụ nhiều cửa hàng (nhiều mã KH). -->
             <v-autocomplete
-              v-model="groupForm.customer_code"
+              v-model="groupForm.customer_codes"
               :items="customerCodes"
               label="Mã khách hàng phục vụ *"
-              placeholder="Tìm và chọn mã khách hàng..."
-              :rules="[v => !!v || 'Vui lòng chọn mã khách hàng']"
+              placeholder="Tìm và chọn 1 hoặc nhiều mã khách hàng..."
+              :rules="[v => (Array.isArray(v) && v.length > 0) || 'Vui lòng chọn ít nhất 1 mã khách hàng']"
               :loading="loadingCodes"
               class="mb-3"
               variant="outlined"
               density="comfortable"
+              multiple
+              chips
+              closable-chips
               no-data-text="Không tìm thấy mã khách hàng nào"
             />
             
@@ -676,15 +680,20 @@
           </div>
 
           <v-form ref="approveFormRef">
-            <!-- Searchable Dropdown for Postgres ma_khach_hang -->
+            <!-- Searchable Dropdown for Postgres ma_khach_hang. Multiple →
+                 khách làm chủ nhiều cửa hàng (nhiều mã KH), quản lý chung. -->
             <v-autocomplete
-              v-model="approveForm.customer_code"
+              v-model="approveForm.customer_codes"
               :items="customerCodes"
               label="Chọn mã khách hàng (Từ Cloudify) *"
-              :rules="[v => !!v || 'Vui lòng chọn mã khách hàng']"
+              placeholder="Chọn 1 hoặc nhiều mã (chủ nhiều cửa hàng)..."
+              :rules="[v => (Array.isArray(v) && v.length > 0) || 'Vui lòng chọn ít nhất 1 mã khách hàng']"
               :loading="loadingCodes"
               class="mb-4"
               variant="outlined"
+              multiple
+              chips
+              closable-chips
               no-data-text="Không tìm thấy mã khách hàng nào"
             />
 
@@ -1118,7 +1127,12 @@ const loadingGroups = ref(false)
 const groupDialog = ref(false)
 const savingGroup = ref(false)
 const isEditGroup = ref(false)
-const groupForm = ref({ id: '', name: '', description: '', asset_id: '', channel_id: '', customer_code: '' })
+const groupForm = ref({ id: '', name: '', description: '', asset_id: '', channel_id: '', customer_codes: [] as string[] })
+
+// groupCodes / customerCodesOf read the multi-code arrays returned by the API,
+// falling back to the legacy single customer_code field for older rows.
+const groupCodes = (g: any): string[] => (g?.customer_codes?.length ? g.customer_codes : (g?.customer_code ? [g.customer_code] : []))
+const customerCodesOf = (c: any): string[] => (c?.customer_codes?.length ? c.customer_codes : (c?.customer_code ? [c.customer_code] : []))
 const groupFormRef = ref<any>(null)
 
 // GMF Packages State
@@ -1175,7 +1189,7 @@ const customerToApprove = ref<any>(null)
 const customerCodes = ref<string[]>([])
 const loadingCodes = ref(false)
 const approvingCustomer = ref(false)
-const approveForm = ref({ customer_code: '', group_ids: [] as string[] })
+const approveForm = ref({ customer_codes: [] as string[], group_ids: [] as string[] })
 const approveFormRef = ref<any>(null)
 
 // Notification snackbar
@@ -1231,9 +1245,12 @@ const availableEmployees = computed(() => {
 const availableCustomers = computed(() => {
   if (!activeGroup.value || !customers.value) return []
   const existingZaloUserIds = new Set(liveCustomers.value.map(c => c.zalo_user_id).filter(id => !!id))
-  return approvedCustomers.value.filter(c => 
-    !existingZaloUserIds.has(c.zalo_user_id) && 
-    c.customer_code === activeGroup.value.customer_code
+  // A customer is assignable when any of their mã KH overlaps the group's set
+  // (a group can serve several shops; a customer can own several shops).
+  const groupSet = new Set(groupCodes(activeGroup.value).map(code => String(code).toLowerCase()))
+  return approvedCustomers.value.filter(c =>
+    !existingZaloUserIds.has(c.zalo_user_id) &&
+    customerCodesOf(c).some(code => groupSet.has(String(code).toLowerCase()))
   )
 })
 
@@ -1442,7 +1459,7 @@ function openCreateGroupDialog() {
   isEditGroup.value = false
   const firstOA = zaloOAChannels.value[0]
   const defaultChannelId = firstOA ? firstOA.id : ''
-  groupForm.value = { id: '', name: '', description: '', asset_id: '', channel_id: defaultChannelId, customer_code: '' }
+  groupForm.value = { id: '', name: '', description: '', asset_id: '', channel_id: defaultChannelId, customer_codes: [] }
   if (defaultChannelId) {
     fetchGmfPackages(defaultChannelId)
   } else {
@@ -1462,7 +1479,7 @@ function onChannelSelected(channelId: string) {
 
 function openEditGroupDialog(g: any) {
   isEditGroup.value = true
-  groupForm.value = { id: g.id, name: g.name, description: g.description, asset_id: g.zalo_asset_id || '', channel_id: g.channel_id || '', customer_code: g.customer_code || '' }
+  groupForm.value = { id: g.id, name: g.name, description: g.description, asset_id: g.zalo_asset_id || '', channel_id: g.channel_id || '', customer_codes: groupCodes(g) }
   groupDialog.value = true
 }
 
@@ -1476,7 +1493,7 @@ async function saveGroup() {
       await api.put(`/tenants/${tenantId.value}/crm/groups/${groupForm.value.id}`, {
         name: groupForm.value.name,
         description: groupForm.value.description,
-        customer_code: groupForm.value.customer_code
+        customer_codes: groupForm.value.customer_codes
       })
       showSnack('Đã cập nhật nhóm thành công', 'success')
     } else {
@@ -1485,7 +1502,7 @@ async function saveGroup() {
         description: groupForm.value.description,
         asset_id: groupForm.value.asset_id,
         channel_id: groupForm.value.channel_id,
-        customer_code: groupForm.value.customer_code
+        customer_codes: groupForm.value.customer_codes
       })
       showSnack('Đã tạo nhóm mới thành công', 'success')
     }
@@ -1713,7 +1730,7 @@ function showPendingQR(c: any) {
 // Approve Customer & Assign ma_khach_hang
 function openApproveDialog(c: any) {
   customerToApprove.value = c
-  approveForm.value = { customer_code: '', group_ids: [] }
+  approveForm.value = { customer_codes: customerCodesOf(c), group_ids: [] }
   approveDialog.value = true
 }
 
@@ -1724,10 +1741,10 @@ async function approveCustomer() {
   approvingCustomer.value = true
   try {
     await api.post(`/tenants/${tenantId.value}/crm/customers/${customerToApprove.value.id}/approve`, {
-      customer_code: approveForm.value.customer_code,
+      customer_codes: approveForm.value.customer_codes,
       group_ids: approveForm.value.group_ids
     })
-    showSnack(`Đã duyệt khách hàng với mã ${approveForm.value.customer_code}`, 'success')
+    showSnack(`Đã duyệt khách hàng với mã ${approveForm.value.customer_codes.join(', ')}`, 'success')
     approveDialog.value = false
     await fetchCustomers()
     await fetchGroups() // reload groups members counts

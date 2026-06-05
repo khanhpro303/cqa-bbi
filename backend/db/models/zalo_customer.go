@@ -14,6 +14,10 @@ type ZaloCustomer struct {
 	CustomerCode string    `gorm:"type:varchar(50);index" json:"customer_code"`
 	CreatedAt    time.Time `gorm:"not null" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"not null" json:"updated_at"`
+
+	// CustomerCodes is the full mã KH set (owners of multiple shops), populated
+	// by list handlers from zalo_customer_codes. Not a DB column.
+	CustomerCodes []string `gorm:"-" json:"customer_codes,omitempty"`
 }
 
 func (ZaloCustomer) TableName() string {

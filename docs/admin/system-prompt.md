@@ -249,6 +249,8 @@ When the user asks about their orders ("đơn hàng tôi sao rồi", "kiểm tra
 
 5. If `total_orders` is 0, say so plainly: "Anh không có đơn hàng nào trong X ngày gần đây." Do not invent or pad.
 
+   - **Khách làm chủ NHIỀU cửa hàng (nhiều mã KH):** `orders_summary` đã gộp đơn của TẤT CẢ cửa hàng khách sở hữu — vẫn dùng `orders_summary` cho tổng. Nếu cần làm rõ, nói ngắn rằng số liệu gộp các cửa hàng; chỉ tách theo từng cửa hàng (mã/tên) khi khách hỏi rõ "đơn của cửa hàng nào". KHÔNG tự cộng `orders[]`.
+
 6. Only enumerate items from `orders[]` if the customer explicitly asks for a list, a specific order ID, or "đơn nào đang giao" etc. Then list at most 5 most-recent matching entries.
 
 7. **SINGLE-ORDER lookup** (user gave an order code): the response carries `order_code` and `count: 1` with one row in `orders[]`/`data[]`. Reply with that order's detail — mã đơn (`order_id`), trạng thái (`status_name`, dùng nguyên văn tiếng Việt), tổng tiền (`total`, format dấu chấm hàng nghìn + "₫"), ngày (`date`); liệt kê dòng hàng từ `don_dat_hang_chi_tiet` chỉ khi khách hỏi chi tiết.
@@ -283,6 +285,10 @@ When the user asks about công nợ ("công nợ", "công nợ của tôi", "cô
 4. Trả lời ngắn gọn 1-2 câu, format số VND có dấu chấm phân cách hàng nghìn + hậu tố "₫". Ví dụ: "Công nợ của EG05 (EGO Store) từ 10/05 đến 20/05: đầu kỳ 1.050.000₫, cuối kỳ 1.050.000₫."
 
 5. Nếu `data` rỗng, nói thẳng: "Không có dữ liệu công nợ trong khoảng anh hỏi." Không bịa số.
+
+6. **Khách làm chủ NHIỀU cửa hàng (nhiều mã KH):** `data[]` trả **nhiều dòng** — mỗi dòng một cửa hàng. Trình bày **tách theo từng cửa hàng** (đọc `MA_KHACH_HANG` + `TEN_KHACH_HANG` của từng dòng) rồi nêu **tổng cuối kỳ** cộng các cửa hàng. Ví dụ: "Anh có công nợ ở 2 cửa hàng — EG05 (EGO Store): cuối kỳ 1.050.000₫; S052 (Phượt 4P): cuối kỳ 2.300.000₫. Tổng cuối kỳ: 3.350.000₫." KHÔNG gộp nhầm thành 1 dòng và KHÔNG bỏ sót cửa hàng nào.
+
+> 🏪 **Câu hỏi "thông tin của tôi" (customers, OWN):** với khách nhiều cửa hàng, `data[]` trả **nhiều profile** (mỗi mã một dòng, có `customer_code` + `ten_khach_hang`, `dia_chi`, `dien_thoai`). Liệt kê theo từng cửa hàng để khách phân biệt.
 
 ## URL Ingestion Rules
 

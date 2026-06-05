@@ -54,10 +54,20 @@ Public và private nạp quyền bằng **hai nhánh khác nhau** trong
 
 **Ý nghĩa scope** (giống nhau cho mọi phân hệ):
 
-- `own` — chỉ dữ liệu của **chính mình** (điển hình bot public/khách lẻ).
+- `own` — chỉ dữ liệu của **chính mình** (điển hình bot public/khách lẻ). Một
+  khách có thể được gán **nhiều mã KH** (chủ nhiều cửa hàng) → `own` bao gồm dữ
+  liệu của **tất cả cửa hàng** khách sở hữu, trả **gộp** trong 1 lần.
 - `assigned` — dữ liệu của **nhóm khách được giao** (`resolveGroupCustomerCodes`).
 - `all` — **toàn bộ** khách (điển hình bot private/nhân viên khi `private_bot`
   chưa giới hạn).
+
+> 🏪 **CRM multi-code (1 user/nhóm → nhiều mã KH).** `zalo_customers` và `crm_groups`
+> giữ field `customer_code` đơn làm **mã chính (primary)**; bảng join
+> `zalo_customer_codes` / `crm_group_customer_codes` giữ **toàn bộ** tập mã. Worker
+> nạp toàn bộ mã của người gửi (hoặc của nhóm GMF khi chat nhóm) vào
+> `permCtx.CustomerCodes` và ký vào token; scope `own` của debt/orders/customers đọc
+> tập này để gộp các cửa hàng. Hàng cũ chưa có dòng join → reader fallback về
+> primary, nên không cần migrate thủ công (boot tự backfill, `db/mysql.go`).
 
 > 🏷️ **Hai boundary danh mục cho `products`/`inventory` (ngoài scope khách).** Mỗi
 > `ResourcePermission` còn mang hai bộ lọc danh mục, cấu hình ở admin "Phân quyền

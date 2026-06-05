@@ -217,25 +217,27 @@ func TestIsOrderAuthorized(t *testing.T) {
 		name         string
 		itemCustCode string
 		scopeType    string
-		ownCode      string
+		ownCodes     []string
 		allowedCodes []string
 		want         bool
 	}{
-		{"own match", "S052", "own", "S052", nil, true},
-		{"own match case-insensitive", "s052", "own", "S052", nil, true},
-		{"own mismatch", "EG05", "own", "S052", nil, false},
-		{"assigned in list (labelled)", "S052", "assigned", "", allowed, true},
-		{"assigned in list (bare)", "EG05", "assigned", "", allowed, true},
-		{"assigned not in list", "X999", "assigned", "", allowed, false},
-		{"all always visible", "ANY", "all", "", nil, true},
-		{"empty scope denies", "S052", "", "S052", nil, false},
-		{"unknown scope denies", "S052", "weird", "S052", allowed, false},
+		{"own match", "S052", "own", []string{"S052"}, nil, true},
+		{"own match case-insensitive", "s052", "own", []string{"S052"}, nil, true},
+		{"own mismatch", "EG05", "own", []string{"S052"}, nil, false},
+		{"own match second of multi", "EG05", "own", []string{"S052", "EG05"}, nil, true},
+		{"own no codes denies", "S052", "own", nil, nil, false},
+		{"assigned in list (labelled)", "S052", "assigned", nil, allowed, true},
+		{"assigned in list (bare)", "EG05", "assigned", nil, allowed, true},
+		{"assigned not in list", "X999", "assigned", nil, allowed, false},
+		{"all always visible", "ANY", "all", nil, nil, true},
+		{"empty scope denies", "S052", "", []string{"S052"}, nil, false},
+		{"unknown scope denies", "S052", "weird", []string{"S052"}, allowed, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isOrderAuthorized(tc.itemCustCode, tc.scopeType, tc.ownCode, tc.allowedCodes); got != tc.want {
-				t.Errorf("isOrderAuthorized(%q, %q, %q, %v) = %v; want %v",
-					tc.itemCustCode, tc.scopeType, tc.ownCode, tc.allowedCodes, got, tc.want)
+			if got := isOrderAuthorized(tc.itemCustCode, tc.scopeType, tc.ownCodes, tc.allowedCodes); got != tc.want {
+				t.Errorf("isOrderAuthorized(%q, %q, %v, %v) = %v; want %v",
+					tc.itemCustCode, tc.scopeType, tc.ownCodes, tc.allowedCodes, got, tc.want)
 			}
 		})
 	}

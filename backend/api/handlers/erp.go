@@ -1809,40 +1809,39 @@ func checkAndIncrementRateLimit(tenantID, groupID, groupName string) (bool, erro
 	return false, nil
 }
 
-// resolveGroupCustomerCode returns the first non-empty CustomerCode assigned to
-// any of the customer's CRM groups. Each GMF group is pre-assigned exactly one
-// Cloudify customer code, so this is the source of truth for "own" scope when
-// permCtx.CustomerCode is not carried on the request (e.g. legacy/direct calls
-// without a signed permission token).
-func resolveGroupCustomerCode(tenantID string, groupIDs []string) string {
-	if len(groupIDs) == 0 {
-		return ""
+// resolveOwnCustomerCodes returns every mã KH bound to the verified caller for
+// scope="own" — a store owner who runs several shops resolves to several codes,
+// so debt/orders/customer queries aggregate across all their shops. Priority:
+// the codes signed into the token (permCtx.CustomerCodes, set by the worker);
+// then the single permCtx.CustomerCode; then the codes assigned to the caller's
+// CRM group(s) (token-less fallback). Returns the full MA values (labels
+// preserved) so DS_KHACH_HANG matching works.
+func resolveOwnCustomerCodes(permCtx *engine.GroupPermissionContext, tenantID string) []string {
+	if len(permCtx.CustomerCodes) > 0 {
+		return dedupeCustomerCodes(permCtx.CustomerCodes)
 	}
-	var groups []models.CRMGroup
-	if err := db.DB.Where("id IN (?) AND tenant_id = ?", groupIDs, tenantID).Find(&groups).Error; err != nil {
-		return ""
-	}
-	for _, g := range groups {
-		if code := strings.TrimSpace(g.CustomerCode); code != "" {
-			return code
-		}
-	}
-	return ""
-}
-
-// resolveOwnCustomerCode returns the customer code bound to the verified
-// caller for scope="own": the worker normally signs it into the permission
-// token (permCtx.CustomerCode); when absent (token-less call) it falls back to
-// the CRM group's CustomerCode (GMF group → exactly one Cloudify code).
-func resolveOwnCustomerCode(permCtx *engine.GroupPermissionContext, tenantID string) string {
 	if code := strings.TrimSpace(permCtx.CustomerCode); code != "" {
-		return code
+		return []string{code}
 	}
 	var groupIDs []string
 	for _, grp := range permCtx.Groups {
 		groupIDs = append(groupIDs, grp.GroupID)
 	}
-	return resolveGroupCustomerCode(tenantID, groupIDs)
+	return db.GetGroupCustomerCodes(tenantID, groupIDs)
+}
+
+// ownCustomerCodesLeading reduces resolveOwnCustomerCodes to bare leading codes
+// (labels stripped) for the per-item authorization comparisons in the orders
+// filter loop. Returns nil when no own code resolves.
+func ownCustomerCodesLeading(permCtx *engine.GroupPermissionContext, tenantID string) []string {
+	codes := resolveOwnCustomerCodes(permCtx, tenantID)
+	out := make([]string, 0, len(codes))
+	for _, c := range codes {
+		if lc := leadingCustomerCode(c); lc != "" {
+			out = append(out, lc)
+		}
+	}
+	return out
 }
 
 func resolveGroupCustomerCodes(tenantID string, groupIDs []string) ([]string, error) {
@@ -2550,7 +2549,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		// untouched. See erp_orders_private.go and docs/admin/order-query-flow.md.
 		if permCtx.AgentType == "private" {
 			ctxReq := c.Request.Context()
-			ownCode := leadingCustomerCode(resolveOwnCustomerCode(permCtx, tenantID))
+			ownCodes := ownCustomerCodesLeading(permCtx, tenantID)
 			ordersPromptResponse := func() {
 				c.JSON(http.StatusOK, gin.H{
 					"status":           "success",
@@ -2605,7 +2604,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					// Otherwise this turn names a (new) customer. Resolve the reply
 					// against the cache + scope DIRECTLY — not constrained to the
 					// previously-offered set — so any in-scope code advances.
-					chosen := scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCode, allowedCodes)
+					chosen := scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCodes, allowedCodes)
 					switch {
 					case len(chosen) == 0:
 						// Nothing in scope resolved — re-list the candidates we have.
@@ -2647,7 +2646,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					return
 				}
 				if !isAllCustomersReply(search) && len(tokenizeOrdersCustomerQuery(search)) > 0 {
-					approved := scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCode, allowedCodes)
+					approved := scopeApprovedOrdersCodes(resolveOrdersCustomerCodes(tenantID, search), scopeType, ownCodes, allowedCodes)
 					if len(approved) == 0 {
 						writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadRequest, 0, c.ClientIP())
 						c.JSON(http.StatusBadRequest, gin.H{
@@ -2701,8 +2700,8 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 			item := data[0]
 			itemCustCode := orderCustomerCode(item)
-			ownCode := leadingCustomerCode(resolveOwnCustomerCode(permCtx, tenantID))
-			if !isOrderAuthorized(itemCustCode, scopeType, ownCode, allowedCodes) {
+			ownCodes := ownCustomerCodesLeading(permCtx, tenantID)
+			if !isOrderAuthorized(itemCustCode, scopeType, ownCodes, allowedCodes) {
 				writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadRequest, 0, c.ClientIP())
 				c.JSON(http.StatusBadRequest, gin.H{
 					"status":   "error",
@@ -2745,7 +2744,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				// Mã KH gán cho group GMF là nguồn chân lý. permCtx.CustomerCode
 				// thường đã mang mã này (worker ký vào token); fallback đọc trực
 				// tiếp CRMGroup.CustomerCode cho các call không có token.
-				ownCode := leadingCustomerCode(resolveOwnCustomerCode(permCtx, tenantID))
+				ownCodes := ownCustomerCodesLeading(permCtx, tenantID)
 				var filteredData []map[string]interface{}
 				for _, item := range data {
 					// MA_KHACH_HANG arrives as [id, "CODE - Name"]; orderCustomerCode
@@ -2759,7 +2758,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						if !codesContain(targetCodes, itemCustCode) {
 							continue
 						}
-					} else if !isOrderAuthorized(itemCustCode, scopeType, ownCode, allowedCodes) {
+					} else if !isOrderAuthorized(itemCustCode, scopeType, ownCodes, allowedCodes) {
 						continue
 					}
 					filteredData = append(filteredData, normalizeOrderRecord(item))
@@ -2839,79 +2838,90 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		}
 	case "customers":
 		if scopeType == "own" {
-			// 1. Get customer code from permission context
-			customerCode := permCtx.CustomerCode
-			if customerCode == "" && permCtx.ZaloUserID != "" {
-				// Query zalo_customers for customerCode
+			// 1. Resolve the caller's full mã KH set. A store owner with several
+			//    shops returns one profile per shop so the LLM can present them
+			//    grouped by mã/tên cửa hàng.
+			ownCodes := resolveOwnCustomerCodes(permCtx, tenantID)
+			if len(ownCodes) == 0 && permCtx.ZaloUserID != "" {
 				var customerRec models.ZaloCustomer
 				if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", tenantID, permCtx.ZaloUserID, "approved").First(&customerRec).Error; err == nil {
-					customerCode = customerRec.CustomerCode
+					ownCodes = db.GetZaloCustomerCodes(tenantID, customerRec.ID, customerRec.CustomerCode)
 				}
 			}
 
-			if customerCode != "" {
+			if len(ownCodes) > 0 {
 				cfg, _ := config.Load()
-				// 2. Resolve ten_khach_hang from the local MySQL cache first
-				//    (cached_customers, tenant-scoped). Fall back to the reference
-				//    Postgres only on a cache miss for this code.
-				var tenKhachHang string
-				var errName error
-				var cachedRec models.CachedCustomer
-				if err := db.DB.Where("tenant_id = ? AND ma = ?", tenantID, customerCode).First(&cachedRec).Error; err == nil && cachedRec.HO_VA_TEN != "" {
-					tenKhachHang = cachedRec.HO_VA_TEN
-				} else {
-					tenKhachHang, errName = db.GetCloudifyCustomerNameByCode(cfg.PostgresURL, customerCode)
+
+				// Resolve the partner-search path once — it is resource-level
+				// config, independent of the individual customer code.
+				customPath := "partner/search"
+				var globalPermsSetting models.AppSetting
+				if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
+					type EndpointConfig struct {
+						Get  bool   `json:"get"`
+						Post bool   `json:"post"`
+						Path string `json:"path"`
+					}
+					var globalPerms map[string]EndpointConfig
+					if json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms) == nil {
+						if config, exists := globalPerms["customers"]; exists && config.Path != "" {
+							customPath = strings.TrimPrefix(config.Path, "/")
+							customPath = strings.TrimPrefix(customPath, "rest_api/private/")
+							customPath = strings.TrimPrefix(customPath, "/")
+						}
+					}
 				}
-				if errName == nil && tenKhachHang != "" {
-					// 3. Make API call with JSON body: {"name": tenKhachHang, "limit": 1000}
-					apiPayload := map[string]interface{}{
+
+				var aggregated []map[string]interface{}
+				var lastErr error
+				for _, rawCode := range ownCodes {
+					customerCode := leadingCustomerCode(rawCode)
+					if customerCode == "" {
+						continue
+					}
+					// 2. Resolve ten_khach_hang from the local MySQL cache first
+					//    (cached_customers, tenant-scoped), Postgres on a miss.
+					var tenKhachHang string
+					var cachedRec models.CachedCustomer
+					if err := db.DB.Where("tenant_id = ? AND ma = ?", tenantID, customerCode).First(&cachedRec).Error; err == nil && cachedRec.HO_VA_TEN != "" {
+						tenKhachHang = cachedRec.HO_VA_TEN
+					} else if name, errName := db.GetCloudifyCustomerNameByCode(cfg.PostgresURL, customerCode); errName == nil {
+						tenKhachHang = name
+					} else {
+						lastErr = fmt.Errorf("failed to fetch cloudify customer name for code %s: %w", customerCode, errName)
+						continue
+					}
+					if tenKhachHang == "" {
+						lastErr = fmt.Errorf("cloudify customer name is empty for code %s", customerCode)
+						continue
+					}
+
+					// 3. partner/search by name, then keep only the matching code.
+					apiData, errCall := client.SearchCustomEndpointWithBody(customPath, map[string]interface{}{
 						"name":  tenKhachHang,
 						"limit": 1000,
+					})
+					if errCall != nil {
+						lastErr = errCall
+						continue
 					}
-
-					customPath := "partner/search"
-					var globalPermsSetting models.AppSetting
-					if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
-						type EndpointConfig struct {
-							Get  bool   `json:"get"`
-							Post bool   `json:"post"`
-							Path string `json:"path"`
-						}
-						var globalPerms map[string]EndpointConfig
-						if json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms) == nil {
-							if config, exists := globalPerms["customers"]; exists && config.Path != "" {
-								customPath = strings.TrimPrefix(config.Path, "/")
-								customPath = strings.TrimPrefix(customPath, "rest_api/private/")
-								customPath = strings.TrimPrefix(customPath, "/")
-							}
+					for _, item := range apiData {
+						maVal := getMapString(item, "MA", "ma", "name", "code")
+						if strings.EqualFold(maVal, customerCode) {
+							aggregated = append(aggregated, map[string]interface{}{
+								"customer_code":  customerCode,
+								"ten_khach_hang": tenKhachHang,
+								"dia_chi":        getMapString(item, "DIA_CHI", "dia_chi", "address"),
+								"dien_thoai":     getMapString(item, "DIEN_THOAI", "dien_thoai", "phone"),
+								"create_date":    getMapString(item, "create_date", "CREATE_DATE"),
+							})
 						}
 					}
-
-					apiData, errCall := client.SearchCustomEndpointWithBody(customPath, apiPayload)
-					if errCall == nil {
-						// 4. Process response and return only: dia_chi, dien_thoai, create_date
-						var filteredData []map[string]interface{}
-						for _, item := range apiData {
-							maVal := getMapString(item, "MA", "ma", "name", "code")
-							if strings.EqualFold(maVal, customerCode) {
-								record := map[string]interface{}{
-									"dia_chi":     getMapString(item, "DIA_CHI", "dia_chi", "address"),
-									"dien_thoai":  getMapString(item, "DIEN_THOAI", "dien_thoai", "phone"),
-									"create_date": getMapString(item, "create_date", "CREATE_DATE"),
-								}
-								filteredData = append(filteredData, record)
-							}
-						}
-						data = filteredData
-					} else {
-						err = errCall
-					}
-				} else {
-					if errName != nil {
-						err = fmt.Errorf("failed to fetch cloudify customer name from DB: %w", errName)
-					} else {
-						err = fmt.Errorf("cloudify customer name is empty for code %s", customerCode)
-					}
+				}
+				data = aggregated
+				// Surface an error only when every code failed to produce data.
+				if len(aggregated) == 0 && lastErr != nil {
+					err = lastErr
 				}
 			} else {
 				err = fmt.Errorf("customer code is empty or unverified")
@@ -3027,7 +3037,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		// neither, so it always reaches this driver. See docs/admin/debt-query-flow.md.
 		if permCtx.AgentType == "private" && partnerID == "" {
 			ctxReq := c.Request.Context()
-			ownCode := leadingCustomerCode(resolveOwnCustomerCode(permCtx, tenantID))
+			ownCodes := ownCustomerCodesLeading(permCtx, tenantID)
 			var allowedDebtCodes []string
 			if scopeType == "assigned" {
 				var groupIDs []string
@@ -3090,7 +3100,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					// against the cache + scope DIRECTLY (not constrained to the
 					// offered set) so any in-scope code advances; the prompt now lists
 					// the real candidate codes so staff can pick one.
-					chosen := scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID, search), scopeType, ownCode, allowedDebtCodes)
+					chosen := scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID, search), scopeType, ownCodes, allowedDebtCodes)
 					switch {
 					case len(chosen) == 0:
 						storeDebtCustomerState(ctxReq, tenantID, permCtx, state)
@@ -3127,7 +3137,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				// to the legacy resolution below). Generic "công nợ của khách hàng"
 				// was already answered by the customer prompt above.
 				if len(tokenizeCustomerQuery(search)) > 0 {
-					approved := scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID, search), scopeType, ownCode, allowedDebtCodes)
+					approved := scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID, search), scopeType, ownCodes, allowedDebtCodes)
 					switch {
 					case len(approved) == 0:
 						// Nothing in scope — ask again for a code/name (the legacy
@@ -3155,16 +3165,10 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 		if !privateDebtResolved {
 			if scopeType == "own" {
-				ownCode := permCtx.CustomerCode
-				if ownCode == "" {
-					var groupIDs []string
-					for _, grp := range permCtx.Groups {
-						groupIDs = append(groupIDs, grp.GroupID)
-					}
-					ownCode = resolveGroupCustomerCode(tenantID, groupIDs)
-				}
-				if ownCode != "" {
-					targetCustomerCodes = []string{ownCode}
+				// Owner of multiple shops → all their mã KH, joined into
+				// DS_KHACH_HANG so the ledger aggregates across shops.
+				if ownCodes := resolveOwnCustomerCodes(permCtx, tenantID); len(ownCodes) > 0 {
+					targetCustomerCodes = ownCodes
 				}
 			} else {
 				if partnerID != "" {

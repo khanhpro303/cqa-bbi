@@ -90,25 +90,26 @@ func TestScopeApprovedDebtCodes(t *testing.T) {
 		name      string
 		resolved  []string
 		scopeType string
-		ownCode   string
+		ownCodes  []string
 		allowed   []string
 		want      []string
 	}{
-		{"all keeps resolved", []string{"S001", "S002"}, "all", "", nil, []string{"S001", "S002"}},
-		{"all keeps full label, dedupes by code", []string{"S001 - A", "S001"}, "all", "", nil, []string{"S001 - A"}},
-		{"all preserves label for ERP", []string{"S001_1 - Huy"}, "all", "", nil, []string{"S001_1 - Huy"}},
-		{"assigned in group", []string{"S052"}, "assigned", "", allowed, []string{"S052"}},
-		{"assigned keeps label when in group", []string{"S052 - Phượt 4P"}, "assigned", "", allowed, []string{"S052 - Phượt 4P"}},
-		{"assigned out of group", []string{"S999"}, "assigned", "", allowed, []string{}},
-		{"assigned mixed keeps only in-group", []string{"S052", "S999", "EG05"}, "assigned", "", allowed, []string{"EG05", "S052"}},
-		{"own matches own", []string{"S001"}, "own", "S001", nil, []string{"S001"}},
-		{"own rejects other", []string{"S002"}, "own", "S001", nil, []string{}},
-		{"unknown scope denies", []string{"S001"}, "weird", "", allowed, []string{}},
-		{"empty resolved", nil, "all", "", nil, []string{}},
+		{"all keeps resolved", []string{"S001", "S002"}, "all", nil, nil, []string{"S001", "S002"}},
+		{"all keeps full label, dedupes by code", []string{"S001 - A", "S001"}, "all", nil, nil, []string{"S001 - A"}},
+		{"all preserves label for ERP", []string{"S001_1 - Huy"}, "all", nil, nil, []string{"S001_1 - Huy"}},
+		{"assigned in group", []string{"S052"}, "assigned", nil, allowed, []string{"S052"}},
+		{"assigned keeps label when in group", []string{"S052 - Phượt 4P"}, "assigned", nil, allowed, []string{"S052 - Phượt 4P"}},
+		{"assigned out of group", []string{"S999"}, "assigned", nil, allowed, []string{}},
+		{"assigned mixed keeps only in-group", []string{"S052", "S999", "EG05"}, "assigned", nil, allowed, []string{"EG05", "S052"}},
+		{"own matches own", []string{"S001"}, "own", []string{"S001"}, nil, []string{"S001"}},
+		{"own rejects other", []string{"S002"}, "own", []string{"S001"}, nil, []string{}},
+		{"own multi keeps both shops", []string{"S001 - A", "S002 - B"}, "own", []string{"S001", "S002"}, nil, []string{"S001 - A", "S002 - B"}},
+		{"unknown scope denies", []string{"S001"}, "weird", nil, allowed, []string{}},
+		{"empty resolved", nil, "all", nil, nil, []string{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := scopeApprovedDebtCodes(tt.resolved, tt.scopeType, tt.ownCode, tt.allowed)
+			got := scopeApprovedDebtCodes(tt.resolved, tt.scopeType, tt.ownCodes, tt.allowed)
 			if len(got) == 0 && len(tt.want) == 0 {
 				return
 			}
