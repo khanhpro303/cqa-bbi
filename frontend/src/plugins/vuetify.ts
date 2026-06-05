@@ -46,5 +46,11 @@ export default createVuetify({
       variant: 'outlined',
       density: 'comfortable',
     },
+    VSwitch: {
+      // Vuetify 4's default switch renders a 20px thumb over a 14px track, so the
+      // thumb overhangs and looks clipped. `inset` gives a contained pill toggle.
+      inset: true,
+      color: 'primary',
+    },
   },
 })
