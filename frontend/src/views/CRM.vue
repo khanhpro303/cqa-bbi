@@ -84,14 +84,16 @@
                 </td>
                 <td class="text-body-2 text-grey-darken-1 py-3">{{ g.description || '—' }}</td>
                 <td class="py-3">
-                  <v-chip size="small" color="blue" variant="tonal" class="mr-2">
-                    <v-icon start size="14">mdi-badge-account-outline</v-icon>
-                    {{ g.employees ? g.employees.length : 0 }} Nhân viên
-                  </v-chip>
-                  <v-chip size="small" color="teal" variant="tonal">
-                    <v-icon start size="14">mdi-account-star-outline</v-icon>
-                    {{ g.customers ? g.customers.length : 0 }} Khách hàng
-                  </v-chip>
+                  <div class="d-flex flex-wrap ga-1 align-center">
+                    <v-chip size="small" color="blue" variant="tonal">
+                      <v-icon start size="14">mdi-badge-account-outline</v-icon>
+                      {{ g.employees ? g.employees.length : 0 }} Nhân viên
+                    </v-chip>
+                    <v-chip size="small" color="teal" variant="tonal">
+                      <v-icon start size="14">mdi-account-star-outline</v-icon>
+                      {{ g.customers ? g.customers.length : 0 }} Khách hàng
+                    </v-chip>
+                  </div>
                 </td>
                 <td class="text-caption py-3">{{ new Date(g.created_at).toLocaleDateString() }}</td>
                 <td class="py-3">
