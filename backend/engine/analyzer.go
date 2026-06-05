@@ -83,7 +83,25 @@ func (a *Analyzer) runJobInternal(ctx context.Context, job models.Job, maxConver
 	return a.runJobInternalExt(ctx, job, maxConversations, injectedProvider, fullRerun, "", "", nil, false)
 }
 
-func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxConversations int, injectedProvider ai.AIProvider, fullRerun bool, dateFrom, dateTo string, sinceOverride *time.Time, excludeAnalyzed bool) (*models.JobRun, error) {
+func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxConversations int, injectedProvider ai.AIProvider, fullRerun bool, dateFrom, dateTo string, sinceOverride *time.Time, excludeAnalyzed bool) (retRun *models.JobRun, retErr error) {
+	// Single chokepoint for job-error notifications. Every run entry point funnels
+	// through here, and every error exit (early failRun, ERP/chatbot sub-jobs, and
+	// the finalize error branch) returns through this defer. Sends a failure alert
+	// to the job's configured outputs (telegram/email/zalo) on hard errors only.
+	// Skipped for limited/manual runs (maxConversations > 0 — the user is watching)
+	// and cancelled contexts; gated by the job's NotifyOnError toggle.
+	defer func() {
+		if maxConversations > 0 || ctx.Err() != nil || !job.NotifyOnError {
+			return
+		}
+		if retRun == nil || retRun.Status != "error" {
+			return
+		}
+		if err := notifications.NewDispatcher().SendJobError(ctx, job, *retRun); err != nil {
+			log.Printf("[analyzer] job error-alert failed for job %s: %v", job.Name, err)
+		}
+	}()
+
 	if job.JobType == "chatbot_toggle" {
 		return a.runChatbotToggleJob(ctx, job)
 	}

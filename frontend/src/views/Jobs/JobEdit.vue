@@ -159,6 +159,7 @@ onMounted(async () => {
       ai_provider: job.ai_provider || 'claude',
       ai_model: job.ai_model || '',
       outputs: job.outputs || '[]',
+      notify_on_error: job.notify_on_error !== false,
       output_schedule: job.output_schedule || 'instant',
       output_cron: job.output_cron || '',
       output_at: job.output_at || '',
@@ -193,6 +194,7 @@ async function saveJob() {
           ? JSON.parse(form.value.outputs || '[]')
           : form.value.outputs || []),
       output_schedule: isSpecialJob ? 'none' : form.value.output_schedule,
+      notify_on_error: form.value.notify_on_error !== false,
       output_cron: isSpecialJob ? '' : form.value.output_cron,
       output_at: isSpecialJob ? null : (form.value.output_at || null),
       schedule_type: form.value.schedule_type,

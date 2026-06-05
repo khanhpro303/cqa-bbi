@@ -40,6 +40,7 @@ type CreateJobRequest struct {
 	OutputSchedule  string          `json:"output_schedule" binding:"required,oneof=instant scheduled cron none"`
 	OutputCron      string          `json:"output_cron"`
 	OutputAt        *time.Time      `json:"output_at"`
+	NotifyOnError   *bool           `json:"notify_on_error"`
 	ScheduleType    string          `json:"schedule_type" binding:"required,oneof=cron after_sync manual"`
 	ScheduleCron    string          `json:"schedule_cron"`
 }
@@ -107,11 +108,13 @@ func CreateJob(c *gin.Context) {
 		OutputSchedule:  req.OutputSchedule,
 		OutputCron:      req.OutputCron,
 		OutputAt:        req.OutputAt,
-		ScheduleType:    req.ScheduleType,
-		ScheduleCron:    req.ScheduleCron,
-		IsActive:        true,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		NotifyOnError:   req.NotifyOnError == nil || *req.NotifyOnError, // mặc định bật
+
+		ScheduleType: req.ScheduleType,
+		ScheduleCron: req.ScheduleCron,
+		IsActive:     true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	if err := db.DB.Create(&job).Error; err != nil {
@@ -149,7 +152,7 @@ func GetJob(c *gin.Context) {
 var allowedJobUpdateFields = map[string]bool{
 	"name": true, "description": true, "type": true, "status": true,
 	"input_channel_ids": true, "outputs": true, "rules_config": true,
-	"rules_content": true, "skip_conditions": true,
+	"rules_content": true, "skip_conditions": true, "notify_on_error": true,
 	"ai_provider": true, "ai_model": true, "ai_system_prompt": true,
 	"schedule_type": true, "schedule_cron": true, "schedule_enabled": true,
 	"date_from": true, "date_to": true, "max_conversations": true,

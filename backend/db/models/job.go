@@ -26,6 +26,7 @@ type Job struct {
 	OutputSchedule string     `gorm:"type:varchar(20);default:'instant'" json:"output_schedule"` // instant | scheduled | cron
 	OutputCron     string     `gorm:"type:varchar(100)" json:"output_cron"`
 	OutputAt       *time.Time `json:"output_at"`
+	NotifyOnError  bool       `gorm:"default:true" json:"notify_on_error"` // gửi thông báo qua outputs khi job chạy lỗi
 
 	// Analysis schedule
 	ScheduleType string `gorm:"type:varchar(20);default:'cron'" json:"schedule_type"` // cron | after_sync | manual

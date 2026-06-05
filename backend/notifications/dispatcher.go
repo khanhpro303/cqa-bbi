@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/vietbui/chat-quality-agent/db"
@@ -39,17 +40,9 @@ func NewDispatcher() *Dispatcher {
 
 // SendJobResults sends notifications for a job run based on the job's output config.
 func (d *Dispatcher) SendJobResults(ctx context.Context, job models.Job, run models.JobRun) error {
-	var outputs []OutputConfig
-	if err := json.Unmarshal([]byte(job.Outputs), &outputs); err != nil {
-		// Fallback: outputs might be double-encoded (string wrapping JSON array)
-		var raw string
-		if err2 := json.Unmarshal([]byte(job.Outputs), &raw); err2 == nil {
-			if err3 := json.Unmarshal([]byte(raw), &outputs); err3 != nil {
-				return fmt.Errorf("invalid outputs config: %w", err)
-			}
-		} else {
-			return fmt.Errorf("invalid outputs config: %w", err)
-		}
+	outputs, err := parseOutputs(job.Outputs)
+	if err != nil {
+		return err
 	}
 
 	// Get unnotified results for this run
@@ -96,29 +89,7 @@ func (d *Dispatcher) SendJobResults(ctx context.Context, job models.Job, run mod
 			log.Printf("[dispatcher] send failed for %s: %v", output.Type, sendErr)
 		}
 
-		// Log notification
-		recipient := output.ChatID
-		switch output.Type {
-		case "email":
-			recipient = output.To
-		case "zalo":
-			recipient = output.GroupID
-		}
-		logEntry := models.NotificationLog{
-			ID:           pkg.NewUUID(),
-			TenantID:     job.TenantID,
-			JobID:        job.ID,
-			JobRunID:     run.ID,
-			ChannelType:  output.Type,
-			Recipient:    recipient,
-			Subject:      subject,
-			Body:         body,
-			Status:       status,
-			ErrorMessage: errMsg,
-			SentAt:       time.Now(),
-			CreatedAt:    time.Now(),
-		}
-		db.DB.Create(&logEntry)
+		d.writeNotificationLog(job, run.ID, output, subject, body, status, errMsg)
 	}
 
 	// Mark results as notified
@@ -127,6 +98,111 @@ func (d *Dispatcher) SendJobResults(ctx context.Context, job models.Job, run mod
 		Update("notified_at", &now)
 
 	return nil
+}
+
+// SendJobError sends a failure alert for a job run that ended in error, to all
+// of the job's configured outputs (telegram/email/zalo), and logs every send.
+// Called for hard failures only (run.Status == "error"). No-ops when the job has
+// no outputs configured.
+func (d *Dispatcher) SendJobError(ctx context.Context, job models.Job, run models.JobRun) error {
+	outputs, err := parseOutputs(job.Outputs)
+	if err != nil {
+		return err
+	}
+	if len(outputs) == 0 {
+		return nil
+	}
+
+	subject := fmt.Sprintf("[CQA] %s - CHẠY LỖI", job.Name)
+	link := fmt.Sprintf("%s/%s/jobs/%s", d.getBaseURL(job.TenantID), job.TenantID, job.ID)
+
+	for _, output := range outputs {
+		notifier, nErr := d.createNotifier(job.TenantID, output)
+		if nErr != nil {
+			log.Printf("[dispatcher] create notifier failed for %s: %v", output.Type, nErr)
+			continue
+		}
+
+		defaultBody := d.buildErrorBody(job, run, output.Type)
+		body := defaultBody
+		if output.Template == "custom" && output.CustomTemplate != "" {
+			// Reuse the same template renderer; counts are 0 for an errored run,
+			// {{content}} carries the error detail.
+			body = d.renderCustomTemplate(output.CustomTemplate, job.Name, 0, 0, 0, 0, defaultBody, link)
+		}
+
+		sendErr := notifier.Send(ctx, subject, body)
+		status, errMsg := "sent", ""
+		if sendErr != nil {
+			status, errMsg = "failed", sendErr.Error()
+			log.Printf("[dispatcher] error-alert send failed for %s: %v", output.Type, sendErr)
+		}
+		d.writeNotificationLog(job, run.ID, output, subject, body, status, errMsg)
+	}
+	return nil
+}
+
+// buildErrorBody renders the failure-alert body. Zalo gets plain text; telegram
+// and email get HTML (<b>), matching buildNotificationBody.
+func (d *Dispatcher) buildErrorBody(job models.Job, run models.JobRun, outputType string) string {
+	msg := strings.TrimSpace(run.ErrorMessage)
+	if msg == "" {
+		msg = "Không có thông tin lỗi chi tiết."
+	}
+	body := htmlBold(outputType, "⚠️ Tác vụ chạy lỗi: "+job.Name) + "\n\n"
+	body += "Lỗi: " + msg + "\n"
+	if run.FinishedAt != nil {
+		body += "Thời điểm: " + run.FinishedAt.Format("15:04 02/01/2006") + "\n"
+	}
+	return body
+}
+
+// parseOutputs unmarshals job.Outputs, tolerating a double-encoded (string-wrapped)
+// JSON array.
+func parseOutputs(raw string) ([]OutputConfig, error) {
+	var outputs []OutputConfig
+	if err := json.Unmarshal([]byte(raw), &outputs); err != nil {
+		var s string
+		if err2 := json.Unmarshal([]byte(raw), &s); err2 == nil {
+			if err3 := json.Unmarshal([]byte(s), &outputs); err3 != nil {
+				return nil, fmt.Errorf("invalid outputs config: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("invalid outputs config: %w", err)
+		}
+	}
+	return outputs, nil
+}
+
+// recipientFor returns the human-facing destination for a NotificationLog row.
+func recipientFor(cfg OutputConfig) string {
+	switch cfg.Type {
+	case "email":
+		return cfg.To
+	case "zalo":
+		return cfg.GroupID
+	default:
+		return cfg.ChatID
+	}
+}
+
+// writeNotificationLog persists a single send outcome (best-effort).
+func (d *Dispatcher) writeNotificationLog(job models.Job, runID string, output OutputConfig, subject, body, status, errMsg string) {
+	now := time.Now()
+	db.DB.Create(&models.NotificationLog{
+		ID:           pkg.NewUUID(),
+		TenantID:     job.TenantID,
+		JobID:        job.ID,
+		JobRunID:     runID,
+		ChannelType:  output.Type,
+		Recipient:    recipientFor(output),
+		Subject:      subject,
+		Body:         body,
+		Status:       status,
+		ErrorMessage: errMsg,
+		SentAt:       now,
+		CreatedAt:    now,
+	})
 }
 
 func (d *Dispatcher) createNotifier(tenantID string, cfg OutputConfig) (Notifier, error) {
@@ -146,17 +222,17 @@ func (d *Dispatcher) createNotifier(tenantID string, cfg OutputConfig) (Notifier
 	}
 }
 
-func (d *Dispatcher) buildNotificationBody(job models.Job, results []models.JobResult, outputType string) string {
-	// Telegram (HTML parse mode) and email (HTML) render <b>; Zalo group
-	// messages are plain text, so drop the tags for that destination.
-	bold := func(s string) string {
-		if outputType == "zalo" {
-			return s
-		}
-		return "<b>" + s + "</b>"
+// htmlBold wraps s in <b> for telegram (HTML parse mode) and email (HTML), but
+// returns plain text for zalo group messages (no HTML rendering).
+func htmlBold(outputType, s string) string {
+	if outputType == "zalo" {
+		return s
 	}
+	return "<b>" + s + "</b>"
+}
 
-	body := bold("Kết quả phân tích: "+job.Name) + "\n\n"
+func (d *Dispatcher) buildNotificationBody(job models.Job, results []models.JobResult, outputType string) string {
+	body := htmlBold(outputType, "Kết quả phân tích: "+job.Name) + "\n\n"
 
 	for i, r := range results {
 		if i >= 10 {
@@ -169,9 +245,9 @@ func (d *Dispatcher) buildNotificationBody(job models.Job, results []models.JobR
 			if r.Severity == "NGHIEM_TRONG" {
 				emoji = "🔴"
 			}
-			body += fmt.Sprintf("%s %s — %s\n📌 %s\n\n", emoji, bold(r.Severity), r.RuleName, r.Evidence)
+			body += fmt.Sprintf("%s %s — %s\n📌 %s\n\n", emoji, htmlBold(outputType, r.Severity), r.RuleName, r.Evidence)
 		case "classification_tag":
-			body += fmt.Sprintf("🏷 %s (%.0f%%)\n📌 %s\n\n", bold(r.RuleName), r.Confidence*100, r.Evidence)
+			body += fmt.Sprintf("🏷 %s (%.0f%%)\n📌 %s\n\n", htmlBold(outputType, r.RuleName), r.Confidence*100, r.Evidence)
 		}
 	}
 

@@ -173,6 +173,7 @@ const form = ref({
   ai_model: '',
   outputs: '[]',
   outputs_validated: true,
+  notify_on_error: true,
   output_schedule: 'instant',
   output_cron: '',
   output_at: '',

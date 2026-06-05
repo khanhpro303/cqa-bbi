@@ -3,6 +3,16 @@
     <h3 class="text-h6 mb-2">{{ $t('job_wizard_step_output') }}</h3>
     <div class="text-body-2 text-grey-darken-1 mb-4">Cấu hình nơi nhận kết quả phân tích. Bỏ qua nếu chỉ muốn xem trên hệ thống.</div>
 
+    <v-switch
+      v-model="notifyOnError"
+      label="Gửi thông báo khi tác vụ chạy lỗi"
+      color="primary"
+      density="compact"
+      hide-details
+      class="mb-2"
+    />
+    <div class="text-caption text-grey mb-4">Khi tác vụ chạy lỗi, gửi cảnh báo tới tất cả đầu ra đã cấu hình bên dưới (Telegram / Email / Zalo).</div>
+
     <v-card v-for="(output, idx) in outputs" :key="idx" variant="outlined" class="pa-4 mb-3">
       <div class="d-flex align-center mb-3">
         <v-chip :color="outputTypeColor(output.type)" variant="tonal" size="small">
@@ -157,6 +167,12 @@ const route = useRoute()
 const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
 const form = defineModel<Record<string, any>>('form', { required: true })
+
+// Notify-on-error toggle (defaults to true when the job has no explicit value).
+const notifyOnError = computed({
+  get: () => form.value.notify_on_error !== false,
+  set: (v: boolean) => { form.value.notify_on_error = v },
+})
 
 interface OutputItem {
   type: string
