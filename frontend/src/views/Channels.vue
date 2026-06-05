@@ -256,6 +256,28 @@
                   </v-alert>
                   <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" color="primary" density="compact" :hint="$t('sync_files_hint_short')" persistent-hint />
                 </template>
+                <template v-if="editChannelType === 'zalo_oa'">
+                  <v-divider class="my-3" />
+                  <div class="text-body-2 font-weight-medium mb-1">Cảnh báo lỗi gửi chiến dịch</div>
+                  <v-switch
+                    v-model="editForm.campaign_alerts_enabled"
+                    label="Gửi cảnh báo qua Zalo khi chiến dịch gửi lỗi"
+                    density="compact"
+                    color="primary"
+                    class="mb-1"
+                  />
+                  <v-select
+                    v-if="editForm.campaign_alerts_enabled"
+                    v-model="editForm.campaign_alert_group_id"
+                    :items="alertGroupOptions"
+                    :loading="loadingAlertGroups"
+                    :no-data-text="loadingAlertGroups ? 'Đang tải…' : 'Chưa có nhóm GMF nào đã liên kết Zalo'"
+                    label="Nhóm GMF nhận cảnh báo"
+                    density="compact"
+                    hint="Một tin tổng hợp sẽ gửi vào nhóm này khi có lượt gửi lỗi"
+                    persistent-hint
+                  />
+                </template>
               </v-window-item>
               
               <v-window-item value="chatbot" class="pt-3">
@@ -554,11 +576,31 @@ const savingEdit = ref(false)
 const editTab = ref('general')
 const editChannelId = ref('')
 const editChannelType = ref('')
-const editForm = reactive({ 
+const editForm = reactive({
   name: '', is_active: true, sync_files: false, sync_interval: 15,
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
-  langflow_api_url: '', langflow_api_key: '', langflow_flow_id: ''
+  langflow_api_url: '', langflow_api_key: '', langflow_flow_id: '',
+  campaign_alerts_enabled: false, campaign_alert_group_id: ''
 })
+// Original parsed metadata of the channel being edited — spread back on save so
+// keys this dialog doesn't manage (e.g. set in ChannelDetail) are never wiped.
+const editOriginalMeta = ref<Record<string, unknown>>({})
+const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
+const loadingAlertGroups = ref(false)
+
+async function loadAlertGroupOptions() {
+  loadingAlertGroups.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups`)
+    alertGroupOptions.value = (Array.isArray(data) ? data : [])
+      .filter((g: any) => g.zalo_group_id && (!g.channel_id || g.channel_id === editChannelId.value))
+      .map((g: any) => ({ title: g.name, value: g.id }))
+  } catch {
+    alertGroupOptions.value = []
+  } finally {
+    loadingAlertGroups.value = false
+  }
+}
 const syncIntervalOptions = computed(() => [
   { title: t('sync_1m'), value: 1 },
   { title: t('sync_5m'), value: 5 },
@@ -578,6 +620,7 @@ function openEdit(ch: any) {
   editTab.value = 'general'
   try {
     const meta = JSON.parse(ch.metadata || '{}')
+    editOriginalMeta.value = meta
     editForm.sync_files = meta.sync_files || false
     editForm.sync_interval = meta.sync_interval || 15
     editForm.session_keyword = meta.session_keyword || ''
@@ -588,7 +631,10 @@ function openEdit(ch: any) {
     editForm.langflow_api_url = meta.langflow_api_url || ''
     editForm.langflow_api_key = meta.langflow_api_key || ''
     editForm.langflow_flow_id = meta.langflow_flow_id || ''
+    editForm.campaign_alerts_enabled = meta.campaign_alerts_enabled || false
+    editForm.campaign_alert_group_id = meta.campaign_alert_group_id || ''
   } catch {
+    editOriginalMeta.value = {}
     editForm.sync_files = false
     editForm.sync_interval = 15
     editForm.session_keyword = ''
@@ -599,7 +645,10 @@ function openEdit(ch: any) {
     editForm.langflow_api_url = ''
     editForm.langflow_api_key = ''
     editForm.langflow_flow_id = ''
+    editForm.campaign_alerts_enabled = false
+    editForm.campaign_alert_group_id = ''
   }
+  if (ch.channel_type === 'zalo_oa') loadAlertGroupOptions()
   editDialog.value = true
 }
 
@@ -611,9 +660,12 @@ async function saveEdit() {
       is_active: editForm.is_active,
     }
     if (editChannelType.value !== 'personal_zalo_import') {
-      const metaToSave: any = { 
-        sync_files: editForm.sync_files, 
-        sync_interval: editForm.sync_interval 
+      // Start from the channel's existing metadata so keys this dialog doesn't
+      // manage (e.g. set in ChannelDetail) survive the save.
+      const metaToSave: any = {
+        ...editOriginalMeta.value,
+        sync_files: editForm.sync_files,
+        sync_interval: editForm.sync_interval,
       }
       if (editChannelType.value === 'zalo_oa') {
         metaToSave.session_keyword = editForm.session_keyword
@@ -624,6 +676,8 @@ async function saveEdit() {
         metaToSave.langflow_api_url = editForm.langflow_api_url
         metaToSave.langflow_api_key = editForm.langflow_api_key
         metaToSave.langflow_flow_id = editForm.langflow_flow_id
+        metaToSave.campaign_alerts_enabled = editForm.campaign_alerts_enabled
+        metaToSave.campaign_alert_group_id = editForm.campaign_alerts_enabled ? editForm.campaign_alert_group_id : ''
       }
       payload.metadata = JSON.stringify(metaToSave)
     }
