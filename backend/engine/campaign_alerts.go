@@ -12,6 +12,7 @@ import (
 
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/notifications"
 )
 
 // campaignAlertDedupeWindow caps how often the scheduler path sends a failure
@@ -95,6 +96,43 @@ func parseCampaignAlertConfig(metadata string) (enabled bool, groupID string) {
 	return enabled, groupID
 }
 
+// parseCampaignAlertOutputs reads optional Telegram/Email alert destinations from
+// the channel metadata key `campaign_alert_outputs` (same shape as job outputs).
+// Malformed or incomplete entries are dropped so the caller no-ops safely.
+func parseCampaignAlertOutputs(metadata string) []notifications.OutputConfig {
+	if strings.TrimSpace(metadata) == "" {
+		return nil
+	}
+	var m struct {
+		Outputs []notifications.OutputConfig `json:"campaign_alert_outputs"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &m); err != nil {
+		return nil
+	}
+	out := make([]notifications.OutputConfig, 0, len(m.Outputs))
+	for _, o := range m.Outputs {
+		switch o.Type {
+		case "telegram":
+			if strings.TrimSpace(o.BotToken) != "" && strings.TrimSpace(o.ChatID) != "" {
+				out = append(out, o)
+			}
+		case "email":
+			if strings.TrimSpace(o.SMTPHost) != "" && strings.TrimSpace(o.From) != "" && strings.TrimSpace(o.To) != "" {
+				out = append(out, o)
+			}
+		}
+	}
+	return out
+}
+
+// campaignAlertRecipient returns the human-facing destination for a log row.
+func campaignAlertRecipient(out notifications.OutputConfig) string {
+	if out.Type == "email" {
+		return out.To
+	}
+	return out.ChatID
+}
+
 // shouldSendCampaignAlert reports whether the scheduler path may send a failure
 // alert for this campaign now, i.e. no alert was successfully sent within
 // campaignAlertDedupeWindow. Only "sent" rows suppress; a failed attempt does
@@ -103,23 +141,26 @@ func parseCampaignAlertConfig(metadata string) (enabled bool, groupID string) {
 func shouldSendCampaignAlert(tenantID, campaignID string) bool {
 	var n int64
 	cutoff := time.Now().Add(-campaignAlertDedupeWindow)
+	// Campaign-wide dedupe across all alert channels (zalo/telegram/email): any
+	// successful alert for this campaign within the window suppresses the next.
 	db.DB.Model(&models.NotificationLog{}).
-		Where("tenant_id = ? AND channel_type = ? AND job_id = ? AND status = ? AND sent_at > ?",
-			tenantID, campaignAlertChannelType, campaignID, "sent", cutoff).
+		Where("tenant_id = ? AND job_id = ? AND status = ? AND sent_at > ?",
+			tenantID, campaignID, "sent", cutoff).
 		Limit(1).Count(&n)
 	return n == 0
 }
 
 // recordCampaignAlertLog writes a NotificationLog row for a campaign alert. The
-// campaign id is stored in JobID (reused as the dedupe key); the alert group id
-// in Recipient. Best-effort: a logging failure never affects the send.
-func recordCampaignAlertLog(tenantID, campaignID, recipient, subject, body, status, errMsg string) {
+// campaign id is stored in JobID (reused as the dedupe key); the destination in
+// Recipient. channelType is "zalo_oa" for the GMF group, or telegram|email for
+// extra outputs. Best-effort: a logging failure never affects the send.
+func recordCampaignAlertLog(tenantID, campaignID, channelType, recipient, subject, body, status, errMsg string) {
 	now := time.Now()
 	if err := db.DB.Create(&models.NotificationLog{
 		ID:           uuid.New().String(),
 		TenantID:     tenantID,
 		JobID:        campaignID,
-		ChannelType:  campaignAlertChannelType,
+		ChannelType:  channelType,
 		Recipient:    recipient,
 		Subject:      subject,
 		Body:         body,
@@ -132,45 +173,74 @@ func recordCampaignAlertLog(tenantID, campaignID, recipient, subject, body, stat
 	}
 }
 
-// notifyFailures sends one aggregated Zalo alert for the given failed runs to the
-// channel's configured alert group. No-op when the campaign's channel has alerts
-// disabled or no alert group. Never returns an error — alerting must never fail a
-// broadcast; outcomes are logged and recorded in NotificationLog.
+// notifyFailures sends one aggregated alert for the given failed runs to every
+// destination the channel has configured: the Zalo GMF group and/or extra
+// Telegram/Email outputs. No-op when alerts are disabled or nothing is
+// configured. Never returns an error — alerting must never fail a broadcast;
+// outcomes are logged and recorded in NotificationLog.
 func (b *campaignBroadcast) notifyFailures(ctx context.Context, failedRuns []models.CampaignRun) {
 	if len(failedRuns) == 0 {
 		return
 	}
 	enabled, groupID := parseCampaignAlertConfig(b.channel.Metadata)
-	if !enabled || groupID == "" {
+	if !enabled {
 		return
 	}
-
-	var alertGroup models.CRMGroup
-	gErr := db.DB.Where("id = ? AND tenant_id = ?", groupID, b.tenantID).First(&alertGroup).Error
-	if gErr != nil || strings.TrimSpace(alertGroup.ZaloGroupID) == "" {
-		log.Printf("[campaign-alert] campaign %s alert group %s misconfigured: %v", b.campaign.ID, groupID, gErr)
-		recordCampaignAlertLog(b.tenantID, b.campaign.ID, groupID, b.campaign.Name, "", "failed", "alert_group_misconfigured")
-		return
+	extraOutputs := parseCampaignAlertOutputs(b.channel.Metadata)
+	if groupID == "" && len(extraOutputs) == 0 {
+		return // alerts on, but no destination configured
 	}
 
+	// Build the shared alert message once.
 	names := b.resolveSegmentGroupNames(failedRuns)
 	fails := make([]alertFail, 0, len(failedRuns))
 	for _, r := range failedRuns {
 		fails = append(fails, alertFail{GroupName: names[r.SegmentID], Reason: friendlyRunError(r.ErrorMessage)})
 	}
-
 	loc, err := time.LoadLocation(tenantTimezone(b.tenantID))
 	if err != nil || loc == nil {
 		loc = time.Local
 	}
 	msg := buildCampaignAlertMessage(b.campaign.Name, fails, time.Now().In(loc))
 
-	status, errMsg := "sent", ""
-	if sErr := b.adapter.SendGroupMessage(ctx, alertGroup.ZaloGroupID, msg); sErr != nil {
-		status, errMsg = "failed", sErr.Error()
-		log.Printf("[campaign-alert] campaign %s alert send failed: %v", b.campaign.ID, sErr)
+	// 1) Zalo GMF group (original destination).
+	if groupID != "" {
+		var alertGroup models.CRMGroup
+		gErr := db.DB.Where("id = ? AND tenant_id = ?", groupID, b.tenantID).First(&alertGroup).Error
+		if gErr != nil || strings.TrimSpace(alertGroup.ZaloGroupID) == "" {
+			log.Printf("[campaign-alert] campaign %s alert group %s misconfigured: %v", b.campaign.ID, groupID, gErr)
+			recordCampaignAlertLog(b.tenantID, b.campaign.ID, campaignAlertChannelType, groupID, b.campaign.Name, "", "failed", "alert_group_misconfigured")
+		} else {
+			status, errMsg := "sent", ""
+			if sErr := b.adapter.SendGroupMessage(ctx, alertGroup.ZaloGroupID, msg); sErr != nil {
+				status, errMsg = "failed", sErr.Error()
+				log.Printf("[campaign-alert] campaign %s alert send failed: %v", b.campaign.ID, sErr)
+			}
+			recordCampaignAlertLog(b.tenantID, b.campaign.ID, campaignAlertChannelType, groupID, b.campaign.Name, msg, status, errMsg)
+		}
 	}
-	recordCampaignAlertLog(b.tenantID, b.campaign.ID, groupID, b.campaign.Name, msg, status, errMsg)
+
+	// 2) Extra Telegram/Email outputs.
+	const subject = "[CQA] Cảnh báo lỗi gửi chiến dịch"
+	for _, out := range extraOutputs {
+		notifier, nErr := notifications.NotifierFor(b.tenantID, out)
+		if nErr != nil {
+			log.Printf("[campaign-alert] campaign %s build %s notifier failed: %v", b.campaign.ID, out.Type, nErr)
+			recordCampaignAlertLog(b.tenantID, b.campaign.ID, out.Type, campaignAlertRecipient(out), subject, "", "failed", nErr.Error())
+			continue
+		}
+		// Email is HTML — convert newlines so the message renders.
+		body := msg
+		if out.Type == "email" {
+			body = strings.ReplaceAll(msg, "\n", "<br>")
+		}
+		status, errMsg := "sent", ""
+		if sErr := notifier.Send(ctx, subject, body); sErr != nil {
+			status, errMsg = "failed", sErr.Error()
+			log.Printf("[campaign-alert] campaign %s %s alert send failed: %v", b.campaign.ID, out.Type, sErr)
+		}
+		recordCampaignAlertLog(b.tenantID, b.campaign.ID, out.Type, campaignAlertRecipient(out), subject, body, status, errMsg)
+	}
 }
 
 // resolveSegmentGroupNames maps each failed run's SegmentID to its group's name,

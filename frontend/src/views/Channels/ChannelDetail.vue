@@ -391,6 +391,7 @@
               hint="Một tin tổng hợp sẽ gửi vào nhóm này khi có lượt gửi lỗi"
               persistent-hint
             />
+            <CampaignAlertOutputs v-if="editForm.campaign_alerts_enabled" v-model="editForm.campaign_alert_outputs" />
           </template>
           <template v-else>
             <v-select
@@ -458,6 +459,7 @@ import type { PersonalZaloGatewayState } from '../../stores/channels'
 import { useAuthStore } from '../../stores/auth'
 import { useUserStore } from '../../stores/users'
 import api from '../../api'
+import CampaignAlertOutputs from '../../components/channels/CampaignAlertOutputs.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -512,7 +514,7 @@ const gatewayLoading = ref(false)
 const gatewayActionLoading = ref<'connect' | 'reconnect' | 'sync' | ''>('')
 let gatewayPollTimer: number | null = null
 
-const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '' })
+const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[] })
 
 // Alert recipient options: this channel's GMF groups that have a linked Zalo group.
 const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
@@ -782,6 +784,7 @@ async function saveEdit() {
         sync_files: editForm.value.sync_files,
         campaign_alerts_enabled: editForm.value.campaign_alerts_enabled,
         campaign_alert_group_id: editForm.value.campaign_alerts_enabled ? editForm.value.campaign_alert_group_id : '',
+        campaign_alert_outputs: editForm.value.campaign_alerts_enabled ? editForm.value.campaign_alert_outputs : [],
       })
     } else {
       payload.metadata = JSON.stringify({ sync_interval: editForm.value.sync_interval, sync_files: editForm.value.sync_files })
@@ -866,6 +869,7 @@ watch(editDialog, (v) => {
       sync_scope: metadata.value.sync_scope || 'all',
       campaign_alerts_enabled: metadata.value.campaign_alerts_enabled || false,
       campaign_alert_group_id: metadata.value.campaign_alert_group_id || '',
+      campaign_alert_outputs: Array.isArray(metadata.value.campaign_alert_outputs) ? metadata.value.campaign_alert_outputs : [],
     }
     if (channel.value.channel_type === 'zalo_oa') {
       loadAlertGroupOptions()

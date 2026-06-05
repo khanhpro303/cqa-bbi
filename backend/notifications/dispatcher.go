@@ -205,6 +205,13 @@ func (d *Dispatcher) writeNotificationLog(job models.Job, runID string, output O
 	})
 }
 
+// NotifierFor builds a Notifier for a single output config (telegram/email/zalo).
+// Exposed for callers outside the dispatcher (e.g. campaign failure alerts) that
+// need to send through the same notifier set.
+func NotifierFor(tenantID string, cfg OutputConfig) (Notifier, error) {
+	return (&Dispatcher{}).createNotifier(tenantID, cfg)
+}
+
 func (d *Dispatcher) createNotifier(tenantID string, cfg OutputConfig) (Notifier, error) {
 	switch cfg.Type {
 	case "telegram":

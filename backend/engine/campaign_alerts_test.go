@@ -90,3 +90,36 @@ func TestParseCampaignAlertConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestParseCampaignAlertOutputs keeps only well-formed telegram/email entries
+// and drops malformed/incomplete ones.
+func TestParseCampaignAlertOutputs(t *testing.T) {
+	t.Run("empty metadata", func(t *testing.T) {
+		if got := parseCampaignAlertOutputs(""); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("filters incomplete + unknown types", func(t *testing.T) {
+		meta := `{"campaign_alert_outputs":[
+			{"type":"telegram","bot_token":"t","chat_id":"-100"},
+			{"type":"telegram","bot_token":"","chat_id":"-100"},
+			{"type":"email","smtp_host":"smtp.x","from":"a@x.com","to":"b@x.com"},
+			{"type":"email","smtp_host":"","from":"a@x.com","to":"b@x.com"},
+			{"type":"zalo","channel_id":"c","group_id":"g"}
+		]}`
+		got := parseCampaignAlertOutputs(meta)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 valid outputs, got %d: %+v", len(got), got)
+		}
+		if got[0].Type != "telegram" || got[1].Type != "email" {
+			t.Errorf("unexpected kept outputs: %+v", got)
+		}
+	})
+
+	t.Run("malformed json", func(t *testing.T) {
+		if got := parseCampaignAlertOutputs("{not json"); got != nil {
+			t.Errorf("expected nil on bad json, got %v", got)
+		}
+	})
+}

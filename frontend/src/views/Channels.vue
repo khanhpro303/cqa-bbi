@@ -277,6 +277,7 @@
                     hint="Một tin tổng hợp sẽ gửi vào nhóm này khi có lượt gửi lỗi"
                     persistent-hint
                   />
+                  <CampaignAlertOutputs v-if="editForm.campaign_alerts_enabled" v-model="editForm.campaign_alert_outputs" />
                 </template>
               </v-window-item>
               
@@ -317,6 +318,7 @@ import { useI18n } from 'vue-i18n'
 import { useChannelStore } from '../stores/channels'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
+import CampaignAlertOutputs from '../components/channels/CampaignAlertOutputs.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -580,7 +582,7 @@ const editForm = reactive({
   name: '', is_active: true, sync_files: false, sync_interval: 15,
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
   langflow_api_url: '', langflow_api_key: '', langflow_flow_id: '',
-  campaign_alerts_enabled: false, campaign_alert_group_id: ''
+  campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[]
 })
 // Original parsed metadata of the channel being edited — spread back on save so
 // keys this dialog doesn't manage (e.g. set in ChannelDetail) are never wiped.
@@ -633,6 +635,7 @@ function openEdit(ch: any) {
     editForm.langflow_flow_id = meta.langflow_flow_id || ''
     editForm.campaign_alerts_enabled = meta.campaign_alerts_enabled || false
     editForm.campaign_alert_group_id = meta.campaign_alert_group_id || ''
+    editForm.campaign_alert_outputs = Array.isArray(meta.campaign_alert_outputs) ? meta.campaign_alert_outputs : []
   } catch {
     editOriginalMeta.value = {}
     editForm.sync_files = false
@@ -647,6 +650,7 @@ function openEdit(ch: any) {
     editForm.langflow_flow_id = ''
     editForm.campaign_alerts_enabled = false
     editForm.campaign_alert_group_id = ''
+    editForm.campaign_alert_outputs = []
   }
   if (ch.channel_type === 'zalo_oa') loadAlertGroupOptions()
   editDialog.value = true
@@ -678,6 +682,7 @@ async function saveEdit() {
         metaToSave.langflow_flow_id = editForm.langflow_flow_id
         metaToSave.campaign_alerts_enabled = editForm.campaign_alerts_enabled
         metaToSave.campaign_alert_group_id = editForm.campaign_alerts_enabled ? editForm.campaign_alert_group_id : ''
+        metaToSave.campaign_alert_outputs = editForm.campaign_alerts_enabled ? editForm.campaign_alert_outputs : []
       }
       payload.metadata = JSON.stringify(metaToSave)
     }
