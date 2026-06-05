@@ -4041,8 +4041,9 @@ func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) (ma, maCha 
 }
 
 // searchProductsByWebNameFromCache resolves an inventory search keyword to cached
-// product rows. It probes the local MySQL cache by LIKE (ten_dong_bo_web, then
-// ten); on a miss it falls back to the shared embedding→LLM matcher.
+// product rows. It first probes for an exact SKU code (ma); on a miss it probes
+// the local MySQL cache by LIKE (ten_dong_bo_web, then ten); on a further miss it
+// falls back to the shared embedding→LLM matcher.
 //
 // When the embedding pinpoints a single specific SKU (the agent already resolved
 // a child SKU and passed its code), the function returns that code as specificSKU
@@ -4052,6 +4053,31 @@ func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) (ma, maCha 
 func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, string, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
+
+	// Pass 0 — exact SKU code (ma). When the agent already resolved the question
+	// to a specific child SKU (e.g. "Shiba đen bóng size XXL" → SP461294) and
+	// passes that code as the search keyword, it is a fully-resolved single SKU,
+	// NOT a web-name keyword. The LIKE/fuzzy passes below would treat the code as
+	// a display-name keyword, miss on ten_dong_bo_web/ten, then fuzzy-expand it to
+	// the parent ma_cha — returning every sibling SKU and firing the redundant
+	// dòng-vs-SKU picker. Surface the code as specificSKU instead so the inventory
+	// caller reads that one SKU's live stock directly. Indexed by idx_cp_tenant_ma,
+	// so this is a cheap point lookup. Only short-circuits on an exact single
+	// match; a bare web-name/model keyword ("FF901", "Shiba") never equals a SKU
+	// code, so the existing passes stay unchanged.
+	if trimmedKeyword := strings.TrimSpace(keyword); trimmedKeyword != "" {
+		var exactSKU []models.CachedProduct
+		if err := db.DB.WithContext(ctx).
+			Where("tenant_id = ? AND ma = ?", tenantID, trimmedKeyword).
+			Limit(2).
+			Find(&exactSKU).Error; err != nil {
+			return nil, "", fmt.Errorf("local MySQL cache exact-SKU query failed: %w", err)
+		}
+		if len(exactSKU) == 1 {
+			log.Printf("[handler] exact SKU code match for keyword '%s' → SKU '%s' (skip web-name fuzzy, answer directly)", trimmedKeyword, exactSKU[0].MA)
+			return nil, exactSKU[0].MA, nil
+		}
+	}
 
 	// Pass 1 — ten_dong_bo_web (web-synced display name).
 	err := db.DB.WithContext(ctx).

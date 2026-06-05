@@ -20,6 +20,17 @@ hỏi **tồn kho** trên Zalo OA. Tài liệu bám sát **code hiện tại** (
 > đã resolve), `inventory` đọc tồn của **đúng SKU đó** — KHÔNG mở rộng về cả dòng,
 > KHÔNG hỏi lại dòng-vs-SKU. Resource `products` thì cố tình bỏ qua `specific`
 > (luôn trả cả dòng cho `price_range`).
+>
+> 🆕 **Pass 0 — khớp mã SKU chính xác (2026-06-05).** `searchProductsByWebNameFromCache`
+> (bản `erp.go`) giờ thử `ma = keyword` **trước** mọi LIKE/fuzzy. Khi Agent đã
+> resolve câu hỏi về một mã SKU con cụ thể (vd `"Shiba đen bóng size XXL"` → `SP461294`)
+> và truyền chính mã đó vào `search`, đó là SKU đã chốt — KHÔNG phải keyword tên web.
+> Trước fix này, LIKE trên `ten_dong_bo_web`/`ten` trượt (mã không nằm trong tên),
+> fuzzy nở mã về `ma_cha` cha → trả về **mọi** SKU anh em (`len>1`) → bắn lại picker
+> dòng-vs-SKU dù khách đã nêu rõ màu+size. Pass 0 trả `specificSKU = mã đó` (point
+> lookup qua index `idx_cp_tenant_ma`), đẩy thẳng vào nhánh single-SKU đọc tồn live.
+> Chỉ short-circuit khi khớp **đúng một** dòng; keyword tên/dòng ("FF901", "Shiba")
+> không bằng mã SKU nên các pass LIKE/fuzzy cũ giữ nguyên.
 
 > 📌 **Lưu ý đặt tên:** Các helper đọc cache giờ mang hậu tố `...FromCache`
 > (`searchProductsByWebNameFromCache`, `getProductsByMaChaFromCache`,
