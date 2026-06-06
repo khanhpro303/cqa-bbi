@@ -108,13 +108,55 @@ func GetAICostAnalytics(c *gin.Context) {
 			Scan(&rows)
 	case "employee":
 		// Employee breakdown only applies to chatbot spend (jobs have no sender).
+		// Group by the stable sender_external_id (not the display name) so that
+		// turns whose name wasn't cached at log time still collapse into one bar,
+		// then resolve a friendly name afterwards from zalo_customers / whitelist.
+		type empRow struct {
+			SenderExternalID string  `gorm:"column:sender_external_id"`
+			SenderName       string  `gorm:"column:sender_name"`
+			TotalCost        float64 `gorm:"column:total_cost"`
+			InputTokens      int64   `gorm:"column:input_tokens"`
+			OutputTokens     int64   `gorm:"column:output_tokens"`
+			CallCount        int64   `gorm:"column:call_count"`
+		}
+		var empRows []empRow
 		base().
 			Where("ai_usage_logs.source = ?", "chatbot").
-			Select("COALESCE(NULLIF(ai_usage_logs.sender_name, ''), NULLIF(ai_usage_logs.sender_external_id, ''), 'Không xác định') as label, " + aggCols).
-			Group("label").
+			Select("ai_usage_logs.sender_external_id as sender_external_id, " +
+				"MAX(NULLIF(ai_usage_logs.sender_name, '')) as sender_name, " + aggCols).
+			Group("ai_usage_logs.sender_external_id").
 			Order("total_cost DESC").
 			Limit(20).
-			Scan(&rows)
+			Scan(&empRows)
+
+		ids := make([]string, 0, len(empRows))
+		for _, er := range empRows {
+			if er.SenderName == "" && er.SenderExternalID != "" {
+				ids = append(ids, er.SenderExternalID)
+			}
+		}
+		nameByID := resolveEmployeeNames(tenantID, ids)
+		rows = make([]aiCostRow, 0, len(empRows))
+		for _, er := range empRows {
+			label := er.SenderName
+			if label == "" {
+				label = nameByID[er.SenderExternalID]
+			}
+			if label == "" {
+				if er.SenderExternalID != "" {
+					label = er.SenderExternalID
+				} else {
+					label = "Không xác định"
+				}
+			}
+			rows = append(rows, aiCostRow{
+				Label:        label,
+				TotalCost:    er.TotalCost,
+				InputTokens:  er.InputTokens,
+				OutputTokens: er.OutputTokens,
+				CallCount:    er.CallCount,
+			})
+		}
 	}
 
 	if rows == nil {
@@ -137,4 +179,71 @@ func GetAICostAnalytics(c *gin.Context) {
 		"rows":          rows,
 		"exchange_rate": exchangeRate,
 	})
+}
+
+// resolveEmployeeNames maps Zalo user IDs to display names for the employee
+// cost breakdown, covering both private NV (zalo_whitelist) and public GMF
+// (zalo_customers) senders whose name wasn't cached on the usage log. Lookups
+// are tenant-scoped and done in two small batched queries to avoid the row
+// fan-out (and double-counted SUMs) that a SQL JOIN on per-channel whitelist
+// rows would cause.
+func resolveEmployeeNames(tenantID string, ids []string) map[string]string {
+	out := make(map[string]string)
+	if len(ids) == 0 {
+		return out
+	}
+
+	type idName struct {
+		ZaloUserID string `gorm:"column:zalo_user_id"`
+		Name       string `gorm:"column:name"`
+	}
+
+	// Customers first; whitelist (employee) names override when both exist.
+	var customers []idName
+	db.DB.Model(&models.ZaloCustomer{}).
+		Select("zalo_user_id, name").
+		Where("tenant_id = ? AND zalo_user_id IN ? AND name <> ''", tenantID, ids).
+		Scan(&customers)
+	for _, c := range customers {
+		out[c.ZaloUserID] = c.Name
+	}
+
+	var employees []idName
+	db.DB.Model(&models.ZaloWhitelist{}).
+		Select("zalo_user_id, name").
+		Where("tenant_id = ? AND zalo_user_id IN ? AND name <> ''", tenantID, ids).
+		Scan(&employees)
+	for _, e := range employees {
+		out[e.ZaloUserID] = e.Name
+	}
+
+	// Last resort: recover the cached display name from past messages for any id
+	// still unresolved. This survives deletion of the zalo_customers/whitelist row
+	// (messages are kept), so a removed customer still shows their name, not a raw
+	// Zalo ID. Only queried for the leftover ids, so it stays off the hot path.
+	var unresolved []string
+	for _, id := range ids {
+		if _, ok := out[id]; !ok {
+			unresolved = append(unresolved, id)
+		}
+	}
+	if len(unresolved) > 0 {
+		type msgName struct {
+			SenderExternalID string `gorm:"column:sender_external_id"`
+			Name             string `gorm:"column:name"`
+		}
+		var msgs []msgName
+		db.DB.Model(&models.Message{}).
+			Select("sender_external_id, MAX(NULLIF(sender_name, '')) as name").
+			Where("tenant_id = ? AND sender_external_id IN ?", tenantID, unresolved).
+			Group("sender_external_id").
+			Scan(&msgs)
+		for _, m := range msgs {
+			if m.Name != "" {
+				out[m.SenderExternalID] = m.Name
+			}
+		}
+	}
+
+	return out
 }

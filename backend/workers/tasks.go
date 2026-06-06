@@ -2169,6 +2169,14 @@ func logChatbotAIUsage(tenantID, channelID, senderID, senderName, agentType, gro
 		provider, model = resolveChatbotPricing(tenantID)
 	}
 
+	// GMF (public) customers aren't in the whitelist, so senderName arrives empty.
+	// Bake their display name in now (zalo_customers, else whitelist) so the
+	// per-employee cost chart shows a name — and keeps showing it even if the
+	// customer is later deleted, since the log row already carries the name.
+	if senderName == "" && senderID != "" {
+		senderName = resolveSenderDisplayName(tenantID, senderID)
+	}
+
 	usage := models.AIUsageLog{
 		ID:               pkg.NewUUID(),
 		TenantID:         tenantID,
@@ -2188,6 +2196,27 @@ func logChatbotAIUsage(tenantID, channelID, senderID, senderName, agentType, gro
 	if err := db.DB.Create(&usage).Error; err != nil {
 		log.Printf("[worker] failed to log chatbot AI usage for tenant %s: %v", tenantID, err)
 	}
+}
+
+// resolveSenderDisplayName looks up a friendly name for a Zalo user ID,
+// preferring the whitelist (NV employee) over zalo_customers (GMF). Returns ""
+// when neither has a name, leaving the caller to keep the raw ID.
+func resolveSenderDisplayName(tenantID, zaloUserID string) string {
+	var wl models.ZaloWhitelist
+	if err := db.DB.Select("name").
+		Where("tenant_id = ? AND zalo_user_id = ? AND name <> ''", tenantID, zaloUserID).
+		First(&wl).Error; err == nil && wl.Name != "" {
+		return wl.Name
+	}
+
+	var cust models.ZaloCustomer
+	if err := db.DB.Select("name").
+		Where("tenant_id = ? AND zalo_user_id = ? AND name <> ''", tenantID, zaloUserID).
+		First(&cust).Error; err == nil && cust.Name != "" {
+		return cust.Name
+	}
+
+	return ""
 }
 
 // fuzzyMatchMaChaWithLLM uses the LLM to find the best matching ma_cha
