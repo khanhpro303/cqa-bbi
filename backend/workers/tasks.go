@@ -679,6 +679,21 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
+		// Verified-only interaction (design intent): the trigger-time gate above
+		// only blocks unverified senders at session OPEN. Because a group session
+		// is group-level (one member's trigger word activates the bot for the whole
+		// group), without this check any UNVERIFIED participant whose message lands
+		// while a groupmate's session is active would fall straight through to
+		// Langflow — interacting with the bot, burning AI spend, and surfacing as a
+		// raw Zalo ID in the per-employee cost chart. Enforce verify on every turn:
+		// a sender who is neither whitelisted staff nor an approved customer is
+		// ignored (no Langflow call, no cost, no usage log). Silent in groups to
+		// avoid spamming verified members with repeated verify DMs.
+		if !isWhitelisted && !isCustomer {
+			log.Printf("[worker] ignoring message from unverified Zalo user %s for tenant %s (active session, not whitelisted/customer)", payload.Sender.ID, matchedChannel.TenantID)
+			return nil
+		}
+
 		// Has session. Check for end word.
 		var isEndTriggered bool
 		for _, kw := range strings.Split(meta.SessionEndKeyword, ";") {
