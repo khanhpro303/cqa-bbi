@@ -9,8 +9,24 @@ import (
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/pkg"
 	"gorm.io/gorm"
 )
+
+// unknownSenderLabel renders a stable placeholder for senders we couldn't name
+// (or who are flagged unverified), e.g. "Unknown (4821)" using the last 4 chars
+// of the Zalo ID so different anonymous senders stay visually distinct on the
+// chart. Falls back to a bare "Unknown" when no ID is available.
+func unknownSenderLabel(senderExternalID string) string {
+	id := senderExternalID
+	if n := len(id); n > 4 {
+		id = id[n-4:]
+	}
+	if id == "" {
+		return "Unknown"
+	}
+	return "Unknown (" + id + ")"
+}
 
 // aiCostRow is one bar/point in an AI-cost breakdown.
 type aiCostRow struct {
@@ -142,12 +158,12 @@ func GetAICostAnalytics(c *gin.Context) {
 			if label == "" {
 				label = nameByID[er.SenderExternalID]
 			}
-			if label == "" {
-				if er.SenderExternalID != "" {
-					label = er.SenderExternalID
-				} else {
-					label = "Không xác định"
-				}
+			// Unnamed senders — and historical rows still carrying Zalo's
+			// unverified-user placeholder (no longer written, but old logs keep
+			// it) — collapse to "Unknown (<last 4 of id>)" rather than a raw
+			// Zalo ID or garbled Vietnamese.
+			if label == "" || label == pkg.UnverifiedZaloDisplayName {
+				label = unknownSenderLabel(er.SenderExternalID)
 			}
 			rows = append(rows, aiCostRow{
 				Label:        label,

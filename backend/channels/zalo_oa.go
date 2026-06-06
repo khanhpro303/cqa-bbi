@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
 const (
@@ -275,6 +277,8 @@ func (z *ZaloOAAdapter) FetchRecentConversations(ctx context.Context, since time
 				userID, _ = conv["from_id"].(string)
 				displayName, _ = conv["from_display_name"].(string)
 			}
+			// Never cache Zalo's unverified-user placeholder as a real name.
+			displayName = pkg.SanitizeZaloDisplayName(displayName)
 
 			// Parse timestamp (Zalo uses milliseconds)
 			var lastMsgAt time.Time
@@ -346,7 +350,8 @@ func (z *ZaloOAAdapter) FetchMessages(ctx context.Context, conversationID string
 				senderName = "OA"
 			}
 			if from, ok := msg["from_display_name"].(string); ok && senderType == "customer" {
-				senderName = from
+				// Never cache Zalo's unverified-user placeholder as a real name.
+				senderName = pkg.SanitizeZaloDisplayName(from)
 			}
 
 			syncedMsg := SyncedMessage{
@@ -511,7 +516,10 @@ func (z *ZaloOAAdapter) FetchUserProfile(ctx context.Context, userID string) (*Z
 		UserID: userID,
 	}
 	if name, ok := data["display_name"].(string); ok {
-		profile.DisplayName = name
+		// Never surface Zalo's unverified-user placeholder as a real name — it
+		// gets cached into customer/sender records by callers (see worker verify
+		// flow), so drop it here at the source.
+		profile.DisplayName = pkg.SanitizeZaloDisplayName(name)
 	}
 	if avatar, ok := data["avatar"].(string); ok {
 		profile.Avatar = avatar

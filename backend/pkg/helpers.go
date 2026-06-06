@@ -1,10 +1,27 @@
 package pkg
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// UnverifiedZaloDisplayName is the placeholder display name Zalo returns for
+// users who have not authorized profile sharing with the OA. It is not a real
+// name: persisting it pollutes customer/sender records and renders as garbled
+// Vietnamese in the AI-cost chart, masking the genuine "unknown sender" state.
+const UnverifiedZaloDisplayName = "Khách chưa xác thực"
+
+// SanitizeZaloDisplayName drops Zalo's unverified-user placeholder, returning ""
+// so callers fall back to their normal unknown-sender handling instead of
+// caching a fake name. Any other (real) name is returned unchanged.
+func SanitizeZaloDisplayName(name string) string {
+	if strings.TrimSpace(name) == UnverifiedZaloDisplayName {
+		return ""
+	}
+	return name
+}
 
 // VNLocation is the Asia/Ho_Chi_Minh timezone (UTC+7).
 var VNLocation *time.Location
