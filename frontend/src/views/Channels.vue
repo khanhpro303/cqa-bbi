@@ -50,22 +50,26 @@
           </div>
 
           <!-- Per-channel auto-reply (webhook channels only) — separate from "hoạt động" -->
-          <div v-if="WEBHOOK_CHANNEL_TYPES.includes(ch.channel_type)" class="d-flex align-center justify-space-between mb-2">
-            <span class="text-caption text-grey">{{ $t('chatbot_channel_autoreply_short') }}</span>
-            <div class="d-flex align-center ga-3" @click.stop>
-              <span v-if="!chatbotActive" class="text-caption text-grey">{{ $t('chatbot_master_off_hint') }}</span>
-              <v-switch
-                :model-value="ch.auto_reply_enabled"
-                hide-details
-                density="compact"
-                color="success"
-                :loading="togglingAutoReplyId === ch.id"
-                :disabled="!authStore.canEdit('channels') || !ch.is_active || !chatbotActive || togglingAutoReplyId === ch.id"
-                @update:model-value="(v: any) => toggleAutoReply(ch, !!v)"
-              />
-              <span class="text-caption font-weight-medium" :class="ch.auto_reply_enabled ? 'text-success' : 'text-grey'">
-                {{ ch.auto_reply_enabled ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
-              </span>
+          <div v-if="WEBHOOK_CHANNEL_TYPES.includes(ch.channel_type)" class="mb-2">
+            <div class="d-flex align-center justify-space-between">
+              <span class="text-caption text-grey">{{ $t('chatbot_channel_autoreply_short') }}</span>
+              <div class="d-flex align-center ga-3" @click.stop>
+                <v-switch
+                  :model-value="ch.auto_reply_enabled"
+                  hide-details
+                  density="compact"
+                  color="success"
+                  :loading="togglingAutoReplyId === ch.id"
+                  :disabled="!authStore.canEdit('channels') || !ch.is_active || !chatbotActive || togglingAutoReplyId === ch.id"
+                  @update:model-value="(v: any) => toggleAutoReply(ch, !!v)"
+                />
+                <span class="text-caption font-weight-medium" :class="ch.auto_reply_enabled ? 'text-success' : 'text-grey'">
+                  {{ ch.auto_reply_enabled ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
+                </span>
+              </div>
+            </div>
+            <div v-if="!chatbotActive" class="text-right mt-n1">
+              <span class="text-caption text-grey">{{ $t('chatbot_master_off_hint') }}</span>
             </div>
           </div>
 
