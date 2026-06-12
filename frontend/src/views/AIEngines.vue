@@ -479,7 +479,7 @@
           <v-btn variant="outlined" @click="promptModalOpen = false">
             {{ $t('cancel') }}
           </v-btn>
-          <v-btn color="primary" @click="savePromptModal">
+          <v-btn variant="flat" color="primary" @click="savePromptModal">
             {{ $t('confirm') }}
           </v-btn>
         </v-card-actions>
