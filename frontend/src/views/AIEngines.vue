@@ -49,36 +49,34 @@
         class="mb-3"
       />
 
-      <v-textarea
-        v-model="langflow.systemPrompt"
+      <v-text-field
+        :model-value="langflow.systemPrompt"
         :label="$t('langflow_system_prompt')"
         :placeholder="$t('langflow_system_prompt_placeholder')"
         :hint="$t('langflow_system_prompt_hint')"
         persistent-hint
-        auto-grow
-        rows="6"
-        max-rows="20"
-        counter
-        variant="outlined"
         density="comfortable"
         prepend-inner-icon="mdi-message-text-outline"
-        class="mb-2"
+        append-inner-icon="mdi-arrow-expand-all"
+        @click="openPromptModal('public')"
+        @click:append-inner.stop="openPromptModal('public')"
+        readonly
+        class="mb-3 cursor-pointer-field"
       />
 
-      <v-textarea
-        v-model="langflow.systemPromptInternal"
+      <v-text-field
+        :model-value="langflow.systemPromptInternal"
         :label="$t('langflow_system_prompt_internal')"
         :placeholder="$t('langflow_system_prompt_internal_placeholder')"
         :hint="$t('langflow_system_prompt_internal_hint')"
         persistent-hint
-        auto-grow
-        rows="6"
-        max-rows="20"
-        counter
-        variant="outlined"
         density="comfortable"
         prepend-inner-icon="mdi-account-tie-outline"
-        class="mb-2 mt-4"
+        append-inner-icon="mdi-arrow-expand-all"
+        @click="openPromptModal('internal')"
+        @click:append-inner.stop="openPromptModal('internal')"
+        readonly
+        class="mb-3 mt-4 cursor-pointer-field"
       />
 
       <div class="d-flex ga-2 mt-4">
@@ -447,6 +445,46 @@
       v-model="groupFilterModal"
       :resources="missingGroupResources"
     />
+
+    <!-- Dialog for System Prompt Editing -->
+    <v-dialog v-model="promptModalOpen" max-width="900px" persistent>
+      <v-card>
+        <v-card-title class="text-h6 font-weight-bold d-flex align-center pa-4">
+          <v-icon start color="primary" class="mr-2">
+            {{ promptModalType === 'public' ? 'mdi-message-text-outline' : 'mdi-account-tie-outline' }}
+          </v-icon>
+          {{ promptModalType === 'public' ? $t('langflow_system_prompt') : $t('langflow_system_prompt_internal') }}
+          <v-spacer></v-spacer>
+          <v-btn icon="mdi-close" variant="text" size="small" @click="promptModalOpen = false" />
+        </v-card-title>
+        
+        <v-divider></v-divider>
+
+        <v-card-text class="pa-4">
+          <v-textarea
+            v-model="promptModalText"
+            rows="18"
+            variant="outlined"
+            density="comfortable"
+            auto-grow
+            class="font-monospace"
+            placeholder="Nhập system prompt ở đây..."
+            hide-details
+          />
+        </v-card-text>
+
+        <v-divider></v-divider>
+
+        <v-card-actions class="pa-4 d-flex justify-end ga-2">
+          <v-btn variant="outlined" @click="promptModalOpen = false">
+            {{ $t('cancel') }}
+          </v-btn>
+          <v-btn color="primary" @click="savePromptModal">
+            {{ $t('confirm') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -480,6 +518,26 @@ const showAdvanced = ref(false)
 
 const groupFilterModal = ref(false)
 const missingGroupResources = ref<string[]>([])
+
+// System Prompt Modal refs & functions
+const promptModalOpen = ref(false)
+const promptModalType = ref<'public' | 'internal'>('public')
+const promptModalText = ref('')
+
+function openPromptModal(type: 'public' | 'internal') {
+  promptModalType.value = type
+  promptModalText.value = type === 'public' ? langflow.systemPrompt : langflow.systemPromptInternal
+  promptModalOpen.value = true
+}
+
+function savePromptModal() {
+  if (promptModalType.value === 'public') {
+    langflow.systemPrompt = promptModalText.value
+  } else {
+    langflow.systemPromptInternal = promptModalText.value
+  }
+  promptModalOpen.value = false
+}
 
 const langflow = reactive({
   baseUrl: '',
@@ -800,5 +858,16 @@ onMounted(async () => {
 }
 .advanced-header:hover {
   background-color: rgba(128, 128, 128, 0.08);
+}
+.cursor-pointer-field :deep(input) {
+  cursor: pointer !important;
+}
+.cursor-pointer-field :deep(.v-field) {
+  cursor: pointer !important;
+}
+.font-monospace :deep(textarea) {
+  font-family: monospace, Courier, monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
 }
 </style>
