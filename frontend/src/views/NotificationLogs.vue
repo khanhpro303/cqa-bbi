@@ -196,6 +196,11 @@ watch(sourceFilter, () => {
   gap: 8px;
 }
 .v-btn-toggle :deep(.v-btn) {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)) !important;
   border-radius: 8px !important;
+}
+.v-btn-toggle :deep(.v-btn--selected) {
+  border-color: rgb(var(--v-theme-primary)) !important;
+  color: rgb(var(--v-theme-primary)) !important;
 }
 </style>
