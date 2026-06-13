@@ -399,6 +399,9 @@ export default {
     'VD: Bạn là trợ lý nội bộ của BBI. Nhận mã/tên khách hàng để tra cứu...',
   langflow_system_prompt_internal_hint:
     'Prompt cho luồng nội bộ / nhân viên (phạm vi ALL). Để trống sẽ dùng biến SYSTEM_PROMPT riêng của luồng đó — KHÔNG kế thừa prompt public ở trên.',
+  crm_system_prompt_crm_analysis: 'System Prompt phân tích khách hàng CRM',
+  crm_system_prompt_crm_analysis_placeholder: 'VD: Bạn là chuyên gia phân tích hành vi khách hàng...',
+  crm_system_prompt_crm_analysis_hint: 'Prompt dùng để định hướng AI phân tích lịch sử chat của khách hàng trong phần CRM.',
 
   // ERP Cloudify Configuration
   erp_config_title: 'Tích hợp dữ liệu ERP (Cloudify ERP Integration)',

@@ -399,6 +399,9 @@ export default {
     'e.g. You are BBI internal staff assistant. Accept a customer code/name to look up...',
   langflow_system_prompt_internal_hint:
     'Prompt for the private / internal staff flow (ALL scope). Leave empty to use that flow\'s own SYSTEM_PROMPT — it does NOT inherit the public prompt above.',
+  crm_system_prompt_crm_analysis: 'CRM Customer Analysis System Prompt',
+  crm_system_prompt_crm_analysis_placeholder: 'e.g. You are a customer behavior analyst...',
+  crm_system_prompt_crm_analysis_hint: 'The prompt used to direct the AI in analyzing customer chat history within the CRM.',
 
   // ERP Cloudify Configuration
   erp_config_title: 'Cloudify ERP Integration',

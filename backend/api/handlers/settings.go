@@ -226,6 +226,7 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		LangflowToken        string `json:"langflow_token"`
 		SystemPrompt         string `json:"system_prompt"`
 		SystemPromptInternal string `json:"system_prompt_internal"`
+		SystemPromptCrmAnalysis string `json:"system_prompt_crm_analysis"`
 
 		// Astra DB configuration
 		AstraDBAPIEndpoint       string `json:"astradb_api_endpoint"`
@@ -282,6 +283,13 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		upsertSetting(tenantID, "ai_engine_system_prompt_internal", req.SystemPromptInternal, nil)
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_system_prompt_internal").Delete(&models.AppSetting{})
+	}
+
+	// CRM Customer Analysis system prompt
+	if req.SystemPromptCrmAnalysis != "" {
+		upsertSetting(tenantID, "ai_engine_system_prompt_crm_analysis", req.SystemPromptCrmAnalysis, nil)
+	} else {
+		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_system_prompt_crm_analysis").Delete(&models.AppSetting{})
 	}
 
 	// Token

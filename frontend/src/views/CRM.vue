@@ -153,6 +153,7 @@
                 </td>
                 <td class="text-caption">{{ new Date(c.updated_at).toLocaleString() }}</td>
                 <td>
+                  <v-btn icon="mdi-robot" size="small" color="primary" variant="text" @click="openAIAnalysis(c)" title="Phân tích AI" class="mr-1" />
                   <v-btn icon="mdi-delete" size="small" color="error" variant="text" @click="deleteCustomer(c.id)" title="Xóa khách hàng" />
                 </td>
               </tr>
@@ -1055,6 +1056,103 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog for AI Customer Analysis -->
+    <v-dialog v-model="aiAnalysisDialog" max-width="800" scrollable>
+      <v-card class="rounded-xl overflow-hidden border border-teal-lighten-4">
+        <v-card-title class="text-white px-6 py-4 d-flex align-center" style="background: linear-gradient(135deg, #00897B, #004D40);">
+          <v-icon start size="28" class="mr-2">mdi-robot-outline</v-icon>
+          <div class="text-h6 font-weight-bold">
+            {{ $t('crm_ai_analysis_title') }} - {{ selectedCustomer?.name }}
+          </div>
+          <v-spacer />
+          <v-btn icon="mdi-close" variant="text" color="white" size="small" @click="aiAnalysisDialog = false" />
+        </v-card-title>
+
+        <v-divider />
+
+        <v-card-text class="pa-6 bg-grey-lighten-5" style="max-height: 550px;">
+          <!-- Loading state -->
+          <div v-if="loadingAnalysis" class="d-flex flex-column align-center justify-center py-12">
+            <v-progress-circular indeterminate color="teal" size="64" width="6" class="mb-4" />
+            <div class="text-subtitle-1 font-weight-medium text-teal-darken-2 mb-1">
+              Đang phân tích lịch sử trò chuyện...
+            </div>
+            <div class="text-caption text-grey-darken-1">
+              AI đang tổng hợp và đánh giá dữ liệu từ Astra DB. Quá trình này có thể mất vài giây.
+            </div>
+          </div>
+
+          <!-- Analysis result -->
+          <div v-else-if="analysisResult">
+            <!-- Customer profile card inside analysis -->
+            <v-card variant="outlined" color="teal-lighten-4" class="mb-6 bg-white rounded-lg pa-4 border border-teal-lighten-3">
+              <v-row align="center">
+                <v-col cols="auto">
+                  <v-avatar size="48" color="teal-lighten-5">
+                    <v-img v-if="selectedCustomer?.avatar" :src="selectedCustomer.avatar" />
+                    <v-icon v-else color="teal" size="28">mdi-account</v-icon>
+                  </v-avatar>
+                </v-col>
+                <v-col>
+                  <div class="font-weight-black text-teal-darken-3 text-subtitle-1">{{ selectedCustomer?.name }}</div>
+                  <div class="text-caption text-grey-darken-1">
+                    Zalo ID: <code>{{ selectedCustomer?.zalo_user_id }}</code> | SĐT: {{ selectedCustomer?.phone_number || 'Chưa liên kết' }}
+                  </div>
+                </v-col>
+                <v-col cols="auto" v-if="analysisModel">
+                  <v-chip size="small" color="teal-darken-2" variant="flat" class="font-weight-bold">
+                    {{ analysisProvider }} / {{ analysisModel }}
+                  </v-chip>
+                </v-col>
+              </v-row>
+            </v-card>
+
+            <!-- Rendered Markdown style analysis text -->
+            <div class="markdown-body text-body-1 text-grey-darken-3 px-2 line-height-relaxed" v-html="formattedAnalysis"></div>
+          </div>
+
+          <!-- Error / Empty state -->
+          <div v-else class="d-flex flex-column align-center justify-center py-12 text-center">
+            <v-icon color="grey-lighten-1" size="64" class="mb-4">mdi-alert-circle-outline</v-icon>
+            <div class="text-subtitle-1 font-weight-bold text-grey-darken-2 mb-1">
+              Không tìm thấy dữ liệu phân tích
+            </div>
+            <div class="text-body-2 text-grey-darken-1 max-width-500">
+              Khách hàng này chưa có hội thoại nào được đồng bộ vào Astra DB hoặc cấu hình AI đang gặp lỗi.
+            </div>
+          </div>
+        </v-card-text>
+
+        <v-divider />
+
+        <v-card-actions class="px-6 py-4 bg-white d-flex align-center">
+          <v-btn
+            v-if="analysisResult"
+            prepend-icon="mdi-content-copy"
+            variant="outlined"
+            color="teal"
+            @click="copyAnalysis"
+          >
+            Sao chép báo cáo
+          </v-btn>
+          <v-spacer />
+          <v-btn
+            prepend-icon="mdi-refresh"
+            variant="tonal"
+            color="teal-darken-2"
+            :loading="loadingAnalysis"
+            @click="fetchAnalysis"
+            class="mr-2"
+          >
+            Phân tích lại
+          </v-btn>
+          <v-btn color="teal" variant="elevated" @click="aiAnalysisDialog = false">
+            Đóng
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-snackbar v-model="snack" :color="snackColor" timeout="3000">{{ snackText }}</v-snackbar>
 
     <ProductGroupRequiredModal
@@ -1783,6 +1881,72 @@ const loadingGroupEndpoints = ref(false)
 const savingGroupEndpoints = ref(false)
 const groupFilterModal = ref(false)
 const missingGroupResources = ref<string[]>([])
+
+// AI Customer Analysis Dialog State & Methods
+const aiAnalysisDialog = ref(false)
+const selectedCustomer = ref<any>(null)
+const analysisResult = ref('')
+const analysisModel = ref('')
+const analysisProvider = ref('')
+const loadingAnalysis = ref(false)
+
+function openAIAnalysis(customer: any) {
+  selectedCustomer.value = customer
+  analysisResult.value = ''
+  analysisModel.value = ''
+  analysisProvider.value = ''
+  aiAnalysisDialog.value = true
+  fetchAnalysis()
+}
+
+async function fetchAnalysis() {
+  if (!selectedCustomer.value) return
+  loadingAnalysis.value = true
+  try {
+    const { data } = await api.post(`/tenants/${tenantId.value}/crm/customers/${selectedCustomer.value.id}/ai-analysis`)
+    analysisResult.value = data.analysis || ''
+    analysisModel.value = data.model || ''
+    analysisProvider.value = data.provider || ''
+  } catch (err: any) {
+    analysisResult.value = ''
+    showSnack(err.response?.data?.error || 'Phân tích thất bại', 'error')
+  } finally {
+    loadingAnalysis.value = false
+  }
+}
+
+const formattedAnalysis = computed(() => {
+  if (!analysisResult.value) return ''
+  let text = analysisResult.value
+  
+  // Escape HTML first to prevent XSS
+  text = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    
+  // Replace headings: ### -> h6, ## -> h5, # -> h4
+  text = text.replace(/^### (.*?)$/gm, '<h6 class="text-subtitle-1 font-weight-bold mt-4 mb-2 text-teal-darken-3">$1</h6>')
+  text = text.replace(/^## (.*?)$/gm, '<h5 class="text-h6 font-weight-bold mt-4 mb-2 text-teal-darken-3">$1</h5>')
+  text = text.replace(/^# (.*?)$/gm, '<h4 class="text-h5 font-weight-bold mt-4 mb-2 text-teal-darken-4">$1</h4>')
+  
+  // Replace bold: **text** -> <strong>text</strong>
+  text = text.replace(/\*\*(.*?)\*\*/g, '<strong class="font-weight-black text-teal-darken-4">$1</strong>')
+  
+  // Replace bullet points: - item or * item -> <li>
+  text = text.replace(/^[-\*] (.*?)$/gm, '<li class="ml-4 mb-1">$1</li>')
+  
+  // Replace paragraph break
+  text = text.replace(/\n/g, '<br>')
+  
+  return text
+})
+
+function copyAnalysis() {
+  if (!analysisResult.value) return
+  navigator.clipboard.writeText(analysisResult.value)
+  showSnack('Đã sao chép báo cáo vào clipboard', 'success')
+}
 
 const scopeOptions = [
   { title: 'Tất cả', value: 'all' },

@@ -79,6 +79,21 @@
         class="mb-3 mt-4 cursor-pointer-field"
       />
 
+      <v-text-field
+        :model-value="langflow.systemPromptCrmAnalysis"
+        :label="$t('crm_system_prompt_crm_analysis')"
+        placeholder="Nhấn để thiết lập prompt phân tích CRM..."
+        :hint="$t('crm_system_prompt_crm_analysis_hint')"
+        persistent-hint
+        density="comfortable"
+        prepend-inner-icon="mdi-robot"
+        append-inner-icon="mdi-arrow-expand-all"
+        @click="openPromptModal('crm_analysis')"
+        @click:append-inner.stop="openPromptModal('crm_analysis')"
+        readonly
+        class="mb-3 mt-4 cursor-pointer-field"
+      />
+
       <div class="d-flex ga-2 mt-4">
         <v-btn color="primary" :loading="saving" @click="save">{{ $t('save') }}</v-btn>
         <v-btn variant="outlined" :loading="testing" @click="testConnection">
@@ -451,9 +466,9 @@
       <v-card>
         <v-card-title class="text-h6 font-weight-bold d-flex align-center pa-4">
           <v-icon start color="primary" class="mr-2">
-            {{ promptModalType === 'public' ? 'mdi-message-text-outline' : 'mdi-account-tie-outline' }}
+            {{ promptModalType === 'public' ? 'mdi-message-text-outline' : (promptModalType === 'internal' ? 'mdi-account-tie-outline' : 'mdi-robot') }}
           </v-icon>
-          {{ promptModalType === 'public' ? $t('langflow_system_prompt') : $t('langflow_system_prompt_internal') }}
+          {{ promptModalType === 'public' ? $t('langflow_system_prompt') : (promptModalType === 'internal' ? $t('langflow_system_prompt_internal') : $t('crm_system_prompt_crm_analysis')) }}
           <v-spacer></v-spacer>
           <v-btn icon="mdi-close" variant="text" size="small" @click="promptModalOpen = false" />
         </v-card-title>
@@ -521,20 +536,28 @@ const missingGroupResources = ref<string[]>([])
 
 // System Prompt Modal refs & functions
 const promptModalOpen = ref(false)
-const promptModalType = ref<'public' | 'internal'>('public')
+const promptModalType = ref<'public' | 'internal' | 'crm_analysis'>('public')
 const promptModalText = ref('')
 
-function openPromptModal(type: 'public' | 'internal') {
+function openPromptModal(type: 'public' | 'internal' | 'crm_analysis') {
   promptModalType.value = type
-  promptModalText.value = type === 'public' ? langflow.systemPrompt : langflow.systemPromptInternal
+  if (type === 'public') {
+    promptModalText.value = langflow.systemPrompt
+  } else if (type === 'internal') {
+    promptModalText.value = langflow.systemPromptInternal
+  } else {
+    promptModalText.value = langflow.systemPromptCrmAnalysis
+  }
   promptModalOpen.value = true
 }
 
 function savePromptModal() {
   if (promptModalType.value === 'public') {
     langflow.systemPrompt = promptModalText.value
-  } else {
+  } else if (promptModalType.value === 'internal') {
     langflow.systemPromptInternal = promptModalText.value
+  } else {
+    langflow.systemPromptCrmAnalysis = promptModalText.value
   }
   promptModalOpen.value = false
 }
@@ -546,6 +569,7 @@ const langflow = reactive({
   token: '',
   systemPrompt: '',
   systemPromptInternal: '',
+  systemPromptCrmAnalysis: '',
 })
 
 const erp = reactive({
@@ -619,6 +643,7 @@ async function loadSettings() {
     langflow.publicFlowId = settings.ai_engine_langflow_public_flow_id || ''
     langflow.systemPrompt = settings.ai_engine_system_prompt || ''
     langflow.systemPromptInternal = settings.ai_engine_system_prompt_internal || ''
+    langflow.systemPromptCrmAnalysis = settings.ai_engine_system_prompt_crm_analysis || ''
 
     if (settings.ai_engine_langflow_token) {
       langflow.token = settings.ai_engine_langflow_token
@@ -698,6 +723,7 @@ async function save() {
       langflow_token: langflow.token,
       system_prompt: langflow.systemPrompt,
       system_prompt_internal: langflow.systemPromptInternal,
+      system_prompt_crm_analysis: langflow.systemPromptCrmAnalysis,
 
       astradb_api_endpoint: astradb.apiEndpoint,
       astradb_token: astradb.token,

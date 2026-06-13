@@ -240,6 +240,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/crm/customers/invite", middleware.RequireRole("owner", "admin"), handlers.InviteZaloCustomer)
 			tenant.POST("/crm/customers/:id/approve", middleware.RequireRole("owner", "admin"), handlers.ApproveZaloCustomer)
 			tenant.DELETE("/crm/customers/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteZaloCustomer)
+			tenant.POST("/crm/customers/:id/ai-analysis", handlers.AnalyzeZaloCustomerChat)
 
 			tenant.GET("/crm/cloudify-customers", handlers.ListCloudifyCustomers(cfg))
 			tenant.POST("/crm/cloudify-customers/assign-phone", middleware.RequireRole("owner", "admin"), handlers.AssignCloudifyCustomerPhone(cfg))

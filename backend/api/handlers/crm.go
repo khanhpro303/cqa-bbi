@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
@@ -876,6 +877,265 @@ func DeleteZaloCustomer(c *gin.Context) {
 
 	tx.Commit()
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+func getAIClientForTenant(ctx context.Context, tenantID string) (ai.AIProvider, error) {
+	provider := "claude"
+	var providerSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_provider'", tenantID).First(&providerSetting).Error; err == nil && providerSetting.ValuePlain != "" {
+		provider = providerSetting.ValuePlain
+	}
+
+	var setting models.AppSetting
+	keyFound := false
+	for _, key := range ai.ProviderAPIKeySettingKeys(provider) {
+		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&setting).Error; err == nil {
+			keyFound = true
+			break
+		}
+	}
+
+	cfg, _ := config.Load()
+	apiKey := ""
+	if keyFound {
+		if setting.ValueEncrypted != nil && len(setting.ValueEncrypted) > 0 {
+			decrypted, err := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt API key: %w", err)
+			}
+			apiKey = string(decrypted)
+		} else {
+			apiKey = setting.ValuePlain
+		}
+	}
+
+	if apiKey == "" {
+		if provider == "openai" {
+			apiKey = cfg.LangflowAPIKey
+		}
+	}
+
+	if apiKey == "" {
+		return nil, fmt.Errorf("API key not configured for provider %s", provider)
+	}
+
+	model := "claude-haiku-4-5"
+	if provider == "gemini" {
+		model = "gemini-2.0-flash"
+	} else if provider == "openai" {
+		model = "gpt-5-mini"
+	}
+	var modelSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_model'", tenantID).First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
+		model = modelSetting.ValuePlain
+	}
+
+	var baseURL string
+	var baseURLSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_base_url'", tenantID).First(&baseURLSetting).Error; err == nil {
+		baseURL = baseURLSetting.ValuePlain
+	}
+
+	switch provider {
+	case "claude":
+		return ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL), nil
+	case "gemini":
+		return ai.NewGeminiProvider(apiKey, model, baseURL), nil
+	case "openai":
+		return ai.NewOpenAIProvider(apiKey, model, baseURL), nil
+	default:
+		return nil, fmt.Errorf("unsupported AI provider: %s", provider)
+	}
+}
+
+// AnalyzeZaloCustomerChat queries the chat history from Astra DB for a customer and runs AI analysis.
+func AnalyzeZaloCustomerChat(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	customerID := c.Param("id")
+
+	// 1. Fetch customer from database
+	var customer models.ZaloCustomer
+	if err := db.DB.Where("tenant_id = ? AND id = ?", tenantID, customerID).First(&customer).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "customer_not_found"})
+		return
+	}
+
+	if customer.ZaloUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "customer_has_no_zalo_user_id"})
+		return
+	}
+
+	// 2. Load Astra DB credentials
+	cfg, _ := config.Load()
+	apiEndpoint := cfg.AstraDBAPIEndpoint
+	token := cfg.AstraDBToken
+	keyspace := "cqa_bbi"
+	if cfg.AstraDBKeyspace != "" {
+		keyspace = cfg.AstraDBKeyspace
+	}
+	collection := "zalo_history"
+	if cfg.AstraDBProductCollection != "" {
+		collection = cfg.AstraDBProductCollection
+	}
+
+	// Fallback to database settings
+	var endpointSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_api_endpoint").First(&endpointSetting).Error; err == nil && endpointSetting.ValuePlain != "" {
+		apiEndpoint = endpointSetting.ValuePlain
+	}
+	var tokenSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_token").First(&tokenSetting).Error; err == nil {
+		if len(tokenSetting.ValueEncrypted) > 0 {
+			if decrypted, err := pkg.Decrypt(tokenSetting.ValueEncrypted, cfg.EncryptionKey); err == nil {
+				token = string(decrypted)
+			}
+		} else if tokenSetting.ValuePlain != "" {
+			token = tokenSetting.ValuePlain
+		}
+	}
+	var keyspaceSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_keyspace").First(&keyspaceSetting).Error; err == nil && keyspaceSetting.ValuePlain != "" {
+		keyspace = keyspaceSetting.ValuePlain
+	}
+	var collectionSetting models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "astradb_product_collection").First(&collectionSetting).Error; err == nil && collectionSetting.ValuePlain != "" {
+		collection = collectionSetting.ValuePlain
+	}
+
+	if apiEndpoint == "" || token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "astradb_not_configured"})
+		return
+	}
+
+	// 3. Query chat history from Astra DB
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
+	
+	payload := map[string]interface{}{
+		"find": map[string]interface{}{
+			"filter": map[string]interface{}{
+				"metadata.zalo_user_id": customer.ZaloUserID,
+			},
+			"options": map[string]interface{}{
+				"limit": 1000,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "marshal_payload_failed", "details": err.Error()})
+		return
+	}
+
+	req, err := http.NewRequestWithContext(c.Request.Context(), "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create_request_failed", "details": err.Error()})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Token", token)
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "astradb_request_failed", "details": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("astradb_http_status_%d", resp.StatusCode)})
+		return
+	}
+
+	var astraResp struct {
+		Data struct {
+			Documents []struct {
+				PageContent string `json:"page_content"`
+				Metadata    struct {
+					Role      string `json:"role"`
+					CreatedAt int64  `json:"created_at"`
+				} `json:"metadata"`
+			} `json:"documents"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&astraResp); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "decode_response_failed", "details": err.Error()})
+		return
+	}
+
+	if len(astraResp.Errors) > 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "astradb_error", "details": astraResp.Errors[0].Message})
+		return
+	}
+
+	docs := astraResp.Data.Documents
+	if len(docs) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"analysis": "Không tìm thấy lịch sử chat nào trong database của khách hàng này để phân tích.",
+			"empty":    true,
+		})
+		return
+	}
+
+	// 4. Sort messages chronologically by created_at (ascending)
+	for i := 0; i < len(docs); i++ {
+		for j := i + 1; j < len(docs); j++ {
+			if docs[i].Metadata.CreatedAt > docs[j].Metadata.CreatedAt {
+				docs[i], docs[j] = docs[j], docs[i]
+			}
+		}
+	}
+
+	// 5. Construct conversation transcript
+	var sb strings.Builder
+	for _, doc := range docs {
+		roleLabel := "Nhân viên/AI"
+		if doc.Metadata.Role == "user" {
+			roleLabel = "Khách hàng"
+		}
+		sb.WriteString(fmt.Sprintf("%s: %s\n", roleLabel, doc.PageContent))
+	}
+	transcript := sb.String()
+
+	// 6. Get active AI client
+	aiClient, err := getAIClientForTenant(c.Request.Context(), tenantID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed_to_initialize_ai_client", "details": err.Error()})
+		return
+	}
+
+	// 7. Get system prompt for customer analysis
+	var promptSetting models.AppSetting
+	systemPrompt := `Bạn là một chuyên gia phân tích hành vi khách hàng và hỗ trợ CRM.
+Hãy phân tích lịch sử trò chuyện của khách hàng sau đây và cung cấp một báo cáo phân tích chi tiết.
+Báo cáo phân tích phải cấu trúc rõ ràng bằng tiếng Việt, bao gồm các phần sau:
+1. **Tóm tắt nhu cầu chính**: Khách hàng thường hỏi về dòng sản phẩm/dịch vụ nào? Hành vi mua sắm chính của họ là gì?
+2. **Đánh giá thái độ & tính cách**: Thái độ của họ ra sao (vui vẻ, khó tính, gấp gáp...)? Có gặp vấn đề/khiếu nại gì chưa được giải quyết ổn thỏa không?
+3. **Đề xuất chiến lược CSKH**: Đề xuất cách tiếp cận bán hàng, tư vấn sản phẩm, chương trình ưu đãi cụ thể để tối ưu hóa tỷ lệ chuyển đổi hoặc giữ chân khách hàng này.
+
+Hãy viết chuyên nghiệp dưới dạng Markdown, có tiêu đề và gạch đầu dòng rõ ràng.`
+
+	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_engine_system_prompt_crm_analysis'", tenantID).First(&promptSetting).Error; err == nil && promptSetting.ValuePlain != "" {
+		systemPrompt = promptSetting.ValuePlain
+	}
+
+	// 8. Analyze with AI
+	aiResp, err := aiClient.AnalyzeChat(c.Request.Context(), systemPrompt, transcript)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ai_analysis_failed", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"analysis": aiResp.Content,
+		"model":    aiResp.Model,
+		"provider": aiResp.Provider,
+	})
 }
 
 // PostgreSQL Profiles Dropdown
