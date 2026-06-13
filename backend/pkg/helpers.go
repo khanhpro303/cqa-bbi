@@ -13,11 +13,35 @@ import (
 // Vietnamese in the AI-cost chart, masking the genuine "unknown sender" state.
 const UnverifiedZaloDisplayName = "Khách chưa xác thực"
 
+// IsUnverifiedPlaceholder checks if the display name is an unverified user placeholder
+// returned by Zalo (either "Khách chưa xác thực", "Khách chưa xác định", or common garbled variants).
+func IsUnverifiedPlaceholder(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	// Check for correct UTF-8 strings
+	if strings.Contains(lower, "khách chưa") ||
+		strings.Contains(lower, "chưa xác thực") ||
+		strings.Contains(lower, "chưa xác định") {
+		return true
+	}
+	// Check for common garbled UTF-8/ISO-8859-1 (Mojibake) strings
+	if strings.Contains(lower, "khã¡ch chæ°a") ||
+		strings.Contains(lower, "chæ°a xã¡c thá»±c") ||
+		strings.Contains(lower, "chæ°a xã¡c ä‘á»‹nh") ||
+		strings.Contains(lower, "chæ°a xã¡c") {
+		return true
+	}
+	return false
+}
+
 // SanitizeZaloDisplayName drops Zalo's unverified-user placeholder, returning ""
 // so callers fall back to their normal unknown-sender handling instead of
 // caching a fake name. Any other (real) name is returned unchanged.
 func SanitizeZaloDisplayName(name string) string {
-	if strings.TrimSpace(name) == UnverifiedZaloDisplayName {
+	if IsUnverifiedPlaceholder(name) {
 		return ""
 	}
 	return name

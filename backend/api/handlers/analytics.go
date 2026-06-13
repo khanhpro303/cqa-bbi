@@ -162,7 +162,7 @@ func GetAICostAnalytics(c *gin.Context) {
 			// unverified-user placeholder (no longer written, but old logs keep
 			// it) — collapse to "Unknown (<last 4 of id>)" rather than a raw
 			// Zalo ID or garbled Vietnamese.
-			if label == "" || label == pkg.UnverifiedZaloDisplayName {
+			if label == "" || pkg.IsUnverifiedPlaceholder(label) {
 				label = unknownSenderLabel(er.SenderExternalID)
 			}
 			rows = append(rows, aiCostRow{

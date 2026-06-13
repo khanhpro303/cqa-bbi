@@ -10,6 +10,10 @@ func TestSanitizeZaloDisplayName(t *testing.T) {
 	}{
 		{"unverified placeholder dropped to empty", UnverifiedZaloDisplayName, ""},
 		{"placeholder with surrounding whitespace dropped", "  " + UnverifiedZaloDisplayName + " ", ""},
+		{"unidentified placeholder dropped to empty", "Khách chưa xác định", ""},
+		{"unidentified placeholder with surrounding whitespace dropped", "  Khách chưa xác định  ", ""},
+		{"garbled unverified placeholder dropped to empty", "KhÃ¡ch chÆ°a xÃ¡c thá»±c", ""},
+		{"garbled unidentified placeholder dropped to empty", "KhÃ¡ch chÆ°a xÃ¡c Ä‘á»‹nh", ""},
 		{"real name kept unchanged", "Nguyễn Văn A", "Nguyễn Văn A"},
 		{"empty stays empty", "", ""},
 	}
