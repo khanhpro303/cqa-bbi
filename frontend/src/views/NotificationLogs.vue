@@ -7,16 +7,15 @@
         <v-btn-toggle
           v-model="sourceFilter"
           density="comfortable"
-          variant="outlined"
-          divided
           mandatory
           color="primary"
+          class="bg-transparent"
         >
-          <v-btn value="all" size="small">Tất cả</v-btn>
-          <v-btn value="job" size="small">
+          <v-btn value="all" size="small" variant="outlined">Tất cả</v-btn>
+          <v-btn value="job" size="small" variant="outlined">
             <v-icon start size="small">mdi-robot-outline</v-icon>Tác vụ AI
           </v-btn>
-          <v-btn value="campaign" size="small">
+          <v-btn value="campaign" size="small" variant="outlined">
             <v-icon start size="small">mdi-bullhorn-outline</v-icon>Chiến dịch
           </v-btn>
         </v-btn-toggle>
@@ -191,3 +190,12 @@ watch(sourceFilter, () => {
   }
 })
 </script>
+
+<style scoped>
+.v-btn-toggle {
+  gap: 8px;
+}
+.v-btn-toggle :deep(.v-btn) {
+  border-radius: 8px !important;
+}
+</style>
