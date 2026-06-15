@@ -55,7 +55,7 @@
               <span class="text-caption text-grey">{{ $t('chatbot_channel_autoreply_short') }}</span>
               <div class="d-flex align-center ga-3" @click.stop>
                 <v-switch
-                  :model-value="ch.auto_reply_enabled"
+                  :model-value="ch.auto_reply_enabled && chatbotActive"
                   hide-details
                   density="compact"
                   color="success"
@@ -63,8 +63,8 @@
                   :disabled="!authStore.canEdit('channels') || !ch.is_active || !chatbotActive || togglingAutoReplyId === ch.id"
                   @update:model-value="(v: any) => toggleAutoReply(ch, !!v)"
                 />
-                <span class="text-caption font-weight-medium" :class="ch.auto_reply_enabled ? 'text-success' : 'text-grey'">
-                  {{ ch.auto_reply_enabled ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
+                <span class="text-caption font-weight-medium" :class="(ch.auto_reply_enabled && chatbotActive) ? 'text-success' : 'text-grey'">
+                  {{ (ch.auto_reply_enabled && chatbotActive) ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
                 </span>
               </div>
             </div>
