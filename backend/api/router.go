@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
+	stdhtml "html"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -29,18 +32,25 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// Serve static frontend files in production
 	if cfg.IsProduction() {
+		serveFrontendIndex := frontendIndexHandler("./static/index.html")
 		r.Static("/assets", "./static/assets")
 		r.Static("/guides", "./static/guides")
 		r.StaticFile("/favicon.png", "./static/favicon.png")
+		r.StaticFile("/favicon.ico", "./static/assets/brand/icons/favicon.ico")
 		r.StaticFile("/bbi-logo.ico", "./static/bbi-logo.ico")
-		r.StaticFile("/", "./static/index.html")
+		r.GET("/site.webmanifest", func(c *gin.Context) {
+			c.Header("Cache-Control", "public, max-age=3600")
+			c.Header("Content-Type", "application/manifest+json")
+			c.File("./static/assets/brand/site.webmanifest")
+		})
+		r.GET("/", serveFrontendIndex)
 		r.NoRoute(func(c *gin.Context) {
 			// SPA fallback: serve index.html for non-API routes
 			if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
 				c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
 				return
 			}
-			c.File("./static/index.html")
+			serveFrontendIndex(c)
 		})
 	}
 
@@ -358,6 +368,44 @@ func corsMiddleware(cfg *config.Config) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+const frontendOriginPlaceholder = "__BBI_APP_ORIGIN__"
+
+func frontendIndexHandler(indexPath string) gin.HandlerFunc {
+	indexTemplate, err := os.ReadFile(indexPath)
+	if err != nil {
+		log.Printf("[frontend] failed to preload %s: %v", indexPath, err)
+	}
+
+	return func(c *gin.Context) {
+		if len(indexTemplate) == 0 {
+			c.File(indexPath)
+			return
+		}
+
+		content := renderFrontendIndex(indexTemplate, requestOrigin(c))
+		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
+	}
+}
+
+func renderFrontendIndex(indexTemplate []byte, origin string) []byte {
+	escapedOrigin := stdhtml.EscapeString(strings.TrimRight(origin, "/"))
+	return bytes.ReplaceAll(
+		indexTemplate,
+		[]byte(frontendOriginPlaceholder),
+		[]byte(escapedOrigin),
+	)
+}
+
+func requestOrigin(c *gin.Context) string {
+	scheme := "http"
+	forwardedProto := strings.TrimSpace(strings.Split(c.GetHeader("X-Forwarded-Proto"), ",")[0])
+	if c.Request.TLS != nil || strings.EqualFold(forwardedProto, "https") {
+		scheme = "https"
+	}
+
+	return scheme + "://" + c.Request.Host
 }
 
 func securityHeaders() gin.HandlerFunc {
