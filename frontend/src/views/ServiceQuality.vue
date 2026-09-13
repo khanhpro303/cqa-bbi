@@ -158,7 +158,7 @@
         <v-card-title class="d-flex align-center flex-wrap ga-2">
           <div>
             <div class="text-subtitle-1 font-weight-bold"><v-icon start color="primary">mdi-chart-box-outline</v-icon>Nội dung trao đổi</div>
-            <div class="text-caption text-medium-emphasis mt-1">
+            <div class="panel-description text-medium-emphasis mt-1">
               Chỉ tổng hợp {{ insightAggregates.eligibleConversations }} hội thoại có phân tích AI mới, được tạo trong khoảng ngày đã chọn.
               Đã loại {{ insightAggregates.excludedStale }} kết quả cũ sau khi hội thoại thay đổi và {{ insightAggregates.excludedOutsideWindow }} kết quả ngoài kỳ.
             </div>
@@ -746,6 +746,15 @@ onBeforeUnmount(() => {
 
 .kpi-card {
   min-height: 104px;
+}
+
+.panel-description {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .service-quality-page :deep(.v-card-title) {

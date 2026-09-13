@@ -7,7 +7,7 @@
             <v-icon start color="primary">mdi-label-multiple-outline</v-icon>
             Phân loại thủ công trên Meta Inbox
           </div>
-          <div class="text-caption text-medium-emphasis mt-1">
+          <div class="panel-description text-medium-emphasis mt-1">
             Đếm hội thoại theo nhãn mà nhân viên gắn trực tiếp trong Meta Inbox. Kết quả này không dùng AI và không đọc được mục giai đoạn khách hàng có sẵn của Meta.
           </div>
         </div>
@@ -635,6 +635,15 @@ onBeforeUnmount(() => {
 .title-block,
 .min-width-0 {
   min-width: 0;
+}
+
+.panel-description {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .kpi-card {
