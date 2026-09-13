@@ -83,6 +83,15 @@ func (a *Analyzer) runJobInternal(ctx context.Context, job models.Job, maxConver
 	return a.runJobInternalExt(ctx, job, maxConversations, injectedProvider, fullRerun, "", "", nil, false)
 }
 
+// transcriptSinceForJob keeps incremental conversation selection intact while
+// giving structured Messenger extraction the complete conversation history.
+func transcriptSinceForJob(job models.Job, since time.Time) time.Time {
+	if job.JobType == "classification" && ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+		return time.Time{}
+	}
+	return since
+}
+
 func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxConversations int, injectedProvider ai.AIProvider, fullRerun bool, dateFrom, dateTo string, sinceOverride *time.Time, excludeAnalyzed bool) (retRun *models.JobRun, retErr error) {
 	// Single chokepoint for job-error notifications. Every run entry point funnels
 	// through here, and every error exit (early failRun, ERP/chatbot sub-jobs, and
@@ -230,6 +239,7 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 	if batchSize < 1 {
 		batchSize = 5
 	}
+	transcriptSince := transcriptSinceForJob(job, since)
 
 	issuesFound := 0
 	passCount := 0
@@ -238,7 +248,7 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 	firstAIErr := ""
 
 	if batchMode {
-		issuesFound, passCount, analyzedCount, errorCount, firstAIErr = a.runBatchMode(ctx, provider, job, run, conversations, since, batchSize)
+		issuesFound, passCount, analyzedCount, errorCount, firstAIErr = a.runBatchMode(ctx, provider, job, run, conversations, transcriptSince, batchSize)
 	} else {
 
 		for _, conv := range conversations {
@@ -253,8 +263,8 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 			// Load messages
 			var messages []models.Message
 			mq := db.DB.Where("conversation_id = ?", conv.ID)
-			if !since.IsZero() {
-				mq = mq.Where("sent_at > ?", since)
+			if !transcriptSince.IsZero() {
+				mq = mq.Where("sent_at > ?", transcriptSince)
 			}
 			mq.Order("sent_at ASC").Find(&messages)
 
@@ -269,7 +279,7 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 					SenderType: m.SenderType,
 					SenderName: m.SenderName,
 					Content:    m.Content,
-					SentAt:     pkg.ToVN(m.SentAt).Format("15:04"),
+					SentAt:     pkg.ToVN(m.SentAt).Format("2006-01-02T15:04:05-07:00"),
 				}
 			}
 			transcript := ai.FormatChatTranscript(chatMessages)
@@ -328,13 +338,19 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 			db.DB.Create(&usageLog)
 
 			// Parse and save results
-			count, passed, err := a.saveResults(run.ID, job.TenantID, conv.ID, job.JobType, aiResp.Content)
+			count, passed, err := a.saveResults(run.ID, job.TenantID, conv.ID, job.JobType, aiResp.Content, conv.LastMessageAt)
 			if err != nil {
 				log.Printf("[analyzer] save results error for %s: %v", conv.ID, err)
-			}
-			issuesFound += count
-			if passed {
-				passCount++
+				analyzedCount--
+				errorCount++
+				if firstAIErr == "" {
+					firstAIErr = err.Error()
+				}
+			} else {
+				issuesFound += count
+				if passed {
+					passCount++
+				}
 			}
 
 			// Update progress so frontend can poll real-time status
@@ -476,7 +492,21 @@ func (a *Analyzer) getProvider(job models.Job) (ai.AIProvider, error) {
 	}
 }
 
-func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiResponse string) (int, bool, error) {
+func buildConversationInsightDetail(classResult ai.ClassificationResponse, sourceLastMessageAt *time.Time) ([]byte, error) {
+	detail := map[string]interface{}{
+		"summary":      classResult.Summary,
+		"intents":      classResult.Insights.Intents,
+		"products":     classResult.Insights.Products,
+		"feedback":     classResult.Insights.Feedback,
+		"lead_quality": classResult.Insights.LeadQuality,
+	}
+	if sourceLastMessageAt != nil && !sourceLastMessageAt.IsZero() {
+		detail["source_last_message_at"] = sourceLastMessageAt.UTC().Format(time.RFC3339Nano)
+	}
+	return json.Marshal(detail)
+}
+
+func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiResponse string, sourceLastMessageAt ...*time.Time) (int, bool, error) {
 	now := time.Now()
 	count := 0
 	passed := false
@@ -570,16 +600,8 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 		}
 
 	case "classification":
-		var classResult struct {
-			Tags []struct {
-				RuleName    string  `json:"rule_name"`
-				Confidence  float64 `json:"confidence"`
-				Evidence    string  `json:"evidence"`
-				Explanation string  `json:"explanation"`
-			} `json:"tags"`
-			Summary string `json:"summary"`
-		}
-		if err := json.Unmarshal([]byte(aiResponse), &classResult); err != nil {
+		classResult, err := ai.ParseClassificationResponse(aiResponse)
+		if err != nil {
 			return 0, false, fmt.Errorf("failed to parse classification response: %w", err)
 		}
 
@@ -603,6 +625,34 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 			}
 			db.DB.Create(&result)
 			count++
+		}
+
+		// Structured Messenger insights are stored independently from tags so
+		// analytics can consume them without changing violation/tag counts.
+		// Legacy responses omit the insights field and do not create this row.
+		if classResult.Insights != nil {
+			var sourceTimestamp *time.Time
+			if len(sourceLastMessageAt) > 0 {
+				sourceTimestamp = sourceLastMessageAt[0]
+			}
+			insightDetail, err := buildConversationInsightDetail(classResult, sourceTimestamp)
+			if err != nil {
+				return count, false, fmt.Errorf("failed to encode conversation insight: %w", err)
+			}
+			if err := db.DB.Create(&models.JobResult{
+				ID:             pkg.NewUUID(),
+				JobRunID:       runID,
+				TenantID:       tenantID,
+				ConversationID: conversationID,
+				ResultType:     "conversation_insight",
+				Evidence:       classResult.Summary,
+				Detail:         string(insightDetail),
+				AIRawResponse:  aiResponse,
+				Confidence:     1.0,
+				CreatedAt:      now,
+			}).Error; err != nil {
+				return count, false, fmt.Errorf("failed to save conversation insight: %w", err)
+			}
 		}
 
 		// Create conversation_evaluation record for classified conversations
@@ -649,6 +699,51 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 	return count, passed, nil
 }
 
+type mappedBatchResult struct {
+	ConversationIndex int
+	Result            json.RawMessage
+}
+
+// mapBatchResults accepts explicit IDs only when they belong to the current
+// batch and have not already been used. Results without an ID retain their
+// positional mapping when that slot is still available.
+func mapBatchResults(conversationIDs []string, results []json.RawMessage) ([]mappedBatchResult, int) {
+	indexByID := make(map[string]int, len(conversationIDs))
+	for index, id := range conversationIDs {
+		indexByID[id] = index
+	}
+
+	used := make(map[int]bool, len(conversationIDs))
+	mapped := make([]mappedBatchResult, 0, len(conversationIDs))
+	for resultIndex, rawResult := range results {
+		targetIndex := -1
+		var resultMap map[string]json.RawMessage
+		if json.Unmarshal(rawResult, &resultMap) == nil {
+			if rawID, explicitID := resultMap["conversation_id"]; explicitID {
+				var conversationID string
+				if json.Unmarshal(rawID, &conversationID) != nil || conversationID == "" {
+					continue
+				}
+				index, belongsToBatch := indexByID[conversationID]
+				if !belongsToBatch || used[index] {
+					continue
+				}
+				targetIndex = index
+			}
+		}
+
+		if targetIndex == -1 {
+			if resultIndex >= len(conversationIDs) || used[resultIndex] {
+				continue
+			}
+			targetIndex = resultIndex
+		}
+		used[targetIndex] = true
+		mapped = append(mapped, mappedBatchResult{ConversationIndex: targetIndex, Result: rawResult})
+	}
+	return mapped, len(conversationIDs) - len(mapped)
+}
+
 // runBatchMode processes conversations in batches of batchSize, sending multiple conversations per AI call.
 func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job models.Job, run models.JobRun, conversations []models.Conversation, since time.Time, batchSize int) (issuesFound, passCount, analyzedCount, errorCount int, firstErr string) {
 	// Build system prompt once
@@ -684,7 +779,7 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 				SenderType: m.SenderType,
 				SenderName: m.SenderName,
 				Content:    m.Content,
-				SentAt:     pkg.ToVN(m.SentAt).Format("15:04"),
+				SentAt:     pkg.ToVN(m.SentAt).Format("2006-01-02T15:04:05-07:00"),
 			}
 		}
 		prepared = append(prepared, convWithTranscript{
@@ -762,12 +857,17 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 
 		var batchResults []json.RawMessage
 		if err := json.Unmarshal([]byte(content), &batchResults); err != nil {
-			// Fallback: try to parse as single result (batch of 1)
-			log.Printf("[analyzer-batch] failed to parse batch response as array, trying individual: %v", err)
-			for _, b := range batch {
-				count, passed, saveErr := a.saveResults(run.ID, job.TenantID, b.Conv.ID, job.JobType, content)
+			if len(batch) == 1 {
+				// Providers occasionally return one object instead of a one-element array.
+				b := batch[0]
+				count, passed, saveErr := a.saveResults(run.ID, job.TenantID, b.Conv.ID, job.JobType, content, b.Conv.LastMessageAt)
 				if saveErr != nil {
+					log.Printf("[analyzer-batch] save error for %s: %v", b.Conv.ID, saveErr)
 					errorCount++
+					batchHadError = true
+					if firstErr == "" {
+						firstErr = saveErr.Error()
+					}
 				} else {
 					analyzedCount++
 					issuesFound += count
@@ -775,27 +875,41 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 						passCount++
 					}
 				}
+			} else {
+				batchErr := fmt.Errorf("AI returned one invalid batch object for %d conversations: %w", len(batch), err)
+				log.Printf("[analyzer-batch] %v", batchErr)
+				errorCount += len(batch)
+				batchHadError = true
+				if firstErr == "" {
+					firstErr = batchErr.Error()
+				}
 			}
 		} else {
-			// Process each result
-			for j, rawResult := range batchResults {
-				if j >= len(batch) {
-					break
+			conversationIDs := make([]string, len(batch))
+			for index, item := range batch {
+				conversationIDs[index] = item.Conv.ID
+			}
+			mappedResults, missingCount := mapBatchResults(conversationIDs, batchResults)
+			if missingCount > 0 {
+				mappingErr := fmt.Errorf("AI batch response missing or misidentified %d/%d conversations", missingCount, len(batch))
+				log.Printf("[analyzer-batch] %v", mappingErr)
+				errorCount += missingCount
+				batchHadError = true
+				if firstErr == "" {
+					firstErr = mappingErr.Error()
 				}
-				convID := batch[j].Conv.ID
+			}
 
-				// Extract conversation_id from result if present, match by order otherwise
-				var resultMap map[string]interface{}
-				if json.Unmarshal(rawResult, &resultMap) == nil {
-					if cid, ok := resultMap["conversation_id"].(string); ok && cid != "" {
-						convID = cid
-					}
-				}
-
-				count, passed, saveErr := a.saveResults(run.ID, job.TenantID, convID, job.JobType, string(rawResult))
+			for _, mappedResult := range mappedResults {
+				conversation := batch[mappedResult.ConversationIndex].Conv
+				count, passed, saveErr := a.saveResults(run.ID, job.TenantID, conversation.ID, job.JobType, string(mappedResult.Result), conversation.LastMessageAt)
 				if saveErr != nil {
-					log.Printf("[analyzer-batch] save error for %s: %v", convID, saveErr)
+					log.Printf("[analyzer-batch] save error for %s: %v", conversation.ID, saveErr)
 					errorCount++
+					batchHadError = true
+					if firstErr == "" {
+						firstErr = saveErr.Error()
+					}
 				} else {
 					analyzedCount++
 					issuesFound += count

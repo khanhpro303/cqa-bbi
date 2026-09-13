@@ -47,6 +47,25 @@
 
     <!-- Classification: dynamic rules -->
     <div v-else-if="form.job_type === 'classification'">
+      <v-alert type="info" variant="tonal" class="mb-3">
+        <div class="font-weight-medium mb-1">Phân tích Messenger chuyên sâu</div>
+        <div class="text-body-2">
+          Mẫu có sẵn phân loại nhu cầu, feedback và chất lượng tin nhắn; đồng thời trích xuất sản phẩm và mức độ tiềm năng của khách.
+        </div>
+        <v-btn color="primary" variant="flat" size="small" class="mt-3" @click="loadMessengerTemplate">
+          Dùng mẫu Messenger
+        </v-btn>
+      </v-alert>
+
+      <v-switch
+        v-model="structuredInsights"
+        color="primary"
+        label="Trích xuất insight có cấu trúc (sản phẩm, feedback, chất lượng khách hàng)"
+        hint="Bật để tạo dữ liệu báo cáo; SKU chỉ được ghi khi khách nêu rõ."
+        persistent-hint
+        class="mb-4"
+      />
+
       <v-card v-for="(rule, idx) in rules" :key="idx" variant="outlined" class="pa-3 mb-3">
         <div class="d-flex align-center mb-2">
           <span class="text-subtitle-2 font-weight-bold">Rule {{ idx + 1 }}</span>
@@ -95,6 +114,13 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
+import {
+  MESSENGER_INSIGHTS_PROFILE,
+  createMessengerInsightsConfig,
+  parseClassificationConfig,
+  serializeClassificationConfig,
+  type ClassificationRule,
+} from '../../utils/classification-config'
 
 const form = defineModel<Record<string, any>>('form', { required: true })
 
@@ -104,18 +130,16 @@ onMounted(() => {
   }
 })
 
-function parseRules() {
-  try {
-    const parsed = JSON.parse(form.value.rules_config || '[]')
-    return Array.isArray(parsed) ? parsed : []
-  } catch { return [] }
-}
-
-const rules = ref<Array<{ name: string; description: string; severity: string }>>(parseRules())
+const initialClassificationConfig = parseClassificationConfig(form.value.rules_config)
+const rules = ref<ClassificationRule[]>(initialClassificationConfig.rules)
+const structuredInsights = ref(initialClassificationConfig.profile === MESSENGER_INSIGHTS_PROFILE)
 
 // Sync rules to form.rules_config
-watch(rules, (val) => {
-  form.value.rules_config = JSON.stringify(val)
+watch([rules, structuredInsights], () => {
+  form.value.rules_config = serializeClassificationConfig({
+    profile: structuredInsights.value ? MESSENGER_INSIGHTS_PROFILE : undefined,
+    rules: rules.value,
+  })
 }, { deep: true })
 
 function addRule() {
@@ -124,6 +148,12 @@ function addRule() {
 
 function removeRule(idx: number) {
   rules.value.splice(idx, 1)
+}
+
+function loadMessengerTemplate() {
+  const config = createMessengerInsightsConfig()
+  rules.value = config.rules
+  structuredInsights.value = true
 }
 
 const defaultTemplate = `# Quy định chất lượng CSKH
@@ -150,8 +180,7 @@ function loadTemplate() {
   form.value.rules_content = defaultTemplate
 }
 
-const defaultSkipTemplate = `- Cuộc chat dưới 2 tin nhắn
-- Khách chỉ gửi sticker hoặc hình ảnh mà không có nội dung text
+const defaultSkipTemplate = `- Khách chỉ gửi sticker hoặc hình ảnh mà không có nội dung text và không có câu hỏi cần phản hồi
 - Cuộc chat chỉ có tin nhắn tự động từ hệ thống`
 
 function loadSkipTemplate() {

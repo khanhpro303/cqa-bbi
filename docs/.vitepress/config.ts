@@ -36,6 +36,8 @@ export default defineConfig({
           { text: 'Kết nối Zalo OA', link: '/usage/channels' },
           { text: 'Kết nối Facebook', link: '/usage/facebook' },
           { text: 'Quản lý tin nhắn', link: '/usage/messages' },
+          { text: 'Chất lượng CSKH Messenger', link: '/usage/service-quality' },
+          { text: 'Theo dõi nhãn Meta Inbox', link: '/usage/meta-inbox-labels' },
           { text: 'Tạo công việc', link: '/usage/jobs' },
           { text: 'Xem kết quả', link: '/usage/results' },
           { text: 'Thông báo', link: '/usage/notifications' },

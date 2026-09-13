@@ -1730,7 +1730,7 @@ const groupedResults = computed<ConversationGroup[]>(() => {
         const tagDetail = parseDetail(r.detail)
         if (tagDetail?.summary) g.review = tagDetail.summary
       }
-    } else {
+    } else if (r.result_type === 'qc_violation') {
       g.violations.push(r)
     }
   }

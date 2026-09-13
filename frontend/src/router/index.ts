@@ -58,6 +58,12 @@ const router = createRouter({
           meta: { perm: 'messages' },
         },
         {
+          path: 'service-quality',
+          name: 'service-quality',
+          component: () => import('../views/ServiceQuality.vue'),
+          meta: { perm: 'messages' },
+        },
+        {
           path: 'jobs',
           name: 'jobs',
           component: () => import('../views/Jobs/JobList.vue'),

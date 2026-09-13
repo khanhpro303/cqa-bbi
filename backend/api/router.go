@@ -189,6 +189,13 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.GET("/conversations/:conversationId/page", middleware.RequirePermission("messages", "r"), handlers.GetConversationPage)
 
 			// Dashboard
+			tenant.GET("/service-quality", middleware.RequirePermission("messages", "r"), handlers.GetServiceQuality)
+			tenant.GET("/messenger-labels", middleware.RequirePermission("messages", "r"), handlers.GetMessengerLabels)
+			tenant.POST("/messenger-labels/:channelId/catalog", middleware.RequirePermission("settings", "w"), handlers.RefreshMessengerLabelCatalog)
+			tenant.PUT("/messenger-labels/:channelId/policy", middleware.RequirePermission("settings", "w"), handlers.SaveMessengerLabelPolicy)
+			tenant.POST("/messenger-labels/:channelId/sync", middleware.RequirePermission("messages", "w"), handlers.SyncMessengerLabels)
+			tenant.PUT("/service-quality/policy", middleware.RequirePermission("settings", "w"), handlers.SaveServiceQualityPolicy)
+			tenant.POST("/service-quality/:conversationId/resolve", middleware.RequirePermission("messages", "w"), handlers.ResolveServiceConversation)
 			tenant.GET("/dashboard", handlers.GetDashboard)
 			tenant.GET("/analytics/ai-cost", handlers.GetAICostAnalytics)
 

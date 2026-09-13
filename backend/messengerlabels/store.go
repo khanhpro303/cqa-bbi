@@ -1,0 +1,231 @@
+package messengerlabels
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"sort"
+	"time"
+
+	"github.com/vietbui/chat-quality-agent/channels"
+	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+func LoadState(database *gorm.DB, channel models.Channel) (models.MessengerLabelState, error) {
+	state := models.MessengerLabelState{ChannelID: channel.ID, TenantID: channel.TenantID, Rules: "[]", Catalog: "[]", SyncStatus: "never"}
+	err := database.Where("channel_id = ? AND tenant_id = ?", channel.ID, channel.TenantID).First(&state).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return state, nil
+	}
+	return state, err
+}
+
+func ensureState(database *gorm.DB, channel models.Channel) error {
+	return database.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.MessengerLabelState{ChannelID: channel.ID, TenantID: channel.TenantID, Rules: "[]", Catalog: "[]", SyncStatus: "never"}).Error
+}
+
+func SavePolicy(database *gorm.DB, channel models.Channel, policy Policy) error {
+	state, err := LoadState(database, channel)
+	if err != nil {
+		return err
+	}
+	var catalog []channels.FacebookLabel
+	if json.Unmarshal([]byte(state.Catalog), &catalog) != nil {
+		return ErrConfiguration
+	}
+	if err = policy.Validate(catalog); err != nil {
+		return err
+	}
+	if err = ensureState(database, channel); err != nil {
+		return err
+	}
+	rules, _ := json.Marshal(policy.Rules)
+	if policy.Rules == nil {
+		rules = []byte("[]")
+	}
+	return database.Model(&models.MessengerLabelState{}).Where("channel_id = ? AND tenant_id = ?", channel.ID, channel.TenantID).Updates(map[string]interface{}{"enabled": policy.Enabled, "rules": string(rules)}).Error
+}
+
+func SaveCatalog(database *gorm.DB, channel models.Channel, catalog []channels.FacebookLabel, now time.Time) error {
+	if err := ensureState(database, channel); err != nil {
+		return err
+	}
+	if catalog == nil {
+		catalog = []channels.FacebookLabel{}
+	}
+	data, err := json.Marshal(catalog)
+	if err != nil {
+		return err
+	}
+	return database.Model(&models.MessengerLabelState{}).Where("channel_id = ? AND tenant_id = ?", channel.ID, channel.TenantID).Updates(map[string]interface{}{"catalog": string(data), "catalog_synced_at": now}).Error
+}
+
+// ClaimSync serializes manual/scheduled work across replicas. A crashed worker's
+// claim expires; the report treats an expired active claim as an error.
+func ClaimSync(database *gorm.DB, channel models.Channel, now time.Time) (string, error) {
+	state, err := LoadState(database, channel)
+	if err != nil {
+		return "", err
+	}
+	if !state.Enabled {
+		return "", ErrDisabled
+	}
+	var policy Policy
+	policy.Enabled = state.Enabled
+	var catalog []channels.FacebookLabel
+	if json.Unmarshal([]byte(state.Rules), &policy.Rules) != nil || json.Unmarshal([]byte(state.Catalog), &catalog) != nil || policy.Validate(catalog) != nil {
+		return "", ErrConfiguration
+	}
+	token := pkg.NewUUID()
+	// A short cooldown also applies after failures, preventing repeated manual
+	// requests from immediately retrying a rate-limited Page. Keep its checkpoint.
+	result := database.Model(&models.MessengerLabelState{}).Where("channel_id = ? AND tenant_id = ? AND enabled = ? AND (lease_until IS NULL OR lease_until < ?) AND (sync_finished_at IS NULL OR sync_finished_at <= ?)", channel.ID, channel.TenantID, true, now, now.Add(-time.Minute)).Updates(map[string]interface{}{"sync_status": "syncing", "sync_error": "", "sync_started_at": now, "lease_until": now.Add(syncLeaseDuration), "sync_token": token})
+	if result.Error != nil {
+		return "", result.Error
+	}
+	if result.RowsAffected != 1 {
+		return "", ErrBusy
+	}
+	return token, nil
+}
+
+type Page struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	IsActive bool   `json:"is_active"`
+}
+
+type SyncStatus struct {
+	Status     string     `json:"status"`
+	StartedAt  *time.Time `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at"`
+	Error      string     `json:"error"`
+}
+
+type Row struct {
+	ConversationID string                   `json:"conversation_id"`
+	CustomerName   string                   `json:"customer_name"`
+	ChannelID      string                   `json:"channel_id"`
+	Classification string                   `json:"classification"`
+	Labels         []channels.FacebookLabel `json:"labels"`
+	CheckedAt      *time.Time               `json:"checked_at"`
+	Error          string                   `json:"error"`
+}
+
+type Report struct {
+	GeneratedAt      time.Time                `json:"generated_at"`
+	Pages            []Page                   `json:"pages"`
+	ChannelID        string                   `json:"channel_id"`
+	Enabled          bool                     `json:"enabled"`
+	Rules            []Rule                   `json:"rules"`
+	Catalog          []channels.FacebookLabel `json:"catalog"`
+	CatalogSyncedAt  *time.Time               `json:"catalog_synced_at"`
+	Sync             SyncStatus               `json:"sync"`
+	FreshnessMinutes int                      `json:"freshness_minutes"`
+	Counts           *Counts                  `json:"counts"`
+	Rows             []Row                    `json:"rows"`
+}
+
+func BuildReport(ctx context.Context, database *gorm.DB, tenantID, channelID string, now time.Time) (*Report, error) {
+	// Read status and snapshots from one database generation, even if a sweep
+	// starts or commits a batch between these queries.
+	var report *Report
+	err := database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		report, err = buildReport(ctx, tx, tenantID, channelID, now)
+		return err
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return report, err
+}
+
+func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID string, now time.Time) (*Report, error) {
+	database = database.WithContext(ctx)
+	r := &Report{GeneratedAt: now, Pages: []Page{}, Rules: []Rule{}, Catalog: []channels.FacebookLabel{}, FreshnessMinutes: FreshnessMinutes, Rows: []Row{}, Sync: SyncStatus{Status: "never"}}
+	var pages []models.Channel
+	if err := database.Where("tenant_id = ? AND channel_type = ?", tenantID, "facebook").Order("name ASC").Find(&pages).Error; err != nil {
+		return nil, err
+	}
+	var selected *models.Channel
+	for i := range pages {
+		p := &pages[i]
+		r.Pages = append(r.Pages, Page{p.ID, p.Name, p.IsActive})
+		if p.ID == channelID {
+			selected = p
+		}
+	}
+	if channelID == "" {
+		return r, nil
+	}
+	if selected == nil {
+		return r, gorm.ErrRecordNotFound
+	}
+	r.ChannelID = channelID
+	state, err := LoadState(database, *selected)
+	if err != nil {
+		return nil, err
+	}
+	r.Enabled = state.Enabled
+	if json.Unmarshal([]byte(state.Rules), &r.Rules) != nil || json.Unmarshal([]byte(state.Catalog), &r.Catalog) != nil {
+		return nil, ErrConfiguration
+	}
+	r.CatalogSyncedAt = state.CatalogSyncedAt
+	r.Sync = SyncStatus{state.SyncStatus, state.SyncStartedAt, state.SyncFinishedAt, state.SyncError}
+	if state.SyncStatus == "syncing" && (state.LeaseUntil == nil || !state.LeaseUntil.After(now)) {
+		r.Sync.Status = "error"
+		r.Sync.Error = "Lần đồng bộ bị gián đoạn; hãy đồng bộ lại."
+	}
+	ready := selected.IsActive && state.Enabled && (Policy{Enabled: state.Enabled, Rules: r.Rules}).Validate(r.Catalog) == nil && completedSync(r.Sync.Status) && state.CatalogSyncedAt != nil && !state.CatalogSyncedAt.After(now) && now.Sub(*state.CatalogSyncedAt) <= FreshnessMinutes*time.Minute
+	var convs []models.Conversation
+	if err := database.Select("id, customer_name").Where("tenant_id = ? AND channel_id = ?", tenantID, channelID).Order("id ASC").Limit(MaxConversations + 1).Find(&convs).Error; err != nil {
+		return nil, err
+	}
+	if len(convs) > MaxConversations {
+		return r, ErrTooLarge
+	}
+	var snapshots []models.MessengerLabelSnapshot
+	if err := database.Where("tenant_id = ? AND channel_id = ?", tenantID, channelID).Find(&snapshots).Error; err != nil {
+		return nil, err
+	}
+	byID := map[string]models.MessengerLabelSnapshot{}
+	for _, snapshot := range snapshots {
+		byID[snapshot.ConversationID] = snapshot
+	}
+	r.Counts = &Counts{}
+	for _, conv := range convs {
+		snapshot := byID[conv.ID]
+		labels := []channels.FacebookLabel{}
+		valid := json.Unmarshal([]byte(snapshot.Labels), &labels) == nil && labels != nil
+		if !valid {
+			labels = []channels.FacebookLabel{}
+		}
+		classification := Classify(labels, snapshot.Status, snapshot.CheckedAt, r.Rules, ready && valid, now)
+		errorText := ""
+		if classification == "unknown" {
+			switch {
+			case !state.Enabled:
+				errorText = "Chưa bật theo dõi nhãn."
+			case !selected.IsActive:
+				errorText = "Fanpage đang tạm dừng."
+			case r.Sync.Status == "syncing":
+				errorText = "Đang đồng bộ nhãn; số phân loại sẽ được tính khi lượt đọc hoàn tất."
+			case !ready:
+				errorText = "Cấu hình hoặc lần đồng bộ nhãn chưa sẵn sàng; hãy đồng bộ lại."
+			case snapshot.Status == "error":
+				errorText = ErrorMessage(snapshot.ErrorKind)
+			case snapshot.CheckedAt == nil:
+				errorText = "Chưa đọc nhãn thành công."
+			default:
+				errorText = "Dữ liệu nhãn đã cũ; hãy đồng bộ lại."
+			}
+		}
+		r.Rows = append(r.Rows, Row{conv.ID, conv.CustomerName, channelID, classification, labels, snapshot.CheckedAt, errorText})
+		r.Counts.Add(classification)
+	}
+	order := map[string]int{"unclassified": 0, "conflict": 1, "unknown": 2, "potential": 3, "qualified": 4, "unqualified": 5}
+	sort.SliceStable(r.Rows, func(i, j int) bool { return order[r.Rows[i].Classification] < order[r.Rows[j].Classification] })
+	return r, nil
+}

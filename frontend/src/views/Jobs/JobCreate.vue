@@ -67,6 +67,7 @@ import StepType from '../../components/JobWizard/StepType.vue'
 import StepInput from '../../components/JobWizard/StepInput.vue'
 import StepChatbotChannels from '../../components/JobWizard/StepChatbotChannels.vue'
 import StepRules from '../../components/JobWizard/StepRules.vue'
+import { isClassificationConfigValid, createMessengerInsightsConfig, serializeClassificationConfig } from '../../utils/classification-config'
 import StepOutput from '../../components/JobWizard/StepOutput.vue'
 import StepOutputSchedule from '../../components/JobWizard/StepOutputSchedule.vue'
 import StepConfirm from '../../components/JobWizard/StepConfirm.vue'
@@ -114,7 +115,7 @@ const canProceed = computed(() => {
     case 2: return form.value.input_channel_ids.length > 0
     case 3: {
       if (form.value.job_type === 'classification') {
-        try { return JSON.parse(form.value.rules_config || '[]').length > 0 } catch { return false }
+        return isClassificationConfigValid(form.value.rules_config)
       }
       return form.value.rules_content.trim().length > 0
     }
@@ -180,6 +181,15 @@ const form = ref({
   schedule_type: 'cron',
   schedule_cron: '0 7 * * *',
 })
+
+if (route.query.template === 'messenger-insights') {
+  form.value.name = 'Phân tích Messenger'
+  form.value.job_type = 'classification'
+  form.value.rules_config = serializeClassificationConfig(createMessengerInsightsConfig())
+  form.value.description = 'Nhu cầu, sản phẩm quan tâm, feedback và tiềm năng mua hàng từ hội thoại Messenger.'
+  form.value.schedule_type = 'after_sync'
+  form.value.output_schedule = 'none'
+}
 
 const stepItems = computed(() => {
   if (isErpCache.value) {

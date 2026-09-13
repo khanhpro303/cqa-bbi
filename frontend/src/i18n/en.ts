@@ -44,6 +44,8 @@ export default {
   nav_mcp: 'MCP Connections',
   nav_ai_engines: 'AI Engines',
   nav_messages: 'Messages',
+  nav_service_quality: 'Service Quality',
+  crm_cloudify_customers: 'Cloudify customers',
   nav_settings: 'Settings',
 
   // Tenants

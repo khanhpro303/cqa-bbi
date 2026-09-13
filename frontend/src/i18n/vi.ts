@@ -44,6 +44,7 @@ export default {
   nav_mcp: 'Kết nối MCP',
   nav_ai_engines: 'AI Engines',
   nav_messages: 'Tin nhắn',
+  nav_service_quality: 'Chất lượng CSKH',
   nav_settings: 'Cài đặt',
 
   // Tenants

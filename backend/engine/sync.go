@@ -177,7 +177,11 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 		sched.TriggerAfterSyncJobs(channel.TenantID, channel.ID)
 	}
 
-	return s.updateSyncStatus(channel.ID, "success", "")
+	if err := s.updateSyncStatus(channel.ID, "success", ""); err != nil {
+		return err
+	}
+	syncMessengerLabelsAfterMessages(ctx, channel, adapter, credBytes)
+	return nil
 }
 
 // SyncAllChannels syncs all active channels for a tenant.

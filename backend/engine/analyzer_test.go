@@ -4,9 +4,93 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/vietbui/chat-quality-agent/ai"
+	"github.com/vietbui/chat-quality-agent/db/models"
 )
+
+func TestTranscriptSinceForJob(t *testing.T) {
+	since := time.Date(2026, 9, 13, 8, 0, 0, 0, time.UTC)
+
+	legacy := models.Job{JobType: "classification", RulesConfig: `[{"name":"Hỏi giá","description":"Khách hỏi giá"}]`}
+	if got := transcriptSinceForJob(legacy, since); !got.Equal(since) {
+		t.Fatalf("legacy classification should retain incremental transcript cutoff: %v", got)
+	}
+
+	messenger := models.Job{JobType: "classification", RulesConfig: `{"profile":"messenger_insights","rules":[]}`}
+	if got := transcriptSinceForJob(messenger, since); !got.IsZero() {
+		t.Fatalf("Messenger insights should load full conversation history: %v", got)
+	}
+
+	qc := models.Job{JobType: "qc_analysis", RulesConfig: `{"profile":"messenger_insights","rules":[]}`}
+	if got := transcriptSinceForJob(qc, since); !got.Equal(since) {
+		t.Fatalf("non-classification jobs should retain cutoff: %v", got)
+	}
+}
+
+func TestBuildConversationInsightDetailIncludesSourceTimestamp(t *testing.T) {
+	source := time.Date(2026, 9, 13, 15, 4, 5, 123000000, time.FixedZone("ICT", 7*60*60))
+	response := ai.ClassificationResponse{
+		Summary: "Khách hỏi Serum A.",
+		Insights: &ai.ConversationInsights{
+			Intents:  []string{"Hỏi hàng"},
+			Products: []ai.ProductInsight{{Name: "Serum A", Evidence: "Serum A còn hàng không?"}},
+			Feedback: []ai.FeedbackInsight{},
+			LeadQuality: ai.LeadQualityInsight{
+				Level:    "high",
+				Evidence: "mình đặt 2 chai",
+				Reason:   "Khách xác nhận số lượng",
+			},
+		},
+	}
+
+	detailJSON, err := buildConversationInsightDetail(response, &source)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	var detail map[string]interface{}
+	if err := json.Unmarshal(detailJSON, &detail); err != nil {
+		t.Fatalf("unexpected detail JSON: %v", err)
+	}
+	if detail["source_last_message_at"] != "2026-09-13T08:04:05.123Z" {
+		t.Fatalf("unexpected source timestamp: %v", detail["source_last_message_at"])
+	}
+	if detail["summary"] != response.Summary {
+		t.Fatalf("missing summary in insight detail: %#v", detail)
+	}
+}
+
+func TestMapBatchResultsRejectsUnknownDuplicateAndCountsMissing(t *testing.T) {
+	results := []json.RawMessage{
+		json.RawMessage(`{"conversation_id":"conv-b","summary":"B"}`),
+		json.RawMessage(`{"conversation_id":"outside","summary":"unknown"}`),
+		json.RawMessage(`{"conversation_id":"conv-b","summary":"duplicate"}`),
+	}
+
+	mapped, missing := mapBatchResults([]string{"conv-a", "conv-b", "conv-c"}, results)
+	if len(mapped) != 1 || mapped[0].ConversationIndex != 1 {
+		t.Fatalf("unexpected mappings: %#v", mapped)
+	}
+	if missing != 2 {
+		t.Fatalf("expected two missing conversations, got %d", missing)
+	}
+}
+
+func TestMapBatchResultsUsesSafePositionFallback(t *testing.T) {
+	results := []json.RawMessage{
+		json.RawMessage(`{"summary":"A"}`),
+		json.RawMessage(`{"summary":"B"}`),
+	}
+
+	mapped, missing := mapBatchResults([]string{"conv-a", "conv-b", "conv-c"}, results)
+	if len(mapped) != 2 || mapped[0].ConversationIndex != 0 || mapped[1].ConversationIndex != 1 {
+		t.Fatalf("unexpected positional mappings: %#v", mapped)
+	}
+	if missing != 1 {
+		t.Fatalf("expected one missing conversation, got %d", missing)
+	}
+}
 
 // MockAIProvider returns a predefined response without calling any API.
 type MockAIProvider struct {

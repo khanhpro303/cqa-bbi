@@ -5,16 +5,121 @@ on:
     branches:
       - main
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+concurrency:
+  group: deploy-vps-main
+  cancel-in-progress: false
 
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: cqa-ci-test
+          MYSQL_ROOT_HOST: '%'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pcqa-ci-test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
-      - name: Thực thi script deploy trên VPS
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: backend/go.sum
+      - name: Test backend and MySQL integration
+        working-directory: backend
+        env:
+          MESSENGER_LABELS_TEST_DSN: root:cqa-ci-test@tcp(127.0.0.1:3306)/?parseTime=true
+        run: |
+          go test ./...
+          go test -race ./messengerlabels
+          go vet ./...
+          CGO_ENABLED=0 go build -o /tmp/cqa-server .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Test and build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npx vitest run
+          npm run build
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy with backup and health verification
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
           script: |
-            /home/karien/cqa-personal-zalo/deploy.sh
+            set -eu
+            umask 077
+            cd /home/karien/cqa-personal-zalo
+            backup_dir="/home/karien/cqa-backups/${{ github.run_id }}"
+            mkdir -p "$backup_dir"
+            previous_image=$(docker inspect --format '{{.Image}}' cqa-app)
+            app_tag=$(docker inspect --format '{{.Config.Image}}' cqa-app)
+            docker image tag "$previous_image" "cqa-app:rollback-${{ github.run_id }}"
+            git rev-parse HEAD > "$backup_dir/previous-commit"
+            docker exec cqa-db sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysqldump --user=root --single-transaction --quick --routines --triggers --no-tablespaces --set-gtid-purged=OFF "$MYSQL_DATABASE"' > "$backup_dir/database.sql"
+            test -s "$backup_dir/database.sql"
+            gzip "$backup_dir/database.sql"
+            echo "Database backup and previous app image saved."
+
+            rollback_app() {
+              echo "Deployment failed; restoring previous application image."
+              docker image tag "cqa-app:rollback-${{ github.run_id }}" "$app_tag"
+              docker compose up -d --no-build --no-deps app
+              echo "Previous application image restored; database backup remains on the VPS."
+            }
+
+            if ! /home/karien/cqa-personal-zalo/deploy.sh; then
+              rollback_app
+              exit 1
+            fi
+            if [ "$(git rev-parse HEAD)" != '${{ github.sha }}' ]; then
+              echo "VPS checkout does not match requested commit."
+              rollback_app
+              exit 1
+            fi
+            healthy=0
+            for attempt in $(seq 1 36); do
+              if docker exec cqa-app wget -q -T 5 -O - http://127.0.0.1:8080/health > "$backup_dir/health.json"; then
+                healthy=1
+                break
+              fi
+              sleep 5
+            done
+            if [ "$healthy" -ne 1 ]; then
+              rollback_app
+              exit 1
+            fi
+            table_count=$(docker exec -i cqa-db sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --user=root --batch --skip-column-names "$MYSQL_DATABASE"' <<'SQL'
+            SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('service_resolutions','messenger_label_states','messenger_label_snapshots');
+            SQL
+            )
+            if [ "$table_count" != '3' ]; then
+              echo "Messenger migration verification failed."
+              rollback_app
+              exit 1
+            fi
+            if ! docker exec cqa-app sh -c 'test -n "$(find /app/static/assets -name "ServiceQuality-*.js" -print -quit)"'; then
+              echo "Messenger frontend artifact is missing."
+              rollback_app
+              exit 1
+            fi
+            docker compose ps
+            cat "$backup_dir/health.json"
+            echo "Verified commit ${{ github.sha }}: app healthy, Messenger tables and frontend present."

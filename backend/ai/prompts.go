@@ -1,6 +1,9 @@
 package ai
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // BuildQCPrompt creates the system prompt for QC analysis.
 func BuildQCPrompt(rulesContent, skipConditions string) string {
@@ -49,6 +52,30 @@ CHỈ trả về JSON, không thêm text khác.`, rulesContent, skipSection)
 
 // BuildClassificationPrompt creates the system prompt for conversation classification.
 func BuildClassificationPrompt(rulesConfigJSON string) string {
+	config := ParseClassificationConfig(rulesConfigJSON)
+	rulesJSON, err := json.Marshal(config.Rules)
+	if err != nil {
+		rulesJSON = []byte("[]")
+	}
+	insightsOutput := ""
+	insightsInstructions := ""
+	if config.MessengerInsightsEnabled() {
+		insightsOutput = `,
+  "insights": {
+    "intents": ["mục đích trao đổi cụ thể"],
+    "products": [{"name":"tên sản phẩm","sku":"SKU nếu được nói rõ, nếu không để rỗng","evidence":"trích dẫn nguyên văn của khách"}],
+    "feedback": [{"category":"sản phẩm|giá|giao hàng|CSKH|khác","sentiment":"positive|neutral|negative|mixed|unknown","evidence":"trích dẫn nguyên văn của khách"}],
+    "lead_quality": {"level":"high|medium|low|spam|unknown","evidence":"trích dẫn nguyên văn của khách hoặc để rỗng nếu thiếu dữ kiện","reason":"lý do ngắn gọn"}
+  }`
+		insightsInstructions = `
+- Luôn trả về trường "insights", kể cả khi các mảng rỗng.
+- Chỉ trích xuất sản phẩm và SKU khi khách hàng thực sự đề cập; TUYỆT ĐỐI không suy đoán hoặc tự tạo SKU.
+- "evidence" phải là trích dẫn chính xác lời khách hàng, không diễn giải và không dùng lời nhân viên làm bằng chứng về nhu cầu/feedback.
+- Khi không đủ dữ kiện về tiềm năng mua hàng, dùng lead_quality.level="unknown".
+- Khiếu nại hoặc cảm xúc tiêu cực không đồng nghĩa khách hàng chất lượng thấp. Đánh giá lead_quality theo mức độ nhu cầu và ý định mua.
+- Không suy đoán hoặc quy kết hội thoại cho một nhân viên cụ thể.`
+	}
+
 	return fmt.Sprintf(`Bạn là hệ thống phân loại nội dung hội thoại CSKH/Sales.
 
 ## Các quy tắc phân loại:
@@ -68,13 +95,14 @@ Trả về JSON:
       "explanation": "Giải thích ngắn gọn tại sao"
     }
   ],
-  "summary": "Mô tả chi tiết nội dung cuộc chat: khách hàng nói gì, nhân viên xử lý ra sao, kết quả thế nào (2-3 câu, KHÔNG lặp lại tên nhãn phân loại)"
+  "summary": "Mô tả chi tiết nội dung cuộc chat: khách hàng nói gì, phía Fanpage xử lý ra sao, kết quả thế nào (2-3 câu, KHÔNG lặp lại tên nhãn phân loại)"%s
 }
 
 - "summary" phải mô tả CỤ THỂ nội dung cuộc chat, không được viết chung chung như "Cuộc chat được phân loại: X"
 - Ví dụ tốt: "Khách hàng hỏi về tính năng webhook nhưng nhân viên không nắm rõ, hướng dẫn sai cách cấu hình. Khách phản hồi tiêu cực."
 - Ví dụ xấu: "Cuộc chat được phân loại: Góp ý tính năng"
-CHỈ trả về JSON, không thêm text khác.`, rulesConfigJSON)
+%s
+CHỈ trả về JSON, không thêm text khác.`, string(rulesJSON), insightsOutput, insightsInstructions)
 }
 
 // FormatBatchTranscript formats multiple conversations for batch analysis.
@@ -103,6 +131,8 @@ func FormatChatTranscript(messages []ChatMessage) string {
 		label := msg.SenderName
 		if label == "" {
 			label = msg.SenderType
+		} else if msg.SenderType != "" {
+			label = fmt.Sprintf("%s (%s)", label, msg.SenderType)
 		}
 		result += fmt.Sprintf("[%s] %s: %s\n", msg.SentAt, label, msg.Content)
 	}
