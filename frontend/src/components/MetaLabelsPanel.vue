@@ -14,6 +14,7 @@
         <v-spacer />
         <v-btn
           v-if="canEditSettings"
+          class="label-action"
           size="small"
           variant="outlined"
           prepend-icon="mdi-tune-variant"
@@ -24,6 +25,7 @@
         </v-btn>
         <v-btn
           v-if="canSync"
+          class="label-action"
           size="small"
           color="primary"
           variant="tonal"
@@ -646,6 +648,12 @@ onBeforeUnmount(() => {
   letter-spacing: normal;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.label-action {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: normal;
 }
 
 .kpi-card {
