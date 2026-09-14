@@ -14,6 +14,7 @@
         <v-spacer />
         <v-btn
           v-if="canEditSettings"
+          size="small"
           variant="outlined"
           prepend-icon="mdi-tune-variant"
           :disabled="!channelId"
@@ -23,6 +24,7 @@
         </v-btn>
         <v-btn
           v-if="canSync"
+          size="small"
           color="primary"
           variant="tonal"
           prepend-icon="mdi-cloud-sync-outline"
