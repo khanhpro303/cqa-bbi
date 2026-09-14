@@ -35,6 +35,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		serveFrontendIndex := frontendIndexHandler("./static/index.html")
 		r.Static("/assets", "./static/assets")
 		r.Static("/guides", "./static/guides")
+		registerPrivacyPolicyRoute(r, "./static/privacy-policy.html")
 		r.StaticFile("/favicon.png", "./static/favicon.png")
 		r.StaticFile("/favicon.ico", "./static/assets/brand/icons/favicon.ico")
 		r.StaticFile("/bbi-logo.ico", "./static/bbi-logo.ico")
@@ -403,6 +404,10 @@ func renderFrontendIndex(indexTemplate []byte, origin string) []byte {
 		[]byte(frontendOriginPlaceholder),
 		[]byte(escapedOrigin),
 	)
+}
+
+func registerPrivacyPolicyRoute(router *gin.Engine, policyPath string) {
+	router.StaticFile("/privacy-policy", policyPath)
 }
 
 func requestOrigin(c *gin.Context) string {

@@ -52,3 +52,29 @@ func TestRenderFrontendIndexEscapesOrigin(t *testing.T) {
 		t.Fatalf("escaped origin missing from output: %s", got)
 	}
 }
+
+func TestPrivacyPolicyStaticFileIsPubliclyAccessible(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	policyPath := filepath.Join(t.TempDir(), "privacy-policy.html")
+	policy := `<!doctype html><html lang="vi"><title>Chính sách quyền riêng tư</title></html>`
+	if err := os.WriteFile(policyPath, []byte(policy), 0o600); err != nil {
+		t.Fatalf("write privacy policy fixture: %v", err)
+	}
+
+	router := gin.New()
+	registerPrivacyPolicyRoute(router, policyPath)
+
+	request := httptest.NewRequest(http.MethodGet, "http://cqa.example.com/privacy-policy", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if contentType := response.Header().Get("Content-Type"); !strings.Contains(contentType, "text/html") {
+		t.Fatalf("Content-Type = %q, want text/html", contentType)
+	}
+	if !strings.Contains(response.Body.String(), "Chính sách quyền riêng tư") {
+		t.Fatalf("response does not contain privacy policy title: %s", response.Body.String())
+	}
+}
