@@ -221,7 +221,11 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	if err := database.First(&immutable, "conversation_id = ?", "d").Error; err != nil {
 		t.Fatal(err)
 	}
-	if immutable.IntakeLabels == nil || *immutable.IntakeLabels != intakeAd || immutable.IntakeLabelsCapturedAt == nil || !immutable.IntakeLabelsCapturedAt.Equal(now) {
+	var immutableLabels []channels.FacebookLabel
+	if immutable.IntakeLabels != nil {
+		err = json.Unmarshal([]byte(*immutable.IntakeLabels), &immutableLabels)
+	}
+	if err != nil || len(immutableLabels) != 1 || immutableLabels[0] != (channels.FacebookLabel{ID: "99", Name: "Ad 99"}) || immutable.IntakeLabelsCapturedAt == nil || !immutable.IntakeLabelsCapturedAt.Equal(now) {
 		t.Fatalf("tracking batch overwrote intake baseline: %+v", immutable)
 	}
 	if err := finishSync(database, channel, immutabilityToken, "success", ""); err != nil {
