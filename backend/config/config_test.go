@@ -43,6 +43,29 @@ func TestLoadConfigMissingRequired(t *testing.T) {
 	}
 }
 
+func TestLoadFacebookAuthConfig(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-jwt-secret-at-least-32-chars-long")
+	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
+	t.Setenv("DB_PASSWORD", "testpassword")
+	t.Setenv("FACEBOOK_APP_ID", "123456")
+	t.Setenv("FACEBOOK_APP_SECRET", "facebook-secret")
+	t.Setenv("FACEBOOK_API_VERSION", "v26.0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.FacebookAppID != "123456" {
+		t.Errorf("FacebookAppID = %q, want %q", cfg.FacebookAppID, "123456")
+	}
+	if cfg.FacebookAppSecret != "facebook-secret" {
+		t.Errorf("FacebookAppSecret = %q, want configured secret", cfg.FacebookAppSecret)
+	}
+	if cfg.FacebookAPIVersion != "v26.0" {
+		t.Errorf("FacebookAPIVersion = %q, want %q", cfg.FacebookAPIVersion, "v26.0")
+	}
+}
+
 func TestDSN(t *testing.T) {
 	cfg := &Config{
 		DBUser:     "testuser",

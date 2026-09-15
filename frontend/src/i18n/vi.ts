@@ -35,6 +35,13 @@ export default {
   register_title: 'Tạo tài khoản mới',
   invalid_credentials: 'Email hoặc mật khẩu không đúng',
   email_already_exists: 'Email đã tồn tại',
+  or: 'hoặc',
+  continue_with_facebook: 'Tiếp tục với Facebook',
+  facebook_login_failed: 'Không thể đăng nhập bằng Facebook. Vui lòng thử lại.',
+  facebook_sdk_load_failed: 'Không tải được Facebook SDK. Hãy kiểm tra kết nối và thử lại.',
+  facebook_service_unavailable: 'Dịch vụ Facebook tạm thời không khả dụng. Vui lòng thử lại sau.',
+  facebook_account_not_provisioned: 'Email Facebook này chưa được cấp tài khoản trong hệ thống.',
+  facebook_email_required: 'Facebook chưa cấp quyền truy cập email. Vui lòng cho phép quyền email và thử lại.',
 
   // Navigation
   nav_home: 'Trang chủ',

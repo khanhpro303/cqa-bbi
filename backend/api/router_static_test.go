@@ -78,3 +78,26 @@ func TestPrivacyPolicyStaticFileIsPubliclyAccessible(t *testing.T) {
 		t.Fatalf("response does not contain privacy policy title: %s", response.Body.String())
 	}
 }
+
+func TestSecurityHeadersAllowFacebookLoginSDK(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(securityHeaders())
+	router.GET("/", func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "http://cqa.example.com/", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	policy := response.Header().Get("Content-Security-Policy")
+	for _, requiredSource := range []string{
+		"https://connect.facebook.net",
+		"frame-src https://www.facebook.com https://web.facebook.com",
+	} {
+		if !strings.Contains(policy, requiredSource) {
+			t.Errorf("Content-Security-Policy %q does not allow %q", policy, requiredSource)
+		}
+	}
+}

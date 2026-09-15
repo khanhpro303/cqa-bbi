@@ -35,6 +35,13 @@ export default {
   register_title: 'Create a new account',
   invalid_credentials: 'Invalid email or password',
   email_already_exists: 'Email already exists',
+  or: 'or',
+  continue_with_facebook: 'Continue with Facebook',
+  facebook_login_failed: 'Unable to sign in with Facebook. Please try again.',
+  facebook_sdk_load_failed: 'Could not load the Facebook SDK. Check your connection and try again.',
+  facebook_service_unavailable: 'Facebook is temporarily unavailable. Please try again later.',
+  facebook_account_not_provisioned: 'This Facebook email has not been provisioned in the system.',
+  facebook_email_required: 'Facebook did not grant email access. Allow the email permission and try again.',
 
   // Navigation
   nav_home: 'Home',

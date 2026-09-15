@@ -15,6 +15,8 @@ interface TenantPermissions {
   permissions: Record<string, string> // { channels: "rw", messages: "r", jobs: "", settings: "" }
 }
 
+const skipFacebookAutoLoginKey = 'cqa_skip_facebook_auto_login'
+
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
   const accessToken = ref(localStorage.getItem('cqa_access_token') || '')
@@ -50,8 +52,18 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(email: string, password: string) {
     const { data } = await api.post('/auth/login', { email, password })
-    accessToken.value = data.access_token
-    localStorage.setItem('cqa_access_token', data.access_token)
+    await acceptLogin(data.access_token)
+  }
+
+  async function loginWithFacebook(facebookAccessToken: string) {
+    const { data } = await api.post('/auth/facebook', { access_token: facebookAccessToken })
+    await acceptLogin(data.access_token)
+  }
+
+  async function acceptLogin(token: string) {
+    accessToken.value = token
+    localStorage.setItem('cqa_access_token', token)
+    sessionStorage.removeItem(skipFacebookAutoLoginKey)
     // Refresh token is now set as HttpOnly cookie by backend
     await fetchProfile()
   }
@@ -81,7 +93,8 @@ export const useAuthStore = defineStore('auth', () => {
     accessToken.value = ''
     localStorage.removeItem('cqa_access_token')
     localStorage.removeItem('cqa_refresh_token') // cleanup legacy
+    sessionStorage.setItem(skipFacebookAutoLoginKey, '1')
   }
 
-  return { user, accessToken, isAuthenticated, tenantPerms, canView, canEdit, fetchTenantPermissions, login, register, fetchProfile, updateProfile, logout }
+  return { user, accessToken, isAuthenticated, tenantPerms, canView, canEdit, fetchTenantPermissions, login, loginWithFacebook, register, fetchProfile, updateProfile, logout }
 })

@@ -37,6 +37,16 @@ Danh sách đầy đủ các biến môi trường trong file `.env`.
 | `RATE_LIMIT_PER_IP` | Số request/phút cho mỗi IP | `100` |
 | `RATE_LIMIT_PER_USER` | Số request/phút cho mỗi user | `300` |
 
+## Đăng nhập Facebook (tùy chọn)
+
+| Biến | Mô tả | Mặc định |
+|------|-------|----------|
+| `FACEBOOK_APP_ID` | App ID của ứng dụng Meta; được gửi ra trình duyệt để khởi tạo JavaScript SDK | _(trống = tắt nút đăng nhập)_ |
+| `FACEBOOK_APP_SECRET` | App Secret dùng ở backend để xác minh access token; không bao giờ gửi ra trình duyệt | |
+| `FACEBOOK_API_VERSION` | Phiên bản Facebook Graph API dùng cho SDK và backend | `v26.0` |
+
+Đăng nhập Facebook chỉ ánh xạ tới người dùng đã tồn tại có cùng email. Hệ thống không tự tạo user hoặc tự cấp quyền công ty từ tài khoản Facebook.
+
 ## SSL (tùy chọn)
 
 | Biến | Mô tả | Mặc định |
