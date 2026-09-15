@@ -131,6 +131,26 @@ func SyncMessengerLabels(c *gin.Context) {
 		messengerLabelError(c, err)
 		return
 	}
+	state, err := messengerlabels.LoadState(db.DB.WithContext(c.Request.Context()), channel)
+	if err != nil {
+		messengerLabelError(c, err)
+		return
+	}
+	if !state.Enabled {
+		db.LogActivity(channel.TenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "messenger_labels.intake_sync_started", "channel", channel.ID, "Lưu nhãn mặc định cho các hội thoại chưa backfill", "", c.ClientIP())
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+			defer cancel()
+			succeeded, failed, captureErr := messengerlabels.CaptureMissingIntakeLabels(ctx, db.DB, channel, pageID, reader)
+			if captureErr != nil {
+				log.Printf("[messenger-labels] manual intake capture failed for channel %s after %d successes and %d failures: %s", channel.ID, succeeded, failed, messengerlabels.ErrorMessage(messengerlabels.ErrorKind(captureErr)))
+				return
+			}
+			log.Printf("[messenger-labels] manual intake capture completed for channel %s: %d captured, %d failed", channel.ID, succeeded, failed)
+		}()
+		c.JSON(http.StatusAccepted, gin.H{"status": "capturing_intake"})
+		return
+	}
 	token, err := messengerlabels.ClaimSync(db.DB.WithContext(c.Request.Context()), channel, time.Now())
 	if err != nil {
 		messengerLabelError(c, err)

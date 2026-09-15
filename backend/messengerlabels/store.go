@@ -156,9 +156,16 @@ type Row struct {
 	Classification string                   `json:"classification"`
 	Labels         []channels.FacebookLabel `json:"labels"`
 	IntakeLabels   []channels.FacebookLabel `json:"intake_labels"`
+	IntakeCaptured bool                     `json:"intake_captured"`
 	TrackingLabels []channels.FacebookLabel `json:"tracking_labels"`
 	CheckedAt      *time.Time               `json:"checked_at"`
 	Error          string                   `json:"error"`
+}
+
+type IntakeProgress struct {
+	Total      int `json:"total"`
+	Captured   int `json:"captured"`
+	WithLabels int `json:"with_labels"`
 }
 
 type Report struct {
@@ -171,6 +178,7 @@ type Report struct {
 	IntakeLabelIDs   []string                 `json:"intake_label_ids"`
 	CatalogSyncedAt  *time.Time               `json:"catalog_synced_at"`
 	Sync             SyncStatus               `json:"sync"`
+	Intake           IntakeProgress           `json:"intake"`
 	FreshnessMinutes int                      `json:"freshness_minutes"`
 	Counts           *Counts                  `json:"counts"`
 	Rows             []Row                    `json:"rows"`
@@ -241,6 +249,7 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 		byID[snapshot.ConversationID] = snapshot
 	}
 	r.Counts = &Counts{}
+	r.Intake.Total = len(convs)
 	intakeLabelIDs, err := intakeLabelIDsFromSnapshots(snapshots)
 	if err != nil {
 		return nil, err
@@ -260,6 +269,11 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 		intakeReady := snapshot.IntakeLabelsCapturedAt != nil && snapshot.IntakeLabels != nil && json.Unmarshal([]byte(*snapshot.IntakeLabels), &intakeLabels) == nil && intakeLabels != nil
 		if !intakeReady {
 			intakeLabels = []channels.FacebookLabel{}
+		} else {
+			r.Intake.Captured++
+			if len(intakeLabels) > 0 {
+				r.Intake.WithLabels++
+			}
 		}
 		trackingLabels := TrackingLabels(labels, intakeLabelIDs)
 		classification := Classify(labels, intakeLabelIDs, snapshot.Status, snapshot.CheckedAt, r.Rules, ready && valid && intakeReady, now)
@@ -284,7 +298,18 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 				errorText = "Dữ liệu nhãn đã cũ; hãy đồng bộ lại."
 			}
 		}
-		r.Rows = append(r.Rows, Row{conv.ID, conv.CustomerName, channelID, classification, labels, intakeLabels, trackingLabels, snapshot.CheckedAt, errorText})
+		r.Rows = append(r.Rows, Row{
+			ConversationID: conv.ID,
+			CustomerName:   conv.CustomerName,
+			ChannelID:      channelID,
+			Classification: classification,
+			Labels:         labels,
+			IntakeLabels:   intakeLabels,
+			IntakeCaptured: intakeReady,
+			TrackingLabels: trackingLabels,
+			CheckedAt:      snapshot.CheckedAt,
+			Error:          errorText,
+		})
 		r.Counts.Add(classification)
 	}
 	order := map[string]int{"unclassified": 0, "conflict": 1, "unknown": 2, "potential": 3, "qualified": 4, "unqualified": 5}

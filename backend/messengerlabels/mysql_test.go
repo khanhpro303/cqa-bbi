@@ -137,6 +137,9 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	if err != nil || report.Counts.Unknown != 3 || report.Counts.Unclassified != 0 {
 		t.Fatalf("mixed sync report: %+v %v", report, err)
 	}
+	if report.Intake.Total != 3 || report.Intake.Captured != 1 || report.Intake.WithLabels != 1 || !report.Rows[0].IntakeCaptured {
+		t.Fatalf("unexpected intake progress: %+v rows=%+v", report.Intake, report.Rows)
+	}
 	if _, err := BuildReport(ctx, database, "other-tenant", channel.ID, time.Now()); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("tenant leaked: %v", err)
 	}
@@ -172,6 +175,9 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	report, err = BuildReport(ctx, database, tenant.ID, channel.ID, time.Now())
 	if err != nil || report.Sync.Status != "partial" || report.Counts.Unclassified != 1 || report.Counts.Qualified != 1 || report.Counts.Unknown != 1 {
 		t.Fatalf("partial report: %+v %v", report, err)
+	}
+	if report.Intake.Total != 3 || report.Intake.Captured != 2 || report.Intake.WithLabels != 1 {
+		t.Fatalf("unexpected resumed intake progress: %+v", report.Intake)
 	}
 	if _, err := ClaimSync(database, channel, time.Now()); !errors.Is(err, ErrBusy) {
 		t.Fatalf("cooldown missing: %v", err)

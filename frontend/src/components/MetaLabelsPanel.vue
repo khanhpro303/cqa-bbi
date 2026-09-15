@@ -86,6 +86,17 @@
         Đang đọc nhãn từ Meta. Số phân loại và cảnh báo sẽ được tính khi lượt đồng bộ hoàn tất; hội thoại đang chờ được tính vào “Chưa xác định”.
       </v-alert>
 
+      <v-alert
+        v-if="data?.intake && data.intake.total > 0"
+        :type="data.intake.captured === data.intake.total ? 'success' : 'warning'"
+        variant="tonal"
+        density="compact"
+        class="mb-4"
+      >
+        Đã lưu nhãn mặc định lúc tiếp nhận cho {{ data.intake.captured }}/{{ data.intake.total }} hội thoại;
+        {{ data.intake.with_labels }} hội thoại có ít nhất một nhãn mặc định.
+      </v-alert>
+
       <v-progress-linear v-if="loading && data" indeterminate color="primary" class="mb-3" />
 
       <template v-if="loading && !data">
@@ -196,7 +207,9 @@
                   </v-chip>
                 </div>
               </div>
-              <span v-else class="text-medium-emphasis">{{ item.classification === 'unknown' ? 'Chưa xác định nhãn' : 'Không có nhãn' }}</span>
+              <span v-else class="text-medium-emphasis">
+                {{ item.intake_captured ? 'Đã lưu: không có nhãn mặc định' : (item.classification === 'unknown' ? 'Chưa backfill nhãn mặc định' : 'Không có nhãn') }}
+              </span>
             </template>
             <template #item.checked_at="{ item }">
               <span>{{ item.checked_at ? formatDateTime(item.checked_at) : 'Chưa kiểm tra' }}</span>
@@ -340,6 +353,7 @@ interface ClassificationRow {
   classification: Classification
   labels: MetaLabel[]
   intake_labels: MetaLabel[]
+  intake_captured: boolean
   tracking_labels: MetaLabel[]
   checked_at: string | null
   error: string
@@ -359,6 +373,11 @@ interface LabelsReport {
     started_at: string | null
     finished_at: string | null
     error: string
+  }
+  intake: {
+    total: number
+    captured: number
+    with_labels: number
   }
   freshness_minutes: number
   counts: MetaLabelCounts | null
@@ -567,14 +586,17 @@ async function startSync() {
   const targetTenant = tenantId.value
   const targetChannel = channelId.value
   try {
-    await api.post(`/tenants/${targetTenant}/messenger-labels/${targetChannel}/sync`)
+    const { data: response } = await api.post(`/tenants/${targetTenant}/messenger-labels/${targetChannel}/sync`)
     if (disposed || sequence !== actionSequence.sync || tenantId.value !== targetTenant || channelId.value !== targetChannel) return
-    if (data.value) {
+    if (data.value && response.status === 'syncing') {
       data.value.sync.status = 'syncing'
       data.value.counts = null
       data.value.rows = []
     }
-    showSnack('Đã bắt đầu đồng bộ nhãn', 'success')
+    showSnack(response.status === 'capturing_intake' ? 'Đã bắt đầu backfill nhãn mặc định' : 'Đã bắt đầu đồng bộ nhãn', 'success')
+    if (response.status === 'capturing_intake') {
+      window.setTimeout(() => loadData(true), 3000)
+    }
     scheduleRefresh()
   } catch (error: any) {
     if (disposed || sequence !== actionSequence.sync || tenantId.value !== targetTenant || channelId.value !== targetChannel) return
