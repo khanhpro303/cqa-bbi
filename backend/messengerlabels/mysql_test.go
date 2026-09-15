@@ -2,6 +2,7 @@ package messengerlabels
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -125,7 +126,11 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, err := LoadState(database, channel)
-	if err != nil || state.Rules != `[{"label_id":"11","category":"qualified"}]` {
+	var prunedRules []Rule
+	if err == nil {
+		err = json.Unmarshal([]byte(state.Rules), &prunedRules)
+	}
+	if err != nil || len(prunedRules) != 1 || prunedRules[0] != (Rule{LabelID: "11", Category: "qualified"}) {
 		t.Fatalf("new intake baseline did not prune persisted policy: %s, %v", state.Rules, err)
 	}
 	report, err := BuildReport(ctx, database, tenant.ID, channel.ID, time.Now())
