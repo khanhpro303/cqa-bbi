@@ -57,7 +57,7 @@
           {{ report.summary.waiting }} hội thoại đang chờ Fanpage phản hồi.
           <div class="text-caption mt-1">Hàng chờ là trạng thái hiện tại và không bị giới hạn bởi bộ lọc ngày.</div>
         </div>
-        <v-btn size="small" variant="outlined" @click="statusFilter = report.summary.overdue ? 'overdue' : 'waiting'">
+        <v-btn size="small" variant="outlined" aria-controls="conversation-queue" @click="viewQueue">
           Xem hàng chờ
         </v-btn>
       </div>
@@ -174,9 +174,21 @@
         </v-card-text>
       </v-card>
 
+      <section
+        id="conversation-queue"
+        ref="conversationQueue"
+        class="conversation-queue"
+        tabindex="-1"
+        aria-labelledby="conversation-queue-title"
+      >
       <v-card variant="outlined">
         <v-card-title class="d-flex align-center flex-wrap ga-3">
-          <div class="text-subtitle-1 font-weight-bold"><v-icon start color="primary">mdi-message-alert-outline</v-icon>Hội thoại</div>
+          <div>
+            <h2 id="conversation-queue-title" class="text-subtitle-1 font-weight-bold"><v-icon start color="primary">mdi-message-alert-outline</v-icon>{{ queueTitle }}</h2>
+            <div class="panel-description text-medium-emphasis mt-1" role="status">
+              {{ filteredRows.length }} hội thoại phù hợp<span v-if="statusFilter === 'overdue' || statusFilter === 'waiting'"> · Trạng thái hiện tại, không giới hạn bởi bộ lọc ngày</span>
+            </div>
+          </div>
           <v-spacer />
           <v-select
             v-model="statusFilter"
@@ -202,6 +214,7 @@
         </v-card-title>
         <v-divider />
         <v-data-table
+          v-model:page="conversationPage"
           :headers="headers"
           :items="filteredRows"
           item-value="conversation_id"
@@ -253,6 +266,7 @@
           </template>
         </v-data-table>
       </v-card>
+      </section>
     </template>
 
     <v-dialog v-model="detailDialog" max-width="760" scrollable>
@@ -380,7 +394,7 @@
 <script setup lang="ts">
 import MetaLabelsPanel from '../components/MetaLabelsPanel.vue'
 import InsightWordcloudPanel from '../components/InsightWordcloudPanel.vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -467,6 +481,11 @@ const errorMessage = ref('')
 const channelId = ref('')
 const statusFilter = ref('all')
 const search = ref('')
+const conversationQueue = ref<HTMLElement | null>(null)
+const conversationPage = ref(1)
+const queueTitle = computed(() => statusFilter.value === 'overdue'
+  ? 'Hàng chờ quá hạn'
+  : statusFilter.value === 'waiting' ? 'Hàng chờ phản hồi' : 'Hội thoại')
 const detailDialog = ref(false)
 const selectedRow = ref<Row | null>(null)
 const resolveDialog = ref(false)
@@ -525,6 +544,21 @@ const filteredRows = computed(() => {
     return `${row.customer_name} ${row.channel_name} ${row.insight?.summary || ''}`.toLocaleLowerCase('vi').includes(term)
   })
 })
+
+watch([statusFilter, search, tenantId], () => { conversationPage.value = 1 })
+
+async function viewQueue() {
+  if (!report.value) return
+  statusFilter.value = report.value.summary.overdue ? 'overdue' : 'waiting'
+  search.value = ''
+  conversationPage.value = 1
+  await nextTick()
+  conversationQueue.value?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+  conversationQueue.value?.focus({ preventScroll: true })
+}
 
 const insightAggregates = computed(() => report.value
   ? aggregateInsights(report.value.rows, report.value.from, report.value.to)
@@ -737,6 +771,16 @@ onBeforeUnmount(() => {
 
 .kpi-card {
   min-height: 104px;
+}
+
+.conversation-queue {
+  scroll-margin-top: 64px;
+  border-radius: 4px;
+}
+
+.conversation-queue:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 4px;
 }
 
 .panel-description {
