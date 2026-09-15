@@ -132,7 +132,7 @@
           <v-icon start color="primary">mdi-cloud-sync</v-icon>
           Nguồn dữ liệu Messenger
           <v-spacer />
-          <span class="text-caption font-weight-regular text-medium-emphasis">{{ report.conversations_scanned }} hội thoại đã quét</span>
+          <span class="panel-description text-medium-emphasis">{{ report.conversations_scanned }} hội thoại đã quét</span>
         </v-card-title>
         <v-divider />
         <v-card-text v-if="report.pages.length" class="d-flex flex-wrap ga-2">

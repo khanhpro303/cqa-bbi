@@ -405,7 +405,7 @@ const kpis = computed(() => {
   const counts = data.value?.counts || null
   return [
     { label: 'Chưa phân loại', value: counts?.unclassified || 0, hint: 'Không có nhãn đã ánh xạ', icon: 'mdi-label-off-outline', color: 'warning' },
-    { label: 'Đã phân loại', value: classifiedCount(counts), hint: `${counts?.qualified || 0} phù hợp · ${counts?.unqualified || 0} chưa phù hợp · ${counts?.potential || 0} tiềm năng`, icon: 'mdi-label-check-outline', color: 'success' },
+    { label: 'Đã phân loại', value: classifiedCount(counts), hint: `${counts?.qualified || 0} phù hợp · ${counts?.unqualified || 0} chưa phù hợp · ${counts?.potential || 0} tiềm năng`, icon: 'mdi-check-circle-outline', color: 'success' },
     { label: 'Chưa xác định', value: counts?.unknown || 0, hint: 'Chưa bật, lỗi hoặc dữ liệu cũ', icon: 'mdi-help-circle-outline', color: 'grey' },
     { label: 'Xung đột nhãn', value: counts?.conflict || 0, hint: 'Có nhãn thuộc nhiều nhóm', icon: 'mdi-label-multiple-outline', color: 'error' },
   ]
