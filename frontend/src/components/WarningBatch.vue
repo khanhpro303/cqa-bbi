@@ -1,7 +1,7 @@
 <template>
   <v-alert v-if="warnings.length" type="warning" variant="tonal" border="start">
     <button v-if="warnings.length > 1" class="warning-toggle" type="button" :aria-expanded="expanded" @click="expanded = !expanded">
-      <strong>Có {{ warnings.length }} cảnh báo</strong>
+      <span>Có {{ warnings.length }} cảnh báo</span>
       <v-icon :icon="expanded ? 'mdi-chevron-up' : 'mdi-chevron-down'" />
     </button>
     <div v-if="warnings.length === 1 || expanded" :class="{ 'mt-3': warnings.length > 1 }">
@@ -31,6 +31,10 @@ watch(() => props.warnings.map(warning => warning.id).join(','), () => {
 
 <style scoped>
 .warning-toggle {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
