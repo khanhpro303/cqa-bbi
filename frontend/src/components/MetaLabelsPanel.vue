@@ -136,7 +136,7 @@
           <v-card-title class="d-flex align-center flex-wrap ga-3">
             <div class="title-block">
               <div class="text-subtitle-1 font-weight-bold">Hội thoại theo nhãn Meta</div>
-              <div class="text-caption text-medium-emphasis mt-1">
+              <div class="panel-description text-medium-emphasis mt-1">
                 Tổng {{ data.counts.total.toLocaleString('vi-VN') }} hội thoại đã lưu cục bộ của Fanpage. Nhãn chỉ thay đổi sau lần đồng bộ gần nhất.
               </div>
             </div>
