@@ -72,22 +72,18 @@
     </v-alert>
 
     <template v-if="channelId">
-      <v-alert v-if="data && !data.enabled" type="warning" variant="tonal" class="mb-4" border="start">
-        Theo dõi nhãn chưa được bật cho Fanpage này. Hãy đồng bộ danh mục nhãn, sau đó ánh xạ nhãn vào ba nhóm trạng thái.
-      </v-alert>
-
-      <v-alert v-else-if="data?.sync.status === 'error' || data?.sync.status === 'partial'" type="warning" variant="tonal" class="mb-4" border="start">
-        <strong>{{ syncStatusLabel(data.sync.status) }}.</strong>
-        {{ data.sync.error || 'Một phần hội thoại chưa lấy được nhãn từ Meta.' }}
-        Các hội thoại lỗi hoặc dữ liệu cũ hơn {{ data.freshness_minutes }} phút được tính riêng vào “Chưa xác định”.
-      </v-alert>
+      <WarningBatch :warnings="labelWarnings" class="mb-4">
+        <template #action="{ warning }">
+          <v-btn v-if="warning.id === 'unclassified'" size="small" variant="outlined" @click="statusFilter = 'unclassified'">Xem chưa phân loại</v-btn>
+        </template>
+      </WarningBatch>
 
       <v-alert v-if="data?.sync.status === 'syncing'" type="info" variant="tonal" class="mb-4">
         Đang đọc nhãn từ Meta. Số phân loại và cảnh báo sẽ được tính khi lượt đồng bộ hoàn tất; hội thoại đang chờ được tính vào “Chưa xác định”.
       </v-alert>
 
       <v-alert
-        v-if="data?.intake && data.intake.total > 0"
+        v-if="data?.intake && data.intake.total > 0 && data.intake.captured === data.intake.total"
         :type="data.intake.captured === data.intake.total ? 'success' : 'warning'"
         variant="tonal"
         density="compact"
@@ -108,15 +104,6 @@
       </template>
 
       <template v-else-if="data?.counts">
-        <v-alert v-if="data.counts.unclassified" type="warning" variant="tonal" border="start" class="mb-4">
-          <div class="d-flex align-center justify-space-between flex-wrap ga-3">
-            <div>
-              <strong>{{ data.counts.unclassified }} hội thoại chưa có nhãn phân loại</strong>
-              <div class="text-body-2 mt-1">Nhân viên cần kiểm tra và gắn nhãn trong Meta Inbox. Cảnh báo chỉ dựa trên dữ liệu nhãn đã đọc thành công.</div>
-            </div>
-            <v-btn size="small" variant="outlined" @click="statusFilter = 'unclassified'">Xem chưa phân loại</v-btn>
-          </div>
-        </v-alert>
         <v-row class="mb-2">
           <v-col v-for="kpi in kpis" :key="kpi.label" cols="12" sm="6" lg="3">
             <v-card variant="outlined" class="h-100 kpi-card">
@@ -336,6 +323,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
+import WarningBatch from './WarningBatch.vue'
 import { useAuthStore } from '../stores/auth'
 import {
   buildMetaLabelRules,
@@ -410,6 +398,23 @@ const canSync = computed(() => authStore.canEdit('messages'))
 const pages = ref<Page[]>([])
 const channelId = ref('')
 const data = ref<LabelsReport | null>(null)
+const labelWarnings = computed(() => {
+  const report = data.value
+  if (!report) return []
+  const warnings: { id: string; title: string; detail: string }[] = []
+  if (!report.enabled) {
+    warnings.push({ id: 'disabled', title: 'Chưa bật theo dõi nhãn', detail: 'Theo dõi nhãn chưa được bật cho Fanpage này. Hãy đồng bộ danh mục nhãn, sau đó ánh xạ nhãn vào ba nhóm trạng thái.' })
+  } else if (report.sync.status === 'error' || report.sync.status === 'partial') {
+    warnings.push({ id: 'sync', title: syncStatusLabel(report.sync.status), detail: `${report.sync.error || 'Một phần hội thoại chưa lấy được nhãn từ Meta.'} Các hội thoại lỗi hoặc dữ liệu cũ hơn ${report.freshness_minutes} phút được tính riêng vào “Chưa xác định”.` })
+  }
+  if (report.intake?.total > 0 && report.intake.captured !== report.intake.total) {
+    warnings.push({ id: 'intake', title: 'Chưa lưu đủ nhãn lúc tiếp nhận', detail: `Đã lưu nhãn mặc định lúc tiếp nhận cho ${report.intake.captured}/${report.intake.total} hội thoại; ${report.intake.with_labels} hội thoại có ít nhất một nhãn mặc định.${report.intake.failed ? ` ${report.intake.failed} hội thoại đang lỗi: ${report.intake.error}` : ''}` })
+  }
+  if (report.counts?.unclassified) {
+    warnings.push({ id: 'unclassified', title: `${report.counts.unclassified} hội thoại chưa có nhãn phân loại`, detail: 'Nhân viên cần kiểm tra và gắn nhãn trong Meta Inbox. Cảnh báo chỉ dựa trên dữ liệu nhãn đã đọc thành công.' })
+  }
+  return warnings
+})
 const loading = ref(false)
 const syncing = ref(false)
 const errorMessage = ref('')
