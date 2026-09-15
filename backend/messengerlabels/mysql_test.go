@@ -90,10 +90,10 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := SaveCatalog(database, channel, []channels.FacebookLabel{{ID: "11", Name: "Phù hợp"}}, now); err != nil {
+	if err := SaveCatalog(database, channel, []channels.FacebookLabel{{ID: "11", Name: "Phù hợp"}, {ID: "99", Name: "Ad 99"}}, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := SavePolicy(database, channel, Policy{true, []Rule{{"11", "qualified"}}}); err != nil {
+	if err := SavePolicy(database, channel, Policy{true, []Rule{{"11", "qualified"}, {"99", "unqualified"}}}); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -116,12 +116,17 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 		t.Fatalf("expected one owner, got %d", len(claimed))
 	}
 	oldToken := <-claimed
+	intakeAd, intakeEmpty := `[{"id":"99","page_label_name":"Ad 99"}]`, `[]`
 	snapshots := []models.MessengerLabelSnapshot{
-		{ConversationID: "a", TenantID: tenant.ID, ChannelID: channel.ID, PSID: "200", Labels: "[]", Status: "success", CheckedAt: &now, AttemptedAt: now},
+		{ConversationID: "a", TenantID: tenant.ID, ChannelID: channel.ID, PSID: "200", Labels: "[]", IntakeLabels: &intakeAd, Status: "success", CheckedAt: &now, IntakeLabelsCapturedAt: &now, AttemptedAt: now},
 		{ConversationID: "b", TenantID: tenant.ID, ChannelID: channel.ID, PSID: "201", Labels: "[]", Status: "error", ErrorKind: "unsupported", AttemptedAt: now},
 	}
 	if err := saveBatch(database, channel, oldToken, "b", snapshots, 1); err != nil {
 		t.Fatal(err)
+	}
+	state, err := LoadState(database, channel)
+	if err != nil || state.Rules != `[{"label_id":"11","category":"qualified"}]` {
+		t.Fatalf("new intake baseline did not prune persisted policy: %s, %v", state.Rules, err)
 	}
 	report, err := BuildReport(ctx, database, tenant.ID, channel.ID, time.Now())
 	if err != nil || report.Counts.Unknown != 3 || report.Counts.Unclassified != 0 {
@@ -129,6 +134,12 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	}
 	if _, err := BuildReport(ctx, database, "other-tenant", channel.ID, time.Now()); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("tenant leaked: %v", err)
+	}
+	if err := SavePolicy(database, channel, Policy{true, []Rule{{"99", "qualified"}}}); !errors.Is(err, ErrIntakeLabel) {
+		t.Fatalf("intake label policy accepted: %v", err)
+	}
+	if err := database.Create(&models.MessengerLabelSnapshot{ConversationID: "c", TenantID: tenant.ID, ChannelID: channel.ID, PSID: "300", Labels: "[]", IntakeLabels: &intakeEmpty, Status: "never", IntakeLabelsCapturedAt: &now, AttemptedAt: now}).Error; err != nil {
+		t.Fatal(err)
 	}
 	if err := database.Model(&models.MessengerLabelState{}).Where("channel_id = ?", channel.ID).Update("lease_until", now.Add(-time.Minute)).Error; err != nil {
 		t.Fatal(err)
@@ -159,6 +170,57 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	}
 	if _, err := ClaimSync(database, channel, time.Now()); !errors.Is(err, ErrBusy) {
 		t.Fatalf("cooldown missing: %v", err)
+	}
+	conversationD := models.Conversation{ID: "d", TenantID: tenant.ID, ChannelID: channel.ID, ExternalConversationID: "d", Metadata: `{"participants":{"data":[{"id":"100"},{"id":"400"}]}}`}
+	if err := database.Create(&conversationD).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveCatalog(database, channel, []channels.FacebookLabel{{ID: "11", Name: "Phù hợp"}, {ID: "99", Name: "Ad 99"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	var policyErr, captureErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		policyErr = SavePolicy(database, channel, Policy{true, []Rule{{"11", "qualified"}, {"99", "unqualified"}}})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		captureErr = saveIntakeLabelSnapshot(database, models.MessengerLabelSnapshot{ConversationID: "d", TenantID: tenant.ID, ChannelID: channel.ID, PSID: "400", Labels: intakeAd, IntakeLabels: &intakeAd, Status: "success", CheckedAt: &now, IntakeLabelsCapturedAt: &now, AttemptedAt: now})
+	}()
+	close(start)
+	wg.Wait()
+	if captureErr != nil || policyErr != nil && !errors.Is(policyErr, ErrIntakeLabel) {
+		t.Fatalf("concurrent policy/capture failed: policy=%v capture=%v", policyErr, captureErr)
+	}
+	state, err = LoadState(database, channel)
+	if err != nil || strings.Contains(state.Rules, `"label_id":"99"`) {
+		t.Fatalf("concurrent intake label remained in policy: %s, %v", state.Rules, err)
+	}
+	if err := database.Model(&models.MessengerLabelState{}).Where("channel_id = ?", channel.ID).Update("sync_finished_at", time.Now().Add(-2*time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	immutabilityToken, err := ClaimSync(database, channel, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	laterAt := now.Add(time.Minute)
+	laterIntake := `[{"id":"88","page_label_name":"Later label"}]`
+	if err := saveBatch(database, channel, immutabilityToken, "d", []models.MessengerLabelSnapshot{{ConversationID: "d", TenantID: tenant.ID, ChannelID: channel.ID, PSID: "400", Labels: laterIntake, IntakeLabels: &laterIntake, Status: "success", CheckedAt: &laterAt, IntakeLabelsCapturedAt: &laterAt, AttemptedAt: laterAt}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	var immutable models.MessengerLabelSnapshot
+	if err := database.First(&immutable, "conversation_id = ?", "d").Error; err != nil {
+		t.Fatal(err)
+	}
+	if immutable.IntakeLabels == nil || *immutable.IntakeLabels != intakeAd || immutable.IntakeLabelsCapturedAt == nil || !immutable.IntakeLabelsCapturedAt.Equal(now) {
+		t.Fatalf("tracking batch overwrote intake baseline: %+v", immutable)
+	}
+	if err := finishSync(database, channel, immutabilityToken, "success", ""); err != nil {
+		t.Fatal(err)
 	}
 	if err := database.Delete(&models.Conversation{}, "id = ?", "a").Error; err != nil {
 		t.Fatal(err)

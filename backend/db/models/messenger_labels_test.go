@@ -25,5 +25,13 @@ func TestMessengerLabelSchemaCascadesAndHasStableIdentity(t *testing.T) {
 		if field := s.FieldsByName["PSID"]; field != nil && field.DBName != "psid" {
 			t.Fatalf("upsert column mismatch: %s", field.DBName)
 		}
+		if _, ok := model.(*MessengerLabelSnapshot); ok {
+			if field := s.FieldsByName["IntakeLabels"]; field == nil || field.DBName != "intake_labels" {
+				t.Fatal("missing intake label baseline column")
+			}
+			if field := s.FieldsByName["IntakeLabelsCapturedAt"]; field == nil || field.DBName != "intake_labels_captured_at" {
+				t.Fatal("missing intake label capture timestamp")
+			}
+		}
 	}
 }

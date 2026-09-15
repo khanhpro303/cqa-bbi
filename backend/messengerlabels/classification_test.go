@@ -20,29 +20,67 @@ func TestClassifyRequiresCompleteFreshRead(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		labels  []channels.FacebookLabel
+		intake  map[string]bool
 		status  string
 		checked *time.Time
 		ready   bool
 		want    string
 	}{
-		{"empty fresh is unclassified", []channels.FacebookLabel{}, "success", &fresh, true, "unclassified"},
-		{"irrelevant label is unclassified", []channels.FacebookLabel{{ID: "99", Name: "VIP"}}, "success", &fresh, true, "unclassified"},
-		{"qualified", []channels.FacebookLabel{{ID: "11", Name: "Renamed"}}, "success", &fresh, true, "qualified"},
-		{"unqualified", []channels.FacebookLabel{{ID: "13", Name: "Không phù hợp"}}, "success", &fresh, true, "unqualified"},
-		{"potential", []channels.FacebookLabel{{ID: "12", Name: "Tiềm năng"}}, "success", &fresh, true, "potential"},
-		{"two categories conflict", []channels.FacebookLabel{{ID: "11"}, {ID: "12"}}, "success", &fresh, true, "conflict"},
-		{"two same category labels", []channels.FacebookLabel{{ID: "11"}, {ID: "14"}}, "success", &fresh, true, "qualified"},
-		{"unread", nil, "", nil, true, "unknown"},
-		{"error never means empty", nil, "error", &fresh, true, "unknown"},
-		{"stale empty", nil, "success", &stale, true, "unknown"},
-		{"future", nil, "success", &future, true, "unknown"},
-		{"disabled or invalid config", nil, "success", &fresh, false, "unknown"},
+		{"empty fresh is unclassified", []channels.FacebookLabel{}, nil, "success", &fresh, true, "unclassified"},
+		{"irrelevant label is unclassified", []channels.FacebookLabel{{ID: "99", Name: "VIP"}}, nil, "success", &fresh, true, "unclassified"},
+		{"intake label is never tracking even if mapped", []channels.FacebookLabel{{ID: "11", Name: "Ad 123"}}, map[string]bool{"11": true}, "success", &fresh, true, "unclassified"},
+		{"manual label remains after intake labels are removed", []channels.FacebookLabel{{ID: "11", Name: "Ad 123"}, {ID: "12", Name: "Tiềm năng"}}, map[string]bool{"11": true}, "success", &fresh, true, "potential"},
+		{"qualified", []channels.FacebookLabel{{ID: "11", Name: "Renamed"}}, nil, "success", &fresh, true, "qualified"},
+		{"unqualified", []channels.FacebookLabel{{ID: "13", Name: "Không phù hợp"}}, nil, "success", &fresh, true, "unqualified"},
+		{"potential", []channels.FacebookLabel{{ID: "12", Name: "Tiềm năng"}}, nil, "success", &fresh, true, "potential"},
+		{"two categories conflict", []channels.FacebookLabel{{ID: "11"}, {ID: "12"}}, nil, "success", &fresh, true, "conflict"},
+		{"two same category labels", []channels.FacebookLabel{{ID: "11"}, {ID: "14"}}, nil, "success", &fresh, true, "qualified"},
+		{"unread", nil, nil, "", nil, true, "unknown"},
+		{"error never means empty", nil, nil, "error", &fresh, true, "unknown"},
+		{"stale empty", nil, nil, "success", &stale, true, "unknown"},
+		{"future", nil, nil, "success", &future, true, "unknown"},
+		{"disabled or invalid config", nil, nil, "success", &fresh, false, "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := Classify(tc.labels, tc.status, tc.checked, rules, tc.ready, now); got != tc.want {
+			if got := Classify(tc.labels, tc.intake, tc.status, tc.checked, rules, tc.ready, now); got != tc.want {
 				t.Fatalf("got %s want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPolicyRejectsIntakeLabelIDs(t *testing.T) {
+	catalog := []channels.FacebookLabel{{ID: "11", Name: "Ad 123"}, {ID: "12", Name: "Tiềm năng"}}
+	reserved := map[string]bool{"11": true}
+	if !errors.Is((Policy{Enabled: true, Rules: []Rule{{"11", "qualified"}}}).ValidateTracking(catalog, reserved), ErrIntakeLabel) {
+		t.Fatal("intake label must not be accepted as a tracking rule")
+	}
+	if err := (Policy{Enabled: true, Rules: []Rule{{"12", "potential"}}}).ValidateTracking(catalog, reserved); err != nil {
+		t.Fatalf("manual tracking label rejected: %v", err)
+	}
+	if err := (Policy{Enabled: false, Rules: []Rule{{"11", "qualified"}}}).ValidateTracking(catalog, reserved); err != nil {
+		t.Fatalf("disabled policy must remain disableable: %v", err)
+	}
+}
+
+func TestIntakeLabelIDsAreCollectedAcrossPageSnapshots(t *testing.T) {
+	now := time.Now()
+	first, second := `[{"id":"ad-1","page_label_name":"Ad 1"}]`, `[{"id":"campaign-2","page_label_name":"Campaign 2"},{"id":"ad-1","page_label_name":"Renamed"}]`
+	ids, err := intakeLabelIDsFromSnapshots([]models.MessengerLabelSnapshot{
+		{IntakeLabels: &first, IntakeLabelsCapturedAt: &now},
+		{IntakeLabels: &second, IntakeLabelsCapturedAt: &now},
+		{},
+	})
+	if err != nil || len(ids) != 2 || !ids["ad-1"] || !ids["campaign-2"] {
+		t.Fatalf("unexpected intake label IDs: %+v, %v", ids, err)
+	}
+}
+
+func TestNewIntakeBaselinePrunesPersistedTrackingRules(t *testing.T) {
+	rules := []Rule{{"11", "qualified"}, {"12", "potential"}}
+	filtered, changed := filterIntakeRules(rules, map[string]bool{"11": true})
+	if !changed || len(filtered) != 1 || filtered[0].LabelID != "12" {
+		t.Fatalf("unexpected filtered rules: %+v, changed=%v", filtered, changed)
 	}
 }
 
@@ -116,7 +154,7 @@ func TestObserveReadsOldConversationAndHandlesRemovedLabels(t *testing.T) {
 	fake := &fakeReader{labels: map[string][]channels.FacebookLabel{"200": {}}, errors: map[string]error{}}
 	var saved models.MessengerLabelSnapshot
 	good, bad, err := Observe(context.Background(), fake, convs, "100", func(s models.MessengerLabelSnapshot) error { saved = s; return nil })
-	if err != nil || good != 1 || bad != 0 || saved.Labels != "[]" || saved.Status != "success" || saved.CheckedAt == nil || saved.PSID != "200" {
+	if err != nil || good != 1 || bad != 0 || saved.Labels != "[]" || saved.Status != "success" || saved.CheckedAt == nil || saved.PSID != "200" || saved.IntakeLabels == nil || *saved.IntakeLabels != "[]" || saved.IntakeLabelsCapturedAt == nil {
 		t.Fatalf("result %d %d %v, snapshot %+v", good, bad, err, saved)
 	}
 	if len(fake.calls) != 1 || fake.calls[0] != "200" {

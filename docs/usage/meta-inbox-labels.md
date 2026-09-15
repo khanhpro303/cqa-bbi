@@ -21,6 +21,18 @@ Tính năng này **chỉ đọc dữ liệu nhãn, đếm và cảnh báo**. Nó
 
 Mỗi nhãn được nhận diện bằng ID, không đoán theo tên. Nhãn khác như “VIP” hoặc “Đã gọi” không được xem là phân loại nếu chưa được đưa vào một trong ba nhóm. Khi nhãn bị xóa khỏi Meta, cần lấy lại danh mục và sửa cấu hình; hệ thống không coi việc thiếu nhãn cấu hình là khách chưa phân loại.
 
+### Boundary với nhãn tự động từ quảng cáo
+
+Meta chỉ trả về ID và tên nhãn, không trả nguồn gắn nhãn hoặc người/công cụ đã gắn. Vì vậy CQA lưu bất biến lần đọc nhãn thành công đầu tiên của từng hội thoại làm **nhãn mặc định lúc tiếp nhận**. Tất cả ID từng xuất hiện trong baseline này trên Fanpage được khóa ở backend:
+
+- vẫn lưu và hiển thị cùng hội thoại để giữ thông tin nguồn/campaign/ad;
+- không xuất hiện trong danh sách chọn nhãn theo dõi;
+- API từ chối nếu cố ánh xạ chúng vào Phù hợp, Chưa phù hợp hoặc Tiềm năng;
+- bộ phân loại luôn bỏ qua chúng, kể cả khi cấu hình cũ từng ánh xạ nhầm;
+- nếu baseline mới được lưu đồng thời với thao tác cấu hình, backend tự loại rule xung đột trong cùng transaction.
+
+Nhân viên phải dùng các nhãn khác, được gắn sau khi tiếp nhận, cho ba giai đoạn theo dõi. Hội thoại chưa đọc được baseline thành công nằm ở **Chưa xác định**, không được suy ra là chưa phân loại. Với dữ liệu lịch sử có trước bản nâng cấp, lần đọc thành công đầu tiên sau nâng cấp là baseline bảo thủ; hệ thống không thể dựng lại ai đã gắn nhãn hay thời điểm gắn từ API Meta.
+
 ## Cách đọc số liệu
 
 | Mục | Điều kiện |
@@ -33,11 +45,11 @@ Mỗi nhãn được nhận diện bằng ID, không đoán theo tên. Nhãn kh�
 
 Tổng gồm tất cả hội thoại đã đồng bộ vào CQA của Fanpage đang chọn. Mỗi hội thoại chỉ thuộc một nhóm đếm. Danh sách này không phụ thuộc bộ lọc ngày của báo cáo tốc độ phản hồi bên trên. Nhãn Meta gắn với khách hàng theo Page-scoped ID, không gắn với từng lượt chat hay từng tin nhắn; bộ đếm hiển thị nhãn đó trên hội thoại đã lưu.
 
-Nhân viên hoặc công cụ khác đều có thể gán nhãn. API cho biết nhãn hiện có; bộ đếm này không chứng minh ai đã gán nhãn hoặc đó có phải là thao tác thủ công hay không.
+Nhân viên hoặc công cụ khác đều có thể gán nhãn. API cho biết nhãn hiện có; bộ đếm này không chứng minh ai đã gán nhãn hoặc đó có phải là thao tác thủ công hay không. Boundary baseline ở trên chỉ bảo đảm nhãn đã có sẵn không được dùng làm tracking; nó không suy đoán provenance từ tên nhãn.
 
 ## Đồng bộ và cảnh báo
 
-- Khi bật theo dõi, sau lần đồng bộ Facebook thành công, CQA đọc lại nhãn cho toàn bộ hội thoại đã lưu của Page. Không chỉ đọc hội thoại có tin mới, vì nhãn có thể thay đổi mà không có tin nhắn.
+- Sau mỗi lần đồng bộ Facebook thành công, CQA bổ sung baseline cho mọi hội thoại chưa có baseline, kể cả khi chưa bật theo dõi. Khi bật theo dõi, CQA tiếp tục đọc lại nhãn hiện tại cho toàn bộ hội thoại đã lưu của Page. Không chỉ đọc hội thoại có tin mới, vì nhãn có thể thay đổi mà không có tin nhắn.
 - **Đồng bộ nhãn** chạy lại việc đọc từ Meta theo yêu cầu. **Làm mới số liệu** chỉ đọc dữ liệu đã lưu trong CQA.
 - Trang làm mới số liệu mỗi 60 giây; khi đang đồng bộ thì mỗi 5 giây. Không hứa thời gian thực: độ trễ phụ thuộc lịch đồng bộ Facebook, quy mô hội thoại và giới hạn API.
 - Cảnh báo nằm trong giao diện CQA. Chưa gửi thông báo ra email, Telegram, Messenger hoặc dịch vụ bên ngoài.

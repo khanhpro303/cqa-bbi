@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/vietbui/chat-quality-agent/channels"
@@ -29,25 +30,67 @@ func ensureState(database *gorm.DB, channel models.Channel) error {
 }
 
 func SavePolicy(database *gorm.DB, channel models.Channel, policy Policy) error {
-	state, err := LoadState(database, channel)
+	return database.Transaction(func(tx *gorm.DB) error {
+		state, err := lockMessengerLabelState(tx, channel)
+		if err != nil {
+			return err
+		}
+		var catalog []channels.FacebookLabel
+		if json.Unmarshal([]byte(state.Catalog), &catalog) != nil {
+			return ErrConfiguration
+		}
+		intakeLabelIDs, err := LoadIntakeLabelIDs(tx, channel)
+		if err != nil {
+			return err
+		}
+		if err = policy.ValidateTracking(catalog, intakeLabelIDs); err != nil {
+			return err
+		}
+		rules, _ := json.Marshal(policy.Rules)
+		if policy.Rules == nil {
+			rules = []byte("[]")
+		}
+		return tx.Model(&state).Updates(map[string]interface{}{"enabled": policy.Enabled, "rules": string(rules)}).Error
+	})
+}
+
+func lockMessengerLabelState(tx *gorm.DB, channel models.Channel) (models.MessengerLabelState, error) {
+	if err := ensureState(tx, channel); err != nil {
+		return models.MessengerLabelState{}, err
+	}
+	var state models.MessengerLabelState
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("channel_id = ? AND tenant_id = ?", channel.ID, channel.TenantID).First(&state).Error
+	return state, err
+}
+
+func pruneNewIntakeRules(tx *gorm.DB, state *models.MessengerLabelState, snapshots []models.MessengerLabelSnapshot) error {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	intakeLabelIDs, err := intakeLabelIDsFromSnapshots(snapshots)
 	if err != nil {
 		return err
 	}
-	var catalog []channels.FacebookLabel
-	if json.Unmarshal([]byte(state.Catalog), &catalog) != nil {
+	if len(intakeLabelIDs) == 0 {
+		return nil
+	}
+	var rules []Rule
+	if json.Unmarshal([]byte(state.Rules), &rules) != nil {
 		return ErrConfiguration
 	}
-	if err = policy.Validate(catalog); err != nil {
+	filtered, changed := filterIntakeRules(rules, intakeLabelIDs)
+	if !changed {
+		return nil
+	}
+	data, err := json.Marshal(filtered)
+	if err != nil {
 		return err
 	}
-	if err = ensureState(database, channel); err != nil {
+	if err := tx.Model(state).Update("rules", string(data)).Error; err != nil {
 		return err
 	}
-	rules, _ := json.Marshal(policy.Rules)
-	if policy.Rules == nil {
-		rules = []byte("[]")
-	}
-	return database.Model(&models.MessengerLabelState{}).Where("channel_id = ? AND tenant_id = ?", channel.ID, channel.TenantID).Updates(map[string]interface{}{"enabled": policy.Enabled, "rules": string(rules)}).Error
+	state.Rules = string(data)
+	return nil
 }
 
 func SaveCatalog(database *gorm.DB, channel models.Channel, catalog []channels.FacebookLabel, now time.Time) error {
@@ -112,6 +155,8 @@ type Row struct {
 	ChannelID      string                   `json:"channel_id"`
 	Classification string                   `json:"classification"`
 	Labels         []channels.FacebookLabel `json:"labels"`
+	IntakeLabels   []channels.FacebookLabel `json:"intake_labels"`
+	TrackingLabels []channels.FacebookLabel `json:"tracking_labels"`
 	CheckedAt      *time.Time               `json:"checked_at"`
 	Error          string                   `json:"error"`
 }
@@ -123,6 +168,7 @@ type Report struct {
 	Enabled          bool                     `json:"enabled"`
 	Rules            []Rule                   `json:"rules"`
 	Catalog          []channels.FacebookLabel `json:"catalog"`
+	IntakeLabelIDs   []string                 `json:"intake_label_ids"`
 	CatalogSyncedAt  *time.Time               `json:"catalog_synced_at"`
 	Sync             SyncStatus               `json:"sync"`
 	FreshnessMinutes int                      `json:"freshness_minutes"`
@@ -144,7 +190,7 @@ func BuildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 
 func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID string, now time.Time) (*Report, error) {
 	database = database.WithContext(ctx)
-	r := &Report{GeneratedAt: now, Pages: []Page{}, Rules: []Rule{}, Catalog: []channels.FacebookLabel{}, FreshnessMinutes: FreshnessMinutes, Rows: []Row{}, Sync: SyncStatus{Status: "never"}}
+	r := &Report{GeneratedAt: now, Pages: []Page{}, Rules: []Rule{}, Catalog: []channels.FacebookLabel{}, IntakeLabelIDs: []string{}, FreshnessMinutes: FreshnessMinutes, Rows: []Row{}, Sync: SyncStatus{Status: "never"}}
 	var pages []models.Channel
 	if err := database.Where("tenant_id = ? AND channel_type = ?", tenantID, "facebook").Order("name ASC").Find(&pages).Error; err != nil {
 		return nil, err
@@ -195,6 +241,14 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 		byID[snapshot.ConversationID] = snapshot
 	}
 	r.Counts = &Counts{}
+	intakeLabelIDs, err := intakeLabelIDsFromSnapshots(snapshots)
+	if err != nil {
+		return nil, err
+	}
+	for id := range intakeLabelIDs {
+		r.IntakeLabelIDs = append(r.IntakeLabelIDs, id)
+	}
+	sort.Strings(r.IntakeLabelIDs)
 	for _, conv := range convs {
 		snapshot := byID[conv.ID]
 		labels := []channels.FacebookLabel{}
@@ -202,7 +256,13 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 		if !valid {
 			labels = []channels.FacebookLabel{}
 		}
-		classification := Classify(labels, snapshot.Status, snapshot.CheckedAt, r.Rules, ready && valid, now)
+		intakeLabels := []channels.FacebookLabel{}
+		intakeReady := snapshot.IntakeLabelsCapturedAt != nil && snapshot.IntakeLabels != nil && json.Unmarshal([]byte(*snapshot.IntakeLabels), &intakeLabels) == nil && intakeLabels != nil
+		if !intakeReady {
+			intakeLabels = []channels.FacebookLabel{}
+		}
+		trackingLabels := TrackingLabels(labels, intakeLabelIDs)
+		classification := Classify(labels, intakeLabelIDs, snapshot.Status, snapshot.CheckedAt, r.Rules, ready && valid && intakeReady, now)
 		errorText := ""
 		if classification == "unknown" {
 			switch {
@@ -218,14 +278,47 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 				errorText = ErrorMessage(snapshot.ErrorKind)
 			case snapshot.CheckedAt == nil:
 				errorText = "Chưa đọc nhãn thành công."
+			case !intakeReady:
+				errorText = "Chưa lưu được nhãn mặc định lúc tiếp nhận hội thoại."
 			default:
 				errorText = "Dữ liệu nhãn đã cũ; hãy đồng bộ lại."
 			}
 		}
-		r.Rows = append(r.Rows, Row{conv.ID, conv.CustomerName, channelID, classification, labels, snapshot.CheckedAt, errorText})
+		r.Rows = append(r.Rows, Row{conv.ID, conv.CustomerName, channelID, classification, labels, intakeLabels, trackingLabels, snapshot.CheckedAt, errorText})
 		r.Counts.Add(classification)
 	}
 	order := map[string]int{"unclassified": 0, "conflict": 1, "unknown": 2, "potential": 3, "qualified": 4, "unqualified": 5}
 	sort.SliceStable(r.Rows, func(i, j int) bool { return order[r.Rows[i].Classification] < order[r.Rows[j].Classification] })
 	return r, nil
+}
+
+func LoadIntakeLabelIDs(database *gorm.DB, channel models.Channel) (map[string]bool, error) {
+	var snapshots []models.MessengerLabelSnapshot
+	if err := database.Select("intake_labels,intake_labels_captured_at").Where("tenant_id = ? AND channel_id = ? AND intake_labels_captured_at IS NOT NULL", channel.TenantID, channel.ID).Find(&snapshots).Error; err != nil {
+		return nil, err
+	}
+	return intakeLabelIDsFromSnapshots(snapshots)
+}
+
+func intakeLabelIDsFromSnapshots(snapshots []models.MessengerLabelSnapshot) (map[string]bool, error) {
+	ids := map[string]bool{}
+	for _, snapshot := range snapshots {
+		if snapshot.IntakeLabelsCapturedAt == nil {
+			continue
+		}
+		if snapshot.IntakeLabels == nil {
+			return nil, ErrConfiguration
+		}
+		var labels []channels.FacebookLabel
+		if json.Unmarshal([]byte(*snapshot.IntakeLabels), &labels) != nil || labels == nil {
+			return nil, ErrConfiguration
+		}
+		for _, label := range labels {
+			if strings.TrimSpace(label.ID) == "" {
+				return nil, ErrConfiguration
+			}
+			ids[label.ID] = true
+		}
+	}
+	return ids, nil
 }

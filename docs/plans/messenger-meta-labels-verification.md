@@ -1,6 +1,6 @@
 # Meta Inbox label tracking — local verification
 
-Verified 2026-09-13. User approved custom labels as a data/counting/alert
+Verified 2026-09-15. User approved custom labels as a data/counting/alert
 workflow independent of AI. No Meta writes, native-stage inference or AI calls.
 
 ## Implemented
@@ -9,6 +9,11 @@ workflow independent of AI. No Meta writes, native-stage inference or AI calls.
   cursor pagination, sanitized errors, bearer authentication and redirect denial.
 - Per-Page opt-in policy, ID-based mapping, six disjoint count states and local
   conversation scope. Missing/stale/errored reads never mean unclassified.
+- Immutable first-success intake label baseline per conversation. Intake IDs are
+  reserved across the Page, rejected by backend policy validation and removed
+  from classification even for stale pre-existing mappings. Baseline capture
+  runs after Facebook sync even while tracking is disabled; missing baselines
+  remain unknown.
 - Scheduled/manual synchronization with database ownership, resumable batches,
   lease renewal, stale-worker write fencing, per-Page cooldown and bounded
   process concurrency. Reports withhold classification while syncing and read
@@ -27,6 +32,10 @@ workflow independent of AI. No Meta writes, native-stage inference or AI calls.
 - Mocked browser smoke: six count states; filter unclassified; conversation
   link; mapping save with exact label IDs; POST sync endpoint; syncing hides
   unclassified alert; mobile 390px has no horizontal document overflow.
+- 2026-09-15 boundary regression: full backend `go test ./...`; race tests for
+  messengerlabels, servicequality, handlers, models, channels and engine; full
+  `go vet ./...`; backend build; 45 frontend tests and production build;
+  VitePress build; `git diff --check`.
 
 ## Explicit gaps
 
@@ -42,20 +51,14 @@ workflow independent of AI. No Meta writes, native-stage inference or AI calls.
 - No benchmark for large Pages or multiple server replicas. Concurrency is
   bounded per process; Page ownership is shared across replicas. Long runs may
   legitimately leave observations older than 30 minutes unknown.
-- Full backend HTTP-fixture suite was not rerun after these additions: automatic
-  approval review rejected the localhost-permission request because the reviewer
-  reached its usage limit. Targeted sandbox-compatible race tests, static
-  checks and builds above passed. Earlier CSKH full-suite evidence is recorded
-  separately in messenger-service-quality-verification.md.
 - Browser data is intercepted fixtures. Existing manifest errors are unrelated.
-- Existing scratch Go mains prevent a root `go test ./...`; named application
-  packages and `main.go` were used. No new dependencies were introduced.
+- No new dependencies were introduced.
 
 ## Deployment preparation
 
 The user subsequently authorized deployment. A clean release candidate excluding
 local scratch mains and agent files passed full `go test ./...`, `go vet ./...`,
-backend build, frontend build and 28 frontend tests. The earlier full-suite
+backend build, frontend build and 45 frontend tests. The earlier full-suite
 permission restriction is resolved. The VPS workflow now gates rollout on a
 MySQL 8 integration run and frontend/backend verification, saves a private SQL
 backup and the previous app image, and checks health, all three new tables and

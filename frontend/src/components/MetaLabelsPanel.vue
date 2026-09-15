@@ -182,10 +182,19 @@
               </v-chip>
             </template>
             <template #item.labels="{ item }">
-              <div v-if="item.labels.length" class="d-flex flex-wrap ga-1 py-1">
-                <v-chip v-for="label in item.labels" :key="label.id" size="x-small" variant="outlined">
-                  {{ label.page_label_name }}
-                </v-chip>
+              <div v-if="item.intake_labels.length || item.tracking_labels.length" class="py-1">
+                <div v-if="item.intake_labels.length" class="d-flex flex-wrap align-center ga-1">
+                  <span class="text-caption text-medium-emphasis mr-1">Mặc định:</span>
+                  <v-chip v-for="label in item.intake_labels" :key="`intake-${label.id}`" size="x-small" variant="outlined" prepend-icon="mdi-lock-outline" color="grey">
+                    {{ label.page_label_name }}
+                  </v-chip>
+                </div>
+                <div v-if="item.tracking_labels.length" class="d-flex flex-wrap align-center ga-1" :class="{ 'mt-1': item.intake_labels.length }">
+                  <span class="text-caption text-medium-emphasis mr-1">Hiện có sau tiếp nhận:</span>
+                  <v-chip v-for="label in item.tracking_labels" :key="`tracking-${label.id}`" size="x-small" variant="outlined" color="primary">
+                    {{ label.page_label_name }}
+                  </v-chip>
+                </div>
               </div>
               <span v-else class="text-medium-emphasis">{{ item.classification === 'unknown' ? 'Chưa xác định nhãn' : 'Không có nhãn' }}</span>
             </template>
@@ -213,6 +222,10 @@
             Nhân viên tiếp tục gắn nhãn trong Meta Inbox. Hệ thống chỉ đọc nhãn và lưu bản chụp để đếm; không tự gắn, sửa hoặc xóa nhãn trên Meta.
           </v-alert>
 
+          <v-alert v-if="intakeLabelIds.length" type="warning" variant="tonal" density="compact" class="mb-4">
+            {{ intakeLabelIds.length }} nhãn đã có sẵn lúc tiếp nhận hội thoại được khóa ở backend. Các nhãn này có thể gồm nguồn quảng cáo/campaign; chúng vẫn được lưu và hiển thị, nhưng không thể chọn làm nhãn theo dõi.
+          </v-alert>
+
           <div class="d-flex align-center justify-space-between flex-wrap ga-2 mb-4">
             <v-switch v-model="policyEnabled" label="Bật theo dõi phân loại bằng nhãn" color="primary" hide-details />
             <div class="text-right">
@@ -236,7 +249,7 @@
 
           <v-select
             v-model="policySelections.qualified"
-            :items="catalog"
+            :items="trackingCatalog"
             item-title="page_label_name"
             item-value="id"
             label="Phù hợp"
@@ -250,7 +263,7 @@
           />
           <v-select
             v-model="policySelections.unqualified"
-            :items="catalog"
+            :items="trackingCatalog"
             item-title="page_label_name"
             item-value="id"
             label="Chưa phù hợp"
@@ -264,7 +277,7 @@
           />
           <v-select
             v-model="policySelections.potential"
-            :items="catalog"
+            :items="trackingCatalog"
             item-title="page_label_name"
             item-value="id"
             label="Tiềm năng"
@@ -326,6 +339,8 @@ interface ClassificationRow {
   channel_id: string
   classification: Classification
   labels: MetaLabel[]
+  intake_labels: MetaLabel[]
+  tracking_labels: MetaLabel[]
   checked_at: string | null
   error: string
 }
@@ -337,6 +352,7 @@ interface LabelsReport {
   enabled: boolean
   rules: MetaLabelRule[]
   catalog: MetaLabel[]
+  intake_label_ids: string[]
   catalog_synced_at: string | null
   sync: {
     status: SyncStatus
@@ -395,10 +411,14 @@ const pageOptions = computed(() => pages.value.map(page => ({
 
 const refreshSeconds = computed(() => data.value?.sync.status === 'syncing' ? 5 : 60)
 const mappingRules = computed(() => buildMetaLabelRules(policySelections))
+const intakeLabelIds = computed(() => data.value?.intake_label_ids || [])
+const intakeLabelIdSet = computed(() => new Set(intakeLabelIds.value))
+const trackingCatalog = computed(() => catalog.value.filter(label => !intakeLabelIdSet.value.has(label.id)))
 const mappingValidation = computed(() => validateMetaLabelRules(
   policyEnabled.value,
   mappingRules.value,
   new Set(catalog.value.map(label => label.id)),
+  intakeLabelIdSet.value,
 ))
 
 const kpis = computed(() => {
@@ -434,7 +454,8 @@ const filteredRows = computed(() => {
   return (data.value?.rows || []).filter(row => {
     if (statusFilter.value !== 'all' && row.classification !== statusFilter.value) return false
     if (!term) return true
-    return `${row.customer_name} ${row.labels.map(label => label.page_label_name).join(' ')}`.toLocaleLowerCase('vi').includes(term)
+    const labels = [...row.intake_labels, ...row.tracking_labels].map(label => label.page_label_name).join(' ')
+    return `${row.customer_name} ${labels}`.toLocaleLowerCase('vi').includes(term)
   })
 })
 

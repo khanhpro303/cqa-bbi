@@ -25,6 +25,14 @@ Không có dữ liệu giai đoạn phải được hiểu là **chưa xác đ�
 | [Custom Labels for Customers](https://developers.facebook.com/documentation/business-messaging/messenger-platform/identity/custom-labels.md) | Có GET nhãn theo Page/PSID và `inbox_labels`. Tài liệu cũng mô tả nhãn hoàn tất/không đạt/đang tiến hành/chưa hoàn tất của luồng quảng cáo Messenger Lead Ads. | Đây là dữ liệu nhãn và kết quả luồng câu hỏi quảng cáo. Không có bằng chứng rằng chúng phản ánh mục giai đoạn thủ công mà người dùng yêu cầu. |
 | [Messenger Lead Generation Ads](https://developers.facebook.com/documentation/business-messaging/messenger-platform/conversation-routing/messenger-lead-ads.md) | Có summary và metadata khi luồng câu hỏi hoàn tất hoặc chưa hoàn tất, cùng chuyển quyền hội thoại. | Những sự kiện này không chứng minh nhân viên đã chọn một giai đoạn trên Meta. |
 
+Custom Labels API chỉ tài liệu hóa `id` và `page_label_name`; không có trường
+`source`, `type`, `is_automatic`, `ad_id`, campaign hoặc actor. Nhãn gắn với PSID,
+không phải trường được tài liệu hóa trên conversation object. Vì vậy backend
+không được suy đoán provenance bằng tên. Bản triển khai lưu lần quan sát đầu tiên
+làm baseline bất biến và cấm toàn bộ ID baseline tham gia tracking. Attribution
+quảng cáo chính thức nếu cần phải lấy từ webhook referral (`source=ADS`, `ad_id`),
+không suy ra từ custom label.
+
 Các trang tham chiếu và SDK được đọc qua bản nội dung trích xuất từ nguồn chính thức; đường dẫn Meta cũ đôi khi trả lỗi khi truy cập trực tiếp. Adapter của dự án hiện dùng `v21.0`; không nâng phiên bản API chỉ vì tài liệu tham chiếu đang hiển thị phiên bản mới hơn. Không có bằng chứng rằng nâng phiên bản sẽ mở trường còn thiếu.
 
 ## Hiện trạng mã nguồn

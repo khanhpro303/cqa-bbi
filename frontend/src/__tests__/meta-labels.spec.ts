@@ -17,13 +17,15 @@ describe('Meta Inbox label helpers', () => {
 
   it('rejects missing, stale, and cross-category duplicate mappings when enabled', () => {
     const catalog = new Set(['label-1', 'label-2'])
-    expect(validateMetaLabelRules(true, [], catalog)).toContain('ít nhất một')
-    expect(validateMetaLabelRules(true, [{ label_id: 'missing', category: 'qualified' }], catalog)).toContain('không còn tồn tại')
+    const intakeLabels = new Set(['label-2'])
+    expect(validateMetaLabelRules(true, [], catalog, intakeLabels)).toContain('ít nhất một')
+    expect(validateMetaLabelRules(true, [{ label_id: 'missing', category: 'qualified' }], catalog, intakeLabels)).toContain('không còn tồn tại')
+    expect(validateMetaLabelRules(true, [{ label_id: 'label-2', category: 'qualified' }], catalog, intakeLabels)).toContain('Nhãn mặc định')
     expect(validateMetaLabelRules(true, [
       { label_id: 'label-1', category: 'qualified' },
       { label_id: 'label-1', category: 'potential' },
-    ], catalog)).toContain('chỉ được gán')
-    expect(validateMetaLabelRules(false, [], catalog)).toBe('')
+    ], catalog, intakeLabels)).toContain('chỉ được gán')
+    expect(validateMetaLabelRules(false, [], catalog, intakeLabels)).toBe('')
   })
 
   it('counts only the three mapped classifications as classified', () => {

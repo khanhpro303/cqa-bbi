@@ -93,8 +93,11 @@ func Observe(ctx context.Context, reader Reader, convs []models.Conversation, pa
 				} else {
 					data, _ := json.Marshal(labels)
 					snapshot.Labels = string(data)
+					intakeLabels := string(data)
+					snapshot.IntakeLabels = &intakeLabels
 					snapshot.Status = "success"
 					snapshot.CheckedAt = &now
+					snapshot.IntakeLabelsCapturedAt = &now
 				}
 				select {
 				case results <- observation{snapshot, err}:

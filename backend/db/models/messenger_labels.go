@@ -25,14 +25,16 @@ type MessengerLabelState struct {
 // A successful empty Labels array means observed no labels. An error or missing
 // row never means unclassified. No employee identity is inferred from labels.
 type MessengerLabelSnapshot struct {
-	ConversationID string `gorm:"type:char(36);primaryKey"`
-	TenantID       string `gorm:"type:char(36);not null;index:idx_meta_label_tenant_channel,priority:1"`
-	ChannelID      string `gorm:"type:char(36);not null;index:idx_meta_label_tenant_channel,priority:2"`
-	PSID           string `gorm:"column:psid;type:varchar(255)"`
-	Labels         string `gorm:"type:json;not null"`
-	Status         string `gorm:"type:varchar(20);not null"`
-	ErrorKind      string `gorm:"type:varchar(32)"`
-	CheckedAt      *time.Time
-	AttemptedAt    time.Time
-	Conversation   Conversation `gorm:"foreignKey:ConversationID;references:ID;constraint:OnDelete:CASCADE"`
+	ConversationID         string  `gorm:"type:char(36);primaryKey"`
+	TenantID               string  `gorm:"type:char(36);not null;index:idx_meta_label_tenant_channel,priority:1"`
+	ChannelID              string  `gorm:"type:char(36);not null;index:idx_meta_label_tenant_channel,priority:2"`
+	PSID                   string  `gorm:"column:psid;type:varchar(255)"`
+	Labels                 string  `gorm:"type:json;not null"`
+	IntakeLabels           *string `gorm:"type:json"`
+	Status                 string  `gorm:"type:varchar(20);not null"`
+	ErrorKind              string  `gorm:"type:varchar(32)"`
+	CheckedAt              *time.Time
+	IntakeLabelsCapturedAt *time.Time
+	AttemptedAt            time.Time
+	Conversation           Conversation `gorm:"foreignKey:ConversationID;references:ID;constraint:OnDelete:CASCADE"`
 }

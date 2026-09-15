@@ -24,16 +24,22 @@ func syncMessengerLabelsAfterMessages(ctx context.Context, channel models.Channe
 	if json.Unmarshal(credentials, &creds) != nil || creds.PageID == "" {
 		return
 	}
-	token, err := messengerlabels.ClaimSync(db.DB.WithContext(ctx), channel, time.Now())
-	if errors.Is(err, messengerlabels.ErrDisabled) || errors.Is(err, messengerlabels.ErrBusy) {
-		return
-	}
-	if err != nil {
-		log.Printf("[messenger-labels] cannot start channel %s: %s", channel.ID, messengerlabels.ErrorMessage(messengerlabels.ErrorKind(err)))
-		return
-	}
 	go func() {
-		if err := messengerlabels.RunClaimedSync(context.Background(), db.DB, channel, creds.PageID, token, reader); err != nil {
+		captureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Hour)
+		defer cancel()
+		if _, _, err := messengerlabels.CaptureMissingIntakeLabels(captureCtx, db.DB, channel, creds.PageID, reader); err != nil {
+			log.Printf("[messenger-labels] intake label capture failed for channel %s: %s", channel.ID, messengerlabels.ErrorMessage(messengerlabels.ErrorKind(err)))
+		}
+
+		token, err := messengerlabels.ClaimSync(db.DB.WithContext(captureCtx), channel, time.Now())
+		if errors.Is(err, messengerlabels.ErrDisabled) || errors.Is(err, messengerlabels.ErrBusy) {
+			return
+		}
+		if err != nil {
+			log.Printf("[messenger-labels] cannot start channel %s: %s", channel.ID, messengerlabels.ErrorMessage(messengerlabels.ErrorKind(err)))
+			return
+		}
+		if err := messengerlabels.RunClaimedSync(captureCtx, db.DB, channel, creds.PageID, token, reader); err != nil {
 			log.Printf("[messenger-labels] scheduled sync failed for channel %s: %s", channel.ID, messengerlabels.ErrorMessage(messengerlabels.ErrorKind(err)))
 		}
 	}()

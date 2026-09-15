@@ -155,7 +155,7 @@ func messengerLabelError(c *gin.Context, err error) {
 	case errors.Is(err, messengerlabels.ErrBusy), errors.Is(err, messengerlabels.ErrDisabled):
 		status = http.StatusConflict
 		message = err.Error()
-	case errors.Is(err, messengerlabels.ErrConfiguration):
+	case errors.Is(err, messengerlabels.ErrConfiguration), errors.Is(err, messengerlabels.ErrIntakeLabel):
 		status = http.StatusBadRequest
 		message = err.Error()
 	case errors.Is(err, messengerlabels.ErrTooLarge):

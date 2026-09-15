@@ -59,7 +59,38 @@ func saveBatch(database *gorm.DB, channel models.Channel, token, cursor string, 
 			}
 		}
 		if len(snapshots) > 0 {
+			ids := make([]string, 0, len(snapshots))
+			for _, snapshot := range snapshots {
+				ids = append(ids, snapshot.ConversationID)
+			}
+			var existing []models.MessengerLabelSnapshot
+			if err := tx.Select("conversation_id,intake_labels,intake_labels_captured_at").Where("conversation_id IN ?", ids).Find(&existing).Error; err != nil {
+				return err
+			}
+			byConversation := make(map[string]models.MessengerLabelSnapshot, len(existing))
+			for _, snapshot := range existing {
+				byConversation[snapshot.ConversationID] = snapshot
+			}
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "conversation_id"}}, DoUpdates: clause.AssignmentColumns([]string{"psid", "labels", "status", "error_kind", "checked_at", "attempted_at"})}).CreateInBatches(snapshots, syncBatchSize).Error; err != nil {
+				return err
+			}
+			newIntakeSnapshots := make([]models.MessengerLabelSnapshot, 0, len(snapshots))
+			for _, snapshot := range snapshots {
+				previous, existed := byConversation[snapshot.ConversationID]
+				if snapshot.IntakeLabels == nil || snapshot.IntakeLabelsCapturedAt == nil || existed && previous.IntakeLabelsCapturedAt != nil {
+					continue
+				}
+				if err := tx.Model(&models.MessengerLabelSnapshot{}).
+					Where("conversation_id = ? AND tenant_id = ? AND channel_id = ? AND intake_labels_captured_at IS NULL", snapshot.ConversationID, channel.TenantID, channel.ID).
+					Updates(map[string]interface{}{
+						"intake_labels":             *snapshot.IntakeLabels,
+						"intake_labels_captured_at": *snapshot.IntakeLabelsCapturedAt,
+					}).Error; err != nil {
+					return err
+				}
+				newIntakeSnapshots = append(newIntakeSnapshots, snapshot)
+			}
+			if err := pruneNewIntakeRules(tx, &state, newIntakeSnapshots); err != nil {
 				return err
 			}
 		}
