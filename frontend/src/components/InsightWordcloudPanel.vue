@@ -21,8 +21,8 @@
     </v-col>
   </v-row>
 
-  <v-dialog v-model="dialog" max-width="1100" scrollable>
-    <v-card v-if="selectedGroup">
+  <v-dialog v-model="dialog" max-width="1100">
+    <v-card v-if="selectedGroup" class="insight-detail-card">
       <v-card-title class="d-flex align-center ga-2">
         <v-icon :icon="selectedGroup.icon" color="primary" />
         <span>{{ selectedGroup.title }}</span>
@@ -30,15 +30,15 @@
         <v-btn icon="mdi-close" variant="text" :title="t('qualityInsight.closeDetails')" @click="dialog = false" />
       </v-card-title>
       <v-divider />
-      <v-card-text>
+      <v-card-text class="insight-detail-body">
         <p class="text-body-2 text-medium-emphasis mb-4">
           {{ t('qualityInsight.countExplanation') }}
         </p>
         <div class="detail-columns">
-          <div>
+          <div class="detail-column">
             <h2 class="text-subtitle-2 mb-2">{{ t('qualityInsight.keywordCounts', { count: selectedGroup.items.length }) }}</h2>
             <v-text-field v-model="keywordSearch" :label="t('qualityInsight.searchKeyword')" prepend-inner-icon="mdi-magnify" density="compact" variant="outlined" hide-details class="mb-2" />
-            <div class="keyword-list">
+            <div class="keyword-list scroll-region">
               <button
                 v-for="item in filteredKeywords"
                 :key="item.key"
@@ -53,11 +53,11 @@
               <p v-if="!filteredKeywords.length" class="text-body-2 text-medium-emphasis pa-3">{{ t('qualityInsight.noKeywords') }}</p>
             </div>
           </div>
-          <div>
+          <div class="detail-column">
             <h2 class="text-subtitle-2 mb-2">
               {{ selectedKeyword ? t('qualityInsight.keywordConversations', { label: selectedKeyword.label, count: selectedKeyword.count }) : t('qualityInsight.selectKeyword') }}
             </h2>
-            <div class="conversation-list">
+            <div class="conversation-list scroll-region">
               <v-card v-for="row in sourceConversations" :key="row.conversation_id" variant="outlined" class="mb-3">
                 <v-card-text>
                   <v-btn
@@ -165,15 +165,39 @@ button { background: transparent; border: 0; font-family: inherit; }
 .segment-footer { font-size: 12px; line-height: 1.6; padding-top: 12px; }
 button:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 3px; border-radius: 3px; }
 .empty-cloud { min-height: 220px; display: grid; place-content: center; }
-.detail-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); gap: 24px; }
-.keyword-list, .conversation-list { max-height: 55vh; overflow-y: auto; }
+.insight-detail-card { display: flex; flex-direction: column; height: min(86vh, 780px); }
+.insight-detail-body { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; }
+.detail-columns { display: grid; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); gap: 24px; min-height: 0; }
+.detail-column { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.keyword-list, .conversation-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.scroll-region {
+  overscroll-behavior: contain;
+  padding-inline-end: 4px;
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
+}
+.scroll-region:hover,
+.scroll-region:focus-within { scrollbar-color: rgba(var(--v-theme-on-surface), .28) transparent; }
+.scroll-region::-webkit-scrollbar { width: 8px; }
+.scroll-region::-webkit-scrollbar-track { background: transparent; }
+.scroll-region::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+.scroll-region:hover::-webkit-scrollbar-thumb,
+.scroll-region:focus-within::-webkit-scrollbar-thumb { background-color: rgba(var(--v-theme-on-surface), .28); }
+.scroll-region::-webkit-scrollbar-thumb:hover { background-color: rgba(var(--v-theme-on-surface), .42); }
 .keyword-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; width: 100%; text-align: left; cursor: pointer; border-bottom: 1px solid rgba(var(--v-theme-on-surface), .1); overflow-wrap: anywhere; }
 .keyword-row.selected, .keyword-row:hover { background: rgba(var(--v-theme-primary), .09); color: rgb(var(--v-theme-primary)); }
 .conversation-link { max-width: 100%; height: auto; min-height: 32px; }
 .conversation-link :deep(.v-btn__content) { white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 600px) {
-  .detail-columns { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .insight-detail-card { height: auto; max-height: 90vh; }
+  .insight-detail-body { display: block; overflow-y: auto; }
+  .detail-columns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; overflow: visible; }
   .keyword-list { max-height: 220px; }
   .conversation-list { max-height: none; }
 }
