@@ -185,8 +185,14 @@
             hover
           >
             <template #item.customer_name="{ item }">
-              <div class="font-weight-medium">{{ item.customer_name || 'Khách hàng chưa có tên' }}</div>
-              <div v-if="item.error" class="text-caption text-error mt-1">{{ item.error }}</div>
+              <div class="d-flex align-center ga-2 flex-nowrap">
+                <span class="font-weight-medium text-no-wrap">{{ item.customer_name || 'Khách hàng chưa có tên' }}</span>
+                <v-tooltip v-if="item.error" :text="item.error" location="top">
+                  <template #activator="{ props }">
+                    <v-icon v-bind="props" icon="mdi-close-circle-outline" color="error" size="18" tabindex="0" :aria-label="item.error" />
+                  </template>
+                </v-tooltip>
+              </div>
             </template>
             <template #item.classification="{ item }">
               <v-chip :color="classificationColor(item.classification)" size="small" variant="tonal">
@@ -194,20 +200,27 @@
               </v-chip>
             </template>
             <template #item.labels="{ item }">
-              <div v-if="item.intake_labels.length || item.tracking_labels.length" class="py-1">
-                <div v-if="item.intake_labels.length" class="d-flex flex-wrap align-center ga-1">
+              <div v-if="item.intake_labels.length || item.tracking_labels.length" class="d-flex flex-nowrap align-center ga-3 py-1">
+                <div v-if="item.intake_labels.length" class="d-flex flex-nowrap align-center ga-1">
                   <span class="text-caption text-medium-emphasis mr-1">Mặc định:</span>
                   <v-chip v-for="label in item.intake_labels" :key="`intake-${label.id}`" size="x-small" variant="outlined" prepend-icon="mdi-lock-outline" color="grey">
                     {{ label.page_label_name }}
                   </v-chip>
                 </div>
-                <div v-if="item.tracking_labels.length" class="d-flex flex-wrap align-center ga-1" :class="{ 'mt-1': item.intake_labels.length }">
-                  <span class="text-caption text-medium-emphasis mr-1">Hiện có sau tiếp nhận:</span>
+                <div v-if="item.tracking_labels.length" class="d-flex flex-nowrap align-center ga-1">
+                  <span class="text-caption text-medium-emphasis mr-1">Hiện có:</span>
                   <v-chip v-for="label in item.tracking_labels" :key="`tracking-${label.id}`" size="x-small" variant="outlined" color="primary">
                     {{ label.page_label_name }}
                   </v-chip>
                 </div>
               </div>
+              <v-tooltip v-else-if="!item.intake_captured && item.intake_error" :text="item.intake_error" location="top">
+                <template #activator="{ props }">
+                  <span v-bind="props" class="text-medium-emphasis" tabindex="0">
+                    {{ item.intake_error.startsWith('Meta không cho đọc nhãn') ? 'Không đọc được nhãn Meta' : 'Lỗi đọc nhãn Meta' }}
+                  </span>
+                </template>
+              </v-tooltip>
               <span v-else class="text-medium-emphasis">
                 {{ item.intake_captured ? 'Đã lưu: không có nhãn mặc định' : (item.intake_error || (item.classification === 'unknown' ? 'Chưa backfill nhãn mặc định' : 'Không có nhãn')) }}
               </span>
@@ -719,6 +732,10 @@ onBeforeUnmount(() => {
 .meta-labels-panel :deep(.v-chip__content) {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.meta-labels-panel :deep(.v-data-table__td) {
+  white-space: nowrap;
 }
 
 @media (max-width: 600px) {
