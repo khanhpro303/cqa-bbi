@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/notifications"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
 )
 
 // Analyzer executes analysis jobs: loads messages, calls AI, saves results.
@@ -90,6 +92,27 @@ func transcriptSinceForJob(job models.Job, since time.Time) time.Time {
 		return time.Time{}
 	}
 	return since
+}
+
+// buildJobSystemPrompt loads the tenant's structured Messenger prompt once per
+// run. Other classification profiles and QC jobs retain their own prompts.
+func buildJobSystemPrompt(ctx context.Context, job models.Job) (string, error) {
+	switch job.JobType {
+	case "qc_analysis":
+		return ai.BuildQCPrompt(job.RulesContent, job.SkipConditions), nil
+	case "classification":
+		if !ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+			return ai.BuildClassificationPrompt(job.RulesConfig), nil
+		}
+		var setting models.AppSetting
+		err := db.DB.WithContext(ctx).Where("tenant_id = ? AND setting_key = ?", job.TenantID, ai.MessengerInsightsPromptSettingKey).First(&setting).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", fmt.Errorf("load Messenger insights prompt: %w", err)
+		}
+		return ai.BuildClassificationPrompt(job.RulesConfig, setting.ValuePlain), nil
+	default:
+		return "", nil
+	}
 }
 
 func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxConversations int, injectedProvider ai.AIProvider, fullRerun bool, dateFrom, dateTo string, sinceOverride *time.Time, excludeAnalyzed bool) (retRun *models.JobRun, retErr error) {
@@ -240,6 +263,10 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 		batchSize = 5
 	}
 	transcriptSince := transcriptSinceForJob(job, since)
+	systemPrompt, err := buildJobSystemPrompt(ctx, job)
+	if err != nil {
+		return a.failRun(&run, err)
+	}
 
 	issuesFound := 0
 	passCount := 0
@@ -248,7 +275,7 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 	firstAIErr := ""
 
 	if batchMode {
-		issuesFound, passCount, analyzedCount, errorCount, firstAIErr = a.runBatchMode(ctx, provider, job, run, conversations, transcriptSince, batchSize)
+		issuesFound, passCount, analyzedCount, errorCount, firstAIErr = a.runBatchMode(ctx, provider, job, run, conversations, transcriptSince, batchSize, systemPrompt)
 	} else {
 
 		for _, conv := range conversations {
@@ -284,14 +311,7 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 			}
 			transcript := ai.FormatChatTranscript(chatMessages)
 
-			// Build prompt based on job type
-			var systemPrompt string
-			switch job.JobType {
-			case "qc_analysis":
-				systemPrompt = ai.BuildQCPrompt(job.RulesContent, job.SkipConditions)
-			case "classification":
-				systemPrompt = ai.BuildClassificationPrompt(job.RulesConfig)
-			default:
+			if systemPrompt == "" {
 				continue
 			}
 
@@ -745,15 +765,8 @@ func mapBatchResults(conversationIDs []string, results []json.RawMessage) ([]map
 }
 
 // runBatchMode processes conversations in batches of batchSize, sending multiple conversations per AI call.
-func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job models.Job, run models.JobRun, conversations []models.Conversation, since time.Time, batchSize int) (issuesFound, passCount, analyzedCount, errorCount int, firstErr string) {
-	// Build system prompt once
-	var systemPrompt string
-	switch job.JobType {
-	case "qc_analysis":
-		systemPrompt = ai.BuildQCPrompt(job.RulesContent, job.SkipConditions)
-	case "classification":
-		systemPrompt = ai.BuildClassificationPrompt(job.RulesConfig)
-	default:
+func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job models.Job, run models.JobRun, conversations []models.Conversation, since time.Time, batchSize int, systemPrompt string) (issuesFound, passCount, analyzedCount, errorCount int, firstErr string) {
+	if systemPrompt == "" {
 		return
 	}
 

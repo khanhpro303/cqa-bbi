@@ -394,7 +394,8 @@ export default {
 
   // AI Engines
   ai_engines: 'AI Engines',
-  ai_engines_desc: 'Configure external AI Workflow Engines like Langflow, Flowise...',
+  ai_engines_desc: 'Configure AI Workflow Engines and CRM system prompts.',
+  crm_system_prompts_section: 'CRM System Prompts',
   langflow_config: 'Langflow Configuration (For both Public & Whitelist)',
   flow_id: 'Flow ID (Whitelist / Internal Staff)',
   application_token: 'Application Token',
@@ -408,9 +409,14 @@ export default {
     'e.g. You are BBI internal staff assistant. Accept a customer code/name to look up...',
   langflow_system_prompt_internal_hint:
     'Prompt for the private / internal staff flow (ALL scope). Leave empty to use that flow\'s own SYSTEM_PROMPT — it does NOT inherit the public prompt above.',
-  crm_system_prompt_crm_analysis: 'CRM Customer Analysis System Prompt',
+  crm_system_prompt_crm_analysis: 'System Prompt — CRM Customer Analysis (Zalo)',
+  messenger_insights_system_prompt: 'System Prompt — Messenger Customer Service Structured Analysis',
+  messenger_insights_system_prompt_placeholder: 'Click to configure the Messenger customer service analysis prompt...',
+  messenger_insights_system_prompt_hint: 'Analyze intents, products, feedback, and lead quality from conversations for Messenger Customer Service Quality.',
+  messenger_insights_system_prompt_note: "Preserve the JSON keys tags, summary, insights and the {'{{rules}}'} variable in the prompt. The variable is replaced with the analysis job rules. Leave blank to use the default prompt; click Confirm, then Save to apply.",
+  messenger_insights_restore_default: 'Restore default prompt',
   crm_system_prompt_crm_analysis_placeholder: 'e.g. You are a customer behavior analyst...',
-  crm_system_prompt_crm_analysis_hint: 'The prompt used to direct the AI in analyzing customer chat history within the CRM.',
+  crm_system_prompt_crm_analysis_hint: 'The prompt used to direct the AI in analyzing customer Zalo chat history within the CRM.',
 
   // ERP Cloudify Configuration
   erp_config_title: 'Cloudify ERP Integration',

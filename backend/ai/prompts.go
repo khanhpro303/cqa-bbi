@@ -3,7 +3,17 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
+
+const MessengerInsightsPromptSettingKey = "ai_engine_system_prompt_messenger_insights"
+
+// DefaultMessengerInsightsPrompt exposes the existing structured prompt as an
+// editable template, with job-specific classification rules filled in at runtime.
+func DefaultMessengerInsightsPrompt() string {
+	prompt := BuildClassificationPrompt(`{"profile":"messenger_insights","rules":[]}`)
+	return strings.Replace(prompt, "## Các quy tắc phân loại:\n[]", "## Các quy tắc phân loại:\n{{rules}}", 1)
+}
 
 // BuildQCPrompt creates the system prompt for QC analysis.
 func BuildQCPrompt(rulesContent, skipConditions string) string {
@@ -51,11 +61,19 @@ CHỈ trả về JSON, không thêm text khác.`, rulesContent, skipSection)
 }
 
 // BuildClassificationPrompt creates the system prompt for conversation classification.
-func BuildClassificationPrompt(rulesConfigJSON string) string {
+func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string) string {
 	config := ParseClassificationConfig(rulesConfigJSON)
 	rulesJSON, err := json.Marshal(config.Rules)
 	if err != nil {
 		rulesJSON = []byte("[]")
+	}
+	if config.MessengerInsightsEnabled() && len(promptOverride) > 0 && strings.TrimSpace(promptOverride[0]) != "" {
+		prompt := promptOverride[0]
+		if strings.Contains(prompt, "{{rules}}") {
+			return strings.ReplaceAll(prompt, "{{rules}}", string(rulesJSON))
+		}
+		// Keep each job's rules even if the administrator removes the placeholder.
+		return prompt + "\n\n## Các quy tắc phân loại:\n" + string(rulesJSON)
 	}
 	insightsOutput := ""
 	insightsInstructions := ""

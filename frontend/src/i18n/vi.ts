@@ -393,7 +393,8 @@ export default {
 
   // AI Engines
   ai_engines: 'AI Engines',
-  ai_engines_desc: 'Cấu hình các AI Workflow Engines bên ngoài như Langflow, Flowise...',
+  ai_engines_desc: 'Cấu hình AI Workflow Engines và System Prompt hệ thống CRM.',
+  crm_system_prompts_section: 'System Prompt hệ thống CRM',
   langflow_config: 'Cấu hình Langflow (Cho cả Public & Whitelist)',
   flow_id: 'Flow ID (Whitelist / Internal Staff)',
   application_token: 'Application Token',
@@ -407,9 +408,14 @@ export default {
     'VD: Bạn là trợ lý nội bộ của BBI. Nhận mã/tên khách hàng để tra cứu...',
   langflow_system_prompt_internal_hint:
     'Prompt cho luồng nội bộ / nhân viên (phạm vi ALL). Để trống sẽ dùng biến SYSTEM_PROMPT riêng của luồng đó — KHÔNG kế thừa prompt public ở trên.',
-  crm_system_prompt_crm_analysis: 'System Prompt phân tích khách hàng CRM',
+  crm_system_prompt_crm_analysis: 'System Prompt — Phân tích khách hàng CRM (Zalo)',
+  messenger_insights_system_prompt: 'System Prompt — Phân tích cấu trúc CSKH Messenger',
+  messenger_insights_system_prompt_placeholder: 'Nhấn để thiết lập prompt phân tích CSKH Messenger...',
+  messenger_insights_system_prompt_hint: 'Phân tích ý định, sản phẩm, phản hồi và chất lượng lead từ hội thoại để tổng hợp phần Chất lượng CSKH Messenger.',
+  messenger_insights_system_prompt_note: "Giữ các khóa JSON tags, summary, insights và biến {'{{rules}}'} trong prompt. Biến {'{{rules}}'} được thay bằng quy tắc của tác vụ phân tích. Để trống sẽ dùng prompt mặc định; nhấn Xác nhận rồi Lưu để áp dụng.",
+  messenger_insights_restore_default: 'Khôi phục prompt mặc định',
   crm_system_prompt_crm_analysis_placeholder: 'VD: Bạn là chuyên gia phân tích hành vi khách hàng...',
-  crm_system_prompt_crm_analysis_hint: 'Prompt dùng để định hướng AI phân tích lịch sử chat của khách hàng trong phần CRM.',
+  crm_system_prompt_crm_analysis_hint: 'Prompt dùng để định hướng AI phân tích lịch sử chat Zalo của khách hàng trong phần CRM.',
 
   // ERP Cloudify Configuration
   erp_config_title: 'Tích hợp dữ liệu ERP (Cloudify ERP Integration)',

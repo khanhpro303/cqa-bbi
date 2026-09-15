@@ -4,7 +4,7 @@
     <div class="text-grey-darken-1 mb-6">{{ $t('ai_engines_desc') }}</div>
 
     <!-- Langflow Config -->
-    <v-card class="pa-6 mb-6">
+    <v-card class="pa-6 mb-6" data-testid="langflow-config">
       <div class="text-subtitle-1 font-weight-bold mb-4">
         <v-icon start size="small">mdi-brain</v-icon>
         {{ $t('langflow_config') }}
@@ -79,6 +79,21 @@
         class="mb-3 mt-4 cursor-pointer-field"
       />
 
+      <div class="d-flex ga-2 mt-4">
+        <v-btn color="primary" :loading="saving" @click="save">{{ $t('save') }}</v-btn>
+        <v-btn variant="outlined" :loading="testing" @click="testConnection">
+          {{ $t('test_connection') }}
+        </v-btn>
+      </div>
+    </v-card>
+
+    <!-- CRM System Prompts -->
+    <v-card class="pa-6 mb-6" data-testid="crm-system-prompts">
+      <div class="text-subtitle-1 font-weight-bold mb-4">
+        <v-icon start size="small">mdi-account-box-outline</v-icon>
+        {{ $t('crm_system_prompts_section') }}
+      </div>
+
       <v-text-field
         :model-value="langflow.systemPromptCrmAnalysis"
         :label="$t('crm_system_prompt_crm_analysis')"
@@ -94,11 +109,23 @@
         class="mb-3 mt-4 cursor-pointer-field"
       />
 
+      <v-text-field
+        :model-value="langflow.systemPromptMessengerInsights"
+        :label="$t('messenger_insights_system_prompt')"
+        :placeholder="$t('messenger_insights_system_prompt_placeholder')"
+        :hint="$t('messenger_insights_system_prompt_hint')"
+        persistent-hint
+        density="comfortable"
+        prepend-inner-icon="mdi-facebook-messenger"
+        append-inner-icon="mdi-arrow-expand-all"
+        @click="openPromptModal('messenger_insights')"
+        @click:append-inner.stop="openPromptModal('messenger_insights')"
+        readonly
+        class="mb-3 mt-4 cursor-pointer-field"
+      />
+
       <div class="d-flex ga-2 mt-4">
         <v-btn color="primary" :loading="saving" @click="save">{{ $t('save') }}</v-btn>
-        <v-btn variant="outlined" :loading="testing" @click="testConnection">
-          {{ $t('test_connection') }}
-        </v-btn>
       </div>
     </v-card>
 
@@ -466,9 +493,9 @@
       <v-card>
         <v-card-title class="text-h6 font-weight-bold d-flex align-center pa-4">
           <v-icon start color="primary" class="mr-2">
-            {{ promptModalType === 'public' ? 'mdi-message-text-outline' : (promptModalType === 'internal' ? 'mdi-account-tie-outline' : 'mdi-robot') }}
+            {{ promptModalType === 'public' ? 'mdi-message-text-outline' : (promptModalType === 'internal' ? 'mdi-account-tie-outline' : (promptModalType === 'messenger_insights' ? 'mdi-facebook-messenger' : 'mdi-robot')) }}
           </v-icon>
-          {{ promptModalType === 'public' ? $t('langflow_system_prompt') : (promptModalType === 'internal' ? $t('langflow_system_prompt_internal') : $t('crm_system_prompt_crm_analysis')) }}
+          {{ promptModalType === 'public' ? $t('langflow_system_prompt') : (promptModalType === 'internal' ? $t('langflow_system_prompt_internal') : (promptModalType === 'messenger_insights' ? $t('messenger_insights_system_prompt') : $t('crm_system_prompt_crm_analysis'))) }}
           <v-spacer></v-spacer>
           <v-btn icon="mdi-close" variant="text" size="small" @click="promptModalOpen = false" />
         </v-card-title>
@@ -476,6 +503,14 @@
         <v-divider></v-divider>
 
         <v-card-text class="pa-4">
+          <v-alert
+            v-if="promptModalType === 'messenger_insights'"
+            type="info"
+            variant="tonal"
+            class="mb-4"
+          >
+            {{ $t('messenger_insights_system_prompt_note') }}
+          </v-alert>
           <v-textarea
             v-model="promptModalText"
             rows="18"
@@ -491,6 +526,13 @@
         <v-divider></v-divider>
 
         <v-card-actions class="pa-4 d-flex justify-end ga-2">
+          <v-btn
+            v-if="promptModalType === 'messenger_insights'"
+            variant="text"
+            @click="promptModalText = messengerInsightsDefaultPrompt"
+          >
+            {{ $t('messenger_insights_restore_default') }}
+          </v-btn>
           <v-btn variant="outlined" @click="promptModalOpen = false">
             {{ $t('cancel') }}
           </v-btn>
@@ -536,15 +578,18 @@ const missingGroupResources = ref<string[]>([])
 
 // System Prompt Modal refs & functions
 const promptModalOpen = ref(false)
-const promptModalType = ref<'public' | 'internal' | 'crm_analysis'>('public')
+const promptModalType = ref<'public' | 'internal' | 'crm_analysis' | 'messenger_insights'>('public')
 const promptModalText = ref('')
+const messengerInsightsDefaultPrompt = ref('')
 
-function openPromptModal(type: 'public' | 'internal' | 'crm_analysis') {
+function openPromptModal(type: 'public' | 'internal' | 'crm_analysis' | 'messenger_insights') {
   promptModalType.value = type
   if (type === 'public') {
     promptModalText.value = langflow.systemPrompt
   } else if (type === 'internal') {
     promptModalText.value = langflow.systemPromptInternal
+  } else if (type === 'messenger_insights') {
+    promptModalText.value = langflow.systemPromptMessengerInsights
   } else {
     promptModalText.value = langflow.systemPromptCrmAnalysis
   }
@@ -556,6 +601,8 @@ function savePromptModal() {
     langflow.systemPrompt = promptModalText.value
   } else if (promptModalType.value === 'internal') {
     langflow.systemPromptInternal = promptModalText.value
+  } else if (promptModalType.value === 'messenger_insights') {
+    langflow.systemPromptMessengerInsights = promptModalText.value
   } else {
     langflow.systemPromptCrmAnalysis = promptModalText.value
   }
@@ -570,6 +617,7 @@ const langflow = reactive({
   systemPrompt: '',
   systemPromptInternal: '',
   systemPromptCrmAnalysis: '',
+  systemPromptMessengerInsights: '',
 })
 
 const erp = reactive({
@@ -644,6 +692,8 @@ async function loadSettings() {
     langflow.systemPrompt = settings.ai_engine_system_prompt || ''
     langflow.systemPromptInternal = settings.ai_engine_system_prompt_internal || ''
     langflow.systemPromptCrmAnalysis = settings.ai_engine_system_prompt_crm_analysis || ''
+    langflow.systemPromptMessengerInsights = settings.ai_engine_system_prompt_messenger_insights || ''
+    messengerInsightsDefaultPrompt.value = settings.ai_engine_system_prompt_messenger_insights_default || ''
 
     if (settings.ai_engine_langflow_token) {
       langflow.token = settings.ai_engine_langflow_token
@@ -724,6 +774,7 @@ async function save() {
       system_prompt: langflow.systemPrompt,
       system_prompt_internal: langflow.systemPromptInternal,
       system_prompt_crm_analysis: langflow.systemPromptCrmAnalysis,
+      system_prompt_messenger_insights: langflow.systemPromptMessengerInsights,
 
       astradb_api_endpoint: astradb.apiEndpoint,
       astradb_token: astradb.token,

@@ -20,6 +20,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm/clause"
 )
 
 // GetSettings returns all non-secret settings for the tenant
@@ -37,6 +38,10 @@ func GetSettings(c *gin.Context) {
 			// Return masked value for encrypted settings
 			result[s.SettingKey] = "••••••••"
 		}
+	}
+	result[ai.MessengerInsightsPromptSettingKey+"_default"] = ai.DefaultMessengerInsightsPrompt()
+	if strings.TrimSpace(result[ai.MessengerInsightsPromptSettingKey]) == "" {
+		result[ai.MessengerInsightsPromptSettingKey] = ai.DefaultMessengerInsightsPrompt()
 	}
 
 	cfg, _ := config.Load()
@@ -220,13 +225,14 @@ func SaveAnalysisSettings(c *gin.Context) {
 func SaveAIEnginesSettings(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	var req struct {
-		LangflowBaseURL      string `json:"langflow_base_url"`
-		LangflowFlowID       string `json:"langflow_flow_id"`
-		LangflowPublicFlowID string `json:"langflow_public_flow_id"`
-		LangflowToken        string `json:"langflow_token"`
-		SystemPrompt         string `json:"system_prompt"`
-		SystemPromptInternal string `json:"system_prompt_internal"`
-		SystemPromptCrmAnalysis string `json:"system_prompt_crm_analysis"`
+		LangflowBaseURL               string  `json:"langflow_base_url"`
+		LangflowFlowID                string  `json:"langflow_flow_id"`
+		LangflowPublicFlowID          string  `json:"langflow_public_flow_id"`
+		LangflowToken                 string  `json:"langflow_token"`
+		SystemPrompt                  string  `json:"system_prompt"`
+		SystemPromptInternal          string  `json:"system_prompt_internal"`
+		SystemPromptCrmAnalysis       string  `json:"system_prompt_crm_analysis"`
+		SystemPromptMessengerInsights *string `json:"system_prompt_messenger_insights"`
 
 		// Astra DB configuration
 		AstraDBAPIEndpoint       string `json:"astradb_api_endpoint"`
@@ -245,6 +251,7 @@ func SaveAIEnginesSettings(c *gin.Context) {
 	// Audit: hash prompt cũ để ghi cũ→mới (không bao giờ log nội dung prompt).
 	oldPrompt := getPlainSetting(tenantID, "ai_engine_system_prompt")
 	oldPromptInternal := getPlainSetting(tenantID, "ai_engine_system_prompt_internal")
+	oldMessengerPrompt := getPlainSetting(tenantID, ai.MessengerInsightsPromptSettingKey)
 
 	// Base URL
 	if req.LangflowBaseURL != "" {
@@ -290,6 +297,32 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		upsertSetting(tenantID, "ai_engine_system_prompt_crm_analysis", req.SystemPromptCrmAnalysis, nil)
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_system_prompt_crm_analysis").Delete(&models.AppSetting{})
+	}
+
+	// Omitted fields preserve the override for older clients. Empty or default
+	// values clear it so subsequent runs use the built-in structured prompt.
+	if req.SystemPromptMessengerInsights != nil {
+		prompt := strings.TrimSpace(*req.SystemPromptMessengerInsights)
+		var saveErr error
+		if prompt == "" || prompt == strings.TrimSpace(ai.DefaultMessengerInsightsPrompt()) {
+			prompt = ""
+			saveErr = db.DB.WithContext(c.Request.Context()).Where("tenant_id = ? AND setting_key = ?", tenantID, ai.MessengerInsightsPromptSettingKey).Delete(&models.AppSetting{}).Error
+		} else {
+			now := time.Now()
+			setting := models.AppSetting{ID: pkg.NewUUID(), TenantID: tenantID, SettingKey: ai.MessengerInsightsPromptSettingKey, ValuePlain: prompt, CreatedAt: now, UpdatedAt: now}
+			saveErr = db.DB.WithContext(c.Request.Context()).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "setting_key"}},
+				DoUpdates: clause.Assignments(map[string]interface{}{"value_plain": prompt, "value_encrypted": nil, "updated_at": now}),
+			}).Create(&setting).Error
+		}
+		if saveErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "messenger_insights_prompt_save_failed"})
+			return
+		}
+		if prompt != oldMessengerPrompt {
+			db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "ai.system_prompt_updated", "settings", ai.MessengerInsightsPromptSettingKey,
+				fmt.Sprintf("System prompt (Messenger insights): hash %s→%s", shortHash(oldMessengerPrompt), shortHash(prompt)), "", c.ClientIP())
+		}
 	}
 
 	// Token
