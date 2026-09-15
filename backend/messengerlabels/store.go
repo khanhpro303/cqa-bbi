@@ -157,15 +157,18 @@ type Row struct {
 	Labels         []channels.FacebookLabel `json:"labels"`
 	IntakeLabels   []channels.FacebookLabel `json:"intake_labels"`
 	IntakeCaptured bool                     `json:"intake_captured"`
+	IntakeError    string                   `json:"intake_error"`
 	TrackingLabels []channels.FacebookLabel `json:"tracking_labels"`
 	CheckedAt      *time.Time               `json:"checked_at"`
 	Error          string                   `json:"error"`
 }
 
 type IntakeProgress struct {
-	Total      int `json:"total"`
-	Captured   int `json:"captured"`
-	WithLabels int `json:"with_labels"`
+	Total      int    `json:"total"`
+	Captured   int    `json:"captured"`
+	WithLabels int    `json:"with_labels"`
+	Failed     int    `json:"failed"`
+	Error      string `json:"error"`
 }
 
 type Report struct {
@@ -269,6 +272,12 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 		intakeReady := snapshot.IntakeLabelsCapturedAt != nil && snapshot.IntakeLabels != nil && json.Unmarshal([]byte(*snapshot.IntakeLabels), &intakeLabels) == nil && intakeLabels != nil
 		if !intakeReady {
 			intakeLabels = []channels.FacebookLabel{}
+			if snapshot.Status == "error" && snapshot.ErrorKind != "" {
+				r.Intake.Failed++
+				if r.Intake.Error == "" {
+					r.Intake.Error = ErrorMessage(snapshot.ErrorKind)
+				}
+			}
 		} else {
 			r.Intake.Captured++
 			if len(intakeLabels) > 0 {
@@ -276,6 +285,10 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 			}
 		}
 		trackingLabels := TrackingLabels(labels, intakeLabelIDs)
+		intakeError := ""
+		if !intakeReady && snapshot.Status == "error" {
+			intakeError = ErrorMessage(snapshot.ErrorKind)
+		}
 		classification := Classify(labels, intakeLabelIDs, snapshot.Status, snapshot.CheckedAt, r.Rules, ready && valid && intakeReady, now)
 		errorText := ""
 		if classification == "unknown" {
@@ -306,6 +319,7 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 			Labels:         labels,
 			IntakeLabels:   intakeLabels,
 			IntakeCaptured: intakeReady,
+			IntakeError:    intakeError,
 			TrackingLabels: trackingLabels,
 			CheckedAt:      snapshot.CheckedAt,
 			Error:          errorText,

@@ -95,6 +95,7 @@
       >
         Đã lưu nhãn mặc định lúc tiếp nhận cho {{ data.intake.captured }}/{{ data.intake.total }} hội thoại;
         {{ data.intake.with_labels }} hội thoại có ít nhất một nhãn mặc định.
+        <span v-if="data.intake.failed"> {{ data.intake.failed }} hội thoại đang lỗi: {{ data.intake.error }}</span>
       </v-alert>
 
       <v-progress-linear v-if="loading && data" indeterminate color="primary" class="mb-3" />
@@ -208,7 +209,7 @@
                 </div>
               </div>
               <span v-else class="text-medium-emphasis">
-                {{ item.intake_captured ? 'Đã lưu: không có nhãn mặc định' : (item.classification === 'unknown' ? 'Chưa backfill nhãn mặc định' : 'Không có nhãn') }}
+                {{ item.intake_captured ? 'Đã lưu: không có nhãn mặc định' : (item.intake_error || (item.classification === 'unknown' ? 'Chưa backfill nhãn mặc định' : 'Không có nhãn')) }}
               </span>
             </template>
             <template #item.checked_at="{ item }">
@@ -354,6 +355,7 @@ interface ClassificationRow {
   labels: MetaLabel[]
   intake_labels: MetaLabel[]
   intake_captured: boolean
+  intake_error: string
   tracking_labels: MetaLabel[]
   checked_at: string | null
   error: string
@@ -378,6 +380,8 @@ interface LabelsReport {
     total: number
     captured: number
     with_labels: number
+    failed: number
+    error: string
   }
   freshness_minutes: number
   counts: MetaLabelCounts | null

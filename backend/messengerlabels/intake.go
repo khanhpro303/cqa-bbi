@@ -40,9 +40,44 @@ func CaptureMissingIntakeLabels(ctx context.Context, database *gorm.DB, channel 
 
 	return Observe(ctx, reader, conversations, pageID, func(snapshot models.MessengerLabelSnapshot) error {
 		if snapshot.Status != "success" || snapshot.IntakeLabels == nil || snapshot.IntakeLabelsCapturedAt == nil {
-			return nil
+			return saveIntakeLabelFailure(database, snapshot)
 		}
 		return saveIntakeLabelSnapshot(database, snapshot)
+	})
+}
+
+func saveIntakeLabelFailure(database *gorm.DB, snapshot models.MessengerLabelSnapshot) error {
+	if snapshot.ConversationID == "" || snapshot.TenantID == "" || snapshot.ChannelID == "" || snapshot.Status != "error" || snapshot.ErrorKind == "" {
+		return errors.New("invalid messenger intake label failure")
+	}
+
+	channel := models.Channel{ID: snapshot.ChannelID, TenantID: snapshot.TenantID}
+	return database.Transaction(func(tx *gorm.DB) error {
+		if _, err := lockMessengerLabelState(tx, channel); err != nil {
+			return err
+		}
+		var previous models.MessengerLabelSnapshot
+		err := tx.Select("conversation_id,intake_labels_captured_at").Where("conversation_id = ? AND tenant_id = ? AND channel_id = ?", snapshot.ConversationID, snapshot.TenantID, snapshot.ChannelID).First(&previous).Error
+		if err == nil && previous.IntakeLabelsCapturedAt != nil {
+			return nil
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		seed := snapshot
+		seed.Labels = "[]"
+		seed.CheckedAt = nil
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&seed).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.MessengerLabelSnapshot{}).
+			Where("conversation_id = ? AND tenant_id = ? AND channel_id = ? AND intake_labels_captured_at IS NULL", snapshot.ConversationID, snapshot.TenantID, snapshot.ChannelID).
+			Updates(map[string]interface{}{
+				"psid":         snapshot.PSID,
+				"status":       "error",
+				"error_kind":   snapshot.ErrorKind,
+				"attempted_at": snapshot.AttemptedAt,
+			}).Error
 	})
 }
 
