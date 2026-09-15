@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { createI18n } from 'vue-i18n'
+import qualityInsightVi from '../i18n/quality-insight-vi'
+import qualityInsightEn from '../i18n/quality-insight-en'
 import { afterEach, describe, expect, it } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
@@ -55,16 +58,28 @@ async function render(items: AggregateItem[], conversations = [conversation('a')
   })
   await router.push('/tenant-one/messages')
   await router.isReady()
+  const i18n = createI18n({ legacy: false, locale: 'vi', messages: { vi: { qualityInsight: qualityInsightVi }, en: { qualityInsight: qualityInsightEn } } })
   const wrapper = mount(InsightWordcloudPanel, {
     props: { groups: [group(items)], conversations, tenantId: 'tenant-one' },
-    global: { plugins: [router], stubs: { ...stubs, ShapeWordcloud, VDialog: Dialog, VBtn: Button, VTextField: TextField } },
+    global: { plugins: [router, i18n], stubs: { ...stubs, ShapeWordcloud, VDialog: Dialog, VBtn: Button, VTextField: TextField } },
   })
   wrappers.push(wrapper)
-  return { wrapper, router }
+  return { wrapper, router, i18n }
 }
 const sourceIds = (wrapper: VueWrapper) => wrapper.findAll('.conversation-link').map(link => link.text())
 
 describe('InsightWordcloudPanel', () => {
+  it('updates open keyword details when the application language switches', async () => {
+    const { wrapper, i18n } = await render([keyword('order', 'Đặt hàng', ['a'])])
+    await wrapper.get('.segment-heading').trigger('click')
+    i18n.global.locale.value = 'en'
+    await flushPromises()
+    expect(wrapper.get('input').attributes('aria-label')).toBe('Search keywords')
+    expect(wrapper.text()).toContain('Đặt hàng · 1 conversations')
+    expect(wrapper.text()).toContain('Keywords and counts (1)')
+    expect(sourceIds(wrapper)).toEqual(['Khách a'])
+  })
+
   it('caps the cloud at 40 words but shows every keyword and its count in segment detail', async () => {
     const items = Array.from({ length: 43 }, (_, index) => keyword(`keyword-${index}`, `Keyword ${index}`, index === 42 ? ['a', 'b'] : ['a']))
     const { wrapper } = await render(items)

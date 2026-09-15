@@ -3,7 +3,7 @@
     <v-select
       v-model="shape"
       :items="shapes"
-      label="Hình dạng wordcloud"
+      :label="t('qualityInsight.shapeLabel')"
       density="compact"
       variant="outlined"
       hide-details
@@ -13,28 +13,30 @@
       ref="host"
       class="wordcloud"
       role="group"
-      :aria-label="`Wordcloud ${title}`"
+      :aria-label="t('qualityInsight.cloudTitle', { title })"
       @wordclouddrawn="decorateWord"
       @wordcloudstop="finishRender"
       @click="selectWord"
       @keydown="activateWord"
     />
-    <p v-if="renderError" class="text-caption text-medium-emphasis">Không thể vẽ wordcloud. Bấm tên segment để xem keyword.</p>
+    <p v-if="renderError" class="text-caption text-medium-emphasis">{{ t('qualityInsight.renderError') }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import WordCloud from 'wordcloud'
 import type { AggregateItem } from '../utils/service-quality'
 
 const props = defineProps<{ items: AggregateItem[]; title: string }>()
 const emit = defineEmits<{ select: [key: string] }>()
-const shapes = [
-  { title: 'Hình tròn', value: 'circle' },
-  { title: 'Kim cương', value: 'diamond' },
-  { title: 'Ngôi sao', value: 'star' },
-]
+const { t, locale } = useI18n()
+const shapes = computed(() => [
+  { title: t('qualityInsight.circle'), value: 'circle' },
+  { title: t('qualityInsight.diamond'), value: 'diamond' },
+  { title: t('qualityInsight.star'), value: 'star' },
+])
 const shape = ref('circle')
 const host = ref<HTMLDivElement | null>(null)
 const renderError = ref(false)
@@ -153,8 +155,8 @@ function decorateWord(event: Event) {
   span.dataset.keyword = source.key
   span.tabIndex = 0
   span.setAttribute('role', 'button')
-  span.setAttribute('aria-label', `${source.label}: ${source.count} hội thoại, xem nguồn phân loại`)
-  span.title = `${source.label}: ${source.count} hội thoại`
+  span.setAttribute('aria-label', t('qualityInsight.wordSource', { label: source.label, count: source.count }))
+  span.title = t('qualityInsight.wordCount', { label: source.label, count: source.count })
 }
 
 function selectWord(event: Event) {
@@ -169,7 +171,7 @@ function activateWord(event: KeyboardEvent) {
   selectWord(event)
 }
 
-watch([() => props.items, shape], scheduleRender, { deep: true })
+watch([() => props.items, shape, locale], scheduleRender, { deep: true })
 onMounted(() => {
   observer = new ResizeObserver(scheduleRender)
   if (host.value) observer.observe(host.value)

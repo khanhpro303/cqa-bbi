@@ -12,10 +12,10 @@
           :title="group.title"
           @select="openSegment(group.kind, $event)"
         />
-        <div v-else class="empty-cloud text-body-2 text-medium-emphasis">Chưa có dữ liệu trong kỳ</div>
+        <div v-else class="empty-cloud text-body-2 text-medium-emphasis">{{ t('qualityInsight.emptyPeriod') }}</div>
         <button v-if="group.items.length" class="segment-footer" type="button" @click="openSegment(group.kind)">
-          {{ group.items.length }} keyword · Xem chi tiết
-          <span v-if="group.items.length > cloudLimit" class="d-block">Wordcloud gom tối đa {{ cloudLimit }} keyword phổ biến nhất</span>
+          {{ t('qualityInsight.keywordDetails', { count: group.items.length }) }}
+          <span v-if="group.items.length > cloudLimit" class="d-block">{{ t('qualityInsight.cloudLimit', { count: cloudLimit }) }}</span>
         </button>
       </section>
     </v-col>
@@ -27,17 +27,17 @@
         <v-icon :icon="selectedGroup.icon" color="primary" />
         <span>{{ selectedGroup.title }}</span>
         <v-spacer />
-        <v-btn icon="mdi-close" variant="text" title="Đóng chi tiết keyword" @click="dialog = false" />
+        <v-btn icon="mdi-close" variant="text" :title="t('qualityInsight.closeDetails')" @click="dialog = false" />
       </v-card-title>
       <v-divider />
       <v-card-text>
         <p class="text-body-2 text-medium-emphasis mb-4">
-          Số lượng là số hội thoại được AI phân loại cho từng keyword. Một hội thoại có thể thuộc nhiều keyword.
+          {{ t('qualityInsight.countExplanation') }}
         </p>
         <div class="detail-columns">
           <div>
-            <h2 class="text-subtitle-2 mb-2">Keyword và số lượng ({{ selectedGroup.items.length }})</h2>
-            <v-text-field v-model="keywordSearch" label="Tìm keyword" prepend-inner-icon="mdi-magnify" density="compact" variant="outlined" hide-details class="mb-2" />
+            <h2 class="text-subtitle-2 mb-2">{{ t('qualityInsight.keywordCounts', { count: selectedGroup.items.length }) }}</h2>
+            <v-text-field v-model="keywordSearch" :label="t('qualityInsight.searchKeyword')" prepend-inner-icon="mdi-magnify" density="compact" variant="outlined" hide-details class="mb-2" />
             <div class="keyword-list">
               <button
                 v-for="item in filteredKeywords"
@@ -50,12 +50,12 @@
               >
                 <span>{{ item.label }}</span><strong>{{ item.count }}</strong>
               </button>
-              <p v-if="!filteredKeywords.length" class="text-body-2 text-medium-emphasis pa-3">Không có keyword phù hợp</p>
+              <p v-if="!filteredKeywords.length" class="text-body-2 text-medium-emphasis pa-3">{{ t('qualityInsight.noKeywords') }}</p>
             </div>
           </div>
           <div>
             <h2 class="text-subtitle-2 mb-2">
-              {{ selectedKeyword ? `${selectedKeyword.label} · ${selectedKeyword.count} hội thoại` : 'Chọn keyword để xem nguồn phân loại' }}
+              {{ selectedKeyword ? t('qualityInsight.keywordConversations', { label: selectedKeyword.label, count: selectedKeyword.count }) : t('qualityInsight.selectKeyword') }}
             </h2>
             <div class="conversation-list">
               <v-card v-for="row in sourceConversations" :key="row.conversation_id" variant="outlined" class="mb-3">
@@ -66,13 +66,13 @@
                     color="primary"
                     append-icon="mdi-arrow-right"
                     :to="{ name: 'messages', params: { tenantId }, query: { conv: row.conversation_id, channel_id: row.channel_id, tab: 'messages' } }"
-                  >{{ row.customer_name || 'Khách Messenger' }}</v-btn>
+                  >{{ row.customer_name || t('qualityInsight.messengerCustomer') }}</v-btn>
                   <div class="text-caption text-medium-emphasis mb-2">{{ row.channel_name }} · {{ row.conversation_id }}</div>
                   <div v-for="(evidence, index) in keywordEvidence(row)" :key="index" class="text-body-2 mb-2 evidence">{{ evidence }}</div>
-                  <p class="text-body-2 mb-0 evidence">{{ row.insight?.summary || 'Không có tóm tắt hội thoại.' }}</p>
+                  <p class="text-body-2 mb-0 evidence">{{ row.insight?.summary || t('qualityInsight.noSummary') }}</p>
                 </v-card-text>
               </v-card>
-              <p v-if="selectedKeyword && !sourceConversations.length" class="text-body-2 text-medium-emphasis">Không còn hội thoại phù hợp trong báo cáo hiện tại.</p>
+              <p v-if="selectedKeyword && !sourceConversations.length" class="text-body-2 text-medium-emphasis">{{ t('qualityInsight.noConversations') }}</p>
             </div>
           </div>
         </div>
@@ -83,6 +83,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import ShapeWordcloud from './ShapeWordcloud.vue'
 import { normalizeInsightLabel, type AggregateItem, type InsightRow } from '../utils/service-quality'
 
@@ -100,6 +101,7 @@ interface SourceConversation extends InsightRow {
 }
 
 const props = defineProps<{ groups: InsightGroup[]; conversations: SourceConversation[]; tenantId: string }>()
+const { t } = useI18n()
 const cloudLimit = 40
 const dialog = ref(false)
 const selectedKind = ref('')

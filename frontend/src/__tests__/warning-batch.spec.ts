@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { createI18n } from 'vue-i18n'
+import qualityInsightVi from '../i18n/quality-insight-vi'
+import qualityInsightEn from '../i18n/quality-insight-en'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import WarningBatch from '../components/WarningBatch.vue'
@@ -10,7 +13,7 @@ const warnings = [
   { id: 'sync', title: 'Lỗi đồng bộ', detail: 'Chi tiết đồng bộ' },
   { id: 'intake', title: 'Lỗi tiếp nhận', detail: 'Chi tiết tiếp nhận' },
 ]
-const global = { stubs: { VAlert: { template: '<div><slot /></div>' }, VIcon: true } }
+const global = { plugins: [createI18n({ legacy: false, locale: 'vi', messages: { vi: { qualityInsight: qualityInsightVi }, en: { qualityInsight: qualityInsightEn } } })], stubs: { VAlert: { template: '<div><slot /></div>' }, VIcon: true } }
 
 describe('WarningBatch', () => {
   it('renders nothing when there are no warnings', () => {

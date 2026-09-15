@@ -1,4 +1,11 @@
+import serviceQuality from './service-quality-en'
+import qualityMeta from './quality-meta-en'
+import qualityInsight from './quality-insight-en'
+
 export default {
+  ...serviceQuality,
+  ...qualityMeta,
+  qualityInsight,
   // Common
   app_name: 'BBI CRM Agent',
   save: 'Save',

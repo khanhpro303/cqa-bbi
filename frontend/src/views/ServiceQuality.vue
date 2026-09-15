@@ -4,10 +4,10 @@
       <div>
         <div class="d-flex align-center ga-2">
           <v-icon color="primary" size="30">mdi-headset</v-icon>
-          <h1 class="text-h5 font-weight-bold">Chất lượng CSKH Messenger</h1>
+          <h1 class="text-h5 font-weight-bold">{{ t('sq_title') }}</h1>
         </div>
         <p class="text-body-2 text-medium-emphasis mt-1 mb-0">
-          Theo dõi thời gian Fanpage phản hồi, khách đang chờ và nội dung trao đổi từ dữ liệu đã đồng bộ.
+          {{ t('sq_subtitle') }}
         </p>
       </div>
       <div class="d-flex flex-wrap ga-2">
@@ -18,7 +18,7 @@
           prepend-icon="mdi-creation"
           :to="`/${tenantId}/jobs/create?template=messenger-insights`"
         >
-          Tạo phân tích nội dung
+          {{ t('sq_create_analysis') }}
         </v-btn>
         <v-btn
           v-if="canEditPolicy"
@@ -26,19 +26,18 @@
           prepend-icon="mdi-tune"
           @click="openPolicyDialog"
         >
-          Ngưỡng phản hồi
+          {{ t('sq_response_threshold') }}
         </v-btn>
         <v-btn color="primary" prepend-icon="mdi-refresh" :loading="loading" @click="loadReport(true)">
-          Làm mới
+          {{ t('sq_refresh') }}
         </v-btn>
       </div>
     </div>
 
     <v-alert type="info" variant="tonal" class="mb-4" border="start">
-      <div class="font-weight-medium">Phạm vi số liệu</div>
+      <div class="font-weight-medium">{{ t('sq_data_scope') }}</div>
       <div class="text-body-2 mt-1">
-        Hệ thống nhận diện phản hồi từ Fanpage, chưa xác định nhân viên, bot hay người trực cụ thể.
-        KPI dựa trên lịch sử Messenger đã đồng bộ; kiểm tra thời điểm đồng bộ của từng trang bên dưới trước khi đánh giá.
+        {{ t('sq_scope_description') }}
       </div>
     </v-alert>
 
@@ -52,13 +51,13 @@
     >
       <div class="d-flex align-center justify-space-between flex-wrap ga-2">
         <div>
-          <strong>{{ report.summary.overdue }} hội thoại quá hạn</strong>
+          <strong>{{ t('sq_overdue_count', { count: report.summary.overdue }) }}</strong>
           <span class="mx-1">·</span>
-          {{ report.summary.waiting }} hội thoại đang chờ Fanpage phản hồi.
-          <div class="text-caption mt-1">Hàng chờ là trạng thái hiện tại và không bị giới hạn bởi bộ lọc ngày.</div>
+          {{ t('sq_waiting_count', { count: report.summary.waiting }) }}
+          <div class="text-caption mt-1">{{ t('sq_queue_current') }}</div>
         </div>
         <v-btn size="small" variant="outlined" aria-controls="conversation-queue" @click="viewQueue">
-          Xem hàng chờ
+          {{ t('sq_view_queue') }}
         </v-btn>
       </div>
     </v-alert>
@@ -71,21 +70,21 @@
             :items="channelOptions"
             item-title="title"
             item-value="value"
-            label="Fanpage"
+            :label="t('sq_page')"
             density="compact"
             variant="outlined"
             hide-details
             style="min-width: 220px; max-width: 320px"
           />
-          <v-text-field v-model="dateFrom" label="Từ ngày" type="date" density="compact" variant="outlined" hide-details style="max-width: 170px" />
-          <v-text-field v-model="dateTo" label="Đến ngày" type="date" density="compact" variant="outlined" hide-details style="max-width: 170px" />
+          <v-text-field v-model="dateFrom" :label="t('sq_date_from')" type="date" density="compact" variant="outlined" hide-details style="max-width: 170px" />
+          <v-text-field v-model="dateTo" :label="t('sq_date_to')" type="date" density="compact" variant="outlined" hide-details style="max-width: 170px" />
           <v-btn variant="tonal" color="primary" prepend-icon="mdi-filter" :disabled="!dateRangeValid" @click="loadReport(true)">
-            Áp dụng
+            {{ t('sq_apply') }}
           </v-btn>
-          <span v-if="!dateRangeValid" class="text-caption text-error">Ngày kết thúc phải từ ngày bắt đầu trở đi.</span>
+          <span v-if="!dateRangeValid" class="text-caption text-error">{{ t('sq_invalid_range') }}</span>
           <v-spacer />
           <span v-if="report" class="text-caption text-medium-emphasis">
-            Cập nhật báo cáo {{ formatDateTime(report.generated_at) }} · {{ report.policy.timezone }} · tự làm mới mỗi 60 giây
+            {{ t('sq_updated', { date: formatDateTime(report.generated_at), timezone: report.policy.timezone }) }}
           </span>
         </div>
       </v-card-text>
@@ -97,7 +96,7 @@
 
     <v-alert v-if="errorMessage" type="error" variant="tonal" class="mb-4" closable @click:close="errorMessage = ''">
       <div>{{ errorMessage }}</div>
-      <v-btn class="mt-2" size="small" variant="outlined" @click="loadReport(true)">Thử lại</v-btn>
+      <v-btn class="mt-2" size="small" variant="outlined" @click="loadReport(true)">{{ t('sq_retry') }}</v-btn>
     </v-alert>
 
     <template v-if="loading && !report">
@@ -109,7 +108,7 @@
 
     <template v-else-if="report">
       <v-alert v-if="report.invalid_timestamps" type="warning" variant="tonal" density="compact" class="mb-4">
-        Bỏ qua {{ report.invalid_timestamps }} tin nhắn có thời gian không hợp lệ hoặc nằm trong tương lai.
+        {{ t('sq_invalid_timestamps', { count: report.invalid_timestamps }) }}
       </v-alert>
 
       <v-row class="mb-2">
@@ -130,9 +129,9 @@
       <v-card variant="outlined" class="mb-4">
         <v-card-title class="text-subtitle-1 font-weight-bold d-flex align-center flex-wrap ga-2">
           <v-icon start color="primary">mdi-cloud-sync</v-icon>
-          Nguồn dữ liệu Messenger
+          {{ t('sq_data_source') }}
           <v-spacer />
-          <span class="panel-description text-medium-emphasis">{{ report.conversations_scanned }} hội thoại đã quét</span>
+          <span class="panel-description text-medium-emphasis">{{ t('sq_scanned', { count: report.conversations_scanned }) }}</span>
         </v-card-title>
         <v-divider />
         <v-card-text v-if="report.pages.length" class="d-flex flex-wrap ga-2">
@@ -144,28 +143,27 @@
             size="small"
           >
             <v-icon start :icon="page.is_active ? 'mdi-facebook' : 'mdi-link-off'" />
-            {{ page.name }} · {{ page.last_sync_at ? formatDateTime(page.last_sync_at) : 'chưa đồng bộ' }} · {{ syncLabel(page.last_sync_status) }}
+            {{ page.name }} · {{ page.last_sync_at ? formatDateTime(page.last_sync_at) : t('sq_not_synced') }} · {{ syncLabel(page.last_sync_status) }}
           </v-chip>
         </v-card-text>
         <v-card-text v-else class="text-center py-8">
           <v-icon size="42" color="grey">mdi-facebook</v-icon>
-          <div class="text-subtitle-1 mt-2">Chưa có Fanpage Facebook</div>
-          <v-btn v-if="authStore.canView('channels')" class="mt-3" color="primary" variant="tonal" :to="`/${tenantId}/channels`">Kết nối Fanpage</v-btn>
+          <div class="text-subtitle-1 mt-2">{{ t('sq_no_pages') }}</div>
+          <v-btn v-if="authStore.canView('channels')" class="mt-3" color="primary" variant="tonal" :to="`/${tenantId}/channels`">{{ t('sq_connect_page') }}</v-btn>
         </v-card-text>
       </v-card>
 
       <v-card variant="outlined" class="mb-4">
         <v-card-title class="d-flex align-center flex-wrap ga-2">
           <div>
-            <div class="text-subtitle-1 font-weight-bold"><v-icon start color="primary">mdi-chart-box-outline</v-icon>Nội dung trao đổi</div>
+            <div class="text-subtitle-1 font-weight-bold"><v-icon start color="primary">mdi-chart-box-outline</v-icon>{{ t('sq_content') }}</div>
             <div class="panel-description text-medium-emphasis mt-1">
-              Chỉ tổng hợp {{ insightAggregates.eligibleConversations }} hội thoại có phân tích AI mới, được tạo trong khoảng ngày đã chọn.
-              Đã loại {{ insightAggregates.excludedStale }} kết quả cũ sau khi hội thoại thay đổi và {{ insightAggregates.excludedOutsideWindow }} kết quả ngoài kỳ.
+              {{ t('sq_aggregate_scope', { eligible: insightAggregates.eligibleConversations, stale: insightAggregates.excludedStale, outside: insightAggregates.excludedOutsideWindow }) }}
             </div>
           </div>
           <v-spacer />
           <v-btn v-if="authStore.canEdit('jobs')" size="small" variant="text" color="primary" :to="`/${tenantId}/jobs/create?template=messenger-insights`">
-            Cấu hình tác vụ AI
+            {{ t('sq_configure_ai') }}
           </v-btn>
         </v-card-title>
         <v-divider />
@@ -186,7 +184,7 @@
           <div>
             <h2 id="conversation-queue-title" class="text-subtitle-1 font-weight-bold"><v-icon start color="primary">mdi-message-alert-outline</v-icon>{{ queueTitle }}</h2>
             <div class="panel-description text-medium-emphasis mt-1" role="status">
-              {{ filteredRows.length }} hội thoại phù hợp<span v-if="statusFilter === 'overdue' || statusFilter === 'waiting'"> · Trạng thái hiện tại, không giới hạn bởi bộ lọc ngày</span>
+              {{ t('sq_matching', { count: filteredRows.length }) }}<span v-if="statusFilter === 'overdue' || statusFilter === 'waiting'">{{ t('sq_queue_date_note') }}</span>
             </div>
           </div>
           <v-spacer />
@@ -195,7 +193,7 @@
             :items="statusOptions"
             item-title="title"
             item-value="value"
-            label="Trạng thái"
+            :label="t('sq_status')"
             density="compact"
             variant="outlined"
             hide-details
@@ -203,7 +201,7 @@
           />
           <v-text-field
             v-model="search"
-            label="Tìm khách hàng"
+            :label="t('sq_search_customer')"
             prepend-inner-icon="mdi-magnify"
             density="compact"
             variant="outlined"
@@ -219,12 +217,12 @@
           :items="filteredRows"
           item-value="conversation_id"
           :items-per-page="20"
-          no-data-text="Không có hội thoại phù hợp"
+          :no-data-text="t('sq_no_conversations')"
           hover
         >
           <template #item.customer_name="{ item }">
             <div class="py-2">
-              <div class="font-weight-medium">{{ item.customer_name || 'Khách Messenger' }}</div>
+              <div class="font-weight-medium">{{ item.customer_name || t('sq_customer_fallback') }}</div>
               <div class="text-caption text-medium-emphasis">{{ item.channel_name }}</div>
             </div>
           </template>
@@ -238,19 +236,19 @@
           <template #item.last_message_at="{ item }">{{ item.last_message_at ? formatDateTime(item.last_message_at) : '—' }}</template>
           <template #item.insight="{ item }">
             <v-chip v-if="item.insight" :color="item.insight_stale ? 'warning' : 'success'" size="x-small" variant="tonal">
-              {{ item.insight_stale ? 'Cần phân tích lại' : 'Đã phân tích' }}
+              {{ item.insight_stale ? t('sq_reanalyse') : t('sq_analysed') }}
             </v-chip>
-            <span v-else class="text-medium-emphasis">Chưa có</span>
+            <span v-else class="text-medium-emphasis">{{ t('sq_none') }}</span>
           </template>
           <template #item.actions="{ item }">
             <div class="d-flex ga-1 justify-end">
-              <v-btn icon="mdi-eye-outline" variant="text" size="small" title="Xem chi tiết" @click="openDetail(item)" />
+              <v-btn icon="mdi-eye-outline" variant="text" size="small" :title="t('sq_view_detail')" @click="openDetail(item)" />
               <v-btn
                 icon="mdi-open-in-new"
                 variant="text"
                 size="small"
                 color="primary"
-                title="Mở tin nhắn"
+                :title="t('sq_open_messages')"
                 :to="messageLink(item)"
               />
               <v-btn
@@ -259,7 +257,7 @@
                 variant="text"
                 size="small"
                 color="success"
-                title="Đánh dấu đã xử lý"
+                :title="t('sq_mark_resolved')"
                 @click="openResolve(item)"
               />
             </div>
@@ -272,55 +270,55 @@
     <v-dialog v-model="detailDialog" max-width="760" scrollable>
       <v-card v-if="selectedRow">
         <v-card-title class="d-flex align-center">
-          Chi tiết · {{ selectedRow.customer_name || 'Khách Messenger' }}
+          {{ t('sq_detail_title', { customer: selectedRow.customer_name || t('sq_customer_fallback') }) }}
           <v-spacer />
           <v-btn icon="mdi-close" variant="text" @click="detailDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text>
-          <p class="text-caption text-medium-emphasis">Lịch sử đã đồng bộ từ {{ selectedRow.history_from ? formatDateTime(selectedRow.history_from) : 'chưa rõ' }}. Lượt đầu là lượt đầu quan sát được, có thể không phải lần liên hệ đầu tiên của khách.</p>
+          <p class="text-caption text-medium-emphasis">{{ t('sq_history', { date: selectedRow.history_from ? formatDateTime(selectedRow.history_from) : t('sq_unknown') }) }}</p>
           <v-alert v-if="selectedRow.insight_stale" type="warning" variant="tonal" density="compact" class="mb-4">
-            Hội thoại có tin nhắn mới sau lần AI phân tích. Nội dung bên dưới có thể đã cũ.
+            {{ t('sq_stale_warning') }}
           </v-alert>
           <template v-if="selectedRow.insight">
-            <div class="text-subtitle-2 font-weight-bold mb-1">Tóm tắt</div>
-            <p class="text-body-2">{{ selectedRow.insight.summary || 'Chưa có tóm tắt.' }}</p>
-            <div class="text-subtitle-2 font-weight-bold mb-2">Nhu cầu</div>
+            <div class="text-subtitle-2 font-weight-bold mb-1">{{ t('sq_summary') }}</div>
+            <p class="text-body-2">{{ selectedRow.insight.summary || t('sq_no_summary') }}</p>
+            <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_intents') }}</div>
             <div class="d-flex flex-wrap ga-2 mb-4">
               <v-chip v-for="intent in selectedRow.insight.intents || []" :key="intent" size="small" variant="tonal">{{ intent }}</v-chip>
-              <span v-if="!selectedRow.insight.intents?.length" class="text-body-2 text-medium-emphasis">Chưa nhận diện</span>
+              <span v-if="!selectedRow.insight.intents?.length" class="text-body-2 text-medium-emphasis">{{ t('sq_unidentified') }}</span>
             </div>
-            <div class="text-subtitle-2 font-weight-bold mb-2">Sản phẩm được hỏi</div>
+            <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_products') }}</div>
             <v-list v-if="selectedRow.insight.products?.length" density="compact" class="mb-3">
               <v-list-item v-for="(product, index) in selectedRow.insight.products" :key="`${product.name}-${index}`" prepend-icon="mdi-package-variant">
                 <v-list-item-title>{{ product.name }} <v-chip v-if="product.sku" size="x-small" class="ml-1">SKU {{ product.sku }}</v-chip></v-list-item-title>
-                <v-list-item-subtitle>{{ product.evidence || 'Không có trích dẫn' }}</v-list-item-subtitle>
+                <v-list-item-subtitle>{{ product.evidence || t('sq_no_evidence') }}</v-list-item-subtitle>
               </v-list-item>
             </v-list>
-            <div v-else class="text-body-2 text-medium-emphasis mb-4">Chưa nhận diện sản phẩm</div>
-            <div class="text-subtitle-2 font-weight-bold mb-2">Feedback</div>
+            <div v-else class="text-body-2 text-medium-emphasis mb-4">{{ t('sq_no_products') }}</div>
+            <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_feedback') }}</div>
             <v-list v-if="selectedRow.insight.feedback?.length" density="compact" class="mb-3">
               <v-list-item v-for="(feedback, index) in selectedRow.insight.feedback" :key="`${feedback.category}-${index}`" prepend-icon="mdi-comment-quote-outline">
                 <v-list-item-title>{{ feedback.category }} · {{ sentimentLabel(feedback.sentiment) }}</v-list-item-title>
-                <v-list-item-subtitle>{{ feedback.evidence || 'Không có trích dẫn' }}</v-list-item-subtitle>
+                <v-list-item-subtitle>{{ feedback.evidence || t('sq_no_evidence') }}</v-list-item-subtitle>
               </v-list-item>
             </v-list>
-            <div v-else class="text-body-2 text-medium-emphasis mb-4">Chưa có feedback được nhận diện</div>
-            <div class="text-subtitle-2 font-weight-bold mb-2">Chất lượng khách hàng</div>
+            <div v-else class="text-body-2 text-medium-emphasis mb-4">{{ t('sq_no_feedback') }}</div>
+            <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_lead_quality') }}</div>
             <v-alert v-if="selectedRow.insight.lead_quality" :type="leadAlertType(selectedRow.insight.lead_quality.level)" variant="tonal" density="compact">
               <strong>{{ leadLabel(selectedRow.insight.lead_quality.level) }}</strong>
-              <div>{{ selectedRow.insight.lead_quality.reason || selectedRow.insight.lead_quality.evidence || 'Không có giải thích.' }}</div>
+              <div>{{ selectedRow.insight.lead_quality.reason || selectedRow.insight.lead_quality.evidence || t('sq_no_reason') }}</div>
               <div v-if="selectedRow.insight.lead_quality.reason && selectedRow.insight.lead_quality.evidence" class="text-caption mt-1">{{ selectedRow.insight.lead_quality.evidence }}</div>
             </v-alert>
           </template>
           <v-alert v-else type="info" variant="tonal" density="compact">
-            Chưa có kết quả phân tích nội dung cho hội thoại này. Tạo hoặc chạy tác vụ “Messenger Insights” để bổ sung.
+            {{ t('sq_no_analysis') }}
           </v-alert>
 
           <v-divider class="my-4" />
-          <div class="text-subtitle-2 font-weight-bold mb-2">Các lượt chờ trong kỳ</div>
+          <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_turns') }}</div>
           <v-table density="compact">
-            <thead><tr><th>Bắt đầu</th><th>Trạng thái</th><th>Thời gian trực</th><th>Số tin khách</th></tr></thead>
+            <thead><tr><th>{{ t('sq_started') }}</th><th>{{ t('sq_status') }}</th><th>{{ t('sq_working_time') }}</th><th>{{ t('sq_customer_messages') }}</th></tr></thead>
             <tbody>
               <tr v-for="(turn, index) in selectedRow.turns" :key="index">
                 <td>{{ formatDateTime(turn.started_at) }}</td>
@@ -328,29 +326,29 @@
                 <td>{{ formatDuration(turn.seconds) }}</td>
                 <td>{{ turn.customer_messages }}</td>
               </tr>
-              <tr v-if="!selectedRow.turns.length"><td colspan="4" class="text-medium-emphasis text-center py-4">Không có lượt chờ trong kỳ</td></tr>
+              <tr v-if="!selectedRow.turns.length"><td colspan="4" class="text-medium-emphasis text-center py-4">{{ t('sq_no_turns') }}</td></tr>
             </tbody>
           </v-table>
         </v-card-text>
         <v-card-actions>
-          <span v-if="selectedRow.resolution_note" class="text-caption text-medium-emphasis px-2">Lý do xử lý: {{ selectedRow.resolution_note }}</span>
+          <span v-if="selectedRow.resolution_note" class="text-caption text-medium-emphasis px-2">{{ t('sq_resolution_note', { note: selectedRow.resolution_note }) }}</span>
           <v-spacer />
-          <v-btn color="primary" :to="messageLink(selectedRow)">Mở hội thoại</v-btn>
+          <v-btn color="primary" :to="messageLink(selectedRow)">{{ t('sq_open_conversation') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
 
     <v-dialog v-model="resolveDialog" max-width="520">
       <v-card>
-        <v-card-title>Đánh dấu đã xử lý</v-card-title>
+        <v-card-title>{{ t('sq_mark_resolved') }}</v-card-title>
         <v-card-text>
           <p class="text-body-2 mb-3">
-            Ghi nhận hội thoại đã được xử lý ngoài Messenger hoặc không cần Fanpage phản hồi. Thao tác này không được tính là một phản hồi đúng hạn.
+            {{ t('sq_resolve_description') }}
           </p>
           <v-textarea
             v-model="resolveNote"
-            label="Lý do xử lý *"
-            placeholder="Ví dụ: Đã gọi điện xác nhận với khách"
+            :label="t('sq_resolve_reason')"
+            :placeholder="t('sq_resolve_placeholder')"
             rows="3"
             maxlength="500"
             counter
@@ -359,30 +357,30 @@
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn variant="text" @click="resolveDialog = false">Hủy</v-btn>
-          <v-btn color="success" :loading="resolving" :disabled="!resolveNote.trim()" @click="resolveConversation">Xác nhận đã xử lý</v-btn>
+          <v-btn variant="text" @click="resolveDialog = false">{{ t('sq_cancel') }}</v-btn>
+          <v-btn color="success" :loading="resolving" :disabled="!resolveNote.trim()" @click="resolveConversation">{{ t('sq_confirm_resolved') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
 
     <v-dialog v-model="policyDialog" max-width="560">
       <v-card>
-        <v-card-title>Ngưỡng phản hồi Messenger</v-card-title>
+        <v-card-title>{{ t('sq_policy_title') }}</v-card-title>
         <v-card-text>
-          <v-alert type="info" variant="tonal" density="compact" class="mb-4">Thời gian chờ chỉ cộng trong giờ trực đã cấu hình, áp dụng cho tất cả các ngày.</v-alert>
-          <v-switch v-model="policyForm.all_day" label="Trực 24/7" color="primary" />
+          <v-alert type="info" variant="tonal" density="compact" class="mb-4">{{ t('sq_policy_description') }}</v-alert>
+          <v-switch v-model="policyForm.all_day" :label="t('sq_all_day')" color="primary" />
           <v-row v-if="!policyForm.all_day">
-            <v-col cols="6"><v-text-field v-model="policyForm.work_start" label="Bắt đầu trực" type="time" /></v-col>
-            <v-col cols="6"><v-text-field v-model="policyForm.work_end" label="Kết thúc trực" type="time" /></v-col>
+            <v-col cols="6"><v-text-field v-model="policyForm.work_start" :label="t('sq_work_start')" type="time" /></v-col>
+            <v-col cols="6"><v-text-field v-model="policyForm.work_end" :label="t('sq_work_end')" type="time" /></v-col>
           </v-row>
-          <v-text-field v-model.number="policyForm.target_minutes" label="Mục tiêu phản hồi (phút)" type="number" min="1" max="1440" />
-          <v-text-field v-model.number="policyForm.overdue_minutes" label="Đánh dấu quá hạn sau (phút)" type="number" min="1" max="1440" />
-          <v-text-field v-model="policyForm.timezone" label="Múi giờ" hint="Ví dụ: Asia/Ho_Chi_Minh" persistent-hint />
+          <v-text-field v-model.number="policyForm.target_minutes" :label="t('sq_target_minutes')" type="number" min="1" max="1440" />
+          <v-text-field v-model.number="policyForm.overdue_minutes" :label="t('sq_overdue_minutes')" type="number" min="1" max="1440" />
+          <v-text-field v-model="policyForm.timezone" :label="t('sq_timezone')" :hint="t('sq_timezone_hint')" persistent-hint />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn variant="text" @click="policyDialog = false">Hủy</v-btn>
-          <v-btn color="primary" :loading="savingPolicy" :disabled="!policyValid" @click="savePolicy">Lưu cấu hình</v-btn>
+          <v-btn variant="text" @click="policyDialog = false">{{ t('sq_cancel') }}</v-btn>
+          <v-btn color="primary" :loading="savingPolicy" :disabled="!policyValid" @click="savePolicy">{{ t('sq_save_policy') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -396,11 +394,11 @@ import MetaLabelsPanel from '../components/MetaLabelsPanel.vue'
 import InsightWordcloudPanel from '../components/InsightWordcloudPanel.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 import {
   aggregateInsights,
-  formatDuration,
   type ConversationInsight,
   type ServiceQualityStatus,
 } from '../utils/service-quality'
@@ -471,6 +469,8 @@ interface Report {
   conversations_scanned: number
 }
 
+const { t, locale } = useI18n()
+const numberLocale = computed(() => locale.value === 'en' ? 'en-US' : 'vi-VN')
 const route = useRoute()
 const authStore = useAuthStore()
 const tenantId = computed(() => route.params.tenantId as string)
@@ -484,8 +484,8 @@ const search = ref('')
 const conversationQueue = ref<HTMLElement | null>(null)
 const conversationPage = ref(1)
 const queueTitle = computed(() => statusFilter.value === 'overdue'
-  ? 'Hàng chờ quá hạn'
-  : statusFilter.value === 'waiting' ? 'Hàng chờ phản hồi' : 'Hội thoại')
+  ? t('sq_queue_overdue')
+  : statusFilter.value === 'waiting' ? t('sq_queue_waiting') : t('sq_conversations'))
 const detailDialog = ref(false)
 const selectedRow = ref<Row | null>(null)
 const resolveDialog = ref(false)
@@ -516,32 +516,32 @@ const dateRangeValid = computed(() => Boolean(dateFrom.value && dateTo.value && 
 const canResolve = computed(() => authStore.canEdit('messages'))
 const canEditPolicy = computed(() => authStore.canEdit('settings'))
 const channelOptions = computed(() => [
-  { title: 'Tất cả Fanpage', value: '' },
+  { title: t('sq_all_pages'), value: '' },
   ...pageCatalog.value.map(page => ({ title: page.name, value: page.id })),
 ])
-const statusOptions = [
-  { title: 'Tất cả trạng thái', value: 'all' },
-  { title: 'Quá hạn', value: 'overdue' },
-  { title: 'Đang chờ', value: 'waiting' },
-  { title: 'Đã phản hồi', value: 'answered' },
-  { title: 'Đã xử lý', value: 'resolved' },
-  { title: 'Không có yêu cầu', value: 'no_request' },
-]
-const headers = [
-  { title: 'Khách hàng / Fanpage', key: 'customer_name', sortable: true },
-  { title: 'Trạng thái', key: 'status', sortable: true },
-  { title: 'Đang chờ', key: 'waiting', sortable: false },
-  { title: 'Tin cuối', key: 'last_message_at', sortable: true },
-  { title: 'AI nội dung', key: 'insight', sortable: false },
+const statusOptions = computed(() => [
+  { title: t('sq_all_statuses'), value: 'all' },
+  { title: t('sq_overdue'), value: 'overdue' },
+  { title: t('sq_waiting'), value: 'waiting' },
+  { title: t('sq_answered'), value: 'answered' },
+  { title: t('sq_resolved'), value: 'resolved' },
+  { title: t('sq_no_request'), value: 'no_request' },
+])
+const headers = computed(() => [
+  { title: t('sq_customer_page'), key: 'customer_name', sortable: true },
+  { title: t('sq_status'), key: 'status', sortable: true },
+  { title: t('sq_waiting'), key: 'waiting', sortable: false },
+  { title: t('sq_last_message'), key: 'last_message_at', sortable: true },
+  { title: t('sq_ai_content'), key: 'insight', sortable: false },
   { title: '', key: 'actions', sortable: false, align: 'end' as const },
-]
+])
 
 const filteredRows = computed(() => {
-  const term = search.value.trim().toLocaleLowerCase('vi')
+  const term = search.value.trim().toLocaleLowerCase(locale.value)
   return (report.value?.rows || []).filter(row => {
     if (statusFilter.value !== 'all' && row.status !== statusFilter.value) return false
     if (!term) return true
-    return `${row.customer_name} ${row.channel_name} ${row.insight?.summary || ''}`.toLocaleLowerCase('vi').includes(term)
+    return `${row.customer_name} ${row.channel_name} ${row.insight?.summary || ''}`.toLocaleLowerCase(locale.value).includes(term)
   })
 })
 
@@ -565,24 +565,24 @@ const insightAggregates = computed(() => report.value
   : aggregateInsights([], new Date(0), new Date(0)))
 
 const insightGroups = computed(() => [
-  { title: 'Nhu cầu chính', icon: 'mdi-cart-outline', kind: 'intent', items: insightAggregates.value.intents },
-  { title: 'Sản phẩm được hỏi', icon: 'mdi-package-variant-closed', kind: 'product', items: insightAggregates.value.products },
-  { title: 'Feedback khách hàng', icon: 'mdi-comment-quote-outline', kind: 'feedback', items: insightAggregates.value.feedback },
-  { title: 'Chất lượng khách hàng', icon: 'mdi-account-star-outline', kind: 'lead', items: insightAggregates.value.leadQuality },
+  { title: t('sq_main_intents'), icon: 'mdi-cart-outline', kind: 'intent', items: insightAggregates.value.intents },
+  { title: t('sq_products'), icon: 'mdi-package-variant-closed', kind: 'product', items: insightAggregates.value.products },
+  { title: t('sq_customer_feedback'), icon: 'mdi-comment-quote-outline', kind: 'feedback', items: insightAggregates.value.feedback },
+  { title: t('sq_lead_quality'), icon: 'mdi-account-star-outline', kind: 'lead', items: insightAggregates.value.leadQuality },
 ].map(group => ({ ...group, items: group.items.map(item => ({ ...item, label: displayAggregateLabel(group.kind, item.label) })) })))
 
 const kpis = computed(() => {
   const summary = report.value!.summary
   const policy = report.value!.policy
   return [
-    { label: 'Lượt đã phản hồi trong kỳ', value: summary.answered.toLocaleString('vi-VN'), hint: 'Mẫu số SLA', icon: 'mdi-message-check-outline', color: 'primary' },
-    { label: `Đúng hạn ≤ ${policy.target_minutes} phút`, value: summary.on_time_percent == null ? '—' : `${summary.on_time_percent.toFixed(1)}%`, hint: `${summary.on_time}/${summary.answered} lượt`, icon: 'mdi-timer-check-outline', color: 'success' },
-    { label: 'Trung vị phản hồi', value: formatDuration(summary.median_seconds), hint: 'Các lượt trong kỳ', icon: 'mdi-timer-outline', color: 'info' },
-    { label: 'P90 phản hồi', value: formatDuration(summary.p90_seconds), hint: '90% lượt nhanh hơn mức này', icon: 'mdi-chart-timeline-variant', color: 'deep-purple' },
-    { label: 'Lượt đầu quan sát được', value: formatDuration(summary.first_median_seconds), hint: 'Trong lịch sử đã đồng bộ', icon: 'mdi-ray-start-arrow', color: 'indigo' },
-    { label: 'Đang chờ hiện tại', value: summary.waiting.toLocaleString('vi-VN'), hint: 'Chưa tới ngưỡng quá hạn', icon: 'mdi-account-clock-outline', color: 'warning' },
-    { label: `Quá hạn ≥ ${policy.overdue_minutes} phút`, value: summary.overdue.toLocaleString('vi-VN'), hint: 'Hàng chờ hiện tại', icon: 'mdi-alert-circle-outline', color: 'error' },
-    { label: 'Đã xử lý trong kỳ', value: summary.resolved.toLocaleString('vi-VN'), hint: 'Không tính là phản hồi', icon: 'mdi-check-decagram-outline', color: 'teal' },
+    { label: t('sq_answered_period'), value: summary.answered.toLocaleString(numberLocale.value), hint: t('sq_sla_denominator'), icon: 'mdi-message-check-outline', color: 'primary' },
+    { label: t('sq_on_time_target', { minutes: policy.target_minutes }), value: summary.on_time_percent == null ? '—' : `${summary.on_time_percent.toLocaleString(numberLocale.value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`, hint: t('sq_turn_count', { onTime: summary.on_time, answered: summary.answered }), icon: 'mdi-timer-check-outline', color: 'success' },
+    { label: t('sq_median'), value: formatDuration(summary.median_seconds), hint: t('sq_period_turns'), icon: 'mdi-timer-outline', color: 'info' },
+    { label: t('sq_p90'), value: formatDuration(summary.p90_seconds), hint: t('sq_p90_hint'), icon: 'mdi-chart-timeline-variant', color: 'deep-purple' },
+    { label: t('sq_first_observed'), value: formatDuration(summary.first_median_seconds), hint: t('sq_synced_history'), icon: 'mdi-ray-start-arrow', color: 'indigo' },
+    { label: t('sq_waiting_now'), value: summary.waiting.toLocaleString(numberLocale.value), hint: t('sq_waiting_hint'), icon: 'mdi-account-clock-outline', color: 'warning' },
+    { label: t('sq_overdue_target', { minutes: policy.overdue_minutes }), value: summary.overdue.toLocaleString(numberLocale.value), hint: t('sq_current_queue'), icon: 'mdi-alert-circle-outline', color: 'error' },
+    { label: t('sq_resolved_period'), value: summary.resolved.toLocaleString(numberLocale.value), hint: t('sq_not_response'), icon: 'mdi-check-decagram-outline', color: 'teal' },
   ]
 })
 
@@ -614,7 +614,7 @@ async function loadReport(force = false) {
     if (error?.code === 'ERR_CANCELED' || sequence !== requestSequence) return
     report.value = null
     if (Array.isArray(error?.response?.data?.pages)) pageCatalog.value = error.response.data.pages
-    errorMessage.value = error?.response?.data?.error || 'Không tải được báo cáo chất lượng CSKH. Vui lòng thử lại.'
+    errorMessage.value = error?.response?.data?.error || t('sq_load_error')
   } finally {
     if (sequence === requestSequence) loading.value = false
   }
@@ -643,12 +643,12 @@ async function resolveConversation() {
     })
     if (tenantId.value !== targetTenant) return
     resolveDialog.value = false
-    showSnack('Đã ghi nhận hội thoại được xử lý', 'success')
+    showSnack(t('sq_resolve_success'), 'success')
     await loadReport(true)
   } catch (error: any) {
     if (tenantId.value !== targetTenant) return
     const conflict = error?.response?.status === 409
-    showSnack(error?.response?.data?.error || 'Không thể ghi nhận xử lý', 'error')
+    showSnack(error?.response?.data?.error || t('sq_resolve_error'), 'error')
     if (conflict) {
       resolveDialog.value = false
       await loadReport(true)
@@ -671,11 +671,11 @@ async function savePolicy() {
     await api.put(`/tenants/${targetTenant}/service-quality/policy`, policyForm.value)
     if (tenantId.value !== targetTenant) return
     policyDialog.value = false
-    showSnack('Đã lưu ngưỡng phản hồi', 'success')
+    showSnack(t('sq_policy_success'), 'success')
     await loadReport(true)
   } catch (error: any) {
     if (tenantId.value !== targetTenant) return
-    showSnack(error?.response?.data?.error || 'Không lưu được cấu hình', 'error')
+    showSnack(error?.response?.data?.error || t('sq_policy_error'), 'error')
   } finally {
     savingPolicy.value = false
   }
@@ -685,13 +685,26 @@ function messageLink(row: Row) {
   return { name: 'messages', params: { tenantId: tenantId.value }, query: { conv: row.conversation_id, channel_id: row.channel_id } }
 }
 
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return '—'
+  const total = Math.max(0, Math.round(seconds))
+  const unit = (name: string, count: number) => t(`sq_${name}`, { count: count.toLocaleString(numberLocale.value) })
+  if (total < 60) return unit('seconds', total)
+  const minutes = Math.floor(total / 60)
+  const remainingSeconds = total % 60
+  if (minutes < 60) return remainingSeconds ? `${unit('minutes', minutes)} ${unit('seconds', remainingSeconds)}` : unit('minutes', minutes)
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return remainingMinutes ? `${unit('hours', hours)} ${unit('minutes', remainingMinutes)}` : unit('hours', hours)
+}
+
 function formatDateTime(value: string) {
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short', timeZone: report.value?.policy.timezone || 'Asia/Ho_Chi_Minh' })
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString(numberLocale.value, { dateStyle: 'short', timeStyle: 'short', timeZone: report.value?.policy.timezone || 'Asia/Ho_Chi_Minh' })
 }
 
 function statusLabel(status: ServiceQualityStatus) {
-  return ({ answered: 'Đã phản hồi', waiting: 'Đang chờ', overdue: 'Quá hạn', resolved: 'Đã xử lý', no_request: 'Không có yêu cầu' } as Record<string, string>)[status] || status
+  return ({ answered: t('sq_answered'), waiting: t('sq_waiting'), overdue: t('sq_overdue'), resolved: t('sq_resolved'), no_request: t('sq_no_request') } as Record<string, string>)[status] || status
 }
 
 function statusColor(status: ServiceQualityStatus) {
@@ -699,11 +712,11 @@ function statusColor(status: ServiceQualityStatus) {
 }
 
 function sentimentLabel(sentiment: string) {
-  return ({ positive: 'Tích cực', neutral: 'Trung lập', negative: 'Tiêu cực', mixed: 'Trái chiều', unknown: 'Chưa rõ' } as Record<string, string>)[sentiment] || sentiment
+  return ({ positive: t('sq_positive'), neutral: t('sq_neutral'), negative: t('sq_negative'), mixed: t('sq_mixed'), unknown: t('sq_unknown_label') } as Record<string, string>)[sentiment] || sentiment
 }
 
 function leadLabel(level: string) {
-  return ({ high: 'Tiềm năng cao', medium: 'Tiềm năng vừa', low: 'Tiềm năng thấp', spam: 'Spam', unknown: 'Chưa rõ' } as Record<string, string>)[level] || level
+  return ({ high: t('sq_lead_high'), medium: t('sq_lead_medium'), low: t('sq_lead_low'), spam: t('sq_spam'), unknown: t('sq_unknown_label') } as Record<string, string>)[level] || level
 }
 
 function leadAlertType(level: string): 'success' | 'info' | 'warning' | 'error' {
@@ -727,7 +740,7 @@ function syncColor(page: Page) {
 }
 
 function syncLabel(status: string) {
-  return ({ success: 'đồng bộ thành công', syncing: 'đang đồng bộ', error: 'lỗi đồng bộ', pending: 'chờ đồng bộ' } as Record<string, string>)[status] || status || 'chưa rõ trạng thái'
+  return ({ success: t('sq_sync_success'), syncing: t('sq_syncing'), error: t('sq_sync_error'), pending: t('sq_sync_pending') } as Record<string, string>)[status] || status || t('sq_sync_unknown')
 }
 
 function showSnack(message: string, color: string) {

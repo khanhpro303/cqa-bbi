@@ -5,10 +5,10 @@
         <div class="title-block">
           <div class="text-subtitle-1 font-weight-bold">
             <v-icon start color="primary">mdi-label-multiple-outline</v-icon>
-            Phân loại thủ công trên Meta Inbox
+            {{ t('quality_meta_title') }}
           </div>
           <div class="panel-description text-medium-emphasis mt-1">
-            Đếm hội thoại theo nhãn mà nhân viên gắn trực tiếp trong Meta Inbox. Kết quả này không dùng AI và không đọc được mục giai đoạn khách hàng có sẵn của Meta.
+            {{ t('quality_meta_description') }}
           </div>
         </div>
         <v-spacer />
@@ -21,7 +21,7 @@
           :disabled="!channelId"
           @click="openSettings"
         >
-          Cấu hình nhãn
+          {{ t('quality_meta_settings') }}
         </v-btn>
         <v-btn
           v-if="canSync"
@@ -34,7 +34,7 @@
           :disabled="!channelId || data?.sync.status === 'syncing'"
           @click="startSync"
         >
-          Đồng bộ nhãn
+          {{ t('quality_meta_sync') }}
         </v-btn>
       </v-card-title>
       <v-divider />
@@ -45,7 +45,7 @@
             :items="pageOptions"
             item-title="title"
             item-value="value"
-            label="Fanpage"
+            :label="t('quality_meta_page')"
             density="compact"
             variant="outlined"
             hide-details
@@ -53,11 +53,11 @@
             style="min-width: 240px; max-width: 360px"
           />
           <v-btn prepend-icon="mdi-refresh" variant="text" :loading="loading" @click="loadData(true)">
-            Làm mới số liệu
+            {{ t('quality_meta_refresh') }}
           </v-btn>
           <v-spacer />
           <span v-if="data?.generated_at" class="text-caption text-medium-emphasis">
-            Cập nhật {{ formatDateTime(data.generated_at) }} · tự làm mới {{ refreshSeconds }} giây
+            {{ t('quality_meta_updated', { date: formatDateTime(data.generated_at), seconds: refreshSeconds }) }}
           </span>
         </div>
       </v-card-text>
@@ -68,18 +68,18 @@
     </v-alert>
 
     <v-alert v-if="!pages.length && !loading" type="info" variant="tonal" class="mb-4">
-      Chưa có Fanpage Facebook để theo dõi nhãn.
+      {{ t('quality_meta_no_pages') }}
     </v-alert>
 
     <template v-if="channelId">
       <WarningBatch :warnings="labelWarnings" class="mb-4">
         <template #action="{ warning }">
-          <v-btn v-if="warning.id === 'unclassified'" size="small" variant="outlined" @click="statusFilter = 'unclassified'">Xem chưa phân loại</v-btn>
+          <v-btn v-if="warning.id === 'unclassified'" size="small" variant="outlined" @click="statusFilter = 'unclassified'">{{ t('quality_meta_view_unclassified') }}</v-btn>
         </template>
       </WarningBatch>
 
       <v-alert v-if="data?.sync.status === 'syncing'" type="info" variant="tonal" class="mb-4">
-        Đang đọc nhãn từ Meta. Số phân loại và cảnh báo sẽ được tính khi lượt đồng bộ hoàn tất; hội thoại đang chờ được tính vào “Chưa xác định”.
+        {{ t('quality_meta_syncing_description') }}
       </v-alert>
 
       <v-alert
@@ -89,9 +89,8 @@
         density="compact"
         class="mb-4"
       >
-        Đã lưu nhãn mặc định lúc tiếp nhận cho {{ data.intake.captured }}/{{ data.intake.total }} hội thoại;
-        {{ data.intake.with_labels }} hội thoại có ít nhất một nhãn mặc định.
-        <span v-if="data.intake.failed"> {{ data.intake.failed }} hội thoại đang lỗi: {{ data.intake.error }}</span>
+        {{ intakeSummary(data.intake) }}
+        <span v-if="data.intake.failed"> {{ t('quality_meta_intake_failed', { count: formatNumber(data.intake.failed), error: data.intake.error }) }}</span>
       </v-alert>
 
       <v-progress-linear v-if="loading && data" indeterminate color="primary" class="mb-3" />
@@ -111,7 +110,7 @@
                 <v-avatar :color="kpi.color" variant="tonal" size="44"><v-icon :icon="kpi.icon" /></v-avatar>
                 <div class="min-width-0">
                   <div class="text-caption text-medium-emphasis">{{ kpi.label }}</div>
-                  <div class="text-h6 font-weight-bold">{{ kpi.value.toLocaleString('vi-VN') }}</div>
+                  <div class="text-h6 font-weight-bold">{{ formatNumber(kpi.value) }}</div>
                   <div class="text-caption text-medium-emphasis">{{ kpi.hint }}</div>
                 </div>
               </v-card-text>
@@ -119,24 +118,24 @@
           </v-col>
         </v-row>
 
-        <div class="d-flex flex-wrap ga-2 mb-4" aria-label="Số lượng theo nhóm nhãn">
+        <div class="d-flex flex-wrap ga-2 mb-4" :aria-label="t('quality_meta_group_counts')">
           <v-chip color="success" variant="tonal" @click="statusFilter = 'qualified'">
-            Phù hợp <strong class="ml-1">{{ data.counts.qualified.toLocaleString('vi-VN') }}</strong>
+            {{ t('quality_meta_qualified') }} <strong class="ml-1">{{ formatNumber(data.counts.qualified) }}</strong>
           </v-chip>
           <v-chip color="grey" variant="tonal" @click="statusFilter = 'unqualified'">
-            Chưa phù hợp <strong class="ml-1">{{ data.counts.unqualified.toLocaleString('vi-VN') }}</strong>
+            {{ t('quality_meta_unqualified') }} <strong class="ml-1">{{ formatNumber(data.counts.unqualified) }}</strong>
           </v-chip>
           <v-chip color="primary" variant="tonal" @click="statusFilter = 'potential'">
-            Tiềm năng <strong class="ml-1">{{ data.counts.potential.toLocaleString('vi-VN') }}</strong>
+            {{ t('quality_meta_potential') }} <strong class="ml-1">{{ formatNumber(data.counts.potential) }}</strong>
           </v-chip>
         </div>
 
         <v-card variant="outlined">
           <v-card-title class="d-flex align-center flex-wrap ga-3">
             <div class="title-block">
-              <div class="text-subtitle-1 font-weight-bold">Hội thoại theo nhãn Meta</div>
+              <div class="text-subtitle-1 font-weight-bold">{{ t('quality_meta_conversations') }}</div>
               <div class="panel-description text-medium-emphasis mt-1">
-                Tổng {{ data.counts.total.toLocaleString('vi-VN') }} hội thoại đã lưu cục bộ của Fanpage. Nhãn chỉ thay đổi sau lần đồng bộ gần nhất.
+                {{ t('quality_meta_total_description', { total: formatNumber(data.counts.total) }) }}
               </div>
             </div>
             <v-spacer />
@@ -145,7 +144,7 @@
               :items="statusOptions"
               item-title="title"
               item-value="value"
-              label="Trạng thái"
+              :label="t('quality_meta_status')"
               density="compact"
               variant="outlined"
               hide-details
@@ -153,7 +152,7 @@
             />
             <v-text-field
               v-model="search"
-              label="Tìm khách hàng hoặc nhãn"
+              :label="t('quality_meta_search')"
               prepend-inner-icon="mdi-magnify"
               clearable
               density="compact"
@@ -168,18 +167,20 @@
             :items="filteredRows"
             item-value="conversation_id"
             :items-per-page="20"
-            no-data-text="Không có hội thoại phù hợp"
+            :no-data-text="t('quality_meta_no_rows')"
             hover
           >
             <template #item.customer_name="{ item }">
               <div class="d-flex align-center ga-2 flex-nowrap">
-                <span class="font-weight-medium text-no-wrap">{{ item.customer_name || 'Khách hàng chưa có tên' }}</span>
-                <v-tooltip v-if="item.error" :text="item.error" location="top">
-                  <template #activator="{ props }">
-                    <v-icon v-bind="props" icon="mdi-close-circle-outline" color="error" size="18" tabindex="0" :aria-label="item.error" />
-                  </template>
-                </v-tooltip>
+                <span class="font-weight-medium text-no-wrap">{{ item.customer_name || t('quality_meta_unnamed_customer') }}</span>
               </div>
+            </template>
+            <template #item.customer_error="{ item }">
+              <v-tooltip v-if="item.error" :text="item.error" location="top">
+                <template #activator="{ props }">
+                  <v-icon v-bind="props" icon="mdi-close-circle-outline" color="error" size="18" tabindex="0" :aria-label="item.error" />
+                </template>
+              </v-tooltip>
             </template>
             <template #item.classification="{ item }">
               <v-chip :color="classificationColor(item.classification)" size="small" variant="tonal">
@@ -189,13 +190,13 @@
             <template #item.labels="{ item }">
               <div v-if="item.intake_labels.length || item.tracking_labels.length" class="d-flex flex-nowrap align-center ga-3 py-1">
                 <div v-if="item.intake_labels.length" class="d-flex flex-nowrap align-center ga-1">
-                  <span class="text-caption text-medium-emphasis mr-1">Mặc định:</span>
+                  <span class="text-caption text-medium-emphasis mr-1">{{ t('quality_meta_default_labels') }}</span>
                   <v-chip v-for="label in item.intake_labels" :key="`intake-${label.id}`" size="x-small" variant="outlined" prepend-icon="mdi-lock-outline" color="grey">
                     {{ label.page_label_name }}
                   </v-chip>
                 </div>
                 <div v-if="item.tracking_labels.length" class="d-flex flex-nowrap align-center ga-1">
-                  <span class="text-caption text-medium-emphasis mr-1">Hiện có:</span>
+                  <span class="text-caption text-medium-emphasis mr-1">{{ t('quality_meta_current_labels') }}</span>
                   <v-chip v-for="label in item.tracking_labels" :key="`tracking-${label.id}`" size="x-small" variant="outlined" color="primary">
                     {{ label.page_label_name }}
                   </v-chip>
@@ -204,19 +205,19 @@
               <v-tooltip v-else-if="!item.intake_captured && item.intake_error" :text="item.intake_error" location="top">
                 <template #activator="{ props }">
                   <span v-bind="props" class="text-medium-emphasis" tabindex="0">
-                    {{ item.intake_error.startsWith('Meta không cho đọc nhãn') ? 'Không đọc được nhãn Meta' : 'Lỗi đọc nhãn Meta' }}
+                    {{ item.intake_error.startsWith('Meta không cho đọc nhãn') ? t('quality_meta_labels_unavailable') : t('quality_meta_labels_error') }}
                   </span>
                 </template>
               </v-tooltip>
               <span v-else class="text-medium-emphasis">
-                {{ item.intake_captured ? 'Đã lưu: không có nhãn mặc định' : (item.intake_error || (item.classification === 'unknown' ? 'Chưa backfill nhãn mặc định' : 'Không có nhãn')) }}
+                {{ item.intake_captured ? t('quality_meta_captured_no_labels') : (item.intake_error || (item.classification === 'unknown' ? t('quality_meta_pending_backfill') : t('quality_meta_no_labels'))) }}
               </span>
             </template>
             <template #item.checked_at="{ item }">
-              <span>{{ item.checked_at ? formatDateTime(item.checked_at) : 'Chưa kiểm tra' }}</span>
+              <span>{{ item.checked_at ? formatDateTime(item.checked_at) : t('quality_meta_not_checked') }}</span>
             </template>
             <template #item.actions="{ item }">
-              <v-btn size="small" variant="text" color="primary" :to="messageLink(item)">Mở hội thoại</v-btn>
+              <v-btn size="small" variant="text" color="primary" :to="messageLink(item)">{{ t('quality_meta_open_conversation') }}</v-btn>
             </template>
           </v-data-table>
         </v-card>
@@ -226,22 +227,22 @@
     <v-dialog v-model="settingsDialog" max-width="760" persistent>
       <v-card>
         <v-card-title class="d-flex align-center flex-wrap ga-2">
-          Cấu hình nhãn Meta Inbox
+          {{ t('quality_meta_settings_title') }}
           <v-spacer />
           <v-btn icon="mdi-close" variant="text" :disabled="savingPolicy || refreshingCatalog" @click="settingsDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text>
           <v-alert type="info" variant="tonal" density="compact" class="mb-4">
-            Nhân viên tiếp tục gắn nhãn trong Meta Inbox. Hệ thống chỉ đọc nhãn và lưu bản chụp để đếm; không tự gắn, sửa hoặc xóa nhãn trên Meta.
+            {{ t('quality_meta_settings_description') }}
           </v-alert>
 
           <v-alert v-if="intakeLabelIds.length" type="warning" variant="tonal" density="compact" class="mb-4">
-            {{ intakeLabelIds.length }} nhãn đã có sẵn lúc tiếp nhận hội thoại được khóa ở backend. Các nhãn này có thể gồm nguồn quảng cáo/campaign; chúng vẫn được lưu và hiển thị, nhưng không thể chọn làm nhãn theo dõi.
+            {{ t('quality_meta_intake_locked', { count: formatNumber(intakeLabelIds.length) }) }}
           </v-alert>
 
           <div class="d-flex align-center justify-space-between flex-wrap ga-2 mb-4">
-            <v-switch v-model="policyEnabled" label="Bật theo dõi phân loại bằng nhãn" color="primary" hide-details />
+            <v-switch v-model="policyEnabled" :label="t('quality_meta_enable_tracking')" color="primary" hide-details />
             <div class="text-right">
               <v-btn
                 variant="outlined"
@@ -249,16 +250,16 @@
                 :loading="refreshingCatalog"
                 @click="refreshCatalog"
               >
-                Lấy danh mục nhãn từ Meta
+                {{ t('quality_meta_fetch_catalog') }}
               </v-btn>
               <div class="text-caption text-medium-emphasis mt-1">
-                {{ catalogSyncedAt ? `Danh mục cập nhật ${formatDateTime(catalogSyncedAt)}` : 'Chưa lấy danh mục nhãn' }}
+                {{ catalogSyncedAt ? t('quality_meta_catalog_updated', { date: formatDateTime(catalogSyncedAt) }) : t('quality_meta_catalog_never') }}
               </div>
             </div>
           </div>
 
           <v-alert v-if="!catalog.length" type="warning" variant="tonal" density="compact" class="mb-4">
-            Chưa có danh mục nhãn. Bấm “Lấy danh mục nhãn từ Meta” trước khi bật theo dõi.
+            {{ t('quality_meta_catalog_empty') }}
           </v-alert>
 
           <v-select
@@ -266,8 +267,8 @@
             :items="trackingCatalog"
             item-title="page_label_name"
             item-value="id"
-            label="Phù hợp"
-            hint="Khách đáp ứng tiêu chí hiện tại"
+            :label="t('quality_meta_qualified')"
+            :hint="t('quality_meta_qualified_hint')"
             persistent-hint
             multiple
             chips
@@ -280,8 +281,8 @@
             :items="trackingCatalog"
             item-title="page_label_name"
             item-value="id"
-            label="Chưa phù hợp"
-            hint="Khách chưa đáp ứng tiêu chí"
+            :label="t('quality_meta_unqualified')"
+            :hint="t('quality_meta_unqualified_hint')"
             persistent-hint
             multiple
             chips
@@ -294,8 +295,8 @@
             :items="trackingCatalog"
             item-title="page_label_name"
             item-value="id"
-            label="Tiềm năng"
-            hint="Khách cần tiếp tục chăm sóc"
+            :label="t('quality_meta_potential')"
+            :hint="t('quality_meta_potential_hint')"
             persistent-hint
             multiple
             chips
@@ -309,8 +310,8 @@
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
           <v-spacer />
-          <v-btn variant="text" :disabled="savingPolicy" @click="settingsDialog = false">Hủy</v-btn>
-          <v-btn color="primary" :loading="savingPolicy" :disabled="Boolean(mappingValidation)" @click="savePolicy">Lưu cấu hình</v-btn>
+          <v-btn variant="text" :disabled="savingPolicy" @click="settingsDialog = false">{{ t('quality_meta_cancel') }}</v-btn>
+          <v-btn color="primary" :loading="savingPolicy" :disabled="Boolean(mappingValidation)" @click="savePolicy">{{ t('quality_meta_save') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -322,6 +323,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import api from '../api'
 import WarningBatch from './WarningBatch.vue'
 import { useAuthStore } from '../stores/auth'
@@ -389,6 +391,8 @@ interface LabelsReport {
   rows: ClassificationRow[]
 }
 
+const { t, locale } = useI18n()
+const formatLocale = computed(() => locale.value === 'en' ? 'en-US' : 'vi-VN')
 const route = useRoute()
 const authStore = useAuthStore()
 const tenantId = computed(() => route.params.tenantId as string)
@@ -403,15 +407,15 @@ const labelWarnings = computed(() => {
   if (!report) return []
   const warnings: { id: string; title: string; detail: string }[] = []
   if (!report.enabled) {
-    warnings.push({ id: 'disabled', title: 'Chưa bật theo dõi nhãn', detail: 'Theo dõi nhãn chưa được bật cho Fanpage này. Hãy đồng bộ danh mục nhãn, sau đó ánh xạ nhãn vào ba nhóm trạng thái.' })
+    warnings.push({ id: 'disabled', title: t('quality_meta_disabled_title'), detail: t('quality_meta_disabled_detail') })
   } else if (report.sync.status === 'error' || report.sync.status === 'partial') {
-    warnings.push({ id: 'sync', title: syncStatusLabel(report.sync.status), detail: `${report.sync.error || 'Một phần hội thoại chưa lấy được nhãn từ Meta.'} Các hội thoại lỗi hoặc dữ liệu cũ hơn ${report.freshness_minutes} phút được tính riêng vào “Chưa xác định”.` })
+    warnings.push({ id: 'sync', title: syncStatusLabel(report.sync.status), detail: `${report.sync.error || t('quality_meta_sync_partial_detail')} ${t('quality_meta_stale_detail', { minutes: formatNumber(report.freshness_minutes) })}` })
   }
   if (report.intake?.total > 0 && report.intake.captured !== report.intake.total) {
-    warnings.push({ id: 'intake', title: 'Chưa lưu đủ nhãn lúc tiếp nhận', detail: `Đã lưu nhãn mặc định lúc tiếp nhận cho ${report.intake.captured}/${report.intake.total} hội thoại; ${report.intake.with_labels} hội thoại có ít nhất một nhãn mặc định.${report.intake.failed ? ` ${report.intake.failed} hội thoại đang lỗi: ${report.intake.error}` : ''}` })
+    warnings.push({ id: 'intake', title: t('quality_meta_intake_title'), detail: `${intakeSummary(report.intake)}${report.intake.failed ? ` ${t('quality_meta_intake_failed', { count: formatNumber(report.intake.failed), error: report.intake.error })}` : ''}` })
   }
   if (report.counts?.unclassified) {
-    warnings.push({ id: 'unclassified', title: `${report.counts.unclassified} hội thoại chưa có nhãn phân loại`, detail: 'Nhân viên cần kiểm tra và gắn nhãn trong Meta Inbox. Cảnh báo chỉ dựa trên dữ liệu nhãn đã đọc thành công.' })
+    warnings.push({ id: 'unclassified', title: t('quality_meta_unclassified_title', { count: formatNumber(report.counts.unclassified) }), detail: t('quality_meta_unclassified_detail') })
   }
   return warnings
 })
@@ -446,7 +450,7 @@ function invalidateActions() {
 }
 
 const pageOptions = computed(() => pages.value.map(page => ({
-  title: `${page.name}${page.is_active ? '' : ' (ngừng hoạt động)'}`,
+  title: `${page.name}${page.is_active ? '' : t('quality_meta_inactive_suffix')}`,
   value: page.id,
 })))
 
@@ -455,48 +459,58 @@ const mappingRules = computed(() => buildMetaLabelRules(policySelections))
 const intakeLabelIds = computed(() => data.value?.intake_label_ids || [])
 const intakeLabelIdSet = computed(() => new Set(intakeLabelIds.value))
 const trackingCatalog = computed(() => catalog.value.filter(label => !intakeLabelIdSet.value.has(label.id)))
-const mappingValidation = computed(() => validateMetaLabelRules(
-  policyEnabled.value,
-  mappingRules.value,
-  new Set(catalog.value.map(label => label.id)),
-  intakeLabelIdSet.value,
-))
+const validationMessageKeys: Record<string, string> = {
+  "Chọn ít nhất một nhãn để bật theo dõi.": 'quality_meta_validation_select',
+  "Có nhãn không còn tồn tại trong danh mục Meta.": 'quality_meta_validation_missing',
+  "Nhãn mặc định đã có lúc tiếp nhận hội thoại không được dùng làm nhãn theo dõi.": 'quality_meta_validation_intake',
+  "Một nhãn chỉ được gán cho một nhóm trạng thái.": 'quality_meta_validation_duplicate',
+}
+const mappingValidation = computed(() => {
+  const message = validateMetaLabelRules(
+    policyEnabled.value,
+    mappingRules.value,
+    new Set(catalog.value.map(label => label.id)),
+    intakeLabelIdSet.value,
+  )
+  return message ? t(validationMessageKeys[message] || message) : ''
+})
 
 const kpis = computed(() => {
   const counts = data.value?.counts || null
   return [
-    { label: 'Chưa phân loại', value: counts?.unclassified || 0, hint: 'Không có nhãn đã ánh xạ', icon: 'mdi-label-off-outline', color: 'warning' },
-    { label: 'Đã phân loại', value: classifiedCount(counts), hint: `${counts?.qualified || 0} phù hợp · ${counts?.unqualified || 0} chưa phù hợp · ${counts?.potential || 0} tiềm năng`, icon: 'mdi-check-circle-outline', color: 'success' },
-    { label: 'Chưa xác định', value: counts?.unknown || 0, hint: 'Chưa bật, lỗi hoặc dữ liệu cũ', icon: 'mdi-help-circle-outline', color: 'grey' },
-    { label: 'Xung đột nhãn', value: counts?.conflict || 0, hint: 'Có nhãn thuộc nhiều nhóm', icon: 'mdi-label-multiple-outline', color: 'error' },
+    { label: t('quality_meta_unclassified'), value: counts?.unclassified || 0, hint: t('quality_meta_unclassified_hint'), icon: 'mdi-label-off-outline', color: 'warning' },
+    { label: t('quality_meta_classified'), value: classifiedCount(counts), hint: t('quality_meta_classified_hint', { qualified: formatNumber(counts?.qualified || 0), unqualified: formatNumber(counts?.unqualified || 0), potential: formatNumber(counts?.potential || 0) }), icon: 'mdi-check-circle-outline', color: 'success' },
+    { label: t('quality_meta_unknown'), value: counts?.unknown || 0, hint: t('quality_meta_unknown_hint'), icon: 'mdi-help-circle-outline', color: 'grey' },
+    { label: t('quality_meta_conflict'), value: counts?.conflict || 0, hint: t('quality_meta_conflict_hint'), icon: 'mdi-label-multiple-outline', color: 'error' },
   ]
 })
 
-const statusOptions = [
-  { title: 'Tất cả trạng thái', value: 'all' },
-  { title: 'Chưa phân loại', value: 'unclassified' },
-  { title: 'Phù hợp', value: 'qualified' },
-  { title: 'Chưa phù hợp', value: 'unqualified' },
-  { title: 'Tiềm năng', value: 'potential' },
-  { title: 'Xung đột nhãn', value: 'conflict' },
-  { title: 'Chưa xác định', value: 'unknown' },
-]
+const statusOptions = computed(() => [
+  { title: t('quality_meta_all_statuses'), value: 'all' },
+  { title: t('quality_meta_unclassified'), value: 'unclassified' },
+  { title: t('quality_meta_qualified'), value: 'qualified' },
+  { title: t('quality_meta_unqualified'), value: 'unqualified' },
+  { title: t('quality_meta_potential'), value: 'potential' },
+  { title: t('quality_meta_conflict'), value: 'conflict' },
+  { title: t('quality_meta_unknown'), value: 'unknown' },
+])
 
-const headers = [
-  { title: 'Khách hàng', key: 'customer_name', sortable: true },
-  { title: 'Phân loại', key: 'classification', sortable: true },
-  { title: 'Nhãn trên Meta', key: 'labels', sortable: false },
-  { title: 'Kiểm tra lúc', key: 'checked_at', sortable: true },
+const headers = computed(() => [
+  { title: t('quality_meta_customer'), key: 'customer_name', sortable: true },
+  { title: '', key: 'customer_error', width: '42px', sortable: false },
+  { title: t('quality_meta_classification'), key: 'classification', sortable: true },
+  { title: t('quality_meta_meta_labels'), key: 'labels', sortable: false },
+  { title: t('quality_meta_checked_at'), key: 'checked_at', sortable: true },
   { title: '', key: 'actions', sortable: false, align: 'end' as const },
-]
+])
 
 const filteredRows = computed(() => {
-  const term = search.value.trim().toLocaleLowerCase('vi')
+  const term = search.value.trim().toLocaleLowerCase(formatLocale.value)
   return (data.value?.rows || []).filter(row => {
     if (statusFilter.value !== 'all' && row.classification !== statusFilter.value) return false
     if (!term) return true
     const labels = [...row.intake_labels, ...row.tracking_labels].map(label => label.page_label_name).join(' ')
-    return `${row.customer_name} ${labels}`.toLocaleLowerCase('vi').includes(term)
+    return `${row.customer_name} ${labels}`.toLocaleLowerCase(formatLocale.value).includes(term)
   })
 })
 
@@ -538,7 +552,7 @@ async function loadData(force = false) {
     if (error?.response?.status === 422 && error.response.data.report?.channel_id === channelId.value) {
       data.value = error.response.data.report
     }
-    errorMessage.value = error?.response?.data?.error || 'Không tải được dữ liệu nhãn Messenger.'
+    errorMessage.value = error?.response?.data?.error || t('quality_meta_load_error')
   } finally {
     if (sequence === requestSequence) {
       loading.value = false
@@ -569,10 +583,10 @@ async function refreshCatalog() {
     if (disposed || sequence !== actionSequence.catalog || tenantId.value !== targetTenant || channelId.value !== targetChannel) return
     catalog.value = response.catalog || []
     catalogSyncedAt.value = response.catalog_synced_at || null
-    showSnack('Đã lấy danh mục nhãn từ Meta', 'success')
+    showSnack(t('quality_meta_catalog_success'), 'success')
   } catch (error: any) {
     if (disposed || sequence !== actionSequence.catalog || tenantId.value !== targetTenant || channelId.value !== targetChannel) return
-    showSnack(error?.response?.data?.error || 'Không lấy được danh mục nhãn từ Meta', 'error')
+    showSnack(error?.response?.data?.error || t('quality_meta_catalog_error'), 'error')
   } finally {
     if (sequence === actionSequence.catalog) refreshingCatalog.value = false
   }
@@ -591,11 +605,11 @@ async function savePolicy() {
     })
     if (disposed || sequence !== actionSequence.policy || tenantId.value !== targetTenant || channelId.value !== targetChannel) return
     settingsDialog.value = false
-    showSnack('Đã lưu cấu hình nhãn', 'success')
+    showSnack(t('quality_meta_save_success'), 'success')
     await loadData(true)
   } catch (error: any) {
     if (disposed || sequence !== actionSequence.policy || tenantId.value !== targetTenant || channelId.value !== targetChannel) return
-    showSnack(error?.response?.data?.error || 'Không lưu được cấu hình nhãn', 'error')
+    showSnack(error?.response?.data?.error || t('quality_meta_save_error'), 'error')
   } finally {
     if (sequence === actionSequence.policy) savingPolicy.value = false
   }
@@ -615,14 +629,14 @@ async function startSync() {
       data.value.counts = null
       data.value.rows = []
     }
-    showSnack(response.status === 'capturing_intake' ? 'Đã bắt đầu backfill nhãn mặc định' : 'Đã bắt đầu đồng bộ nhãn', 'success')
+    showSnack(response.status === 'capturing_intake' ? t('quality_meta_backfill_started') : t('quality_meta_sync_started'), 'success')
     if (response.status === 'capturing_intake') {
       window.setTimeout(() => loadData(true), 3000)
     }
     scheduleRefresh()
   } catch (error: any) {
     if (disposed || sequence !== actionSequence.sync || tenantId.value !== targetTenant || channelId.value !== targetChannel) return
-    showSnack(error?.response?.data?.error || (error?.response?.status === 409 ? 'Fanpage đang đồng bộ nhãn' : 'Không thể bắt đầu đồng bộ nhãn'), 'error')
+    showSnack(error?.response?.data?.error || (error?.response?.status === 409 ? t('quality_meta_sync_busy') : t('quality_meta_sync_error')), 'error')
   } finally {
     if (sequence === actionSequence.sync) syncing.value = false
   }
@@ -634,12 +648,12 @@ function messageLink(row: ClassificationRow) {
 
 function classificationLabel(status: Classification) {
   return ({
-    unclassified: 'Chưa phân loại',
-    qualified: 'Phù hợp',
-    unqualified: 'Chưa phù hợp',
-    potential: 'Tiềm năng',
-    conflict: 'Xung đột nhãn',
-    unknown: 'Chưa xác định',
+    unclassified: t('quality_meta_unclassified'),
+    qualified: t('quality_meta_qualified'),
+    unqualified: t('quality_meta_unqualified'),
+    potential: t('quality_meta_potential'),
+    conflict: t('quality_meta_conflict'),
+    unknown: t('quality_meta_unknown'),
   } as Record<Classification, string>)[status]
 }
 
@@ -648,12 +662,20 @@ function classificationColor(status: Classification) {
 }
 
 function syncStatusLabel(status: SyncStatus) {
-  return ({ never: 'Chưa từng đồng bộ', syncing: 'Đang đồng bộ', success: 'Đồng bộ thành công', partial: 'Đồng bộ một phần', error: 'Đồng bộ lỗi' } as Record<SyncStatus, string>)[status]
+  return ({ never: t('quality_meta_sync_never'), syncing: t('quality_meta_sync_running'), success: t('quality_meta_sync_success'), partial: t('quality_meta_sync_partial'), error: t('quality_meta_sync_failed') } as Record<SyncStatus, string>)[status]
+}
+
+function formatNumber(value: number) {
+  return value.toLocaleString(formatLocale.value)
+}
+
+function intakeSummary(intake: LabelsReport['intake']) {
+  return t('quality_meta_intake_summary', { captured: formatNumber(intake.captured), total: formatNumber(intake.total), withLabels: formatNumber(intake.with_labels) })
 }
 
 function formatDateTime(value: string) {
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Ho_Chi_Minh' })
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString(formatLocale.value, { dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Ho_Chi_Minh' })
 }
 
 function showSnack(message: string, color: string) {

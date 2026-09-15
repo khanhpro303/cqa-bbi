@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { createI18n } from 'vue-i18n'
+import qualityInsightVi from '../i18n/quality-insight-vi'
+import qualityInsightEn from '../i18n/quality-insight-en'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h, nextTick } from 'vue'
 import { mount, type VueWrapper } from '@vue/test-utils'
@@ -64,8 +67,8 @@ async function runFrames() {
   pending.forEach(callback => callback(0))
   await nextTick()
 }
-async function render() {
-  const wrapper = mount(ShapeWordcloud, { props: { items, title: 'Sản phẩm' }, global: { stubs: { VSelect: Select } } })
+async function render(i18n = createI18n({ legacy: false, locale: 'vi', messages: { vi: { qualityInsight: qualityInsightVi }, en: { qualityInsight: qualityInsightEn } } })) {
+  const wrapper = mount(ShapeWordcloud, { props: { items, title: 'Sản phẩm' }, global: { plugins: [i18n], stubs: { VSelect: Select } } })
   wrappers.push(wrapper)
   await runFrames()
   return wrapper
@@ -83,6 +86,17 @@ function draw(host: HTMLElement, item: WordCloud.ListEntry, drawn = true) {
 }
 
 describe('ShapeWordcloud', () => {
+  it('updates shape options and rendered accessibility labels when language switches', async () => {
+    const i18n = createI18n({ legacy: false, locale: 'vi', messages: { vi: { qualityInsight: qualityInsightVi }, en: { qualityInsight: qualityInsightEn } } })
+    const wrapper = await render(i18n)
+    i18n.global.locale.value = 'en'
+    await runFrames()
+    expect(wrapper.findAll('option').map(option => option.text())).toEqual(['Circle', 'Diamond', 'Star'])
+    const [host, options] = lastRender()
+    const span = draw(host, options.list![0]!)
+    expect(span.getAttribute('aria-label')).toBe('Áo xanh: 9 conversations, view classification sources')
+  })
+
   it('retries an empty canvas mask once with library shape placement and keeps keyword clicks', async () => {
     const wrapper = await render()
     await wrapper.get('select').setValue('star')

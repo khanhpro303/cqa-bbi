@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, nextTick } from 'vue'
+import { createI18n } from 'vue-i18n'
+import qualityVi from '../i18n/service-quality-vi'
+import qualityEn from '../i18n/service-quality-en'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ServiceQuality from '../views/ServiceQuality.vue'
 
@@ -20,7 +23,7 @@ const Field = defineComponent({
   }),
 })
 const Table = defineComponent({
-  props: ['items', 'page', 'itemsPerPage'],
+  props: ['items', 'page', 'itemsPerPage', 'headers'],
   emits: ['update:page'],
   setup: (props, { emit }) => () => h('div', { class: 'queue-table', 'data-page': props.page }, [
     ...(props.items as { conversation_id: string; customer_name: string }[]).map(row => h('div', { class: 'queue-row', 'data-id': row.conversation_id }, row.customer_name)),
@@ -46,11 +49,13 @@ function report(statuses: string[]) {
   }
 }
 
+let i18n: ReturnType<typeof createI18n>
 async function render(statuses: string[]) {
+  i18n = createI18n({ legacy: false, locale: 'vi', messages: { vi: qualityVi, en: qualityEn } })
   mocks.get.mockResolvedValue({ data: report(statuses) })
   const wrapper = mount(ServiceQuality, {
     attachTo: document.body,
-    global: { stubs: { ...stubs, VBtn: Button, VSelect: Field, VTextField: Field, VTextarea: Field, VSwitch: Field, VDataTable: Table, VDialog: Hidden, MetaLabelsPanel: Hidden, InsightWordcloudPanel: Hidden } },
+    global: { plugins: [i18n], stubs: { ...stubs, VBtn: Button, VSelect: Field, VTextField: Field, VTextarea: Field, VSwitch: Field, VDataTable: Table, VDialog: Hidden, MetaLabelsPanel: Hidden, InsightWordcloudPanel: Hidden } },
   })
   wrappers.push(wrapper)
   await flushPromises()
@@ -71,6 +76,21 @@ afterEach(() => {
 })
 
 describe('ServiceQuality queue banner navigation', () => {
+  it('updates the module language and duration when the locale changes without reloading', async () => {
+    const wrapper = await render(['answered', 'overdue'])
+    expect(wrapper.text()).toContain('Chất lượng CSKH Messenger')
+    expect(wrapper.text()).toContain('1 phút')
+    ;(i18n.global.locale as unknown as { value: string }).value = 'en'
+    await nextTick()
+    expect(wrapper.text()).toContain('Messenger Customer Service Quality')
+    expect(wrapper.text()).toContain('1 min')
+    expect(wrapper.text()).toContain('1 overdue conversation')
+    expect(wrapper.find('input[aria-label="Status"]').exists()).toBe(true)
+    expect(wrapper.findComponent(Table).props('headers')[0].title).toBe('Customer / Page')
+    expect(wrapper.get('#conversation-queue h2').text()).toContain('Conversations')
+    expect(mocks.get).toHaveBeenCalledTimes(1)
+  })
+
   it('takes the user to the overdue section with matching rows and an accessible heading', async () => {
     const wrapper = await render(['answered', 'waiting', 'overdue', 'resolved', 'overdue'])
     expect(wrapper.get('#conversation-queue h2').text()).toContain('Hội thoại')

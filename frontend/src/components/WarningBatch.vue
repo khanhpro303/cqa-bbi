@@ -1,7 +1,7 @@
 <template>
   <v-alert v-if="warnings.length" type="warning" variant="tonal" border="start">
     <button v-if="warnings.length > 1" class="warning-toggle" type="button" :aria-expanded="expanded" @click="expanded = !expanded">
-      <span>Có {{ warnings.length }} cảnh báo</span>
+      <span>{{ t('qualityInsight.warningCount', { count: warnings.length }) }}</span>
       <v-icon :icon="expanded ? 'mdi-chevron-up' : 'mdi-chevron-down'" />
     </button>
     <div v-if="warnings.length === 1 || expanded" :class="{ 'mt-3': warnings.length > 1 }">
@@ -20,8 +20,10 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ warnings: { id: string; title: string; detail: string }[] }>()
+const { t } = useI18n()
 const expanded = ref(false)
 
 watch(() => props.warnings.map(warning => warning.id).join(','), () => {
