@@ -180,21 +180,22 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	if err := database.Create(&conversationD).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveCatalog(database, channel, []channels.FacebookLabel{{ID: "11", Name: "Phù hợp"}, {ID: "99", Name: "Ad 99"}}, time.Now()); err != nil {
+	if err := SaveCatalog(database, channel, []channels.FacebookLabel{{ID: "11", Name: "Phù hợp"}, {ID: "99", Name: "Ad 99"}, {ID: "77", Name: "Ad 77"}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	intakeAdD := `[{"id":"77","page_label_name":"Ad 77"}]`
 	start := make(chan struct{})
 	var policyErr, captureErr error
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		<-start
-		policyErr = SavePolicy(database, channel, Policy{true, []Rule{{"11", "qualified"}, {"99", "unqualified"}}})
+		policyErr = SavePolicy(database, channel, Policy{true, []Rule{{"11", "qualified"}, {"77", "unqualified"}}})
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		captureErr = saveIntakeLabelSnapshot(database, models.MessengerLabelSnapshot{ConversationID: "d", TenantID: tenant.ID, ChannelID: channel.ID, PSID: "400", Labels: intakeAd, IntakeLabels: &intakeAd, Status: "success", CheckedAt: &now, IntakeLabelsCapturedAt: &now, AttemptedAt: now})
+		captureErr = saveIntakeLabelSnapshot(database, models.MessengerLabelSnapshot{ConversationID: "d", TenantID: tenant.ID, ChannelID: channel.ID, PSID: "400", Labels: intakeAdD, IntakeLabels: &intakeAdD, Status: "success", CheckedAt: &now, IntakeLabelsCapturedAt: &now, AttemptedAt: now})
 	}()
 	close(start)
 	wg.Wait()
@@ -202,8 +203,28 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 		t.Fatalf("concurrent policy/capture failed: policy=%v capture=%v", policyErr, captureErr)
 	}
 	state, err = LoadState(database, channel)
-	if err != nil || strings.Contains(state.Rules, `"label_id":"99"`) {
+	var concurrentRules []Rule
+	if err == nil {
+		err = json.Unmarshal([]byte(state.Rules), &concurrentRules)
+	}
+	if err != nil {
 		t.Fatalf("concurrent intake label remained in policy: %s, %v", state.Rules, err)
+	}
+	for _, rule := range concurrentRules {
+		if rule.LabelID == "77" {
+			t.Fatalf("concurrent intake label remained in policy: %s", state.Rules)
+		}
+	}
+	var baselineBefore models.MessengerLabelSnapshot
+	if err := database.First(&baselineBefore, "conversation_id = ?", "d").Error; err != nil {
+		t.Fatal(err)
+	}
+	var baselineLabels []channels.FacebookLabel
+	if baselineBefore.IntakeLabels != nil {
+		err = json.Unmarshal([]byte(*baselineBefore.IntakeLabels), &baselineLabels)
+	}
+	if err != nil || len(baselineLabels) != 1 || baselineLabels[0] != (channels.FacebookLabel{ID: "77", Name: "Ad 77"}) || baselineBefore.IntakeLabelsCapturedAt == nil {
+		t.Fatalf("initial intake baseline missing: labels=%v timestamp=%v error=%v", baselineLabels, baselineBefore.IntakeLabelsCapturedAt, err)
 	}
 	if err := database.Model(&models.MessengerLabelState{}).Where("channel_id = ?", channel.ID).Update("sync_finished_at", time.Now().Add(-2*time.Minute)).Error; err != nil {
 		t.Fatal(err)
@@ -221,11 +242,7 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	if err := database.First(&immutable, "conversation_id = ?", "d").Error; err != nil {
 		t.Fatal(err)
 	}
-	var immutableLabels []channels.FacebookLabel
-	if immutable.IntakeLabels != nil {
-		err = json.Unmarshal([]byte(*immutable.IntakeLabels), &immutableLabels)
-	}
-	if err != nil || len(immutableLabels) != 1 || immutableLabels[0] != (channels.FacebookLabel{ID: "99", Name: "Ad 99"}) || immutable.IntakeLabelsCapturedAt == nil || !immutable.IntakeLabelsCapturedAt.Equal(now.Truncate(time.Millisecond)) {
+	if immutable.IntakeLabels == nil || *immutable.IntakeLabels != *baselineBefore.IntakeLabels || immutable.IntakeLabelsCapturedAt == nil || !immutable.IntakeLabelsCapturedAt.Equal(*baselineBefore.IntakeLabelsCapturedAt) {
 		t.Fatalf("tracking batch overwrote intake baseline: %+v", immutable)
 	}
 	if err := finishSync(database, channel, immutabilityToken, "success", ""); err != nil {
