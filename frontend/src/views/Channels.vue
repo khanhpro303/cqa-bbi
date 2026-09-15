@@ -9,7 +9,7 @@
 
     <v-row>
       <v-col v-for="ch in channelStore.channels" :key="ch.id" cols="12" sm="6" md="4">
-        <v-card class="pa-4" style="cursor: pointer" @click="router.push(`/${tenantId}/channels/${ch.id}`)">
+        <v-card class="pa-4 h-100 d-flex flex-column" style="cursor: pointer" @click="router.push(`/${tenantId}/channels/${ch.id}`)">
           <div class="d-flex align-center mb-3">
             <v-icon :color="channelColor(ch.channel_type)" size="32" class="mr-3">
               {{ channelIcon(ch.channel_type) }}
@@ -49,8 +49,8 @@
             </div>
           </div>
 
-          <!-- Per-channel auto-reply (webhook channels only) — separate from "hoạt động" -->
-          <div v-if="WEBHOOK_CHANNEL_TYPES.includes(ch.channel_type)" class="mb-2">
+          <!-- Per-channel auto-reply is shown only when the backend exposes that capability. -->
+          <div v-if="ch.supports_auto_reply" class="mb-2">
             <div class="d-flex align-center justify-space-between">
               <span class="text-caption text-grey">{{ $t('chatbot_channel_autoreply_short') }}</span>
               <div class="d-flex align-center ga-3" @click.stop>
@@ -92,7 +92,7 @@
             <span class="text-body-2">{{ ch.last_sync_at ? new Date(ch.last_sync_at).toLocaleString() : '—' }}</span>
           </div>
 
-          <v-divider class="mb-3" />
+          <v-divider class="mb-3 mt-auto" />
           <div class="d-flex ga-2 flex-wrap" @click.stop>
             <v-btn v-if="ch.channel_type !== 'personal_zalo_import'" size="small" variant="tonal" color="primary" prepend-icon="mdi-sync" :loading="syncing === ch.id" :disabled="!ch.is_active" @click="syncNow(ch.id)">
               {{ $t('sync_now') }}
@@ -349,9 +349,8 @@ const snackbar = ref(false)
 const snackText = ref('')
 const snackColor = ref('success')
 
-// Per-channel auto-reply: only webhook channels expose the toggle; the tenant
-// master switch (chatbot_active) gates them all.
-const WEBHOOK_CHANNEL_TYPES = ['zalo_oa', 'facebook']
+// Per-channel auto-reply is capability-driven by the backend; the tenant master
+// switch (chatbot_active) gates every supported channel.
 const togglingAutoReplyId = ref('')
 const chatbotActive = computed(() => chatbotStore.isActive(tenantId.value))
 const chatbotStatusLoaded = computed(() => chatbotStore.isLoaded(tenantId.value))

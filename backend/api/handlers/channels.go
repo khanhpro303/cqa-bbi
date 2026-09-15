@@ -45,6 +45,7 @@ type ChannelResponse struct {
 	Name                   string                               `json:"name"`
 	ExternalID             string                               `json:"external_id"`
 	IsActive               bool                                 `json:"is_active"`
+	SupportsAutoReply      bool                                 `json:"supports_auto_reply"`
 	AutoReplyEnabled       bool                                 `json:"auto_reply_enabled"`
 	Metadata               string                               `json:"metadata"`
 	LastSyncAt             *time.Time                           `json:"last_sync_at"`
@@ -241,6 +242,10 @@ func UpdateChannel(c *gin.Context) {
 		updates["is_active"] = *req.IsActive
 	}
 	if req.AutoReplyEnabled != nil {
+		if !channelSupportsAutoReply(channel.ChannelType) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "auto_reply_not_supported"})
+			return
+		}
 		updates["auto_reply_enabled"] = *req.AutoReplyEnabled
 	}
 	// A deactivated channel must never auto-reply: deactivating forces auto-reply off.
@@ -1004,19 +1009,25 @@ func getFBPageToken(userToken string, targetPageID string) (pageID, pageToken, p
 }
 
 func channelToResponse(ch models.Channel) ChannelResponse {
+	supportsAutoReply := channelSupportsAutoReply(ch.ChannelType)
 	return ChannelResponse{
-		ID:               ch.ID,
-		TenantID:         ch.TenantID,
-		ChannelType:      ch.ChannelType,
-		Name:             ch.Name,
-		ExternalID:       ch.ExternalID,
-		IsActive:         ch.IsActive,
-		AutoReplyEnabled: ch.AutoReplyEnabled,
-		Metadata:         ch.Metadata,
-		LastSyncAt:       ch.LastSyncAt,
-		LastSyncStatus:   ch.LastSyncStatus,
-		CreatedAt:        ch.CreatedAt,
+		ID:                ch.ID,
+		TenantID:          ch.TenantID,
+		ChannelType:       ch.ChannelType,
+		Name:              ch.Name,
+		ExternalID:        ch.ExternalID,
+		IsActive:          ch.IsActive,
+		SupportsAutoReply: supportsAutoReply,
+		AutoReplyEnabled:  supportsAutoReply && ch.AutoReplyEnabled,
+		Metadata:          ch.Metadata,
+		LastSyncAt:        ch.LastSyncAt,
+		LastSyncStatus:    ch.LastSyncStatus,
+		CreatedAt:         ch.CreatedAt,
 	}
+}
+
+func channelSupportsAutoReply(channelType string) bool {
+	return channelType == "zalo_oa"
 }
 
 func normalizeCreateChannelCredentials(channelType string, raw json.RawMessage) (json.RawMessage, error) {

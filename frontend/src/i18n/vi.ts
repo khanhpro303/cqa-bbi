@@ -531,7 +531,7 @@ export default {
   jobs_validation_chatbot_status: 'Vui lòng chọn trạng thái chatbot mong muốn',
   jobs_validation_chatbot_channels: 'Vui lòng chọn ít nhất 1 kênh OA',
   jobs_chatbot_toggle_select_channels: 'Chọn kênh áp dụng',
-  jobs_chatbot_toggle_channels_hint: 'Chỉ áp dụng cho kênh OA có webhook (Zalo OA, Facebook) đang hoạt động.',
+  jobs_chatbot_toggle_channels_hint: 'Chỉ áp dụng cho kênh Zalo OA đang hoạt động và hỗ trợ chatbot tự động trả lời.',
   jobs_wizard_step_status_config: 'Cấu hình trạng thái',
   // Điều khiển Chatbot OA (Dashboard panel)
   chatbot_master_label: 'Điều khiển Chatbot OA',

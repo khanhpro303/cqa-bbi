@@ -46,13 +46,12 @@ const route = useRoute()
 const channelStore = useChannelStore()
 const { channels } = storeToRefs(channelStore)
 
-// Only webhook-capable OA channels that are active can run the chatbot.
-const OA_TYPES = ['zalo_oa', 'facebook']
+// The backend is the source of truth for chatbot auto-reply support.
 const oaChannels = computed(() =>
-  channels.value.filter((c) => OA_TYPES.includes(c.channel_type) && c.is_active)
+  channels.value.filter((c) => c.supports_auto_reply && c.is_active)
 )
 
-// The sentinel ['global'] means "all OA channels" (matches the backend fallback).
+// The sentinel ['global'] means all supported active channels (matches backend).
 const allSelected = computed(() => {
   const ids = (form.value.input_channel_ids as string[]) || []
   return ids.length === 1 && ids[0] === 'global'

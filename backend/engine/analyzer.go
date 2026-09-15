@@ -1002,9 +1002,8 @@ func (a *Analyzer) runChatbotToggleJob(ctx context.Context, job models.Job) (*mo
 	targetBool := targetVal == "true"
 
 	// Resolve target channels from job.InputChannelIDs (JSON array). The legacy
-	// sentinel "global" (and an empty list) means "all webhook-capable active OA
-	// channels" — reproducing the old tenant-wide behavior without touching the
-	// master switch or non-webhook channels (e.g. personal_zalo_import).
+	// sentinel "global" (and an empty list) means "all active channels that support
+	// chatbot auto-reply". At present only Zalo OA supports that capability.
 	var channelIDs []string
 	_ = json.Unmarshal([]byte(job.InputChannelIDs), &channelIDs)
 	realIDs := channelIDs[:0]
@@ -1014,11 +1013,12 @@ func (a *Analyzer) runChatbotToggleJob(ctx context.Context, job models.Job) (*mo
 		}
 	}
 
-	q := db.DB.Model(&models.Channel{}).Where("tenant_id = ?", job.TenantID)
+	q := db.DB.Model(&models.Channel{}).
+		Where("tenant_id = ? AND channel_type = ?", job.TenantID, "zalo_oa")
 	if len(realIDs) > 0 {
 		q = q.Where("id IN ?", realIDs)
 	} else {
-		q = q.Where("channel_type IN ? AND is_active = ?", []string{"zalo_oa", "facebook"}, true)
+		q = q.Where("is_active = ?", true)
 	}
 	updateRes := q.Update("auto_reply_enabled", targetBool)
 	if updateRes.Error != nil {

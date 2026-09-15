@@ -532,7 +532,7 @@ export default {
   jobs_validation_chatbot_status: 'Please select the desired chatbot status',
   jobs_validation_chatbot_channels: 'Please select at least one OA channel',
   jobs_chatbot_toggle_select_channels: 'Select target channels',
-  jobs_chatbot_toggle_channels_hint: 'Applies only to active webhook OA channels (Zalo OA, Facebook).',
+  jobs_chatbot_toggle_channels_hint: 'Applies only to active Zalo OA channels that support chatbot auto-reply.',
   jobs_wizard_step_status_config: 'Status Configuration',
   // OA Chatbot control (Dashboard panel)
   chatbot_master_label: 'OA Chatbot Control',
