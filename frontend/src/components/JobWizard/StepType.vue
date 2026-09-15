@@ -6,6 +6,8 @@
     <v-text-field
       v-model="form.name"
       :label="$t('job_name')"
+      :placeholder="namePlaceholder"
+      persistent-placeholder
       :rules="[v => !!v || $t('validation_required'), v => (v && v.length >= 2) || $t('validation_min_chars', { min: 2 })]"
       class="mb-3"
     />
@@ -58,5 +60,6 @@
 </template>
 
 <script setup lang="ts">
+defineProps<{ namePlaceholder?: string }>()
 const form = defineModel<Record<string, any>>('form', { required: true })
 </script>

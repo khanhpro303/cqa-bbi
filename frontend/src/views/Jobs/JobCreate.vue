@@ -8,7 +8,10 @@
     <v-card class="pa-6">
       <v-stepper v-model="step" :items="stepItems" :alt-labels="mdAndUp" hide-actions>
         <template #[`item.1`]>
-          <StepType v-model:form="form" />
+          <StepType
+            v-model:form="form"
+            :name-placeholder="route.query.template === 'messenger-insights' ? 'Ví dụ: Phân tích Messenger' : undefined"
+          />
         </template>
         <template #[`item.2`]>
           <StepRules v-if="form.job_type === 'chatbot_toggle'" v-model:form="form" />
@@ -183,7 +186,6 @@ const form = ref({
 })
 
 if (route.query.template === 'messenger-insights') {
-  form.value.name = 'Phân tích Messenger'
   form.value.job_type = 'classification'
   form.value.rules_config = serializeClassificationConfig(createMessengerInsightsConfig())
   form.value.description = 'Nhu cầu, sản phẩm quan tâm, feedback và tiềm năng mua hàng từ hội thoại Messenger.'
