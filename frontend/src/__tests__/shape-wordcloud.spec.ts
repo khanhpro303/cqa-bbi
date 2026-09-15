@@ -72,7 +72,7 @@ async function render() {
 }
 function lastRender(): [HTMLElement, WordCloud.Options] {
   const [targets, options] = mocks.render.mock.calls.at(-1) as [[HTMLCanvasElement, HTMLElement], WordCloud.Options]
-  return [targets[1], options]
+  return [Array.isArray(targets) ? targets[1] : targets, options]
 }
 function draw(host: HTMLElement, item: WordCloud.ListEntry, drawn = true) {
   const span = document.createElement('span')
@@ -83,6 +83,37 @@ function draw(host: HTMLElement, item: WordCloud.ListEntry, drawn = true) {
 }
 
 describe('ShapeWordcloud', () => {
+  it('retries an empty canvas mask once with library shape placement and keeps keyword clicks', async () => {
+    const wrapper = await render()
+    await wrapper.get('select').setValue('star')
+    await runFrames()
+    const calls = mocks.render.mock.calls.length
+    const host = wrapper.get('.wordcloud').element as HTMLElement
+    host.dispatchEvent(new CustomEvent('wordcloudstop'))
+    await runFrames()
+    expect(mocks.render).toHaveBeenCalledTimes(calls + 1)
+    expect(mocks.render.mock.calls.at(-1)![0]).toBe(host)
+    expect(lastRender()[1]).toMatchObject({ shape: 'star', clearCanvas: true })
+    const span = draw(host, lastRender()[1].list![0]!)
+    host.dispatchEvent(new CustomEvent('wordcloudstop'))
+    await runFrames()
+    span.click()
+    expect(wrapper.emitted('select')).toEqual([['sku:first']])
+    expect(mocks.render).toHaveBeenCalledTimes(calls + 1)
+  })
+
+  it('shows an error instead of endlessly retrying when both layouts are empty', async () => {
+    const wrapper = await render()
+    const host = wrapper.get('.wordcloud').element
+    host.dispatchEvent(new CustomEvent('wordcloudstop'))
+    await runFrames()
+    const calls = mocks.render.mock.calls.length
+    host.dispatchEvent(new CustomEvent('wordcloudstop'))
+    await runFrames()
+    expect(wrapper.text()).toContain('Không thể vẽ wordcloud')
+    expect(mocks.render).toHaveBeenCalledTimes(calls)
+  })
+
   it('packs the selected shape and remeasures after resize', async () => {
     const wrapper = await render()
     expect((mocks.render.mock.calls.at(-1)![0] as HTMLCanvasElement[])[0]).toMatchObject({ width: 320, height: 280 })

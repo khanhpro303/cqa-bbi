@@ -15,6 +15,7 @@
       role="group"
       :aria-label="`Wordcloud ${title}`"
       @wordclouddrawn="decorateWord"
+      @wordcloudstop="finishRender"
       @click="selectWord"
       @keydown="activateWord"
     />
@@ -40,12 +41,14 @@ const renderError = ref(false)
 let observer: ResizeObserver | undefined
 let frame = 0
 let disposed = false
+let maskedRender = true
 
-function renderCloud() {
+function renderCloud(useMask: boolean | number = true) {
   const element = host.value
   if (!element || disposed || !element.clientWidth) return
   renderError.value = !WordCloud.isSupported
   if (renderError.value) return
+  maskedRender = useMask !== false
   const mask = createShapeMask(element.clientWidth, element.clientHeight)
   if (!mask) {
     renderError.value = true
@@ -64,9 +67,9 @@ function renderCloud() {
   let colorIndex = 0
   element.dispatchEvent(new CustomEvent('wordcloudstart'))
   element.replaceChildren()
-  WordCloud([mask, element], {
+  WordCloud(maskedRender ? [mask, element] : element, {
     list,
-    clearCanvas: false,
+    clearCanvas: !maskedRender,
     shape: shape.value,
     ellipticity: 1,
     gridSize: 4,
@@ -87,6 +90,20 @@ function renderCloud() {
     abortThreshold: 500,
     wait: 1,
   })
+}
+
+function finishRender() {
+  const element = host.value
+  if (!element || disposed || !props.items.length || element.children.length) return
+  if (maskedRender) {
+    // Some browsers alter canvas pixels. The mask can then reserve every grid
+    // cell; retry using the library's shape placement without pixel comparison.
+    maskedRender = false
+    cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(() => renderCloud(false))
+  } else {
+    renderError.value = true
+  }
 }
 
 function createShapeMask(width: number, height: number): HTMLCanvasElement | null {
