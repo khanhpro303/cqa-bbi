@@ -37,6 +37,7 @@ export interface AggregateItem {
   key: string
   label: string
   count: number
+  conversationIds: string[]
 }
 
 export interface InsightAggregates {
@@ -65,14 +66,18 @@ export function normalizeInsightLabel(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('vi')
 }
 
-function addUnique(target: Map<string, AggregateItem>, values: Array<{ key: string; label: string }>) {
+function addUnique(target: Map<string, AggregateItem>, values: Array<{ key: string; label: string }>, conversationId: string) {
   const seen = new Set<string>()
   for (const value of values) {
     if (!value.key || seen.has(value.key)) continue
     seen.add(value.key)
     const current = target.get(value.key)
-    if (current) current.count += 1
-    else target.set(value.key, { ...value, count: 1 })
+    if (current) {
+      if (!current.conversationIds.includes(conversationId)) {
+        current.conversationIds.push(conversationId)
+        current.count = current.conversationIds.length
+      }
+    } else target.set(value.key, { ...value, count: 1, conversationIds: [conversationId] })
   }
 }
 
@@ -109,21 +114,21 @@ export function aggregateInsights(rows: InsightRow[], from: string | Date, to: s
     }
 
     eligibleConversations += 1
-    addUnique(intents, (row.insight.intents || []).map(label => ({ key: normalizeInsightLabel(label), label: label.trim() })))
+    addUnique(intents, (row.insight.intents || []).map(label => ({ key: normalizeInsightLabel(label), label: label.trim() })), row.conversation_id)
     addUnique(products, (row.insight.products || []).map(product => {
       const sku = product.sku?.trim()
       const name = product.name.trim()
       return sku
         ? { key: `sku:${normalizeInsightLabel(sku)}`, label: `${name} · ${sku}` }
         : { key: `name:${normalizeInsightLabel(name)}`, label: name }
-    }))
+    }), row.conversation_id)
     addUnique(feedback, (row.insight.feedback || []).map(item => {
       const category = item.category.trim()
       const sentiment = item.sentiment.trim().toLowerCase()
       return { key: `${normalizeInsightLabel(category)}:${sentiment}`, label: `${category} · ${sentiment}` }
-    }))
+    }), row.conversation_id)
     const lead = row.insight.lead_quality?.level
-    if (lead) addUnique(leadQuality, [{ key: lead, label: lead }])
+    if (lead) addUnique(leadQuality, [{ key: lead, label: lead }], row.conversation_id)
   }
 
   return {

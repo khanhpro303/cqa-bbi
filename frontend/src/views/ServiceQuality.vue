@@ -170,17 +170,7 @@
         </v-card-title>
         <v-divider />
         <v-card-text>
-          <v-row>
-            <v-col v-for="group in insightGroups" :key="group.title" cols="12" md="6" lg="3">
-              <div class="text-subtitle-2 font-weight-bold mb-2"><v-icon start size="small" :icon="group.icon" />{{ group.title }}</div>
-              <div v-if="group.items.length" class="d-flex flex-wrap ga-2">
-                <v-chip v-for="item in group.items.slice(0, 8)" :key="item.key" size="small" variant="tonal">
-                  {{ displayAggregateLabel(group.kind, item.label) }} <strong class="ml-1">{{ item.count }}</strong>
-                </v-chip>
-              </div>
-              <div v-else class="text-body-2 text-medium-emphasis py-2">Chưa có dữ liệu trong kỳ</div>
-            </v-col>
-          </v-row>
+          <InsightWordcloudPanel :groups="insightGroups" :conversations="report.rows" :tenant-id="tenantId" />
         </v-card-text>
       </v-card>
 
@@ -389,6 +379,7 @@
 
 <script setup lang="ts">
 import MetaLabelsPanel from '../components/MetaLabelsPanel.vue'
+import InsightWordcloudPanel from '../components/InsightWordcloudPanel.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
@@ -544,7 +535,7 @@ const insightGroups = computed(() => [
   { title: 'Sản phẩm được hỏi', icon: 'mdi-package-variant-closed', kind: 'product', items: insightAggregates.value.products },
   { title: 'Feedback khách hàng', icon: 'mdi-comment-quote-outline', kind: 'feedback', items: insightAggregates.value.feedback },
   { title: 'Chất lượng khách hàng', icon: 'mdi-account-star-outline', kind: 'lead', items: insightAggregates.value.leadQuality },
-])
+].map(group => ({ ...group, items: group.items.map(item => ({ ...item, label: displayAggregateLabel(group.kind, item.label) })) })))
 
 const kpis = computed(() => {
   const summary = report.value!.summary

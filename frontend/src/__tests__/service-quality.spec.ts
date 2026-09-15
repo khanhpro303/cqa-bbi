@@ -32,25 +32,50 @@ describe('service quality utilities', () => {
       },
     ], '2026-09-09T00:00:00Z', '2026-09-12T00:00:00Z')
 
-    expect(result.intents).toEqual([{ key: 'hỏi hàng', label: 'Hỏi hàng', count: 2 }])
-    expect(result.products.map(item => [item.key, item.count])).toEqual([
-      ['name:sữa b', 2],
-      ['sku:sku-1', 1],
+    expect(result.intents).toEqual([{ key: 'hỏi hàng', label: 'Hỏi hàng', count: 2, conversationIds: ['c1', 'c2'] }])
+    expect(result.products.map(item => [item.key, item.count, item.conversationIds])).toEqual([
+      ['name:sữa b', 2, ['c1', 'c2']],
+      ['sku:sku-1', 1, ['c1']],
     ])
     expect(result.feedback[0].count).toBe(2)
+    expect(result.feedback[0].conversationIds).toEqual(['c1', 'c2'])
     expect(result.leadQuality[0].count).toBe(2)
+    expect(result.leadQuality[0].conversationIds).toEqual(['c1', 'c2'])
+  })
+
+  it('keeps keyword counts aligned with unique source conversations across duplicate rows', () => {
+    const insight = {
+      intents: ['Hỏi giá', ' hỏi  giá '],
+      products: [{ name: 'Sữa A', sku: 'SKU-1' }, { name: 'Tên khác', sku: ' sku-1 ' }],
+      feedback: [{ category: 'Giao hàng', sentiment: 'negative' }, { category: ' giao  hàng ', sentiment: 'Negative' }],
+      lead_quality: { level: 'high' as const },
+    }
+    const result = aggregateInsights([
+      { conversation_id: 'c1', insight_at: '2026-09-10T03:00:00Z', insight },
+      { conversation_id: 'c1', insight_at: '2026-09-11T03:00:00Z', insight },
+      { conversation_id: 'c2', insight_at: '2026-09-11T03:00:00Z', insight },
+    ], '2026-09-09T00:00:00Z', '2026-09-12T00:00:00Z')
+
+    for (const segment of [result.intents, result.products, result.feedback, result.leadQuality]) {
+      expect(segment).toHaveLength(1)
+      expect(segment[0].conversationIds).toEqual(['c1', 'c2'])
+      expect(segment[0].count).toBe(segment[0].conversationIds.length)
+    }
   })
 
   it('excludes stale and out-of-window AI analyses from aggregates', () => {
     const result = aggregateInsights([
       { conversation_id: 'stale', insight_at: '2026-09-10T03:00:00Z', insight_stale: true, insight: { intents: ['Mua hàng'] } },
       { conversation_id: 'old', insight_at: '2026-08-01T03:00:00Z', insight: { intents: ['Mua hàng'] } },
+      { conversation_id: 'end', insight_at: '2026-09-12T00:00:00Z', insight: { intents: ['Mua hàng'] } },
+      { conversation_id: 'missing-date', insight: { intents: ['Mua hàng'] } },
       { conversation_id: 'fresh', insight_at: '2026-09-10T03:00:00Z', insight: { intents: ['Hỏi giá'] } },
     ], '2026-09-09T00:00:00Z', '2026-09-12T00:00:00Z')
 
     expect(result.eligibleConversations).toBe(1)
     expect(result.excludedStale).toBe(1)
-    expect(result.excludedOutsideWindow).toBe(1)
+    expect(result.excludedOutsideWindow).toBe(3)
     expect(result.intents.map(item => item.label)).toEqual(['Hỏi giá'])
+    expect(result.intents[0].conversationIds).toEqual(['fresh'])
   })
 })

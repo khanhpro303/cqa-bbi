@@ -1,0 +1,157 @@
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it } from 'vitest'
+import { defineComponent, h } from 'vue'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { createMemoryHistory, createRouter, RouterLink } from 'vue-router'
+import InsightWordcloudPanel from '../components/InsightWordcloudPanel.vue'
+import type { AggregateItem, ConversationInsight } from '../utils/service-quality'
+
+// Preserve Vuetify slots and dialog visibility while exercising real router links.
+const Container = defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) })
+const Dialog = defineComponent({
+  props: { modelValue: Boolean },
+  setup: (props, { slots }) => () => props.modelValue ? h('div', { role: 'dialog' }, slots.default?.()) : null,
+})
+const Button = defineComponent({
+  props: ['to'],
+  setup: (props, { slots, attrs }) => () => props.to
+    ? h(RouterLink, { ...attrs, to: props.to }, slots)
+    : h('button', attrs, slots.default?.()),
+})
+const TextField = defineComponent({
+  props: ['modelValue', 'label'],
+  emits: ['update:modelValue'],
+  setup: (props, { emit }) => () => h('input', {
+    value: props.modelValue,
+    'aria-label': props.label,
+    onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value),
+  }),
+})
+const ShapeWordcloud = defineComponent({
+  props: { items: { type: Array as () => AggregateItem[], required: true } },
+  emits: ['select'],
+  setup: (props, { emit }) => () => h('div', props.items.map(item => h('button', {
+    class: 'cloud-word', onClick: () => emit('select', item.key),
+  }, item.label))),
+})
+const stubs = Object.fromEntries([
+  'VRow', 'VCol', 'VIcon', 'VCard', 'VCardTitle', 'VCardText', 'VSpacer', 'VDivider',
+].map(name => [name, Container]))
+const wrappers: VueWrapper[] = []
+afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
+
+const keyword = (key: string, label: string, conversationIds: string[]): AggregateItem => ({
+  key, label, conversationIds, count: conversationIds.length,
+})
+const conversation = (id: string, insight: ConversationInsight = {}) => ({
+  conversation_id: id, channel_id: `channel-${id}`, channel_name: 'Kênh bán hàng',
+  customer_name: `Khách ${id}`, insight: { summary: `Tóm tắt ${id}`, ...insight },
+})
+const group = (items: AggregateItem[], kind = 'intent') => ({ kind, title: 'Ý định', icon: 'mdi-chat', items })
+async function render(items: AggregateItem[], conversations = [conversation('a'), conversation('b'), conversation('c')]) {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ name: 'messages', path: '/:tenantId/messages', component: Container }],
+  })
+  await router.push('/tenant-one/messages')
+  await router.isReady()
+  const wrapper = mount(InsightWordcloudPanel, {
+    props: { groups: [group(items)], conversations, tenantId: 'tenant-one' },
+    global: { plugins: [router], stubs: { ...stubs, ShapeWordcloud, VDialog: Dialog, VBtn: Button, VTextField: TextField } },
+  })
+  wrappers.push(wrapper)
+  return { wrapper, router }
+}
+const sourceIds = (wrapper: VueWrapper) => wrapper.findAll('.conversation-link').map(link => link.text())
+
+describe('InsightWordcloudPanel', () => {
+  it('caps the cloud at 40 words but shows every keyword and its count in segment detail', async () => {
+    const items = Array.from({ length: 43 }, (_, index) => keyword(`keyword-${index}`, `Keyword ${index}`, index === 42 ? ['a', 'b'] : ['a']))
+    const { wrapper } = await render(items)
+    expect(wrapper.findAll('.cloud-word')).toHaveLength(40)
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    await wrapper.get('.segment-heading').trigger('click')
+    expect(wrapper.findAll('.keyword-row')).toHaveLength(43)
+    const last = wrapper.findAll('.keyword-row')[42]!
+    expect(last.get('span').text()).toBe('Keyword 42')
+    expect(last.get('strong').text()).toBe('2')
+    await last.trigger('click')
+    expect(sourceIds(wrapper)).toEqual(['Khách a', 'Khách b'])
+  })
+
+  it('opens the clicked word and switches exact source conversations when selecting another keyword', async () => {
+    const { wrapper } = await render([
+      keyword('first', 'Hỏi giá', ['a', 'c']), keyword('second', 'Đặt hàng', ['b']),
+    ])
+    await wrapper.findAll('.cloud-word')[1]!.trigger('click')
+    expect(wrapper.get('.keyword-row.selected').text()).toBe('Đặt hàng1')
+    expect(sourceIds(wrapper)).toEqual(['Khách b'])
+    expect(wrapper.get('.conversation-list').text()).toContain('Tóm tắt b')
+    await wrapper.findAll('.keyword-row')[0]!.trigger('click')
+    expect(sourceIds(wrapper)).toEqual(['Khách a', 'Khách c'])
+    expect(wrapper.get('.keyword-row.selected').attributes('aria-pressed')).toBe('true')
+  })
+
+  it('navigates a source link to the messages tab with tenant, conversation and channel', async () => {
+    const { wrapper, router } = await render([keyword('order', 'Đặt hàng', ['b'])])
+    await wrapper.get('.cloud-word').trigger('click')
+    await wrapper.get('.conversation-link').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('messages')
+    expect(router.currentRoute.value.params).toEqual({ tenantId: 'tenant-one' })
+    expect(router.currentRoute.value.query).toEqual({ conv: 'b', channel_id: 'channel-b', tab: 'messages' })
+  })
+
+  it('refreshes open detail counts and sources, selects a remaining keyword, and closes removed groups', async () => {
+    const { wrapper } = await render([keyword('order', 'Đặt hàng', ['a', 'b']), keyword('price', 'Hỏi giá', ['c'])])
+    await wrapper.get('.segment-heading').trigger('click')
+    await wrapper.setProps({ groups: [group([keyword('order', 'Đặt hàng', ['b']), keyword('price', 'Hỏi giá', ['c'])])] })
+    expect(wrapper.get('.keyword-row.selected').get('strong').text()).toBe('1')
+    expect(sourceIds(wrapper)).toEqual(['Khách b'])
+    await wrapper.setProps({ groups: [group([keyword('price', 'Hỏi giá', ['c'])])] })
+    expect(wrapper.get('.keyword-row.selected').get('span').text()).toBe('Hỏi giá')
+    expect(sourceIds(wrapper)).toEqual(['Khách c'])
+    await wrapper.setProps({ groups: [] })
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  })
+
+  it('closes detail when tenant changes and when refreshed segment becomes empty', async () => {
+    const { wrapper } = await render([keyword('order', 'Đặt hàng', ['a'])])
+    await wrapper.get('.cloud-word').trigger('click')
+    await wrapper.setProps({ tenantId: 'tenant-two' })
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    await wrapper.get('.cloud-word').trigger('click')
+    await wrapper.setProps({ groups: [group([])] })
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  })
+
+  it('renders an empty segment without cloud words or source links', async () => {
+    const { wrapper } = await render([])
+    expect(wrapper.get('.empty-cloud').text()).toBe('Chưa có dữ liệu trong kỳ')
+    expect(wrapper.find('.cloud-word').exists()).toBe(false)
+    expect(wrapper.find('.segment-footer').exists()).toBe(false)
+    await wrapper.get('.segment-heading').trigger('click')
+    expect(wrapper.findAll('.keyword-row')).toHaveLength(0)
+    expect(sourceIds(wrapper)).toEqual([])
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  })
+
+  it('shows only matching product evidence and filters the keyword list without changing the selected source', async () => {
+    const { wrapper } = await render([
+      keyword('sku:sp1', 'Áo xanh · SP1', ['a']), keyword('name:quần', 'Quần', ['b']),
+    ], [conversation('a', { products: [
+      { name: 'Áo xanh', sku: ' SP1 ', evidence: 'Khách hỏi áo xanh' },
+      { name: 'Khác', sku: 'SP2', evidence: 'Không thuộc keyword được chọn' },
+    ] }), conversation('b')])
+    await wrapper.setProps({ groups: [group([
+      keyword('sku:sp1', 'Áo xanh · SP1', ['a']), keyword('name:quần', 'Quần', ['b']),
+    ], 'product')] })
+    await wrapper.get('.cloud-word').trigger('click')
+    expect(wrapper.get('.conversation-list').text()).toContain('Khách hỏi áo xanh')
+    expect(wrapper.get('.conversation-list').text()).not.toContain('Không thuộc keyword được chọn')
+    await wrapper.get('input').setValue(' QUẦN ')
+    expect(wrapper.findAll('.keyword-row')).toHaveLength(1)
+    expect(wrapper.get('.keyword-row').get('span').text()).toBe('Quần')
+    expect(sourceIds(wrapper)).toEqual(['Khách a'])
+  })
+})
