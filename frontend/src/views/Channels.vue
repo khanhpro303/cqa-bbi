@@ -54,18 +54,26 @@
             <div class="d-flex align-center justify-space-between">
               <span class="text-caption text-grey">{{ $t('chatbot_channel_autoreply_short') }}</span>
               <div class="d-flex align-center ga-3" @click.stop>
-                <v-switch
-                  :model-value="ch.auto_reply_enabled && chatbotActive"
-                  hide-details
-                  density="compact"
-                  color="success"
-                  :loading="togglingAutoReplyId === ch.id"
-                  :disabled="!authStore.canEdit('channels') || !ch.is_active || !chatbotActive || togglingAutoReplyId === ch.id"
-                  @update:model-value="(v: any) => toggleAutoReply(ch, !!v)"
-                />
-                <span class="text-caption font-weight-medium" :class="(ch.auto_reply_enabled && chatbotActive) ? 'text-success' : 'text-grey'">
-                  {{ (ch.auto_reply_enabled && chatbotActive) ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
-                </span>
+                <template v-if="chatbotStatusLoaded">
+                  <v-switch
+                    :model-value="ch.auto_reply_enabled && chatbotActive"
+                    hide-details
+                    density="compact"
+                    color="success"
+                    :loading="togglingAutoReplyId === ch.id"
+                    :disabled="!authStore.canEdit('channels') || !ch.is_active || !chatbotActive || togglingAutoReplyId === ch.id"
+                    @update:model-value="(v: any) => toggleAutoReply(ch, !!v)"
+                  />
+                  <span class="text-caption font-weight-medium" :class="(ch.auto_reply_enabled && chatbotActive) ? 'text-success' : 'text-grey'">
+                    {{ (ch.auto_reply_enabled && chatbotActive) ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
+                  </span>
+                  <v-btn v-if="chatbotStatusError" icon="mdi-refresh" size="x-small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click.stop="fetchChatbotStatus" />
+                </template>
+                <v-btn v-else-if="chatbotStatusError" icon="mdi-refresh" size="x-small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click.stop="fetchChatbotStatus" />
+                <template v-else>
+                  <v-progress-circular indeterminate size="20" width="2" color="grey" class="mx-3" />
+                  <span class="text-caption text-grey">{{ $t('loading') }}</span>
+                </template>
               </div>
             </div>
             <div v-if="!chatbotActive" class="text-right mt-n1">
@@ -320,6 +328,7 @@ import { ref, computed, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChannelStore } from '../stores/channels'
+import { useChatbotStore } from '../stores/chatbot'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
 import CampaignAlertOutputs from '../components/channels/CampaignAlertOutputs.vue'
@@ -328,6 +337,7 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const channelStore = useChannelStore()
+const chatbotStore = useChatbotStore()
 const authStore = useAuthStore()
 const tenantId = computed(() => route.params.tenantId as string)
 
@@ -343,13 +353,13 @@ const snackColor = ref('success')
 // master switch (chatbot_active) gates them all.
 const WEBHOOK_CHANNEL_TYPES = ['zalo_oa', 'facebook']
 const togglingAutoReplyId = ref('')
-const chatbotActive = ref(true)
+const chatbotActive = computed(() => chatbotStore.isActive(tenantId.value))
+const chatbotStatusLoaded = computed(() => chatbotStore.isLoaded(tenantId.value))
+const chatbotStatusLoading = computed(() => chatbotStore.isLoading(tenantId.value))
+const chatbotStatusError = computed(() => chatbotStore.hasError(tenantId.value))
 
-async function fetchChatbotStatus() {
-  try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/settings`)
-    chatbotActive.value = data?.settings?.chatbot_active !== 'false'
-  } catch { /* ignore — default to enabled */ }
+function fetchChatbotStatus() {
+  return chatbotStore.fetchStatus(tenantId.value)
 }
 
 async function toggleAutoReply(ch: any, val: boolean) {

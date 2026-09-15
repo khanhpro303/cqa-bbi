@@ -41,18 +41,26 @@
         </div>
         <v-spacer />
         <div class="d-flex align-center">
-          <span class="text-body-2 font-weight-medium mr-2" :class="chatbotActive ? 'text-success' : 'text-grey'">
-            {{ chatbotActive ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
-          </span>
-          <v-switch
-            v-model="chatbotActive"
-            color="success"
-            hide-details
-            density="compact"
-            :loading="togglingChatbot"
-            :disabled="togglingChatbot"
-            @update:model-value="toggleChatbot"
-          />
+          <template v-if="chatbotStatusLoaded">
+            <span class="text-body-2 font-weight-medium mr-2" :class="chatbotActive ? 'text-success' : 'text-grey'">
+              {{ chatbotActive ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
+            </span>
+            <v-switch
+              :model-value="chatbotActive"
+              color="success"
+              hide-details
+              density="compact"
+              :loading="togglingChatbot"
+              :disabled="togglingChatbot"
+              @update:model-value="toggleChatbot"
+            />
+            <v-btn v-if="chatbotStatusError" icon="mdi-refresh" size="small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click="fetchChatbotStatus" />
+          </template>
+          <v-btn v-else-if="chatbotStatusError" icon="mdi-refresh" size="small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click="fetchChatbotStatus" />
+          <template v-else>
+            <span class="text-body-2 text-grey mr-2">{{ $t('loading') }}</span>
+            <v-progress-circular indeterminate size="20" width="2" color="grey" />
+          </template>
         </div>
       </div>
     </v-card>
@@ -268,6 +276,7 @@ import { Line } from 'vue-chartjs'
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend } from 'chart.js'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
+import { useChatbotStore } from '../stores/chatbot'
 import AiCostCarousel from '../components/dashboard/AiCostCarousel.vue'
 import BannerCarousel from '../components/dashboard/BannerCarousel.vue'
 
@@ -279,34 +288,30 @@ const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
 
 const authStore = useAuthStore()
+const chatbotStore = useChatbotStore()
 const isAdmin = computed(() => {
   const role = authStore.tenantPerms.role
   return role === 'owner' || role === 'admin'
 })
 
-const chatbotActive = ref(true)
-const togglingChatbot = ref(false)
+const chatbotActive = computed(() => chatbotStore.isActive(tenantId.value))
+const chatbotStatusLoaded = computed(() => chatbotStore.isLoaded(tenantId.value))
+const chatbotStatusLoading = computed(() => chatbotStore.isLoading(tenantId.value))
+const chatbotStatusError = computed(() => chatbotStore.hasError(tenantId.value))
+const togglingChatbot = computed(() => chatbotStore.isMutating(tenantId.value))
 
 async function fetchChatbotStatus() {
   if (!isAdmin.value) return
-  try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/settings`)
-    chatbotActive.value = data?.settings?.chatbot_active !== 'false'
-  } catch { /* ignore */ }
+  await chatbotStore.fetchStatus(tenantId.value)
 }
 
 async function toggleChatbot(val: any) {
-  togglingChatbot.value = true
+  const targetTenantId = tenantId.value
+  const requestedActive = !!val
   try {
-    await api.put(`/tenants/${tenantId.value}/settings`, {
-      key: 'chatbot_active',
-      value: val ? 'true' : 'false'
-    })
+    await chatbotStore.updateStatus(targetTenantId, requestedActive)
   } catch (e: any) {
-    chatbotActive.value = !val
     alert(t('chatbot_toggle_error') + ': ' + (e.response?.data?.error || e.message))
-  } finally {
-    togglingChatbot.value = false
   }
 }
 
