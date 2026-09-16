@@ -58,19 +58,89 @@
               {{ selectedKeyword ? t('qualityInsight.keywordConversations', { label: selectedKeyword.label, count: selectedKeyword.count }) : t('qualityInsight.selectKeyword') }}
             </h2>
             <div class="conversation-list scroll-region">
-              <v-card v-for="row in sourceConversations" :key="row.conversation_id" variant="outlined" class="mb-3">
-                <v-card-text>
+              <v-card v-for="row in sourceConversations" :key="row.conversation_id" variant="outlined" class="conversation-card mb-3">
+                <div class="conversation-card-header">
+                  <button
+                    class="conversation-toggle"
+                    type="button"
+                    :aria-expanded="Boolean(expandedConversations[row.conversation_id])"
+                    :aria-controls="`conversation-detail-${row.conversation_id}`"
+                    @click="toggleConversation(row)"
+                  >
+                    <span class="conversation-heading">
+                      <strong class="text-primary">{{ row.customer_name || t('qualityInsight.messengerCustomer') }}</strong>
+                      <span class="text-caption text-medium-emphasis">{{ row.channel_name }} · {{ row.conversation_id }}</span>
+                      <span v-for="(evidence, index) in keywordEvidence(row)" :key="index" class="text-body-2 evidence">{{ evidence }}</span>
+                      <span class="text-body-2 evidence conversation-summary">{{ row.insight?.summary || t('qualityInsight.noSummary') }}</span>
+                    </span>
+                    <v-icon size="small" :icon="expandedConversations[row.conversation_id] ? 'mdi-chevron-up' : 'mdi-chevron-down'" />
+                  </button>
                   <v-btn
-                    class="conversation-link pa-0"
+                    class="conversation-link"
+                    icon="mdi-open-in-new"
+                    size="small"
                     variant="text"
                     color="primary"
-                    append-icon="mdi-arrow-right"
+                    :title="t('qualityInsight.openMessages')"
                     :to="{ name: 'messages', params: { tenantId }, query: { conv: row.conversation_id, channel_id: row.channel_id, tab: 'messages' } }"
-                  >{{ row.customer_name || t('qualityInsight.messengerCustomer') }}</v-btn>
-                  <div class="text-caption text-medium-emphasis mb-2">{{ row.channel_name }} · {{ row.conversation_id }}</div>
-                  <div v-for="(evidence, index) in keywordEvidence(row)" :key="index" class="text-body-2 mb-2 evidence">{{ evidence }}</div>
-                  <p class="text-body-2 mb-0 evidence">{{ row.insight?.summary || t('qualityInsight.noSummary') }}</p>
-                </v-card-text>
+                  />
+                </div>
+
+                <div
+                  v-if="expandedConversations[row.conversation_id]"
+                  :id="`conversation-detail-${row.conversation_id}`"
+                  class="conversation-detail"
+                >
+                  <v-divider />
+                  <div class="conversation-detail-grid">
+                    <section>
+                      <h3 class="detail-title"><v-icon size="small" icon="mdi-chat-outline" />{{ t('qualityInsight.transcript') }}</h3>
+                      <div v-if="loadingConversations[row.conversation_id]" class="detail-state">
+                        <v-progress-circular indeterminate size="24" width="2" />
+                        <span>{{ t('qualityInsight.loadingConversation') }}</span>
+                      </div>
+                      <div v-else-if="conversationErrors[row.conversation_id]" class="detail-state text-error">
+                        <span>{{ t('qualityInsight.loadConversationError') }}</span>
+                        <v-btn size="small" variant="text" color="primary" @click="loadConversation(row, true)">{{ t('qualityInsight.retry') }}</v-btn>
+                      </div>
+                      <div v-else-if="conversationMessages[row.conversation_id]?.length" class="chat-transcript">
+                        <article
+                          v-for="message in conversationMessages[row.conversation_id]"
+                          :key="message.id"
+                          class="chat-message"
+                          :class="message.sender_type === 'agent' ? 'chat-message-agent' : 'chat-message-customer'"
+                        >
+                          <header>
+                            <strong>{{ message.sender_name || (message.sender_type === 'agent' ? row.channel_name : row.customer_name) }}</strong>
+                            <time>{{ formatMessageTime(message.sent_at) }}</time>
+                          </header>
+                          <p v-if="message.content" class="evidence">{{ message.content }}</p>
+                          <span v-else class="text-caption text-medium-emphasis">[{{ message.content_type || t('qualityInsight.attachment') }}]</span>
+                        </article>
+                      </div>
+                      <div v-else class="detail-state text-medium-emphasis">{{ t('qualityInsight.noMessages') }}</div>
+                    </section>
+
+                    <section>
+                      <h3 class="detail-title"><v-icon size="small" icon="mdi-alert-circle-outline" />{{ t('qualityInsight.evaluationDetail') }}</h3>
+                      <v-alert type="success" variant="tonal" density="compact" class="mb-3">
+                        {{ row.insight?.summary || t('qualityInsight.noSummary') }}
+                      </v-alert>
+                      <div class="d-flex align-center flex-wrap ga-2 mb-2">
+                        <v-chip size="x-small" color="warning" variant="tonal">{{ t('qualityInsight.classified') }}</v-chip>
+                        <strong class="text-body-2">{{ selectedKeyword?.label }}</strong>
+                      </div>
+                      <div
+                        v-for="(evidence, index) in keywordEvidence(row)"
+                        :key="index"
+                        class="classification-evidence evidence"
+                      >{{ evidence }}</div>
+                      <p v-if="!keywordEvidence(row).length" class="text-body-2 text-medium-emphasis mb-0">
+                        {{ t('qualityInsight.noEvidence') }}
+                      </p>
+                    </section>
+                  </div>
+                </div>
               </v-card>
               <p v-if="selectedKeyword && !sourceConversations.length" class="text-body-2 text-medium-emphasis">{{ t('qualityInsight.noConversations') }}</p>
             </div>
@@ -84,6 +154,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import api from '../api'
 import ShapeWordcloud from './ShapeWordcloud.vue'
 import { normalizeInsightLabel, type AggregateItem, type InsightRow } from '../utils/service-quality'
 
@@ -100,13 +171,26 @@ interface SourceConversation extends InsightRow {
   channel_name: string
 }
 
+interface ConversationMessage {
+  id: string
+  sender_type: string
+  sender_name: string
+  content: string
+  content_type: string
+  sent_at: string
+}
+
 const props = defineProps<{ groups: InsightGroup[]; conversations: SourceConversation[]; tenantId: string }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const cloudLimit = 40
 const dialog = ref(false)
 const selectedKind = ref('')
 const selectedKey = ref('')
 const keywordSearch = ref('')
+const expandedConversations = ref<Record<string, boolean>>({})
+const conversationMessages = ref<Record<string, ConversationMessage[]>>({})
+const loadingConversations = ref<Record<string, boolean>>({})
+const conversationErrors = ref<Record<string, boolean>>({})
 const selectedGroup = computed(() => props.groups.find(group => group.kind === selectedKind.value))
 const selectedKeyword = computed(() => selectedGroup.value?.items.find(item => item.key === selectedKey.value))
 const filteredKeywords = computed(() => {
@@ -123,6 +207,38 @@ function openSegment(kind: string, key?: string) {
   selectedKey.value = key || props.groups.find(group => group.kind === kind)?.items[0]?.key || ''
   keywordSearch.value = ''
   dialog.value = true
+}
+
+async function toggleConversation(row: SourceConversation) {
+  const id = row.conversation_id
+  expandedConversations.value[id] = !expandedConversations.value[id]
+  if (expandedConversations.value[id] && !conversationMessages.value[id] && !loadingConversations.value[id]) {
+    await loadConversation(row)
+  }
+}
+
+async function loadConversation(row: SourceConversation, force = false) {
+  const id = row.conversation_id
+  const tenantId = props.tenantId
+  if (!force && (conversationMessages.value[id] || loadingConversations.value[id])) return
+  loadingConversations.value[id] = true
+  conversationErrors.value[id] = false
+  try {
+    const { data } = await api.get(`/tenants/${tenantId}/conversations/${id}/messages`)
+    if (props.tenantId !== tenantId) return
+    conversationMessages.value[id] = Array.isArray(data.messages) ? data.messages : []
+  } catch {
+    if (props.tenantId !== tenantId) return
+    conversationErrors.value[id] = true
+  } finally {
+    if (props.tenantId === tenantId) loadingConversations.value[id] = false
+  }
+}
+
+function formatMessageTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString(locale.value === 'en' ? 'en-US' : 'vi-VN', { dateStyle: 'short', timeStyle: 'short' })
 }
 
 function keywordEvidence(row: SourceConversation): string[] {
@@ -148,7 +264,14 @@ function keywordEvidence(row: SourceConversation): string[] {
   return []
 }
 
-watch(() => props.tenantId, () => { dialog.value = false })
+watch(() => props.tenantId, () => {
+  dialog.value = false
+  expandedConversations.value = {}
+  conversationMessages.value = {}
+  loadingConversations.value = {}
+  conversationErrors.value = {}
+})
+watch(selectedKey, () => { expandedConversations.value = {} })
 // Keep the open detail in sync with refreshed report data.
 watch(selectedGroup, group => {
   if (!group?.items.length) dialog.value = false
@@ -194,8 +317,25 @@ button:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-o
 .keyword-label { min-width: 0; overflow-wrap: anywhere; }
 .keyword-count { flex: 0 0 auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .keyword-row.selected, .keyword-row:hover { background: rgba(var(--v-theme-primary), .09); color: rgb(var(--v-theme-primary)); }
-.conversation-link { max-width: 100%; height: auto; min-height: 32px; }
-.conversation-link :deep(.v-btn__content) { white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.conversation-card { overflow: hidden; }
+.conversation-card-header { display: flex; align-items: stretch; }
+.conversation-toggle { display: flex; flex: 1 1 auto; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; padding: 16px; text-align: left; cursor: pointer; }
+.conversation-heading { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.conversation-summary { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.conversation-link { align-self: center; flex: 0 0 auto; margin-inline-end: 8px; }
+.conversation-detail { padding: 0 16px 16px; }
+.conversation-detail-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(260px, 1fr); gap: 20px; padding-top: 16px; }
+.detail-title { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; color: rgb(var(--v-theme-on-surface)); font-size: 13px; font-weight: 700; }
+.detail-state { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 120px; font-size: 13px; }
+.chat-transcript { max-height: 420px; overflow-y: auto; padding: 8px; border-radius: 8px; background: rgba(var(--v-theme-on-surface), .04); }
+.chat-message { margin-bottom: 8px; padding: 10px; border: 1px solid rgba(var(--v-theme-on-surface), .12); border-radius: 8px; }
+.chat-message:last-child { margin-bottom: 0; }
+.chat-message-agent { margin-left: 28px; background: rgba(var(--v-theme-primary), .08); }
+.chat-message-customer { margin-right: 28px; background: rgb(var(--v-theme-surface)); }
+.chat-message header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; font-size: 12px; }
+.chat-message time { flex: 0 0 auto; color: rgba(var(--v-theme-on-surface), .58); }
+.chat-message p { margin: 0; font-size: 13px; }
+.classification-evidence { margin-bottom: 8px; padding: 10px; border-left: 3px solid rgb(var(--v-theme-warning)); border-radius: 4px; background: rgba(var(--v-theme-warning), .11); font-size: 13px; }
 .evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .insight-detail-card { height: auto; max-height: 90vh; }
@@ -203,5 +343,9 @@ button:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-o
   .detail-columns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; overflow: visible; }
   .keyword-list { max-height: 220px; }
   .conversation-list { max-height: none; }
+  .conversation-detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .conversation-toggle { padding: 12px; }
+  .chat-message-agent { margin-left: 16px; }
+  .chat-message-customer { margin-right: 16px; }
 }
 </style>

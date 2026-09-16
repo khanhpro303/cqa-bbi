@@ -2,13 +2,16 @@
 import { createI18n } from 'vue-i18n'
 import qualityInsightVi from '../i18n/quality-insight-vi'
 import qualityInsightEn from '../i18n/quality-insight-en'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, RouterLink } from 'vue-router'
 import InsightWordcloudPanel from '../components/InsightWordcloudPanel.vue'
 import insightWordcloudPanelSource from '../components/InsightWordcloudPanel.vue?raw'
+import api from '../api'
 import type { AggregateItem, ConversationInsight } from '../utils/service-quality'
+
+vi.mock('../api', () => ({ default: { get: vi.fn() } }))
 
 // Preserve Vuetify slots and dialog visibility while exercising real router links.
 const Container = defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) })
@@ -40,9 +43,14 @@ const ShapeWordcloud = defineComponent({
 })
 const stubs = Object.fromEntries([
   'VRow', 'VCol', 'VIcon', 'VCard', 'VCardTitle', 'VCardText', 'VSpacer', 'VDivider',
+  'VAlert', 'VChip', 'VProgressCircular',
 ].map(name => [name, Container]))
 const wrappers: VueWrapper[] = []
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
+beforeEach(() => {
+  vi.mocked(api.get).mockReset()
+  vi.mocked(api.get).mockResolvedValue({ data: { messages: [] } })
+})
 
 const keyword = (key: string, label: string, conversationIds: string[]): AggregateItem => ({
   key, label, conversationIds, count: conversationIds.length,
@@ -67,7 +75,7 @@ async function render(items: AggregateItem[], conversations = [conversation('a')
   wrappers.push(wrapper)
   return { wrapper, router, i18n }
 }
-const sourceIds = (wrapper: VueWrapper) => wrapper.findAll('.conversation-link').map(link => link.text())
+const sourceIds = (wrapper: VueWrapper) => wrapper.findAll('.conversation-heading strong').map(name => name.text())
 
 describe('InsightWordcloudPanel', () => {
   it('updates open keyword details when the application language switches', async () => {
@@ -131,6 +139,32 @@ describe('InsightWordcloudPanel', () => {
     expect(router.currentRoute.value.name).toBe('messages')
     expect(router.currentRoute.value.params).toEqual({ tenantId: 'tenant-one' })
     expect(router.currentRoute.value.query).toEqual({ conv: 'b', channel_id: 'channel-b', tab: 'messages' })
+  })
+
+  it('expands a conversation card, loads its transcript once, and keeps the evaluation beside it', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { messages: [
+      { id: 'm1', sender_type: 'customer', sender_name: 'Khách a', content: 'Cho mình hỏi giá', content_type: 'text', sent_at: '2026-09-16T09:00:00+07:00' },
+      { id: 'm2', sender_type: 'agent', sender_name: 'Tư vấn viên', content: 'Dạ sản phẩm có giá 500.000đ', content_type: 'text', sent_at: '2026-09-16T09:01:00+07:00' },
+    ] } })
+    const { wrapper } = await render([keyword('price', 'Hỏi giá', ['a'])])
+    await wrapper.get('.cloud-word').trigger('click')
+
+    const toggle = wrapper.get('.conversation-toggle')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    await toggle.trigger('click')
+    await flushPromises()
+
+    expect(api.get).toHaveBeenCalledWith('/tenants/tenant-one/conversations/a/messages')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('.chat-transcript').text()).toContain('Cho mình hỏi giá')
+    expect(wrapper.get('.chat-transcript').text()).toContain('Dạ sản phẩm có giá 500.000đ')
+    expect(wrapper.get('.conversation-detail').text()).toContain('Đánh giá chi tiết')
+    expect(wrapper.get('.conversation-detail').text()).toContain('Tóm tắt a')
+
+    await toggle.trigger('click')
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(api.get).toHaveBeenCalledTimes(1)
   })
 
   it('refreshes open detail counts and sources, selects a remaining keyword, and closes removed groups', async () => {
