@@ -293,7 +293,13 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 			if !transcriptSince.IsZero() {
 				mq = mq.Where("sent_at > ?", transcriptSince)
 			}
-			mq.Order("sent_at ASC").Find(&messages)
+			if err := mq.Order("sent_at ASC").Find(&messages).Error; err != nil {
+				errorCount++
+				if firstAIErr == "" {
+					firstAIErr = fmt.Sprintf("load messages: %v", err)
+				}
+				continue
+			}
 
 			if len(messages) == 0 {
 				continue
@@ -391,13 +397,21 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 complete:
 	// Complete run
 	finishedAt := time.Now()
-	summaryJSON, _ := json.Marshal(map[string]interface{}{
+	summary := map[string]interface{}{
 		"conversations_found":    len(conversations),
 		"conversations_analyzed": analyzedCount,
 		"conversations_passed":   passCount,
 		"conversations_errors":   errorCount,
 		"issues_found":           issuesFound,
-	})
+	}
+	if analyzedCount == 0 && errorCount == 0 && ctx.Err() == nil {
+		if len(conversations) == 0 {
+			summary["empty_reason"] = "no_matching_conversations"
+		} else {
+			summary["empty_reason"] = "no_messages"
+		}
+	}
+	summaryJSON, _ := json.Marshal(summary)
 	runStatus := "success"
 	if analyzedCount == 0 && errorCount > 0 {
 		runStatus = "error"
@@ -643,7 +657,9 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 				Confidence:     t.Confidence,
 				CreatedAt:      now,
 			}
-			db.DB.Create(&result)
+			if err := db.DB.Create(&result).Error; err != nil {
+				return count, false, fmt.Errorf("save classification tag: %w", err)
+			}
 			count++
 		}
 
@@ -675,12 +691,14 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 			}
 		}
 
+		passed = len(classResult.Tags) > 0
+
 		// Create conversation_evaluation record for classified conversations
 		if len(classResult.Tags) > 0 {
 			evalDetail, _ := json.Marshal(map[string]interface{}{
 				"summary": classResult.Summary,
 			})
-			db.DB.Create(&models.JobResult{
+			if err := db.DB.Create(&models.JobResult{
 				ID:             pkg.NewUUID(),
 				JobRunID:       runID,
 				TenantID:       tenantID,
@@ -692,7 +710,9 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 				AIRawResponse:  aiResponse,
 				Confidence:     1.0,
 				CreatedAt:      now,
-			})
+			}).Error; err != nil {
+				return count, false, fmt.Errorf("save classification evaluation: %w", err)
+			}
 		}
 
 		// No tags matched — mark conversation as SKIP
@@ -700,7 +720,7 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 			skipDetail, _ := json.Marshal(map[string]interface{}{
 				"summary": classResult.Summary,
 			})
-			db.DB.Create(&models.JobResult{
+			if err := db.DB.Create(&models.JobResult{
 				ID:             pkg.NewUUID(),
 				JobRunID:       runID,
 				TenantID:       tenantID,
@@ -712,7 +732,9 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 				AIRawResponse:  aiResponse,
 				Confidence:     1.0,
 				CreatedAt:      now,
-			})
+			}).Error; err != nil {
+				return count, false, fmt.Errorf("save classification evaluation: %w", err)
+			}
 		}
 	}
 
@@ -782,7 +804,13 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 		if !since.IsZero() {
 			bmq = bmq.Where("sent_at > ?", since)
 		}
-		bmq.Order("sent_at ASC").Find(&messages)
+		if err := bmq.Order("sent_at ASC").Find(&messages).Error; err != nil {
+			errorCount++
+			if firstErr == "" {
+				firstErr = fmt.Sprintf("load messages: %v", err)
+			}
+			continue
+		}
 		if len(messages) == 0 {
 			continue
 		}

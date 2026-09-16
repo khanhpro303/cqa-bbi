@@ -715,8 +715,10 @@
           </v-btn>
         </div>
 
-        <div v-if="!filteredGroupedResults.length" class="text-center text-grey pa-4">
-          {{ $t('no_issues') }}
+        <div v-if="resultsLoading" class="text-center pa-4">Đang tải kết quả...</div>
+        <v-alert v-else-if="resultsError" type="error" variant="tonal">{{ resultsError }}</v-alert>
+        <div v-else-if="!filteredGroupedResults.length" class="text-center text-grey pa-4">
+          {{ emptyResultsMessage }}
         </div>
         <!-- Table view: Classification -->
         <div v-else-if="viewMode === 'table' && isClassification">
@@ -936,8 +938,8 @@
               <th>{{ $t('sent_at') }}</th>
               <th>{{ $t('status') }}</th>
               <th>{{ $t('conversations_analyzed') }}</th>
-              <th>{{ $t('conversations_passed') }}</th>
-              <th>{{ $t('issues_found') }}</th>
+              <th>{{ isClassification ? 'Có nhãn / Đã phân tích' : $t('conversations_passed') }}</th>
+              <th>{{ isClassification ? 'Nhãn tìm thấy' : $t('issues_found') }}</th>
               <th>{{ $t('actions') }}</th>
             </tr>
           </thead>
@@ -945,9 +947,9 @@
             <tr v-for="run in paginatedRuns" :key="run.id">
               <td class="text-body-2">{{ formatDateTime(run.started_at) }}</td>
               <td>
-                <v-chip size="x-small" :color="statusColor(run.status)" variant="tonal">
+                <v-chip size="x-small" :color="emptyAnalysisRunReason(run.status, run.summary) ? 'grey' : statusColor(run.status)" variant="tonal">
                   <v-progress-circular v-if="run.status === 'running'" indeterminate size="10" width="1" class="mr-1" />
-                  {{ run.status }}
+                  {{ emptyAnalysisRunReason(run.status, run.summary) ? 'Không có dữ liệu' : run.status }}
                 </v-chip>
               </td>
               <template v-if="job?.job_type === 'chatbot_toggle' || job?.job_type === 'erp_product_cache' || job?.job_type === 'erp_customer_cache'">
@@ -973,13 +975,17 @@
               <template v-else>
                 <td>{{ parseSummary(run.summary).conversations_analyzed || 0 }}</td>
                 <td>
-                  <span class="text-success font-weight-medium">{{ parseSummary(run.summary).conversations_passed || 0 }}</span>
-                  <span class="text-grey"> / {{ parseSummary(run.summary).conversations_analyzed || 0 }}</span>
+                  <template v-if="parseSummary(run.summary).conversations_analyzed > 0">
+                    <span class="text-success font-weight-medium">{{ parseSummary(run.summary).conversations_passed || 0 }}</span>
+                    <span class="text-grey"> / {{ parseSummary(run.summary).conversations_analyzed }}</span>
+                  </template>
+                  <span v-else>—</span>
                 </td>
                 <td>{{ parseSummary(run.summary).issues_found || 0 }}</td>
                 <td>
                   <span v-if="run.error_message" class="text-caption text-error">{{ run.error_message }}</span>
-                  <v-btn v-else size="small" variant="text" color="primary" @click="loadResults(run.id)">
+                  <span v-else-if="emptyAnalysisRunReason(run.status, run.summary)" class="text-caption text-medium-emphasis">{{ emptyAnalysisRunReason(run.status, run.summary) }}</span>
+                  <v-btn v-else-if="run.status !== 'running'" size="small" variant="text" color="primary" @click="loadResults(run.id)">
                     {{ $t('view_results') }}
                   </v-btn>
                 </td>
@@ -1210,6 +1216,7 @@
 </template>
 
 <script setup lang="ts">
+import { emptyAnalysisRunReason } from '../../utils/analysis-run'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDisplay } from 'vuetify'
@@ -1261,6 +1268,20 @@ function tagColor(tag: string): string {
   return idx >= 0 ? TAG_COLORS[idx % TAG_COLORS.length] : TAG_COLORS[0]
 }
 const selectedRunId = ref<string | null>(null)
+const resultsLoading = ref(false)
+const resultsError = ref('')
+const emptyResultsMessage = computed(() => {
+  if (groupedResults.value.length) return 'Không có kết quả phù hợp với bộ lọc hiện tại.'
+  const run = jobStore.jobRuns.find(r => r.id === selectedRunId.value)
+  if (run) {
+    if (run.error_message) return run.error_message
+    const reason = emptyAnalysisRunReason(run.status, run.summary)
+    if (reason) return reason + ' Chọn “Tất cả kết quả” để xem các lần chạy trước.'
+    return 'Không có kết quả được lưu cho lần chạy này. Chọn “Tất cả kết quả” để xem các lần chạy khác.'
+  }
+  return 'Chưa có kết quả phân tích được lưu cho công việc này.'
+})
+
 const cancelling = ref(false)
 const triggering = ref(false)
 const isJobRunning = computed(() => jobStore.jobRuns?.[0]?.status === 'running')
@@ -2075,14 +2096,32 @@ async function loadResults(runId: string) {
   resultFilter.value = 'all'
   resultPage.value = 1
   activeTab.value = 'results'
-  await jobStore.fetchJobResults(tenantId.value, jobId.value, runId)
+  resultsLoading.value = true
+  resultsError.value = ''
+  jobStore.jobResults = []
+  try {
+    await jobStore.fetchJobResults(tenantId.value, jobId.value, runId)
+  } catch {
+    resultsError.value = 'Không tải được kết quả. Vui lòng thử lại.'
+  } finally {
+    resultsLoading.value = false
+  }
 }
 
 async function loadAllResults() {
   selectedRunId.value = null
   resultFilter.value = 'all'
   resultPage.value = 1
-  await jobStore.fetchAllJobResults(tenantId.value, jobId.value)
+  resultsLoading.value = true
+  resultsError.value = ''
+  jobStore.jobResults = []
+  try {
+    await jobStore.fetchAllJobResults(tenantId.value, jobId.value)
+  } catch {
+    resultsError.value = 'Không tải được kết quả. Vui lòng thử lại.'
+  } finally {
+    resultsLoading.value = false
+  }
 }
 
 async function clearResults() {
