@@ -27,6 +27,24 @@ func TestMessengerPromptOverrideRetainsJobRules(t *testing.T) {
 	}
 }
 
+func TestMessengerPromptAlwaysIncludesMandatorySenderRoleRules(t *testing.T) {
+	config := `{"profile":"messenger_insights","rules":[]}`
+	for _, override := range []string{"", "Prompt tùy chỉnh {{rules}}"} {
+		prompt := BuildClassificationPrompt(config, override)
+		for _, expected := range []string{
+			"## Quy tắc vai trò bắt buộc",
+			"(customer)",
+			"(agent)",
+			"không có dòng (customer)",
+			"không có nghĩa khách đã cung cấp",
+		} {
+			if !strings.Contains(prompt, expected) {
+				t.Errorf("prompt override %q missing mandatory role rule %q: %s", override, expected, prompt)
+			}
+		}
+	}
+}
+
 func TestMessengerPromptDoesNotOverrideLegacyClassification(t *testing.T) {
 	config := `[{"name":"Hỏi giá","description":"Khách hỏi giá"}]`
 	if got, want := BuildClassificationPrompt(config, "Messenger override {{rules}}"), BuildClassificationPrompt(config); got != want {

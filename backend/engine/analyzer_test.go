@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,55 @@ func TestTranscriptSinceForJob(t *testing.T) {
 	qc := models.Job{JobType: "qc_analysis", RulesConfig: `{"profile":"messenger_insights","rules":[]}`}
 	if got := transcriptSinceForJob(qc, since); !got.Equal(since) {
 		t.Fatalf("non-classification jobs should retain cutoff: %v", got)
+	}
+}
+
+func TestMessengerInsightsGuardSkipsAgentOnlyConversation(t *testing.T) {
+	job := models.Job{
+		JobType:     "classification",
+		RulesConfig: `{"profile":"messenger_insights","rules":[{"name":"Hỏi giá","description":"Khách hỏi giá"}]}`,
+	}
+	messages := []models.Message{
+		{SenderType: "agent", SenderName: "LS2 Helmets Vietnam", Content: "Áo LS2 Bolton Air giá 3.590.000đ. Cho em xin chiều cao và cân nặng để tư vấn size."},
+		{SenderType: "agent", SenderName: "LS2 Helmets Vietnam", Content: "Bạn đang phản hồi bình luận của người dùng về bài viết trên Trang của mình."},
+	}
+
+	raw, guarded := messengerInsightsGuardResponse(job, messages)
+	if !guarded {
+		t.Fatal("agent-only Messenger conversation must be handled without calling AI")
+	}
+	response, err := ai.ParseClassificationResponse(raw)
+	if err != nil {
+		t.Fatalf("guard response must be valid classification JSON: %v", err)
+	}
+	if len(response.Tags) != 0 {
+		t.Fatalf("agent-only conversation must not receive customer-intent tags: %#v", response.Tags)
+	}
+	if !strings.Contains(response.Summary, "Chưa ghi nhận tin nhắn từ khách hàng") || !strings.Contains(response.Summary, "2 tin nhắn từ Fanpage") {
+		t.Fatalf("unexpected safe summary: %q", response.Summary)
+	}
+	if response.Insights == nil || len(response.Insights.Intents) != 0 || len(response.Insights.Products) != 0 || len(response.Insights.Feedback) != 0 {
+		t.Fatalf("agent-only conversation must have empty customer insights: %#v", response.Insights)
+	}
+	if response.Insights.LeadQuality.Level != "unknown" || response.Insights.LeadQuality.Evidence != "" {
+		t.Fatalf("agent-only lead quality must be unknown without evidence: %#v", response.Insights.LeadQuality)
+	}
+}
+
+func TestMessengerInsightsGuardLeavesCustomerAndOtherJobsForAnalysis(t *testing.T) {
+	messenger := models.Job{JobType: "classification", RulesConfig: `{"profile":"messenger_insights","rules":[]}`}
+	withCustomer := []models.Message{{SenderType: "customer", Content: "Áo này giá bao nhiêu?"}}
+	if raw, guarded := messengerInsightsGuardResponse(messenger, withCustomer); guarded || raw != "" {
+		t.Fatalf("conversation with a customer message must continue to AI: guarded=%v raw=%q", guarded, raw)
+	}
+
+	legacy := models.Job{JobType: "classification", RulesConfig: `[]`}
+	qc := models.Job{JobType: "qc_analysis", RulesConfig: `{"profile":"messenger_insights","rules":[]}`}
+	agentOnly := []models.Message{{SenderType: "agent", Content: "Xin chào"}}
+	for _, job := range []models.Job{legacy, qc} {
+		if raw, guarded := messengerInsightsGuardResponse(job, agentOnly); guarded || raw != "" {
+			t.Fatalf("non-Messenger-insights job must keep existing behavior: type=%s guarded=%v raw=%q", job.JobType, guarded, raw)
+		}
 	}
 }
 
