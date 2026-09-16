@@ -22,6 +22,9 @@ func TestServiceQualityRejectsInvalidMutationsBeforeDB(t *testing.T) {
 		{"missing resolution marker", `{"note":"Đã gọi khách"}`, ResolveServiceConversation},
 		{"blank reason", `{"through_message_id":"message","note":"   "}`, ResolveServiceConversation},
 		{"oversized reason", `{"through_message_id":"message","note":"` + strings.Repeat("a", 501) + `"}`, ResolveServiceConversation},
+		{"missing stale conversation ids", `{}`, ReanalyseStaleJobConversations},
+		{"empty stale conversation ids", `{"conversation_ids":[]}`, ReanalyseStaleJobConversations},
+		{"blank stale conversation id", `{"conversation_ids":[" "]}`, ReanalyseStaleJobConversations},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := gin.New()
@@ -57,5 +60,17 @@ func TestServiceQualityPermissionsDenyWithoutDatabaseAccess(t *testing.T) {
 				t.Fatalf("got %d: %s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestStaleReanalysisRequiresJobWritePermission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("tenant_role", "member"); c.Set("tenant_permissions", `{}`) })
+	r.POST("/test", middleware.RequirePermission("jobs", "w"), ReanalyseStaleJobConversations)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(`{"conversation_ids":["conversation"]}`)))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
 }

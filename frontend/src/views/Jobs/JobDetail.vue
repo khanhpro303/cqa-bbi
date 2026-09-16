@@ -49,8 +49,12 @@
             <v-radio value="since_last">
               <template #label>
                 <div>
-                  <div class="font-weight-medium">Chạy từ lần gần nhất</div>
-                  <div class="text-caption text-grey">Lấy cuộc chat gần nhất đã đánh giá làm mốc. Cuộc chat cũ hơn mốc sẽ không được đánh giá dù chưa phân tích.</div>
+                  <div class="font-weight-medium">{{ isMessengerInsights ? 'Chạy nội dung cần phân tích' : 'Chạy từ lần gần nhất' }}</div>
+                  <div class="text-caption text-grey">
+                    {{ isMessengerInsights
+                      ? 'Tự động lấy cuộc chat chưa phân tích hoặc có tin nhắn mới hơn kết quả AI hiện tại.'
+                      : 'Lấy cuộc chat gần nhất đã đánh giá làm mốc. Cuộc chat cũ hơn mốc sẽ không được đánh giá dù chưa phân tích.' }}
+                  </div>
                 </div>
               </template>
             </v-radio>
@@ -1260,6 +1264,16 @@ const job = ref<Record<string, any> | null>(null)
 const tenantAIProvider = ref('')
 const tenantAIModel = ref('')
 const isClassification = computed(() => job.value?.job_type === 'classification')
+const isMessengerInsights = computed(() => {
+  if (!isClassification.value) return false
+  try {
+    const raw = job.value?.rules_config
+    const config = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return config?.profile === 'messenger_insights'
+  } catch {
+    return false
+  }
+})
 
 const TAG_COLORS = ['#7E57C2', '#1E88E5', '#00897B', '#FB8C00', '#D81B60', '#00ACC1', '#3949AB', '#E64A19', '#7CB342', '#6D4C41']
 function tagColor(tag: string): string {

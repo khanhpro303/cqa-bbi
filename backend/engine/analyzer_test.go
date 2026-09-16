@@ -111,6 +111,28 @@ func TestBuildConversationInsightDetailIncludesSourceTimestamp(t *testing.T) {
 	}
 }
 
+func TestPendingInsightConversationIDsIncludesNeverAnalysedAndStale(t *testing.T) {
+	latest := time.Date(2026, 9, 16, 8, 30, 0, 0, time.UTC)
+	candidates := []staleInsightCandidate{
+		{ID: "never"},
+		{ID: "fresh", InsightID: "result-fresh", InsightJobID: "job-a", LastMessageAt: &latest, Detail: `{"source_last_message_at":"2026-09-16T08:30:00Z"}`},
+		{ID: "new-message", InsightID: "result-stale", InsightJobID: "job-a", LastMessageAt: &latest, Detail: `{"source_last_message_at":"2026-09-16T08:00:00Z"}`},
+		{ID: "legacy", InsightID: "result-legacy", InsightJobID: "job-b", LastMessageAt: &latest, Detail: `{}`},
+	}
+	got := pendingInsightConversationIDs(candidates, "", 0)
+	if len(got) != 3 || got[0] != "never" || got[1] != "new-message" || got[2] != "legacy" {
+		t.Fatalf("pendingInsightConversationIDs() = %#v; want never-analysed and stale conversations", got)
+	}
+	targeted := pendingInsightConversationIDs(candidates, "job-a", 0)
+	if len(targeted) != 1 || targeted[0] != "new-message" {
+		t.Fatalf("targeted pending IDs = %#v; want only stale insight from requested job", targeted)
+	}
+	limited := pendingInsightConversationIDs(candidates, "", 2)
+	if len(limited) != 2 || limited[0] != "never" || limited[1] != "new-message" {
+		t.Fatalf("limited pending IDs = %#v", limited)
+	}
+}
+
 func TestMapBatchResultsRejectsUnknownDuplicateAndCountsMissing(t *testing.T) {
 	results := []json.RawMessage{
 		json.RawMessage(`{"conversation_id":"conv-b","summary":"B"}`),

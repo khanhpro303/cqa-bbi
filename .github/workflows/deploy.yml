@@ -107,10 +107,10 @@ jobs:
               exit 1
             fi
             table_count=$(docker exec -i cqa-db sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --user=root --batch --skip-column-names "$MYSQL_DATABASE"' <<'SQL'
-            SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('service_resolutions','messenger_label_states','messenger_label_snapshots');
+            SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('service_resolutions','messenger_label_states','messenger_label_snapshots','messenger_intake_attributions');
             SQL
             )
-            if [ "$table_count" != '3' ]; then
+            if [ "$table_count" != '4' ]; then
               echo "Messenger migration verification failed."
               rollback_app
               exit 1

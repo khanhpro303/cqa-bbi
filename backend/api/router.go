@@ -111,6 +111,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 		// Webhooks
 		api.POST("/webhooks/zalo", handlers.ZaloWebhookHandler(cfg))
+		api.GET("/webhooks/facebook", handlers.FacebookWebhookHandler(cfg))
+		api.POST("/webhooks/facebook", handlers.FacebookWebhookHandler(cfg))
 
 		// Initial setup (only works when no users exist)
 		api.GET("/setup/status", handlers.SetupStatus)
@@ -195,6 +197,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			// Dashboard
 			tenant.GET("/service-quality", middleware.RequirePermission("messages", "r"), handlers.GetServiceQuality)
 			tenant.GET("/messenger-labels", middleware.RequirePermission("messages", "r"), handlers.GetMessengerLabels)
+			tenant.GET("/messenger-intake/:channelId", middleware.RequirePermission("messages", "r"), handlers.GetMessengerIntakeAttributions)
 			tenant.POST("/messenger-labels/:channelId/catalog", middleware.RequirePermission("settings", "w"), handlers.RefreshMessengerLabelCatalog)
 			tenant.PUT("/messenger-labels/:channelId/policy", middleware.RequirePermission("settings", "w"), handlers.SaveMessengerLabelPolicy)
 			tenant.POST("/messenger-labels/:channelId/sync", middleware.RequirePermission("messages", "w"), handlers.SyncMessengerLabels)
@@ -210,6 +213,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.PUT("/jobs/:jobId", middleware.RequirePermission("jobs", "w"), handlers.UpdateJob)
 			tenant.DELETE("/jobs/:jobId", middleware.RequirePermission("jobs", "d"), handlers.DeleteJob)
 			tenant.POST("/jobs/:jobId/trigger", middleware.RequirePermission("jobs", "w"), handlers.TriggerJob)
+			tenant.POST("/jobs/:jobId/reanalyse-stale", middleware.RequirePermission("jobs", "w"), handlers.ReanalyseStaleJobConversations)
 			tenant.POST("/jobs/:jobId/test-run", middleware.RequirePermission("jobs", "w"), handlers.TestRunJob)
 			tenant.POST("/jobs/:jobId/cancel", middleware.RequirePermission("jobs", "w"), handlers.CancelJob)
 			tenant.GET("/jobs/:jobId/runs", middleware.RequirePermission("jobs", "r"), handlers.ListJobRuns)

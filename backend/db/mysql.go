@@ -57,6 +57,7 @@ func AutoMigrate() error {
 		&models.ServiceResolution{},
 		&models.MessengerLabelState{},
 		&models.MessengerLabelSnapshot{},
+		&models.MessengerIntakeAttribution{},
 		&models.Job{},
 		&models.JobRun{},
 		&models.JobResult{},

@@ -199,6 +199,17 @@
             hide-details
             style="max-width: 190px"
           />
+          <v-btn
+            v-if="authStore.canEdit('jobs') && staleInsightCount"
+            color="warning"
+            variant="tonal"
+            prepend-icon="mdi-creation"
+            :loading="reanalysingStale"
+            :disabled="loading"
+            @click="reanalyseStaleInsights"
+          >
+            {{ t('sq_reanalyse_now', { count: staleInsightCount }) }}
+          </v-btn>
           <v-text-field
             v-model="search"
             :label="t('sq_search_customer')"
@@ -442,6 +453,7 @@ interface Row {
   turns: Turn[]
   insight?: ConversationInsight
   insight_at?: string
+  insight_job_id?: string
   insight_stale: boolean
   resolution_note?: string
   history_from?: string
@@ -494,6 +506,7 @@ const resolveNote = ref('')
 const resolving = ref(false)
 const policyDialog = ref(false)
 const savingPolicy = ref(false)
+const reanalysingStale = ref(false)
 const policyForm = ref<Policy>({ timezone: 'Asia/Ho_Chi_Minh', work_start: '08:00', work_end: '22:00', all_day: false, target_minutes: 5, overdue_minutes: 15 })
 const snackbar = ref(false)
 const snackText = ref('')
@@ -544,6 +557,18 @@ const filteredRows = computed(() => {
     return `${row.customer_name} ${row.channel_name} ${row.insight?.summary || ''}`.toLocaleLowerCase(locale.value).includes(term)
   })
 })
+
+const staleInsightGroups = computed(() => {
+  const groups = new Map<string, string[]>()
+  for (const row of report.value?.rows || []) {
+    if (!row.insight_stale || !row.insight_job_id) continue
+    const ids = groups.get(row.insight_job_id) || []
+    ids.push(row.conversation_id)
+    groups.set(row.insight_job_id, ids)
+  }
+  return groups
+})
+const staleInsightCount = computed(() => [...staleInsightGroups.value.values()].reduce((total, ids) => total + ids.length, 0))
 
 watch([statusFilter, search, tenantId], () => { conversationPage.value = 1 })
 
@@ -655,6 +680,27 @@ async function resolveConversation() {
     }
   } finally {
     resolving.value = false
+  }
+}
+
+async function reanalyseStaleInsights() {
+  if (!staleInsightCount.value || reanalysingStale.value) return
+  reanalysingStale.value = true
+  const targetTenant = tenantId.value
+  const groups = [...staleInsightGroups.value.entries()]
+  const requestedCount = groups.reduce((total, [, ids]) => total + ids.length, 0)
+  try {
+    const requests = groups.map(([jobId, conversationIds]) =>
+      api.post(`/tenants/${targetTenant}/jobs/${jobId}/reanalyse-stale`, { conversation_ids: conversationIds }),
+    )
+    await Promise.all(requests)
+    if (tenantId.value !== targetTenant) return
+    showSnack(t('sq_reanalyse_started', { count: requestedCount }), 'success')
+  } catch (error: any) {
+    if (tenantId.value !== targetTenant) return
+    showSnack(error?.response?.data?.error || t('sq_reanalyse_error'), 'error')
+  } finally {
+    reanalysingStale.value = false
   }
 }
 

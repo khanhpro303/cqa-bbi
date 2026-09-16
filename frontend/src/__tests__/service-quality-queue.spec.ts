@@ -7,10 +7,10 @@ import qualityEn from '../i18n/service-quality-en'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ServiceQuality from '../views/ServiceQuality.vue'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn() }))
-vi.mock('../api', () => ({ default: { get: mocks.get } }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), canEditJobs: false }))
+vi.mock('../api', () => ({ default: { get: mocks.get, post: mocks.post } }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ params: { tenantId: 'tenant-one' } }) }))
-vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ canEdit: () => false, canView: () => false }) }))
+vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ canEdit: (resource: string) => resource === 'jobs' && mocks.canEditJobs, canView: () => false }) }))
 
 const Container = defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) })
 const Button = defineComponent({ setup: (_, { slots, attrs }) => () => h('button', attrs, slots.default?.()) })
@@ -38,21 +38,24 @@ const stubs = Object.fromEntries([
 const wrappers: VueWrapper[] = []
 const scrollIntoView = vi.fn()
 
-function report(statuses: string[]) {
+function report(statuses: string[], staleIndexes: number[] = []) {
   return {
     policy: { timezone: 'Asia/Ho_Chi_Minh', work_start: '08:00', work_end: '22:00', all_day: false, target_minutes: 5, overdue_minutes: 15 },
     generated_at: '2026-09-15T03:00:00Z', from: '2026-09-09T00:00:00Z', to: '2026-09-16T00:00:00Z',
     pages: [{ id: 'page-one', name: 'Fanpage A', last_sync_at: null, last_sync_status: '', is_active: true }],
     summary: { answered: 1, on_time: 1, on_time_percent: 100, median_seconds: 60, p90_seconds: 60, first_median_seconds: 60, waiting: statuses.filter(s => s === 'waiting').length, overdue: statuses.filter(s => s === 'overdue').length, resolved: 0 },
-    rows: statuses.map((status, index) => ({ conversation_id: `c${index}`, customer_name: `Khách ${index}`, channel_id: 'page-one', channel_name: 'Fanpage A', last_message_at: null, status, turns: [], insight_stale: false })),
+    rows: statuses.map((status, index) => ({
+      conversation_id: `c${index}`, customer_name: `Khách ${index}`, channel_id: 'page-one', channel_name: 'Fanpage A', last_message_at: null, status, turns: [],
+      insight_stale: staleIndexes.includes(index), insight_job_id: staleIndexes.includes(index) ? `job-${index % 2}` : undefined,
+    })),
     invalid_timestamps: 0, conversations_scanned: statuses.length,
   }
 }
 
 let i18n: ReturnType<typeof createI18n>
-async function render(statuses: string[]) {
+async function render(statuses: string[], staleIndexes: number[] = []) {
   i18n = createI18n({ legacy: false, locale: 'vi', messages: { vi: qualityVi, en: qualityEn } })
-  mocks.get.mockResolvedValue({ data: report(statuses) })
+  mocks.get.mockResolvedValue({ data: report(statuses, staleIndexes) })
   const wrapper = mount(ServiceQuality, {
     attachTo: document.body,
     global: { plugins: [i18n], stubs: { ...stubs, VBtn: Button, VSelect: Field, VTextField: Field, VTextarea: Field, VSwitch: Field, VDataTable: Table, VDialog: Hidden, MetaLabelsPanel: Hidden, InsightWordcloudPanel: Hidden } },
@@ -66,6 +69,9 @@ const rowIds = (wrapper: VueWrapper) => wrapper.findAll('.queue-row').map(row =>
 
 beforeEach(() => {
   mocks.get.mockReset()
+  mocks.post.mockReset()
+  mocks.post.mockResolvedValue({ data: { message: 'stale_reanalysis_started' } })
+  mocks.canEditJobs = false
   scrollIntoView.mockReset()
   vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollIntoView)
 })
@@ -76,6 +82,21 @@ afterEach(() => {
 })
 
 describe('ServiceQuality queue banner navigation', () => {
+  it('reanalyses only rows carrying the stale badge and groups them by insight job', async () => {
+    mocks.canEditJobs = true
+    const wrapper = await render(['answered', 'waiting', 'overdue', 'resolved'], [0, 2, 3])
+    const button = wrapper.findAll('button').find(item => item.text().includes('Phân tích lại ngay'))
+    expect(button?.text()).toContain('(3)')
+
+    await button!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.post).toHaveBeenCalledTimes(2)
+    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-one/jobs/job-0/reanalyse-stale', { conversation_ids: ['c0', 'c2'] })
+    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-one/jobs/job-1/reanalyse-stale', { conversation_ids: ['c3'] })
+    expect(wrapper.text()).toContain('Đã bắt đầu phân tích lại 3 hội thoại')
+  })
+
   it('updates the module language and duration when the locale changes without reloading', async () => {
     const wrapper = await render(['answered', 'overdue'])
     expect(wrapper.text()).toContain('Chất lượng CSKH Messenger')

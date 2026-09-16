@@ -53,6 +53,7 @@ THAM-KHAO-MCP/
 # Agent IDE/runner configs
 .agents/
 .playwright-mcp/
+.gemini/
 
 # Local dev/testing stack (docker-compose, scripts, generated .env.local)
 local-dev/

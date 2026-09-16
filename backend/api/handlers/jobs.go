@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
@@ -397,6 +398,66 @@ func TriggerJob(c *gin.Context) {
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{"message": "job_triggered"})
+}
+
+func ReanalyseStaleJobConversations(c *gin.Context) {
+	var req struct {
+		ConversationIDs []string `json:"conversation_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.ConversationIDs) == 0 || len(req.ConversationIDs) > engine.MaxStaleReanalysisConversations {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("conversation_ids phải có từ 1 đến %d hội thoại", engine.MaxStaleReanalysisConversations)})
+		return
+	}
+	seen := make(map[string]struct{}, len(req.ConversationIDs))
+	ids := make([]string, 0, len(req.ConversationIDs))
+	for _, id := range req.ConversationIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "conversation_ids không hợp lệ"})
+			return
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	tenantID := middleware.GetTenantID(c)
+	jobID := c.Param("jobId")
+	var job models.Job
+	if err := db.DB.Where("id = ? AND tenant_id = ?", jobID, tenantID).First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job_not_found"})
+		return
+	}
+	if job.JobType != "classification" || !ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "công việc không phải phân tích Messenger Insights"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	if _, running := jobCancelFuncs.LoadOrStore(job.ID, cancel); running {
+		cancel()
+		c.JSON(http.StatusConflict, gin.H{"error": "công việc đang chạy; vui lòng chờ hoàn tất"})
+		return
+	}
+	go func() {
+		defer jobCancelFuncs.Delete(job.ID)
+		defer cancel()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("[security] panic in stale reanalysis for job %s: %v", job.Name, recovered)
+			}
+		}()
+		cfg, _ := config.Load()
+		if _, err := engine.NewAnalyzer(cfg).RunJobStale(ctx, job, ids); err != nil {
+			log.Printf("[stale-reanalysis] error for job %s: %v", job.Name, err)
+		}
+	}()
+
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "job.reanalyse_stale", "job", job.ID,
+		fmt.Sprintf("Requested stale reanalysis for %d conversations", len(ids)), "", c.ClientIP())
+	c.JSON(http.StatusAccepted, gin.H{"message": "stale_reanalysis_started", "requested": len(ids)})
 }
 
 func CancelJob(c *gin.Context) {

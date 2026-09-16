@@ -8,6 +8,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/messengerintake"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"gorm.io/gorm"
 )
@@ -128,12 +129,19 @@ func (s *IngestService) upsertConversation(tx *gorm.DB, tenantID, channelID stri
 	metadataJSON, _ := json.Marshal(conv.Metadata)
 
 	if result.Error == nil {
-		if err := tx.Model(&existing).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"customer_name":   conv.CustomerName,
 			"last_message_at": conv.LastMessageAt,
 			"metadata":        string(metadataJSON),
 			"updated_at":      time.Now(),
-		}).Error; err != nil {
+		}
+		if conv.ExternalUserID != "" {
+			updates["external_user_id"] = conv.ExternalUserID
+		}
+		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return "", err
+		}
+		if err := messengerintake.BindConversation(tx, tenantID, channelID, conv.ExternalUserID, existing.ID); err != nil {
 			return "", err
 		}
 		return existing.ID, nil
@@ -156,6 +164,9 @@ func (s *IngestService) upsertConversation(tx *gorm.DB, tenantID, channelID stri
 		UpdatedAt:              time.Now(),
 	}
 	if err := tx.Create(&newConv).Error; err != nil {
+		return "", err
+	}
+	if err := messengerintake.BindConversation(tx, tenantID, channelID, conv.ExternalUserID, newConv.ID); err != nil {
 		return "", err
 	}
 	return newConv.ID, nil

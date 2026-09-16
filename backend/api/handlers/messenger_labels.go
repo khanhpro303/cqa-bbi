@@ -32,6 +32,54 @@ func GetMessengerLabels(c *gin.Context) {
 	c.JSON(http.StatusOK, report)
 }
 
+type messengerIntakeAttributionResponse struct {
+	ConversationID *string   `json:"conversation_id,omitempty"`
+	AdID           string    `json:"ad_id,omitempty"`
+	Ref            string    `json:"ref,omitempty"`
+	Source         string    `json:"source,omitempty"`
+	ReferralType   string    `json:"referral_type,omitempty"`
+	CapturedAt     time.Time `json:"captured_at"`
+}
+
+// GetMessengerIntakeAttributions exposes tenant-scoped, non-secret proof that
+// webhook referrals were stored. Raw payloads and PSIDs stay server-side.
+func GetMessengerIntakeAttributions(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	channelID := c.Param("channelId")
+	var channel models.Channel
+	if err := db.DB.WithContext(c.Request.Context()).Where(
+		"id = ? AND tenant_id = ? AND channel_type = ?", channelID, tenantID, "facebook",
+	).First(&channel).Error; err != nil {
+		messengerLabelError(c, err)
+		return
+	}
+
+	query := func() *gorm.DB {
+		return db.DB.WithContext(c.Request.Context()).Model(&models.MessengerIntakeAttribution{}).
+			Where("tenant_id = ? AND channel_id = ?", tenantID, channel.ID)
+	}
+	var total, withAdID, unbound int64
+	if err := query().Count(&total).Error; err != nil {
+		messengerLabelError(c, err)
+		return
+	}
+	if err := query().Where("ad_id <> ''").Count(&withAdID).Error; err != nil {
+		messengerLabelError(c, err)
+		return
+	}
+	if err := query().Where("conversation_id IS NULL").Count(&unbound).Error; err != nil {
+		messengerLabelError(c, err)
+		return
+	}
+	rows := []messengerIntakeAttributionResponse{}
+	if err := query().Select("conversation_id,ad_id,ref,source,referral_type,captured_at").
+		Order("captured_at DESC").Limit(20).Scan(&rows).Error; err != nil {
+		messengerLabelError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"total": total, "with_ad_id": withAdID, "unbound": unbound, "rows": rows})
+}
+
 func messengerLabelChannel(c *gin.Context) (models.Channel, bool) {
 	var channel models.Channel
 	err := db.DB.WithContext(c.Request.Context()).Where("id = ? AND tenant_id = ? AND channel_type = ?", c.Param("channelId"), middleware.GetTenantID(c), "facebook").First(&channel).Error

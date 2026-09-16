@@ -106,12 +106,14 @@ func (f *FacebookAdapter) FetchRecentConversations(ctx context.Context, since ti
 
 			// Extract participant name (the non-page user)
 			customerName := ""
+			customerID := ""
 			if participants, ok := conv["participants"].(map[string]interface{}); ok {
 				if pData, ok := participants["data"].([]interface{}); ok {
 					for _, p := range pData {
 						participant, _ := p.(map[string]interface{})
 						pID, _ := participant["id"].(string)
 						if pID != f.creds.PageID {
+							customerID = pID
 							customerName, _ = participant["name"].(string)
 							break
 						}
@@ -121,7 +123,7 @@ func (f *FacebookAdapter) FetchRecentConversations(ctx context.Context, since ti
 
 			conversations = append(conversations, SyncedConversation{
 				ExternalID:     convID,
-				ExternalUserID: convID,
+				ExternalUserID: customerID,
 				CustomerName:   customerName,
 				LastMessageAt:  updatedAt,
 				Metadata:       conv,
@@ -266,4 +268,3 @@ func (f *FacebookAdapter) SendMessage(ctx context.Context, conversationID string
 	// TODO: implement facebook send message API
 	return fmt.Errorf("facebook send message not implemented yet")
 }
-

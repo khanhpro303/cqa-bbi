@@ -5,6 +5,29 @@ import (
 	"time"
 )
 
+func TestIsInsightStale(t *testing.T) {
+	last := time.Date(2026, 9, 16, 8, 30, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		detail string
+		last   *time.Time
+		want   bool
+	}{
+		{name: "legacy result has no source timestamp", detail: `{}`, last: &last, want: true},
+		{name: "invalid result is stale", detail: `{`, last: &last, want: true},
+		{name: "new message after analysis", detail: `{"source_last_message_at":"2026-09-16T08:00:00Z"}`, last: &last, want: true},
+		{name: "source matches latest message", detail: `{"source_last_message_at":"2026-09-16T08:30:00Z"}`, last: &last, want: false},
+		{name: "conversation has no latest message", detail: `{"source_last_message_at":"2026-09-16T08:30:00Z"}`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsInsightStale(tt.detail, tt.last); got != tt.want {
+				t.Fatalf("IsInsightStale() = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDateWindowDefaultsToLastSevenVietnamCalendarDays(t *testing.T) {
 	now := time.Date(2026, 9, 12, 17, 30, 0, 0, time.UTC) // 00:30 on Sep 13 in Vietnam.
 	from, to, err := DateWindow("", "", now, DefaultPolicy())

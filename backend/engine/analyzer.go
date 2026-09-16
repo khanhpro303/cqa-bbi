@@ -15,12 +15,39 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/notifications"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"github.com/vietbui/chat-quality-agent/servicequality"
 	"gorm.io/gorm"
 )
 
 // Analyzer executes analysis jobs: loads messages, calls AI, saves results.
 type Analyzer struct {
 	cfg *config.Config
+}
+
+const MaxStaleReanalysisConversations = 5000
+
+type staleInsightCandidate struct {
+	ID            string
+	LastMessageAt *time.Time
+	InsightID     string
+	InsightJobID  string
+	Detail        string
+}
+
+func pendingInsightConversationIDs(candidates []staleInsightCandidate, requiredJobID string, limit int) []string {
+	ids := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if requiredJobID != "" && candidate.InsightJobID != requiredJobID {
+			continue
+		}
+		if candidate.InsightID == "" || servicequality.IsInsightStale(candidate.Detail, candidate.LastMessageAt) {
+			ids = append(ids, candidate.ID)
+			if limit > 0 && len(ids) >= limit {
+				break
+			}
+		}
+	}
+	return ids
 }
 
 func NewAnalyzer(cfg *config.Config) *Analyzer {
@@ -32,8 +59,13 @@ func (a *Analyzer) RunJobWithLimit(ctx context.Context, job models.Job, limit in
 	return a.runJob(ctx, job, limit, nil)
 }
 
-// RunJob executes a single job: analyzes new conversations since last run.
+// RunJob executes a single job. Messenger Insights jobs select every
+// conversation that has never been analysed or whose latest insight is stale;
+// other job types retain their incremental last-run behaviour.
 func (a *Analyzer) RunJob(ctx context.Context, job models.Job) (*models.JobRun, error) {
+	if job.JobType == "classification" && ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+		return a.runPendingMessengerInsights(ctx, job, 0, nil)
+	}
 	return a.runJob(ctx, job, 0, nil)
 }
 
@@ -44,16 +76,21 @@ func (a *Analyzer) RunJobFull(ctx context.Context, job models.Job) (*models.JobR
 
 // RunJobFullWithParams re-analyzes with optional date range and limit.
 func (a *Analyzer) RunJobFullWithParams(ctx context.Context, job models.Job, dateFrom, dateTo string, maxConv int) (*models.JobRun, error) {
-	return a.runJobInternalExt(ctx, job, maxConv, nil, true, dateFrom, dateTo, nil, false)
+	return a.runJobInternalExt(ctx, job, maxConv, nil, true, dateFrom, dateTo, nil, false, nil)
 }
 
 // RunJobUnanalyzed analyzes all conversations not yet evaluated by this job, regardless of time.
 func (a *Analyzer) RunJobUnanalyzed(ctx context.Context, job models.Job, maxConv int) (*models.JobRun, error) {
-	return a.runJobInternalExt(ctx, job, maxConv, nil, true, "", "", nil, true)
+	return a.runJobInternalExt(ctx, job, maxConv, nil, true, "", "", nil, true, nil)
 }
 
-// RunJobSinceLast analyzes conversations newer than the most recently evaluated conversation.
+// RunJobSinceLast keeps the legacy timestamp mode for other jobs. Messenger
+// Insights jobs instead select pending/stale conversations so older chats with
+// newly synced messages cannot be skipped by a global timestamp watermark.
 func (a *Analyzer) RunJobSinceLast(ctx context.Context, job models.Job, maxConv int) (*models.JobRun, error) {
+	if job.JobType == "classification" && ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+		return a.runPendingMessengerInsights(ctx, job, maxConv, nil)
+	}
 	// Find max last_message_at among conversations already evaluated by this job
 	var maxMsgAt time.Time
 	if err := db.DB.Model(&models.JobResult{}).
@@ -69,7 +106,67 @@ func (a *Analyzer) RunJobSinceLast(ctx context.Context, job models.Job, maxConv 
 		// No previous results — fall back to regular incremental (last run / 24h)
 		return a.runJob(ctx, job, maxConv, nil)
 	}
-	return a.runJobInternalExt(ctx, job, maxConv, nil, false, "", "", &maxMsgAt, false)
+	return a.runJobInternalExt(ctx, job, maxConv, nil, false, "", "", &maxMsgAt, false, nil)
+}
+
+// RunJobStale reanalyses only explicitly requested conversations whose latest
+// insight for this job is still stale at execution time.
+func (a *Analyzer) RunJobStale(ctx context.Context, job models.Job, conversationIDs []string) (*models.JobRun, error) {
+	if job.JobType != "classification" || !ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+		return nil, fmt.Errorf("job is not a Messenger Insights classification job")
+	}
+	if len(conversationIDs) == 0 || len(conversationIDs) > MaxStaleReanalysisConversations {
+		return nil, fmt.Errorf("conversation_ids must contain 1 to %d items", MaxStaleReanalysisConversations)
+	}
+
+	candidates, err := pendingMessengerInsightCandidates(ctx, job, conversationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("find stale conversations: %w", err)
+	}
+	eligible := pendingInsightConversationIDs(candidates, job.ID, 0)
+	if len(eligible) == 0 {
+		now := time.Now()
+		return &models.JobRun{JobID: job.ID, TenantID: job.TenantID, StartedAt: now, FinishedAt: &now, Status: "success", Summary: `{"conversations_found":0,"conversations_analyzed":0,"stale_skipped":true}`}, nil
+	}
+	return a.runJobInternalExt(ctx, job, 0, nil, true, "", "", nil, false, eligible)
+}
+
+func (a *Analyzer) runPendingMessengerInsights(ctx context.Context, job models.Job, maxConversations int, provider ai.AIProvider) (*models.JobRun, error) {
+	candidates, err := pendingMessengerInsightCandidates(ctx, job, nil)
+	if err != nil {
+		return nil, fmt.Errorf("find pending Messenger insights: %w", err)
+	}
+	limit := maxConversations
+	if limit <= 0 || limit > MaxStaleReanalysisConversations {
+		limit = MaxStaleReanalysisConversations
+	}
+	ids := pendingInsightConversationIDs(candidates, "", limit)
+	return a.runJobInternalExt(ctx, job, 0, provider, true, "", "", nil, false, ids)
+}
+
+func pendingMessengerInsightCandidates(ctx context.Context, job models.Job, requestedIDs []string) ([]staleInsightCandidate, error) {
+	var channelIDs []string
+	if err := json.Unmarshal([]byte(job.InputChannelIDs), &channelIDs); err != nil {
+		return nil, fmt.Errorf("invalid input_channel_ids: %w", err)
+	}
+	query := db.DB.WithContext(ctx).Table("conversations AS c").
+		Select("c.id, c.last_message_at, j.id AS insight_id, jr.job_id AS insight_job_id, j.detail").
+		Joins(`LEFT JOIN job_results AS j ON j.id = (
+			SELECT newest.id FROM job_results AS newest
+			WHERE newest.tenant_id = c.tenant_id AND newest.conversation_id = c.id AND newest.result_type = ?
+			ORDER BY newest.created_at DESC, newest.id DESC LIMIT 1
+		)`, "conversation_insight").
+		Joins("LEFT JOIN job_runs AS jr ON jr.id = j.job_run_id").
+		Where("c.tenant_id = ? AND c.channel_id IN ?", job.TenantID, channelIDs).
+		Order("c.last_message_at DESC, c.id ASC")
+	if requestedIDs != nil {
+		query = query.Where("c.id IN ?", requestedIDs)
+	}
+	var candidates []staleInsightCandidate
+	if err := query.Scan(&candidates).Error; err != nil {
+		return nil, err
+	}
+	return candidates, nil
 }
 
 // RunJobWithProvider runs with an injected AI provider (for testing without real API keys).
@@ -82,7 +179,7 @@ func (a *Analyzer) runJob(ctx context.Context, job models.Job, maxConversations 
 }
 
 func (a *Analyzer) runJobInternal(ctx context.Context, job models.Job, maxConversations int, injectedProvider ai.AIProvider, fullRerun bool) (*models.JobRun, error) {
-	return a.runJobInternalExt(ctx, job, maxConversations, injectedProvider, fullRerun, "", "", nil, false)
+	return a.runJobInternalExt(ctx, job, maxConversations, injectedProvider, fullRerun, "", "", nil, false, nil)
 }
 
 // transcriptSinceForJob keeps incremental conversation selection intact while
@@ -149,7 +246,7 @@ func buildJobSystemPrompt(ctx context.Context, job models.Job) (string, error) {
 	}
 }
 
-func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxConversations int, injectedProvider ai.AIProvider, fullRerun bool, dateFrom, dateTo string, sinceOverride *time.Time, excludeAnalyzed bool) (retRun *models.JobRun, retErr error) {
+func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxConversations int, injectedProvider ai.AIProvider, fullRerun bool, dateFrom, dateTo string, sinceOverride *time.Time, excludeAnalyzed bool, conversationIDs []string) (retRun *models.JobRun, retErr error) {
 	// Single chokepoint for job-error notifications. Every run entry point funnels
 	// through here, and every error exit (early failRun, ERP/chatbot sub-jobs, and
 	// the finalize error branch) returns through this defer. Sends a failure alert
@@ -243,6 +340,9 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 	// Fetch conversations with messages in time range
 	var conversations []models.Conversation
 	q := db.DB.Where("tenant_id = ? AND channel_id IN ?", job.TenantID, channelIDs)
+	if conversationIDs != nil {
+		q = q.Where("id IN ?", conversationIDs)
+	}
 	if !since.IsZero() {
 		q = q.Where("last_message_at > ?", since)
 	}

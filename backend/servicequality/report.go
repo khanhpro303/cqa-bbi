@@ -35,6 +35,7 @@ type Row struct {
 	Turns          []Turn          `json:"turns"`
 	Insight        json.RawMessage `json:"insight,omitempty"`
 	InsightAt      *time.Time      `json:"insight_at,omitempty"`
+	InsightJobID   string          `json:"insight_job_id,omitempty"`
 	InsightStale   bool            `json:"insight_stale"`
 	ResolutionNote string          `json:"resolution_note,omitempty"`
 	HistoryFrom    *time.Time      `json:"history_from,omitempty"`
@@ -51,6 +52,19 @@ type Report struct {
 	InvalidTimestamps    int       `json:"invalid_timestamps"`
 	ConversationsScanned int       `json:"conversations_scanned"`
 	HistoryComplete      bool      `json:"history_complete"`
+}
+
+// IsInsightStale reports whether a stored insight no longer represents the
+// latest synced message in its conversation. Legacy insights without a source
+// timestamp are stale by definition.
+func IsInsightStale(detail string, lastMessageAt *time.Time) bool {
+	var source struct {
+		LastMessageAt *time.Time `json:"source_last_message_at"`
+	}
+	if json.Unmarshal([]byte(detail), &source) != nil || source.LastMessageAt == nil {
+		return true
+	}
+	return lastMessageAt != nil && lastMessageAt.After(*source.LastMessageAt)
 }
 
 func LoadPolicy(database *gorm.DB, tenantID string) (Policy, error) {
@@ -166,11 +180,15 @@ func Build(ctx context.Context, database *gorm.DB, tenantID, channelID string, n
 		}
 		// Fetch only the latest structured analysis per conversation, including an
 		// id tie-break so reruns cannot duplicate aggregation counts.
-		var insights []models.JobResult
-		if err := database.Table("job_results AS j").Select("j.*").Where("j.tenant_id = ? AND j.conversation_id IN ? AND j.result_type = ?", tenantID, cids, "conversation_insight").Where(`NOT EXISTS (SELECT 1 FROM job_results newer WHERE newer.tenant_id = j.tenant_id AND newer.conversation_id = j.conversation_id AND newer.result_type = j.result_type AND (newer.created_at > j.created_at OR (newer.created_at = j.created_at AND newer.id > j.id)))`).Scan(&insights).Error; err != nil {
+		type insightRecord struct {
+			models.JobResult
+			InsightJobID string `gorm:"column:insight_job_id"`
+		}
+		var insights []insightRecord
+		if err := database.Table("job_results AS j").Select("j.*, jr.job_id AS insight_job_id").Joins("LEFT JOIN job_runs AS jr ON jr.id = j.job_run_id").Where("j.tenant_id = ? AND j.conversation_id IN ? AND j.result_type = ?", tenantID, cids, "conversation_insight").Where(`NOT EXISTS (SELECT 1 FROM job_results newer WHERE newer.tenant_id = j.tenant_id AND newer.conversation_id = j.conversation_id AND newer.result_type = j.result_type AND (newer.created_at > j.created_at OR (newer.created_at = j.created_at AND newer.id > j.id)))`).Scan(&insights).Error; err != nil {
 			return nil, err
 		}
-		latest := map[string]models.JobResult{}
+		latest := map[string]insightRecord{}
 		for _, v := range insights {
 			latest[v.ConversationID] = v
 		}
@@ -197,16 +215,10 @@ func Build(ctx context.Context, database *gorm.DB, tenantID, channelID string, n
 			}
 			if v, ok := latest[c.ID]; ok && json.Valid([]byte(v.Detail)) {
 				row.Insight = json.RawMessage(v.Detail)
+				row.InsightJobID = v.InsightJobID
 				t := v.CreatedAt
 				row.InsightAt = &t
-				var source struct {
-					LastMessageAt *time.Time `json:"source_last_message_at"`
-				}
-				if json.Unmarshal([]byte(v.Detail), &source) != nil || source.LastMessageAt == nil {
-					row.InsightStale = true
-				} else {
-					row.InsightStale = c.LastMessageAt != nil && c.LastMessageAt.After(*source.LastMessageAt)
-				}
+				row.InsightStale = IsInsightStale(v.Detail, c.LastMessageAt)
 			}
 			if v := resolved[c.ID]; len(v) > 0 {
 				row.ResolutionNote = v[len(v)-1].Note
