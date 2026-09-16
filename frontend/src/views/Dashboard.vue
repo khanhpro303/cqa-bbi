@@ -269,7 +269,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Line } from 'vue-chartjs'
@@ -304,6 +304,11 @@ async function fetchChatbotStatus() {
   if (!isAdmin.value) return
   await chatbotStore.fetchStatus(tenantId.value)
 }
+
+// Permissions can arrive after mount; load as soon as the panel becomes visible.
+watch([tenantId, isAdmin], ([id, admin]) => {
+  if (id && admin) fetchChatbotStatus()
+}, { immediate: true })
 
 async function toggleChatbot(val: any) {
   const targetTenantId = tenantId.value
@@ -508,7 +513,6 @@ async function resetDemo() {
 onMounted(() => {
   loadDemoStatus()
   loadDashboard()
-  fetchChatbotStatus()
 })
 
 function timeAgo(dateStr: string) {
