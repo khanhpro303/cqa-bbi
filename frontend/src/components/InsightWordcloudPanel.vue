@@ -37,7 +37,7 @@
         <div class="detail-columns">
           <div class="detail-column">
             <h2 class="text-subtitle-2 mb-2">{{ t('qualityInsight.keywordCounts', { count: selectedGroup.items.length }) }}</h2>
-            <v-text-field v-model="keywordSearch" :label="t('qualityInsight.searchKeyword')" prepend-inner-icon="mdi-magnify" density="compact" variant="outlined" hide-details class="mb-2" />
+            <v-text-field v-model="keywordSearch" :label="t('qualityInsight.searchKeyword')" prepend-inner-icon="mdi-magnify" density="compact" variant="outlined" hide-details class="keyword-search mb-2" />
             <div class="keyword-list scroll-region">
               <button
                 v-for="item in filteredKeywords"
@@ -169,6 +169,7 @@ button:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-o
 .insight-detail-body { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; }
 .detail-columns { display: grid; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); gap: 24px; min-height: 0; }
 .detail-column { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.keyword-search { flex: 0 0 auto; }
 .keyword-list, .conversation-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .scroll-region {
   overscroll-behavior: contain;

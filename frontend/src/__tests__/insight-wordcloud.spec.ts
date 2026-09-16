@@ -105,6 +105,11 @@ describe('InsightWordcloudPanel', () => {
     expect(insightWordcloudPanelSource).toMatch(/\.keyword-count\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/)
   })
 
+  it('keeps the keyword search field at its compact intrinsic height', () => {
+    expect(insightWordcloudPanelSource).toContain('class="keyword-search mb-2"')
+    expect(insightWordcloudPanelSource).toMatch(/\.keyword-search\s*\{[^}]*flex:\s*0 0 auto;/)
+  })
+
   it('opens the clicked word and switches exact source conversations when selecting another keyword', async () => {
     const { wrapper } = await render([
       keyword('first', 'Hỏi giá', ['a', 'c']), keyword('second', 'Đặt hàng', ['b']),
