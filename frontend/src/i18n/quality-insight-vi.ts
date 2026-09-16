@@ -17,6 +17,7 @@ export default {
   "evaluationDetail": "Đánh giá chi tiết",
   "loadingConversation": "Đang tải hội thoại...",
   "loadConversationError": "Không tải được nội dung hội thoại.",
+  "loadEvaluationError": "Không tải được trích dẫn đánh giá.",
   "retry": "Thử lại",
   "noMessages": "Hội thoại chưa có tin nhắn.",
   "attachment": "Tệp đính kèm",

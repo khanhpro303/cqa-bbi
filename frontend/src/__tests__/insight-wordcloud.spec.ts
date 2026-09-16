@@ -49,7 +49,9 @@ const wrappers: VueWrapper[] = []
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 beforeEach(() => {
   vi.mocked(api.get).mockReset()
-  vi.mocked(api.get).mockResolvedValue({ data: { messages: [] } })
+  vi.mocked(api.get).mockImplementation(url => Promise.resolve(
+    String(url).endsWith('/evaluations') ? { data: { groups: [] } } : { data: { messages: [] } }
+  ))
 })
 
 const keyword = (key: string, label: string, conversationIds: string[]): AggregateItem => ({
@@ -142,10 +144,14 @@ describe('InsightWordcloudPanel', () => {
   })
 
   it('expands a conversation card, loads its transcript once, and keeps the evaluation beside it', async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ data: { messages: [
-      { id: 'm1', sender_type: 'customer', sender_name: 'Khách a', content: 'Cho mình hỏi giá', content_type: 'text', sent_at: '2026-09-16T09:00:00+07:00' },
-      { id: 'm2', sender_type: 'agent', sender_name: 'Tư vấn viên', content: 'Dạ sản phẩm có giá 500.000đ', content_type: 'text', sent_at: '2026-09-16T09:01:00+07:00' },
-    ] } })
+    vi.mocked(api.get).mockImplementation(url => Promise.resolve(
+      String(url).endsWith('/evaluations')
+        ? { data: { groups: [] } }
+        : { data: { messages: [
+          { id: 'm1', sender_type: 'customer', sender_name: 'Khách a', content: 'Cho mình hỏi giá', content_type: 'text', sent_at: '2026-09-16T09:00:00+07:00' },
+          { id: 'm2', sender_type: 'agent', sender_name: 'Tư vấn viên', content: 'Dạ sản phẩm có giá 500.000đ', content_type: 'text', sent_at: '2026-09-16T09:01:00+07:00' },
+        ] } }
+    ))
     const { wrapper } = await render([keyword('price', 'Hỏi giá', ['a'])])
     await wrapper.get('.cloud-word').trigger('click')
 
@@ -155,6 +161,7 @@ describe('InsightWordcloudPanel', () => {
     await flushPromises()
 
     expect(api.get).toHaveBeenCalledWith('/tenants/tenant-one/conversations/a/messages')
+    expect(api.get).toHaveBeenCalledWith('/tenants/tenant-one/conversations/a/evaluations')
     expect(toggle.attributes('aria-expanded')).toBe('true')
     expect(wrapper.get('.chat-transcript').text()).toContain('Cho mình hỏi giá')
     expect(wrapper.get('.chat-transcript').text()).toContain('Dạ sản phẩm có giá 500.000đ')
@@ -164,7 +171,36 @@ describe('InsightWordcloudPanel', () => {
     await toggle.trigger('click')
     await toggle.trigger('click')
     await flushPromises()
-    expect(api.get).toHaveBeenCalledTimes(1)
+    expect(api.get).toHaveBeenCalledTimes(2)
+  })
+
+  it('renders the intent citation, explanation, and orange border on its source message', async () => {
+    vi.mocked(api.get).mockImplementation(url => Promise.resolve(
+      String(url).endsWith('/evaluations')
+        ? { data: { groups: [{ job_type: 'classification', results: [
+          { result_type: 'conversation_insight', detail: JSON.stringify({ summary: 'Tóm tắt a' }) },
+          {
+            result_type: 'classification_tag',
+            rule_name: 'Nhu cầu - Hỏi giá/khuyến mãi',
+            evidence: 'giá sao',
+            detail: JSON.stringify({ explanation: 'Khách hỏi giá của sản phẩm.' }),
+          },
+        ] }] } }
+        : { data: { messages: [
+          { id: 'm1', sender_type: 'agent', sender_name: 'LS2 Helmets Vietnam', content: 'Xin chào bạn', content_type: 'text', sent_at: '2026-09-16T09:00:00+07:00' },
+          { id: 'm2', sender_type: 'customer', sender_name: 'Khách a', content: 'giá sao', content_type: 'text', sent_at: '2026-09-16T09:01:00+07:00' },
+        ] } }
+    ))
+    const { wrapper } = await render([keyword('hỏi giá', 'hỏi giá', ['a'])])
+    await wrapper.get('.cloud-word').trigger('click')
+    await wrapper.get('.conversation-toggle').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.classification-evidence').text()).toBe('giá sao')
+    expect(wrapper.get('.classification-explanation').text()).toBe('Khách hỏi giá của sản phẩm.')
+    expect(wrapper.findAll('.chat-message')[0]!.classes()).not.toContain('chat-message-highlight')
+    expect(wrapper.findAll('.chat-message')[1]!.classes()).toContain('chat-message-highlight')
+    expect(insightWordcloudPanelSource).toMatch(/\.chat-message-highlight\s*\{[^}]*border:\s*2px solid rgb\(var\(--v-theme-warning\)\)/)
   })
 
   it('refreshes open detail counts and sources, selects a remaining keyword, and closes removed groups', async () => {
@@ -212,6 +248,8 @@ describe('InsightWordcloudPanel', () => {
       keyword('sku:sp1', 'Áo xanh · SP1', ['a']), keyword('name:quần', 'Quần', ['b']),
     ], 'product')] })
     await wrapper.get('.cloud-word').trigger('click')
+    await wrapper.get('.conversation-toggle').trigger('click')
+    await flushPromises()
     expect(wrapper.get('.conversation-list').text()).toContain('Khách hỏi áo xanh')
     expect(wrapper.get('.conversation-list').text()).not.toContain('Không thuộc keyword được chọn')
     await wrapper.get('input').setValue(' QUẦN ')

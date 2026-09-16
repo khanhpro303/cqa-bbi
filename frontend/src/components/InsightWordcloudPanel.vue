@@ -70,7 +70,6 @@
                     <span class="conversation-heading">
                       <strong class="text-primary">{{ row.customer_name || t('qualityInsight.messengerCustomer') }}</strong>
                       <span class="text-caption text-medium-emphasis">{{ row.channel_name }} · {{ row.conversation_id }}</span>
-                      <span v-for="(evidence, index) in keywordEvidence(row)" :key="index" class="text-body-2 evidence">{{ evidence }}</span>
                       <span class="text-body-2 evidence conversation-summary">{{ row.insight?.summary || t('qualityInsight.noSummary') }}</span>
                     </span>
                     <v-icon size="small" :icon="expandedConversations[row.conversation_id] ? 'mdi-chevron-up' : 'mdi-chevron-down'" />
@@ -108,7 +107,10 @@
                           v-for="message in conversationMessages[row.conversation_id]"
                           :key="message.id"
                           class="chat-message"
-                          :class="message.sender_type === 'agent' ? 'chat-message-agent' : 'chat-message-customer'"
+                          :class="[
+                            message.sender_type === 'agent' ? 'chat-message-agent' : 'chat-message-customer',
+                            { 'chat-message-highlight': isEvidenceMessage(row, message) },
+                          ]"
                         >
                           <header>
                             <strong>{{ message.sender_name || (message.sender_type === 'agent' ? row.channel_name : row.customer_name) }}</strong>
@@ -126,16 +128,21 @@
                       <v-alert type="success" variant="tonal" density="compact" class="mb-3">
                         {{ row.insight?.summary || t('qualityInsight.noSummary') }}
                       </v-alert>
-                      <div class="d-flex align-center flex-wrap ga-2 mb-2">
-                        <v-chip size="x-small" color="warning" variant="tonal">{{ t('qualityInsight.classified') }}</v-chip>
-                        <strong class="text-body-2">{{ selectedKeyword?.label }}</strong>
+                      <div v-if="evaluationErrors[row.conversation_id]" class="evaluation-error text-error">
+                        <span>{{ t('qualityInsight.loadEvaluationError') }}</span>
+                        <v-btn size="small" variant="text" color="primary" @click="loadConversation(row, true)">{{ t('qualityInsight.retry') }}</v-btn>
                       </div>
-                      <div
-                        v-for="(evidence, index) in keywordEvidence(row)"
-                        :key="index"
-                        class="classification-evidence evidence"
-                      >{{ evidence }}</div>
-                      <p v-if="!keywordEvidence(row).length" class="text-body-2 text-medium-emphasis mb-0">
+                      <div v-for="(citation, index) in keywordCitations(row)" :key="`${citation.evidence}-${index}`" class="classification-citation">
+                        <div class="d-flex align-center flex-wrap ga-2 mb-2">
+                          <v-chip size="x-small" color="warning" variant="tonal">{{ t('qualityInsight.classified') }}</v-chip>
+                          <strong class="text-body-2">{{ citation.label }}</strong>
+                        </div>
+                        <blockquote class="classification-evidence evidence">{{ citation.evidence }}</blockquote>
+                        <p v-if="citation.explanation" class="classification-explanation text-body-2 text-medium-emphasis">
+                          {{ citation.explanation }}
+                        </p>
+                      </div>
+                      <p v-if="!loadingConversations[row.conversation_id] && !evaluationErrors[row.conversation_id] && !keywordCitations(row).length" class="text-body-2 text-medium-emphasis mb-0">
                         {{ t('qualityInsight.noEvidence') }}
                       </p>
                     </section>
@@ -180,6 +187,24 @@ interface ConversationMessage {
   sent_at: string
 }
 
+interface EvaluationResult {
+  result_type: string
+  rule_name?: string
+  evidence?: string
+  detail?: string
+}
+
+interface EvaluationGroup {
+  job_type: string
+  results?: EvaluationResult[]
+}
+
+interface KeywordCitation {
+  label: string
+  evidence: string
+  explanation?: string
+}
+
 const props = defineProps<{ groups: InsightGroup[]; conversations: SourceConversation[]; tenantId: string }>()
 const { t, locale } = useI18n()
 const cloudLimit = 40
@@ -189,8 +214,10 @@ const selectedKey = ref('')
 const keywordSearch = ref('')
 const expandedConversations = ref<Record<string, boolean>>({})
 const conversationMessages = ref<Record<string, ConversationMessage[]>>({})
+const conversationEvaluations = ref<Record<string, EvaluationGroup[]>>({})
 const loadingConversations = ref<Record<string, boolean>>({})
 const conversationErrors = ref<Record<string, boolean>>({})
+const evaluationErrors = ref<Record<string, boolean>>({})
 const selectedGroup = computed(() => props.groups.find(group => group.kind === selectedKind.value))
 const selectedKeyword = computed(() => selectedGroup.value?.items.find(item => item.key === selectedKey.value))
 const filteredKeywords = computed(() => {
@@ -223,13 +250,25 @@ async function loadConversation(row: SourceConversation, force = false) {
   if (!force && (conversationMessages.value[id] || loadingConversations.value[id])) return
   loadingConversations.value[id] = true
   conversationErrors.value[id] = false
+  evaluationErrors.value[id] = false
   try {
-    const { data } = await api.get(`/tenants/${tenantId}/conversations/${id}/messages`)
+    const [messagesResult, evaluationsResult] = await Promise.allSettled([
+      api.get(`/tenants/${tenantId}/conversations/${id}/messages`),
+      api.get(`/tenants/${tenantId}/conversations/${id}/evaluations`),
+    ])
     if (props.tenantId !== tenantId) return
-    conversationMessages.value[id] = Array.isArray(data.messages) ? data.messages : []
-  } catch {
-    if (props.tenantId !== tenantId) return
-    conversationErrors.value[id] = true
+    if (messagesResult.status === 'fulfilled') {
+      const messages = messagesResult.value.data.messages
+      conversationMessages.value[id] = Array.isArray(messages) ? messages : []
+    } else {
+      conversationErrors.value[id] = true
+    }
+    if (evaluationsResult.status === 'fulfilled') {
+      const groups = evaluationsResult.value.data.groups
+      conversationEvaluations.value[id] = Array.isArray(groups) ? groups : []
+    } else {
+      evaluationErrors.value[id] = true
+    }
   } finally {
     if (props.tenantId === tenantId) loadingConversations.value[id] = false
   }
@@ -241,35 +280,97 @@ function formatMessageTime(value: string) {
   return date.toLocaleString(locale.value === 'en' ? 'en-US' : 'vi-VN', { dateStyle: 'short', timeStyle: 'short' })
 }
 
-function keywordEvidence(row: SourceConversation): string[] {
+function parseEvaluationDetail(detail?: string): Record<string, unknown> {
+  if (!detail) return {}
+  try {
+    const parsed = JSON.parse(detail)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function latestClassificationTags(row: SourceConversation): EvaluationResult[] {
+  const groups = conversationEvaluations.value[row.conversation_id] || []
+  const classificationGroups = groups.filter(group =>
+    group.job_type === 'classification' && group.results?.some(result => result.result_type === 'conversation_insight')
+  )
+  const matchingGroup = classificationGroups.find(group => group.results?.some(result => {
+    if (result.result_type !== 'conversation_insight') return false
+    const summary = parseEvaluationDetail(result.detail).summary
+    return typeof summary === 'string' && summary === row.insight?.summary
+  })) || classificationGroups[0]
+  return matchingGroup?.results?.filter(result => result.result_type === 'classification_tag') || []
+}
+
+function keywordCitations(row: SourceConversation): KeywordCitation[] {
   const key = selectedKeyword.value?.key
   if (!key || !row.insight) return []
+  let citations: KeywordCitation[] = []
   if (selectedKind.value === 'product') {
-    return [...new Set((row.insight.products || []).filter(product => {
+    citations = (row.insight.products || []).filter(product => {
       const productKey = product.sku?.trim()
         ? `sku:${normalizeInsightLabel(product.sku)}`
         : `name:${normalizeInsightLabel(product.name)}`
       return productKey === key
-    }).map(product => product.evidence).filter((evidence): evidence is string => Boolean(evidence)))]
-  }
-  if (selectedKind.value === 'feedback') {
-    return [...new Set((row.insight.feedback || []).filter(feedback =>
+    }).filter(product => Boolean(product.evidence)).map(product => ({
+      label: selectedKeyword.value?.label || product.name,
+      evidence: product.evidence!,
+    }))
+  } else if (selectedKind.value === 'feedback') {
+    citations = (row.insight.feedback || []).filter(feedback =>
       `${normalizeInsightLabel(feedback.category)}:${feedback.sentiment.trim().toLowerCase()}` === key
-    ).map(feedback => feedback.evidence).filter((evidence): evidence is string => Boolean(evidence)))]
-  }
-  if (selectedKind.value === 'lead') {
+    ).filter(feedback => Boolean(feedback.evidence)).map(feedback => ({
+      label: selectedKeyword.value?.label || feedback.category,
+      evidence: feedback.evidence!,
+    }))
+  } else if (selectedKind.value === 'lead') {
     const lead = row.insight.lead_quality
-    return [lead?.reason, lead?.evidence].filter((value): value is string => Boolean(value))
+    if (lead?.evidence) citations = [{
+      label: selectedKeyword.value?.label || '',
+      evidence: lead.evidence,
+      explanation: lead.reason,
+    }]
+  } else if (selectedKind.value === 'intent') {
+    const normalizedKeyword = normalizeInsightLabel(selectedKeyword.value?.label || key)
+    citations = latestClassificationTags(row).filter(result => {
+      const normalizedRule = normalizeInsightLabel(result.rule_name || '')
+      return Boolean(result.evidence) && (normalizedRule.includes(normalizedKeyword) || normalizedKeyword.includes(normalizedRule))
+    }).map(result => {
+      const explanation = parseEvaluationDetail(result.detail).explanation
+      return {
+        label: result.rule_name || selectedKeyword.value?.label || '',
+        evidence: result.evidence!,
+        explanation: typeof explanation === 'string' ? explanation : undefined,
+      }
+    })
   }
-  return []
+  return citations.filter((citation, index, all) =>
+    all.findIndex(item => normalizeQuote(item.evidence) === normalizeQuote(citation.evidence)) === index
+  )
+}
+
+function normalizeQuote(value: string) {
+  return normalizeInsightLabel(value).replace(/\s+/g, ' ').trim()
+}
+
+function isEvidenceMessage(row: SourceConversation, message: ConversationMessage) {
+  const content = normalizeQuote(message.content || '')
+  if (!content) return false
+  return keywordCitations(row).some(citation => {
+    const evidence = normalizeQuote(citation.evidence)
+    return evidence.length > 2 && (evidence.includes(content) || content.includes(evidence))
+  })
 }
 
 watch(() => props.tenantId, () => {
   dialog.value = false
   expandedConversations.value = {}
   conversationMessages.value = {}
+  conversationEvaluations.value = {}
   loadingConversations.value = {}
   conversationErrors.value = {}
+  evaluationErrors.value = {}
 })
 watch(selectedKey, () => { expandedConversations.value = {} })
 // Keep the open detail in sync with refreshed report data.
@@ -330,12 +431,17 @@ button:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-o
 .chat-transcript { max-height: 420px; overflow-y: auto; padding: 8px; border-radius: 8px; background: rgba(var(--v-theme-on-surface), .04); }
 .chat-message { margin-bottom: 8px; padding: 10px; border: 1px solid rgba(var(--v-theme-on-surface), .12); border-radius: 8px; }
 .chat-message:last-child { margin-bottom: 0; }
-.chat-message-agent { margin-left: 28px; background: rgba(var(--v-theme-primary), .08); }
+.chat-message-agent { margin-left: 28px; border-color: rgba(var(--v-theme-info), .3); background: rgba(var(--v-theme-info), .12); }
+.chat-message-agent header strong { color: rgb(var(--v-theme-info)); }
 .chat-message-customer { margin-right: 28px; background: rgb(var(--v-theme-surface)); }
+.chat-message-highlight { border: 2px solid rgb(var(--v-theme-warning)); box-shadow: 0 0 0 1px rgba(var(--v-theme-warning), .14); }
 .chat-message header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; font-size: 12px; }
 .chat-message time { flex: 0 0 auto; color: rgba(var(--v-theme-on-surface), .58); }
 .chat-message p { margin: 0; font-size: 13px; }
-.classification-evidence { margin-bottom: 8px; padding: 10px; border-left: 3px solid rgb(var(--v-theme-warning)); border-radius: 4px; background: rgba(var(--v-theme-warning), .11); font-size: 13px; }
+.classification-citation { margin-bottom: 14px; }
+.classification-evidence { margin: 0 0 6px; padding: 10px; border-left: 3px solid rgb(var(--v-theme-warning)); border-radius: 4px; background: rgba(var(--v-theme-warning), .11); font-size: 13px; }
+.classification-explanation { margin: 0; }
+.evaluation-error { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
 .evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .insight-detail-card { height: auto; max-height: 90vh; }

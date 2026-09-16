@@ -17,6 +17,7 @@ export default {
   "evaluationDetail": "Evaluation details",
   "loadingConversation": "Loading conversation...",
   "loadConversationError": "Unable to load the conversation.",
+  "loadEvaluationError": "Unable to load evaluation citations.",
   "retry": "Retry",
   "noMessages": "This conversation has no messages.",
   "attachment": "Attachment",
