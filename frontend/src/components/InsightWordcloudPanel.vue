@@ -48,7 +48,7 @@
                 type="button"
                 @click="selectedKey = item.key"
               >
-                <span>{{ item.label }}</span><strong>{{ item.count }}</strong>
+                <span class="keyword-label">{{ item.label }}</span><strong class="keyword-count">{{ item.count }}</strong>
               </button>
               <p v-if="!filteredKeywords.length" class="text-body-2 text-medium-emphasis pa-3">{{ t('qualityInsight.noKeywords') }}</p>
             </div>
@@ -189,7 +189,9 @@ button:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-o
 .scroll-region:hover::-webkit-scrollbar-thumb,
 .scroll-region:focus-within::-webkit-scrollbar-thumb { background-color: rgba(var(--v-theme-on-surface), .28); }
 .scroll-region::-webkit-scrollbar-thumb:hover { background-color: rgba(var(--v-theme-on-surface), .42); }
-.keyword-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; width: 100%; text-align: left; cursor: pointer; border-bottom: 1px solid rgba(var(--v-theme-on-surface), .1); overflow-wrap: anywhere; }
+.keyword-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; width: 100%; text-align: left; cursor: pointer; border-bottom: 1px solid rgba(var(--v-theme-on-surface), .1); }
+.keyword-label { min-width: 0; overflow-wrap: anywhere; }
+.keyword-count { flex: 0 0 auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .keyword-row.selected, .keyword-row:hover { background: rgba(var(--v-theme-primary), .09); color: rgb(var(--v-theme-primary)); }
 .conversation-link { max-width: 100%; height: auto; min-height: 32px; }
 .conversation-link :deep(.v-btn__content) { white-space: normal; text-align: left; overflow-wrap: anywhere; }

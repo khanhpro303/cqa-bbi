@@ -7,6 +7,7 @@ import { defineComponent, h } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, RouterLink } from 'vue-router'
 import InsightWordcloudPanel from '../components/InsightWordcloudPanel.vue'
+import insightWordcloudPanelSource from '../components/InsightWordcloudPanel.vue?raw'
 import type { AggregateItem, ConversationInsight } from '../utils/service-quality'
 
 // Preserve Vuetify slots and dialog visibility while exercising real router links.
@@ -92,6 +93,16 @@ describe('InsightWordcloudPanel', () => {
     expect(last.get('strong').text()).toBe('2')
     await last.trigger('click')
     expect(sourceIds(wrapper)).toEqual(['Khách a', 'Khách b'])
+  })
+
+  it('keeps a multi-digit keyword count on one line when the label wraps', async () => {
+    const { wrapper } = await render([
+      keyword('helmet', 'Mũ Bảo Hiểm Fullface Lật Hàm 180độ LS2 FF901 Advant X', Array.from({ length: 47 }, (_, index) => `conversation-${index}`)),
+    ], [])
+    await wrapper.get('.segment-heading').trigger('click')
+    const count = wrapper.get('.keyword-count')
+    expect(count.text()).toBe('47')
+    expect(insightWordcloudPanelSource).toMatch(/\.keyword-count\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/)
   })
 
   it('opens the clicked word and switches exact source conversations when selecting another keyword', async () => {
