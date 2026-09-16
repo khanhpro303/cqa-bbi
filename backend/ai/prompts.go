@@ -8,6 +8,25 @@ import (
 
 const MessengerInsightsPromptSettingKey = "ai_engine_system_prompt_messenger_insights"
 
+const mandatorySenderRoleHeading = "## Quy tắc vai trò bắt buộc"
+
+const mandatorySenderRoleInstructions = `
+
+## Quy tắc vai trò bắt buộc
+- Chỉ dòng có nhãn (customer) mới được xem là lời nói, nhu cầu, thông tin hoặc hành động của khách hàng.
+- Dòng có nhãn (agent) là lời của Fanpage/nhân viên; không được dùng lời agent làm bằng chứng cho nhu cầu, sản phẩm, phản hồi hoặc chất lượng lead của khách.
+- Không được suy ra nội dung của bình luận hoặc tin nhắn không xuất hiện trong transcript.
+- Việc agent yêu cầu khách cung cấp chiều cao, cân nặng hoặc thông tin khác không có nghĩa khách đã cung cấp thông tin đó.
+- Nếu không có dòng (customer), phải ghi rõ chưa ghi nhận tin nhắn khách hàng, không gán nhãn dựa trên ý định khách và để các customer insights rỗng với lead_quality.level="unknown".
+- Ví dụ: "[agent] Cho em xin chiều cao và cân nặng để tư vấn size" phải được hiểu là Fanpage đang hỏi; không được viết "khách đã cung cấp chiều cao và cân nặng".`
+
+func appendMandatorySenderRoleInstructions(prompt string) string {
+	if strings.Contains(prompt, mandatorySenderRoleHeading) {
+		return prompt
+	}
+	return prompt + mandatorySenderRoleInstructions
+}
+
 // DefaultMessengerInsightsPrompt exposes the existing structured prompt as an
 // editable template, with job-specific classification rules filled in at runtime.
 func DefaultMessengerInsightsPrompt() string {
@@ -70,10 +89,12 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
 	if config.MessengerInsightsEnabled() && len(promptOverride) > 0 && strings.TrimSpace(promptOverride[0]) != "" {
 		prompt := promptOverride[0]
 		if strings.Contains(prompt, "{{rules}}") {
-			return strings.ReplaceAll(prompt, "{{rules}}", string(rulesJSON))
+			prompt = strings.ReplaceAll(prompt, "{{rules}}", string(rulesJSON))
+			return appendMandatorySenderRoleInstructions(prompt)
 		}
 		// Keep each job's rules even if the administrator removes the placeholder.
-		return prompt + "\n\n## Các quy tắc phân loại:\n" + string(rulesJSON)
+		prompt += "\n\n## Các quy tắc phân loại:\n" + string(rulesJSON)
+		return appendMandatorySenderRoleInstructions(prompt)
 	}
 	insightsOutput := ""
 	insightsInstructions := ""
@@ -94,7 +115,7 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
 - Không suy đoán hoặc quy kết hội thoại cho một nhân viên cụ thể.`
 	}
 
-	return fmt.Sprintf(`Bạn là hệ thống phân loại nội dung hội thoại CSKH/Sales.
+	prompt := fmt.Sprintf(`Bạn là hệ thống phân loại nội dung hội thoại CSKH/Sales.
 
 ## Các quy tắc phân loại:
 %s
@@ -121,6 +142,10 @@ Trả về JSON:
 - Ví dụ xấu: "Cuộc chat được phân loại: Góp ý tính năng"
 %s
 CHỈ trả về JSON, không thêm text khác.`, string(rulesJSON), insightsOutput, insightsInstructions)
+	if config.MessengerInsightsEnabled() {
+		return appendMandatorySenderRoleInstructions(prompt)
+	}
+	return prompt
 }
 
 // FormatBatchTranscript formats multiple conversations for batch analysis.

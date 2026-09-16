@@ -94,6 +94,40 @@ func transcriptSinceForJob(job models.Job, since time.Time) time.Time {
 	return since
 }
 
+// messengerInsightsGuardResponse prevents an agent-only transcript from being
+// interpreted as customer intent. It returns a complete classification payload
+// so the normal result-storage path records a SKIP and empty customer insights
+// without spending an AI call.
+func messengerInsightsGuardResponse(job models.Job, messages []models.Message) (string, bool) {
+	if job.JobType != "classification" || !ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() || len(messages) == 0 {
+		return "", false
+	}
+	for _, message := range messages {
+		if message.SenderType == "customer" {
+			return "", false
+		}
+	}
+
+	response := ai.ClassificationResponse{
+		Tags:    []ai.ClassificationTag{},
+		Summary: fmt.Sprintf("Chưa ghi nhận tin nhắn từ khách hàng. Hội thoại hiện chỉ có %d tin nhắn từ Fanpage.", len(messages)),
+		Insights: &ai.ConversationInsights{
+			Intents:  []string{},
+			Products: []ai.ProductInsight{},
+			Feedback: []ai.FeedbackInsight{},
+			LeadQuality: ai.LeadQualityInsight{
+				Level:  "unknown",
+				Reason: "Không có tin nhắn từ khách hàng trong dữ liệu đã đồng bộ.",
+			},
+		},
+	}
+	raw, err := json.Marshal(response)
+	if err != nil {
+		return "", false
+	}
+	return string(raw), true
+}
+
 // buildJobSystemPrompt loads the tenant's structured Messenger prompt once per
 // run. Other classification profiles and QC jobs retain their own prompts.
 func buildJobSystemPrompt(ctx context.Context, job models.Job) (string, error) {
@@ -321,50 +355,54 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 				continue
 			}
 
-			// Call AI (with rate limit delay)
-			if analyzedCount > 0 {
-				time.Sleep(500 * time.Millisecond) // Avoid rate limiting
-			}
-			aiResp, err := provider.AnalyzeChat(ctx, systemPrompt, transcript)
-			if err != nil {
-				log.Printf("[analyzer] AI error for conversation %s: %v", conv.ID, err)
-				if firstAIErr == "" {
-					firstAIErr = err.Error()
+			analysisContent, guarded := messengerInsightsGuardResponse(job, messages)
+			if !guarded {
+				// Call AI (with rate limit delay)
+				if analyzedCount > 0 {
+					time.Sleep(500 * time.Millisecond) // Avoid rate limiting
 				}
-				errorCount++
-				// Update progress even on error
-				errProgressJSON, _ := json.Marshal(map[string]interface{}{
-					"conversations_found":    len(conversations),
-					"conversations_analyzed": analyzedCount,
-					"conversations_passed":   passCount,
-					"conversations_errors":   errorCount,
-					"issues_found":           issuesFound,
-				})
-				if err := db.DB.Model(&run).Update("summary", string(errProgressJSON)).Error; err != nil {
-					log.Printf("[analyzer] DB update error (error progress): %v", err)
+				aiResp, err := provider.AnalyzeChat(ctx, systemPrompt, transcript)
+				if err != nil {
+					log.Printf("[analyzer] AI error for conversation %s: %v", conv.ID, err)
+					if firstAIErr == "" {
+						firstAIErr = err.Error()
+					}
+					errorCount++
+					// Update progress even on error
+					errProgressJSON, _ := json.Marshal(map[string]interface{}{
+						"conversations_found":    len(conversations),
+						"conversations_analyzed": analyzedCount,
+						"conversations_passed":   passCount,
+						"conversations_errors":   errorCount,
+						"issues_found":           issuesFound,
+					})
+					if err := db.DB.Model(&run).Update("summary", string(errProgressJSON)).Error; err != nil {
+						log.Printf("[analyzer] DB update error (error progress): %v", err)
+					}
+					continue
 				}
-				continue
+				analysisContent = aiResp.Content
+
+				// Log AI usage + cost
+				cost := ai.CalculateCostUSD(aiResp.Provider, aiResp.Model, aiResp.InputTokens, aiResp.OutputTokens)
+				usageLog := models.AIUsageLog{
+					ID:           pkg.NewUUID(),
+					TenantID:     job.TenantID,
+					JobID:        job.ID,
+					JobRunID:     run.ID,
+					Provider:     aiResp.Provider,
+					Model:        aiResp.Model,
+					InputTokens:  aiResp.InputTokens,
+					OutputTokens: aiResp.OutputTokens,
+					CostUSD:      cost,
+					CreatedAt:    time.Now(),
+				}
+				db.DB.Create(&usageLog)
 			}
 			analyzedCount++
 
-			// Log AI usage + cost
-			cost := ai.CalculateCostUSD(aiResp.Provider, aiResp.Model, aiResp.InputTokens, aiResp.OutputTokens)
-			usageLog := models.AIUsageLog{
-				ID:           pkg.NewUUID(),
-				TenantID:     job.TenantID,
-				JobID:        job.ID,
-				JobRunID:     run.ID,
-				Provider:     aiResp.Provider,
-				Model:        aiResp.Model,
-				InputTokens:  aiResp.InputTokens,
-				OutputTokens: aiResp.OutputTokens,
-				CostUSD:      cost,
-				CreatedAt:    time.Now(),
-			}
-			db.DB.Create(&usageLog)
-
 			// Parse and save results
-			count, passed, err := a.saveResults(run.ID, job.TenantID, conv.ID, job.JobType, aiResp.Content, conv.LastMessageAt)
+			count, passed, err := a.saveResults(run.ID, job.TenantID, conv.ID, job.JobType, analysisContent, conv.LastMessageAt)
 			if err != nil {
 				log.Printf("[analyzer] save results error for %s: %v", conv.ID, err)
 				analyzedCount--
@@ -822,6 +860,22 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 				Content:    m.Content,
 				SentAt:     pkg.ToVN(m.SentAt).Format("2006-01-02T15:04:05-07:00"),
 			}
+		}
+		if guardedContent, guarded := messengerInsightsGuardResponse(job, messages); guarded {
+			count, passed, saveErr := a.saveResults(run.ID, job.TenantID, conv.ID, job.JobType, guardedContent, conv.LastMessageAt)
+			if saveErr != nil {
+				errorCount++
+				if firstErr == "" {
+					firstErr = saveErr.Error()
+				}
+			} else {
+				analyzedCount++
+				issuesFound += count
+				if passed {
+					passCount++
+				}
+			}
+			continue
 		}
 		prepared = append(prepared, convWithTranscript{
 			Conv:       conv,
