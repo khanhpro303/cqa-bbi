@@ -87,6 +87,7 @@ describe('ServiceQuality queue banner navigation', () => {
     const wrapper = await render(['answered', 'waiting', 'overdue', 'resolved'], [0, 2, 3])
     const button = wrapper.findAll('button').find(item => item.text().includes('Phân tích lại ngay'))
     expect(button?.text()).toContain('(3)')
+    expect(button?.attributes('size')).toBe('small')
 
     await button!.trigger('click')
     await flushPromises()

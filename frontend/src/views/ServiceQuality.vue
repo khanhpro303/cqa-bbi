@@ -201,6 +201,7 @@
           />
           <v-btn
             v-if="authStore.canEdit('jobs') && staleInsightCount"
+            size="small"
             color="warning"
             variant="tonal"
             prepend-icon="mdi-creation"
