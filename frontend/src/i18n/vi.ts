@@ -121,7 +121,7 @@ export default {
   dashboard: 'Trang chủ',
   total_conversations: 'Tổng hội thoại',
   total_messages: 'Tổng tin nhắn',
-  issues_today: 'Vấn đề hôm nay',
+  issues_today: 'Vi phạm QC trong kỳ',
   active_jobs: 'Công việc đang chạy',
   active_channels: 'Kênh hoạt động',
   recent_activity: 'Hoạt động gần đây',

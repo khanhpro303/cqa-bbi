@@ -12,26 +12,56 @@ import (
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/pkg"
 )
+
+// dashboardDateRange interprets calendar dates in the tenant's timezone.
+// The upper bound is exclusive so fractional seconds on the last day are included.
+func dashboardDateRange(now time.Time, fromDate, toDate string, loc *time.Location) (time.Time, time.Time, error) {
+	now = now.In(loc)
+	from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	to := from.AddDate(0, 0, 1)
+	var err error
+	if fromDate != "" {
+		from, err = time.ParseInLocation("2006-01-02", fromDate, loc)
+		if err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+	}
+	if toDate != "" {
+		to, err = time.ParseInLocation("2006-01-02", toDate, loc)
+		if err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+		to = to.AddDate(0, 0, 1)
+	}
+	if !from.Before(to) {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid date range")
+	}
+	return from.UTC(), to.UTC(), nil
+}
+
+func dashboardQCResults(database *gorm.DB, tenantID string, from, to time.Time) *gorm.DB {
+	return database.Model(&models.JobResult{}).
+		Where("tenant_id = ? AND result_type = ? AND created_at >= ? AND created_at < ?", tenantID, "qc_violation", from, to)
+}
 
 func GetDashboard(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
-	// Date filter (optional)
-	now := time.Now()
-	today := now.Truncate(24 * time.Hour)
-	from := today
-	to := now
-
-	if f := c.Query("from"); f != "" {
-		if t, err := time.Parse("2006-01-02", f); err == nil {
-			from = t
+	loc := pkg.VNLocation
+	var timezone models.AppSetting
+	if db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "timezone").First(&timezone).Error == nil {
+		if configured, err := time.LoadLocation(timezone.ValuePlain); err == nil {
+			loc = configured
 		}
 	}
-	if t := c.Query("to"); t != "" {
-		if parsed, err := time.Parse("2006-01-02", t); err == nil {
-			to = parsed.Add(24*time.Hour - time.Second) // end of day
-		}
+	now := time.Now().In(loc)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	from, to, err := dashboardDateRange(now, c.Query("from"), c.Query("to"), loc)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_date_range"})
+		return
 	}
 
 	// Static stats (not time-dependent)
@@ -41,8 +71,11 @@ func GetDashboard(c *gin.Context) {
 
 	// Time-dependent stats
 	var totalConversations, issuesToday int64
-	db.DB.Model(&models.Conversation{}).Where("tenant_id = ? AND last_message_at BETWEEN ? AND ?", tenantID, from, to).Count(&totalConversations)
-	db.DB.Model(&models.JobResult{}).Where("tenant_id = ? AND created_at BETWEEN ? AND ?", tenantID, from, to).Count(&issuesToday)
+	db.DB.Model(&models.Conversation{}).Where("tenant_id = ? AND last_message_at >= ? AND last_message_at < ?", tenantID, from, to).Count(&totalConversations)
+	if err := dashboardQCResults(db.DB, tenantID, from, to).Count(&issuesToday).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "dashboard_query_failed"})
+		return
+	}
 
 	// Conversations by channel type
 	type ChannelCount struct {
@@ -52,14 +85,14 @@ func GetDashboard(c *gin.Context) {
 	var channelCounts []ChannelCount
 	db.DB.Model(&models.Conversation{}).
 		Joins("JOIN channels ON channels.id = conversations.channel_id").
-		Where("conversations.tenant_id = ? AND conversations.last_message_at BETWEEN ? AND ?", tenantID, from, to).
+		Where("conversations.tenant_id = ? AND conversations.last_message_at >= ? AND conversations.last_message_at < ?", tenantID, from, to).
 		Select("channels.channel_type, COUNT(*) as count").
 		Group("channels.channel_type").
 		Scan(&channelCounts)
 
 	// QC Alerts: only qc_violation (real quality issues)
 	var qcAlerts []models.JobResult
-	db.DB.Where("tenant_id = ? AND result_type = 'qc_violation' AND created_at BETWEEN ? AND ?", tenantID, from, to).
+	dashboardQCResults(db.DB, tenantID, from, to).
 		Order("created_at DESC").Limit(5).Find(&qcAlerts)
 
 	// Classification recent: only classification_tag
@@ -71,12 +104,12 @@ func GetDashboard(c *gin.Context) {
 	db.DB.Model(&models.JobResult{}).
 		Select("job_results.*, conversations.customer_name").
 		Joins("LEFT JOIN conversations ON conversations.id = job_results.conversation_id").
-		Where("job_results.tenant_id = ? AND job_results.result_type = 'classification_tag' AND job_results.created_at BETWEEN ? AND ?", tenantID, from, to).
+		Where("job_results.tenant_id = ? AND job_results.result_type = 'classification_tag' AND job_results.created_at >= ? AND job_results.created_at < ?", tenantID, from, to).
 		Order("job_results.created_at DESC").Limit(10).Find(&classRecent)
 
 	// AI cost
 	var costPeriod float64
-	db.DB.Model(&models.AIUsageLog{}).Where("tenant_id = ? AND created_at BETWEEN ? AND ?", tenantID, from, to).
+	db.DB.Model(&models.AIUsageLog{}).Where("tenant_id = ? AND created_at >= ? AND created_at < ?", tenantID, from, to).
 		Select("COALESCE(SUM(cost_usd), 0)").Scan(&costPeriod)
 
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())

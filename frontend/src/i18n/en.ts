@@ -122,7 +122,7 @@ export default {
   dashboard: 'Dashboard',
   total_conversations: 'Total Conversations',
   total_messages: 'Total Messages',
-  issues_today: 'Issues Today',
+  issues_today: 'QC violations in period',
   active_jobs: 'Active Jobs',
   active_channels: 'Active Channels',
   recent_activity: 'Recent Activity',

@@ -9,11 +9,13 @@ Dashboard là trang tổng quan khi bạn vào 1 công ty. Hiển thị các ch�
 | Thẻ | Ý nghĩa |
 |-----|---------|
 | **Tổng cuộc hội thoại** | Tổng số cuộc chat đã đồng bộ |
-| **Vấn đề hôm nay** | Số vi phạm CSKH phát hiện trong ngày |
+| **Vi phạm QC trong kỳ** | Số bản ghi vi phạm QC được tạo trong khoảng ngày đang chọn; không tính đánh giá PASS/SKIP, nhãn phân loại hay insight |
 | **Công việc đang chạy** | Số công việc đang thực thi |
 | **Kênh hoạt động** | Số kênh chat đang kết nối |
 
 ## Thống kê kênh
+
+Card vi phạm đếm từng vi phạm, không phải số cuộc hội thoại. Một cuộc hội thoại có thể có nhiều vi phạm. Kết quả QC được tạo thêm khi chạy lại vẫn được tính theo thời điểm phân tích; đây không phải số vấn đề chưa xử lý. Khoảng ngày được hiểu theo múi giờ công ty (mặc định Việt Nam), bao gồm toàn bộ ngày kết thúc. Preset 7/28 ngày bao gồm hôm nay.
 
 Hiển thị số cuộc hội thoại theo từng loại kênh:
 - Zalo OA: số cuộc chat

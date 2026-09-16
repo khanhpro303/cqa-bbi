@@ -354,7 +354,7 @@ const totalMessages = computed(() => messagesByDay.value.reduce((sum, d) => sum 
 
 // Date filter + presets
 const now = new Date()
-const dateFrom = ref(formatDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 28)))
+const dateFrom = ref(formatDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 27)))
 const dateTo = ref(formatDate(now))
 const datePreset = ref('28days')
 
@@ -368,7 +368,7 @@ const datePresets = [
 ]
 
 function formatDate(d: Date) {
-  return d.toISOString().split('T')[0]
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 function applyPreset(preset: string) {
@@ -382,10 +382,10 @@ function applyPreset(preset: string) {
       dateFrom.value = formatDate(new Date(y, m, d.getDate()))
       break
     case '7days':
-      dateFrom.value = formatDate(new Date(y, m, d.getDate() - 7))
+      dateFrom.value = formatDate(new Date(y, m, d.getDate() - 6))
       break
     case '28days':
-      dateFrom.value = formatDate(new Date(y, m, d.getDate() - 28))
+      dateFrom.value = formatDate(new Date(y, m, d.getDate() - 27))
       break
     case 'week': {
       const day = d.getDay() || 7
