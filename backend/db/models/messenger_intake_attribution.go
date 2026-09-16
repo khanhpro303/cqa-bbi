@@ -10,7 +10,7 @@ type MessengerIntakeAttribution struct {
 	ChannelID      string    `gorm:"type:char(36);not null;uniqueIndex:idx_mia_channel_psid,priority:1" json:"channel_id"`
 	ConversationID *string   `gorm:"type:char(36);index:idx_mia_conversation" json:"conversation_id,omitempty"`
 	PageID         string    `gorm:"type:varchar(64);not null;index:idx_mia_page" json:"page_id"`
-	PSID           string    `gorm:"type:varchar(64);not null;uniqueIndex:idx_mia_channel_psid,priority:2" json:"psid"`
+	PSID           string    `gorm:"column:psid;type:varchar(64);not null;uniqueIndex:idx_mia_channel_psid,priority:2" json:"psid"`
 	AdID           string    `gorm:"type:varchar(128);index:idx_mia_ad" json:"ad_id,omitempty"`
 	Ref            string    `gorm:"type:varchar(512)" json:"ref,omitempty"`
 	Source         string    `gorm:"type:varchar(64)" json:"source,omitempty"`
