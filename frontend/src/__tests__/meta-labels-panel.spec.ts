@@ -51,6 +51,9 @@ describe('Meta labels conversation table', () => {
     expect(rows[1]!.get('[data-column="customer_error"] v-icon-stub').attributes('aria-label')).toBe('Meta error')
     expect(rows[2]!.find('[data-column="customer_error"] v-icon-stub').exists()).toBe(false)
     expect(wrapper.text()).toContain('Hội thoại theo nhãn Meta')
+    const titleIcon = wrapper.get('.meta-conversations-title v-icon-stub')
+    expect(titleIcon.attributes('icon')).toBe('mdi-message-text-outline')
+    expect(titleIcon.attributes('color')).toBe('primary')
     i18n.global.locale.value = 'en'
     await nextTick()
     expect(wrapper.text()).toContain('Meta')

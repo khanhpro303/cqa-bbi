@@ -133,7 +133,10 @@
         <v-card variant="outlined">
           <v-card-title class="d-flex align-center flex-wrap ga-3">
             <div class="title-block">
-              <div class="text-subtitle-1 font-weight-bold">{{ t('quality_meta_conversations') }}</div>
+              <div class="meta-conversations-title text-subtitle-1 font-weight-bold">
+                <v-icon start color="primary" icon="mdi-message-text-outline" />
+                {{ t('quality_meta_conversations') }}
+              </div>
               <div class="panel-description text-medium-emphasis mt-1">
                 {{ t('quality_meta_total_description', { total: formatNumber(data.counts.total) }) }}
               </div>

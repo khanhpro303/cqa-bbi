@@ -182,7 +182,7 @@
       <v-card variant="outlined">
         <v-card-title class="d-flex align-center flex-wrap ga-3">
           <div>
-            <h2 id="conversation-queue-title" class="text-subtitle-1 font-weight-bold"><v-icon start color="primary">mdi-message-alert-outline</v-icon>{{ queueTitle }}</h2>
+            <h2 id="conversation-queue-title" class="queue-title text-subtitle-1 font-weight-bold"><v-icon start color="primary">mdi-message-alert-outline</v-icon>{{ queueTitle }}</h2>
             <div class="panel-description text-medium-emphasis mt-1" role="status">
               {{ t('sq_matching', { count: filteredRows.length }) }}<span v-if="statusFilter === 'overdue' || statusFilter === 'waiting'">{{ t('sq_queue_date_note') }}</span>
             </div>
@@ -836,6 +836,12 @@ onBeforeUnmount(() => {
 .conversation-queue {
   scroll-margin-top: 64px;
   border-radius: 4px;
+}
+
+.queue-title {
+  font-size: 1rem !important;
+  line-height: 1.75rem !important;
+  letter-spacing: 0.009375em !important;
 }
 
 .conversation-queue:focus-visible {

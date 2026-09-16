@@ -115,7 +115,10 @@ describe('ServiceQuality queue banner navigation', () => {
 
   it('takes the user to the overdue section with matching rows and an accessible heading', async () => {
     const wrapper = await render(['answered', 'waiting', 'overdue', 'resolved', 'overdue'])
-    expect(wrapper.get('#conversation-queue h2').text()).toContain('Hội thoại')
+    const queueHeading = wrapper.get('#conversation-queue h2')
+    expect(queueHeading.text()).toContain('Hội thoại')
+    expect(queueHeading.classes()).toContain('queue-title')
+    expect(queueHeading.classes()).toContain('text-subtitle-1')
     expect(wrapper.get('#conversation-queue [role="status"]').text()).toContain('5 hội thoại')
     await queueButton(wrapper).trigger('click')
     await flushPromises()
