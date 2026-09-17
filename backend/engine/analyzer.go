@@ -804,12 +804,12 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 		// Structured Messenger insights are stored independently from tags so
 		// analytics can consume them without changing violation/tag counts.
 		// Legacy responses omit the insights field and do not create this row.
+		var classificationSourceTimestamp *time.Time
+		if len(sourceLastMessageAt) > 0 {
+			classificationSourceTimestamp = sourceLastMessageAt[0]
+		}
 		if classResult.Insights != nil {
-			var sourceTimestamp *time.Time
-			if len(sourceLastMessageAt) > 0 {
-				sourceTimestamp = sourceLastMessageAt[0]
-			}
-			insightDetail, err := buildConversationInsightDetail(classResult, sourceTimestamp)
+			insightDetail, err := buildConversationInsightDetail(classResult, classificationSourceTimestamp)
 			if err != nil {
 				return count, false, fmt.Errorf("failed to encode conversation insight: %w", err)
 			}
@@ -833,9 +833,13 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 
 		// Create conversation_evaluation record for classified conversations
 		if len(classResult.Tags) > 0 {
-			evalDetail, _ := json.Marshal(map[string]interface{}{
+			evalDetailPayload := map[string]interface{}{
 				"summary": classResult.Summary,
-			})
+			}
+			if classificationSourceTimestamp != nil && !classificationSourceTimestamp.IsZero() {
+				evalDetailPayload["source_last_message_at"] = classificationSourceTimestamp.UTC().Format(time.RFC3339Nano)
+			}
+			evalDetail, _ := json.Marshal(evalDetailPayload)
 			if err := db.DB.Create(&models.JobResult{
 				ID:             pkg.NewUUID(),
 				JobRunID:       runID,
@@ -855,9 +859,13 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 
 		// No tags matched — mark conversation as SKIP
 		if len(classResult.Tags) == 0 {
-			skipDetail, _ := json.Marshal(map[string]interface{}{
+			skipDetailPayload := map[string]interface{}{
 				"summary": classResult.Summary,
-			})
+			}
+			if classificationSourceTimestamp != nil && !classificationSourceTimestamp.IsZero() {
+				skipDetailPayload["source_last_message_at"] = classificationSourceTimestamp.UTC().Format(time.RFC3339Nano)
+			}
+			skipDetail, _ := json.Marshal(skipDetailPayload)
 			if err := db.DB.Create(&models.JobResult{
 				ID:             pkg.NewUUID(),
 				JobRunID:       runID,

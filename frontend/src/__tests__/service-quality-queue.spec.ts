@@ -25,20 +25,27 @@ const Field = defineComponent({
 const Table = defineComponent({
   props: ['items', 'page', 'itemsPerPage', 'headers'],
   emits: ['update:page'],
-  setup: (props, { emit }) => () => h('div', { class: 'queue-table', 'data-page': props.page }, [
-    ...(props.items as { conversation_id: string; customer_name: string }[]).map(row => h('div', { class: 'queue-row', 'data-id': row.conversation_id }, row.customer_name)),
+  setup: (props, { emit, slots }) => () => h('div', { class: 'queue-table', 'data-page': props.page }, [
+    h('div', { class: 'queue-headers' }, (props.headers as { title: string }[]).map(header => header.title).join(' | ')),
+    ...(props.items as { conversation_id: string; customer_name: string }[]).map(row => h('div', { class: 'queue-row', 'data-id': row.conversation_id }, [
+      row.customer_name,
+      slots['item.classifications']?.({ item: row }),
+      slots['item.actions']?.({ item: row }),
+    ])),
     h('button', { class: 'next-page', onClick: () => emit('update:page', Number(props.page) + 1) }, 'Trang tiếp'),
   ]),
 })
 const Hidden = defineComponent({ setup: () => () => null })
+const ExpansionPanels = defineComponent({ name: 'VExpansionPanels', setup: (_, { slots, attrs }) => () => h('div', { ...attrs, class: 'expansion-panels' }, slots.default?.()) })
 const stubs = Object.fromEntries([
   'VIcon', 'VAlert', 'VCard', 'VCardText', 'VCardTitle', 'VCardActions', 'VSpacer', 'VDivider',
   'VRow', 'VCol', 'VAvatar', 'VChip', 'VProgressLinear', 'VSkeletonLoader', 'VSnackbar',
+  'VList', 'VListItem', 'VListItemTitle', 'VListItemSubtitle', 'VTable',
 ].map(name => [name, Container]))
 const wrappers: VueWrapper[] = []
 const scrollIntoView = vi.fn()
 
-function report(statuses: string[], staleIndexes: number[] = []) {
+function report(statuses: string[], staleIndexes: number[] = [], classifiedIndexes: number[] = [], classificationStaleIndexes: number[] = [], noMatchIndexes: number[] = []) {
   return {
     policy: { timezone: 'Asia/Ho_Chi_Minh', work_start: '08:00', work_end: '22:00', all_day: false, target_minutes: 5, overdue_minutes: 15 },
     generated_at: '2026-09-15T03:00:00Z', from: '2026-09-09T00:00:00Z', to: '2026-09-16T00:00:00Z',
@@ -47,18 +54,27 @@ function report(statuses: string[], staleIndexes: number[] = []) {
     rows: statuses.map((status, index) => ({
       conversation_id: `c${index}`, customer_name: `Khách ${index}`, channel_id: 'page-one', channel_name: 'Fanpage A', last_message_at: null, status, turns: [],
       insight_stale: staleIndexes.includes(index), insight_job_id: staleIndexes.includes(index) ? `job-${index % 2}` : undefined,
+      insight: index === 0 ? { lead_quality: { level: 'high', reason: 'Khách có nhu cầu rõ ràng' } } : undefined,
+      classification_status: noMatchIndexes.includes(index) ? 'no_match' : classifiedIndexes.includes(index) ? 'classified' : 'never_run',
+      classification_stale: classificationStaleIndexes.includes(index),
+      classifications: classifiedIndexes.includes(index) ? [{ rule_name: 'Hỏi giá', evidence: 'Giá bao nhiêu?', explanation: 'Khách đang hỏi giá sản phẩm.' }] : [],
     })),
     invalid_timestamps: 0, conversations_scanned: statuses.length,
   }
 }
 
 let i18n: ReturnType<typeof createI18n>
-async function render(statuses: string[], staleIndexes: number[] = []) {
+async function render(statuses: string[], staleIndexes: number[] = [], classifiedIndexes: number[] = [], showDialogs = false, classificationStaleIndexes: number[] = [], noMatchIndexes: number[] = []) {
   i18n = createI18n({ legacy: false, locale: 'vi', messages: { vi: qualityVi, en: qualityEn } })
-  mocks.get.mockResolvedValue({ data: report(statuses, staleIndexes) })
+  mocks.get.mockResolvedValue({ data: report(statuses, staleIndexes, classifiedIndexes, classificationStaleIndexes, noMatchIndexes) })
   const wrapper = mount(ServiceQuality, {
     attachTo: document.body,
-    global: { plugins: [i18n], stubs: { ...stubs, VBtn: Button, VSelect: Field, VTextField: Field, VTextarea: Field, VSwitch: Field, VDataTable: Table, VDialog: Hidden, MetaLabelsPanel: Hidden, InsightWordcloudPanel: Hidden } },
+    global: { plugins: [i18n], stubs: {
+      ...stubs, VBtn: Button, VSelect: Field, VTextField: Field, VTextarea: Field, VSwitch: Field, VDataTable: Table,
+      VDialog: showDialogs ? Container : Hidden,
+      VExpansionPanels: ExpansionPanels, VExpansionPanel: Container, VExpansionPanelTitle: Container, VExpansionPanelText: Container,
+      MetaLabelsPanel: Hidden, InsightWordcloudPanel: Hidden,
+    } },
   })
   wrappers.push(wrapper)
   await flushPromises()
@@ -82,6 +98,32 @@ afterEach(() => {
 })
 
 describe('ServiceQuality queue banner navigation', () => {
+  it('shows classification status in one compact column and exposes classification details in the dialog', async () => {
+    const wrapper = await render(['answered', 'waiting'], [], [0], true)
+
+    expect(wrapper.get('.queue-headers').text()).toContain('AI nội dung | Đã phân loại')
+    expect(wrapper.get('[data-id="c0"]').text()).toContain('Đã phân loại')
+    expect(wrapper.get('[data-id="c1"]').text()).toContain('Chưa phân loại')
+
+    await wrapper.get('[data-id="c0"] button[title="Xem chi tiết"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Chất lượng khách hàng')
+    expect(wrapper.text()).toContain('Chi tiết phân loại')
+    expect(wrapper.text()).toContain('1 kết quả phân loại')
+    expect(wrapper.text()).toContain('Hỏi giá')
+    expect(wrapper.text()).toContain('Giá bao nhiêu?')
+    expect(wrapper.text()).toContain('Khách đang hỏi giá sản phẩm.')
+    expect(wrapper.get('.expansion-panels').attributes('variant')).toBe('accordion')
+  })
+
+  it('distinguishes stale classification and a completed run without matching tags', async () => {
+    const wrapper = await render(['answered', 'answered'], [], [0], false, [0], [1])
+
+    expect(wrapper.get('[data-id="c0"]').text()).toContain('Cần phân loại lại')
+    expect(wrapper.get('[data-id="c1"]').text()).toContain('Đã phân loại · không khớp')
+  })
+
   it('reanalyses only rows carrying the stale badge and groups them by insight job', async () => {
     mocks.canEditJobs = true
     const wrapper = await render(['answered', 'waiting', 'overdue', 'resolved'], [0, 2, 3])

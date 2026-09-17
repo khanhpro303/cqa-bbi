@@ -58,6 +58,38 @@ func TestClassificationResultCountsAndStorageErrors(t *testing.T) {
 	}
 }
 
+func TestClassificationEvaluationStoresSourceMessageWatermark(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{name: "tagged", content: `{"tags":[{"rule_name":"Hỏi giá"}],"summary":"Hỏi giá"}`},
+		{name: "no match", content: `{"tags":[],"summary":"No match"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := resultStateDB(t)
+			var evaluationDetail string
+			database.Callback().Create().Replace("gorm:create", func(tx *gorm.DB) {
+				if result, ok := tx.Statement.Dest.(*models.JobResult); ok && result.ResultType == "conversation_evaluation" {
+					evaluationDetail = result.Detail
+				}
+				tx.RowsAffected = 1
+			})
+			source := time.Date(2026, 9, 17, 8, 4, 5, 123000000, time.UTC)
+			if _, _, err := NewAnalyzer(&config.Config{}).saveResults("run", "tenant", "conv", "classification", tc.content, &source); err != nil {
+				t.Fatal(err)
+			}
+			var detail map[string]interface{}
+			if err := json.Unmarshal([]byte(evaluationDetail), &detail); err != nil {
+				t.Fatalf("invalid evaluation detail: %v", err)
+			}
+			if got := detail["source_last_message_at"]; got != "2026-09-17T08:04:05.123Z" {
+				t.Fatalf("source watermark = %v", got)
+			}
+		})
+	}
+}
+
 func TestAnalysisEmptyAndReadFailure(t *testing.T) {
 	for _, batch := range []bool{false, true} {
 		for _, tc := range []struct {

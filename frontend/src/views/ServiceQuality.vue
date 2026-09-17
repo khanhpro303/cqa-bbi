@@ -224,6 +224,7 @@
         </v-card-title>
         <v-divider />
         <v-data-table
+          class="conversation-table"
           v-model:page="conversationPage"
           :headers="headers"
           :items="filteredRows"
@@ -252,8 +253,22 @@
             </v-chip>
             <span v-else class="text-medium-emphasis">{{ t('sq_none') }}</span>
           </template>
+          <template #item.classifications="{ item }">
+            <div class="classification-status-cell">
+              <v-chip v-if="item.classification_stale" color="warning" size="x-small" variant="tonal">
+                {{ t('sq_reclassify') }}
+              </v-chip>
+              <v-chip v-else-if="item.classification_status === 'classified'" color="success" size="x-small" variant="tonal">
+                {{ t('sq_classified') }}
+              </v-chip>
+              <v-chip v-else-if="item.classification_status === 'no_match'" color="info" size="x-small" variant="tonal">
+                {{ t('sq_classified_no_match') }}
+              </v-chip>
+              <span v-else class="text-medium-emphasis">{{ t('sq_unclassified') }}</span>
+            </div>
+          </template>
           <template #item.actions="{ item }">
-            <div class="d-flex ga-1 justify-end">
+            <div class="d-flex flex-wrap ga-1 justify-end">
               <v-btn icon="mdi-eye-outline" variant="text" size="small" :title="t('sq_view_detail')" @click="openDetail(item)" />
               <v-btn
                 icon="mdi-open-in-new"
@@ -326,6 +341,37 @@
           <v-alert v-else type="info" variant="tonal" density="compact">
             {{ t('sq_no_analysis') }}
           </v-alert>
+
+          <div class="text-subtitle-2 font-weight-bold mt-4 mb-2">{{ t('sq_classification_detail') }}</div>
+          <v-alert v-if="selectedRow.classification_stale" type="warning" variant="tonal" density="compact" class="mb-2">
+            {{ t('sq_classification_stale_warning') }}
+          </v-alert>
+          <v-expansion-panels v-if="selectedRow.classifications?.length" variant="accordion" class="classification-panels">
+            <v-expansion-panel>
+              <v-expansion-panel-title>
+                <div class="d-flex align-center ga-2 classification-panel-title">
+                  <v-icon size="small" color="primary">mdi-tag-multiple-outline</v-icon>
+                  <span>{{ t('sq_classification_count', { count: selectedRow.classifications.length }) }}</span>
+                </div>
+              </v-expansion-panel-title>
+              <v-expansion-panel-text>
+                <div v-for="(classification, index) in selectedRow.classifications" :key="`${classification.rule_name}-${index}`" class="classification-detail-item">
+                  <v-chip size="small" color="primary" variant="tonal">
+                    <v-icon start size="small">mdi-tag</v-icon>
+                    {{ classification.rule_name }}
+                  </v-chip>
+                  <blockquote v-if="classification.evidence" class="classification-evidence">{{ classification.evidence }}</blockquote>
+                  <p v-if="classification.explanation" class="text-body-2 text-medium-emphasis mb-0">{{ classification.explanation }}</p>
+                  <v-alert v-if="classification.detail_error" type="warning" variant="tonal" density="compact" class="mt-2">
+                    {{ t('sq_classification_detail_error') }}
+                  </v-alert>
+                </div>
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+          </v-expansion-panels>
+          <div v-else class="text-body-2 text-medium-emphasis">
+            {{ selectedRow.classification_status === 'no_match' ? t('sq_no_classification_match') : t('sq_no_classification') }}
+          </div>
 
           <v-divider class="my-4" />
           <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_turns') }}</div>
@@ -456,8 +502,19 @@ interface Row {
   insight_at?: string
   insight_job_id?: string
   insight_stale: boolean
+  classification_status: 'never_run' | 'classified' | 'no_match'
+  classification_stale: boolean
+  classifications: ClassificationTag[]
   resolution_note?: string
   history_from?: string
+}
+
+interface ClassificationTag {
+  rule_name: string
+  evidence?: string
+  explanation?: string
+  confidence?: number
+  detail_error?: boolean
 }
 
 interface Report {
@@ -547,6 +604,7 @@ const headers = computed(() => [
   { title: t('sq_waiting'), key: 'waiting', sortable: false },
   { title: t('sq_last_message'), key: 'last_message_at', sortable: true },
   { title: t('sq_ai_content'), key: 'insight', sortable: false },
+  { title: t('sq_classification'), key: 'classifications', sortable: false },
   { title: '', key: 'actions', sortable: false, align: 'end' as const },
 ])
 
@@ -877,10 +935,79 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
+.classification-status-cell,
+.classification-panel-title {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.classification-detail-item + .classification-detail-item {
+  margin-top: 16px;
+}
+
+.classification-evidence {
+  margin: 10px 0 6px;
+  padding: 10px 12px;
+  border-left: 3px solid rgb(var(--v-theme-primary));
+  border-radius: 4px;
+  background: rgba(var(--v-theme-primary), 0.08);
+  overflow-wrap: anywhere;
+}
+
+.classification-panels :deep(.v-expansion-panel-title__overlay) {
+  border-radius: inherit;
+}
+
 @media (max-width: 600px) {
-  :deep(.v-data-table__td),
-  :deep(.v-data-table__th) {
-    white-space: nowrap;
+  .conversation-queue :deep(.conversation-table thead) {
+    display: none;
+  }
+
+  .conversation-queue :deep(.conversation-table tbody tr) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    padding: 8px 4px;
+    border-bottom: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
+  }
+
+  .conversation-queue :deep(.conversation-table tbody td) {
+    width: auto !important;
+    min-width: 0;
+    height: auto !important;
+    padding: 4px 8px !important;
+    border-bottom: 0 !important;
+  }
+
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(1)) {
+    grid-column: 1;
+    grid-row: 1;
+    white-space: normal;
+  }
+
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(2)) {
+    grid-column: 1 / 3;
+    grid-row: 2;
+  }
+
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(3)),
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(4)) {
+    display: none;
+  }
+
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(5)) {
+    grid-column: 1 / 3;
+    grid-row: 3;
+  }
+
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(6)) {
+    grid-column: 1 / 3;
+    grid-row: 4;
+  }
+
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(7)) {
+    grid-column: 2;
+    grid-row: 1;
   }
 }
 </style>
