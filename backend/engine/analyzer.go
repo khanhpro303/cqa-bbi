@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,15 @@ type staleInsightCandidate struct {
 	InsightID     string
 	InsightJobID  string
 	Detail        string
+}
+
+type analysisSnapshotMetadata struct {
+	SourceLastMessageAt *time.Time
+	SourceMessageCount  int
+	TranscriptSHA256    string
+	PromptSHA256        string
+	AIProvider          string
+	AIModel             string
 }
 
 func pendingInsightConversationIDs(candidates []staleInsightCandidate, requiredJobID string, limit int) []string {
@@ -192,6 +202,23 @@ func transcriptSinceForJob(job models.Job, since time.Time) time.Time {
 		return time.Time{}
 	}
 	return since
+}
+
+func newAnalysisSnapshotMetadata(messages []models.Message, transcript, systemPrompt string) analysisSnapshotMetadata {
+	metadata := analysisSnapshotMetadata{SourceMessageCount: len(messages)}
+	for i := range messages {
+		if metadata.SourceLastMessageAt == nil || messages[i].SentAt.After(*metadata.SourceLastMessageAt) {
+			sentAt := messages[i].SentAt
+			metadata.SourceLastMessageAt = &sentAt
+		}
+	}
+	if transcript != "" {
+		metadata.TranscriptSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(transcript)))
+	}
+	if systemPrompt != "" {
+		metadata.PromptSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(systemPrompt)))
+	}
+	return metadata
 }
 
 // messengerInsightsGuardResponse prevents an agent-only transcript from being
@@ -453,6 +480,7 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 				}
 			}
 			transcript := ai.FormatChatTranscript(chatMessages)
+			snapshotMetadata := newAnalysisSnapshotMetadata(messages, transcript, systemPrompt)
 
 			if systemPrompt == "" {
 				continue
@@ -485,6 +513,8 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 					continue
 				}
 				analysisContent = aiResp.Content
+				snapshotMetadata.AIProvider = aiResp.Provider
+				snapshotMetadata.AIModel = aiResp.Model
 
 				// Log AI usage + cost
 				cost := ai.CalculateCostUSD(aiResp.Provider, aiResp.Model, aiResp.InputTokens, aiResp.OutputTokens)
@@ -505,7 +535,7 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 			analyzedCount++
 
 			// Parse and save results
-			count, passed, err := a.saveResults(run.ID, job.TenantID, conv.ID, job.JobType, analysisContent, conv.LastMessageAt)
+			count, passed, err := a.saveResults(run.ID, job.TenantID, conv.ID, job.JobType, analysisContent, snapshotMetadata)
 			if err != nil {
 				log.Printf("[analyzer] save results error for %s: %v", conv.ID, err)
 				analyzedCount--
@@ -681,10 +711,42 @@ func buildConversationInsightDetail(classResult ai.ClassificationResponse, sourc
 	return json.Marshal(detail)
 }
 
-func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiResponse string, sourceLastMessageAt ...*time.Time) (int, bool, error) {
+func buildQCEvaluationDetail(review string, score int, summary string, metadata analysisSnapshotMetadata) ([]byte, error) {
+	detail := map[string]interface{}{
+		"review":           review,
+		"score":            score,
+		"summary":          summary,
+		"snapshot_version": 1,
+	}
+	if metadata.SourceLastMessageAt != nil && !metadata.SourceLastMessageAt.IsZero() {
+		detail["source_last_message_at"] = metadata.SourceLastMessageAt.UTC().Format(time.RFC3339Nano)
+	}
+	if metadata.SourceMessageCount > 0 {
+		detail["source_message_count"] = metadata.SourceMessageCount
+	}
+	if metadata.TranscriptSHA256 != "" {
+		detail["transcript_sha256"] = metadata.TranscriptSHA256
+	}
+	if metadata.PromptSHA256 != "" {
+		detail["prompt_sha256"] = metadata.PromptSHA256
+	}
+	if metadata.AIProvider != "" {
+		detail["ai_provider"] = metadata.AIProvider
+	}
+	if metadata.AIModel != "" {
+		detail["ai_model"] = metadata.AIModel
+	}
+	return json.Marshal(detail)
+}
+
+func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiResponse string, snapshot ...analysisSnapshotMetadata) (int, bool, error) {
 	now := time.Now()
 	count := 0
 	passed := false
+	metadata := analysisSnapshotMetadata{}
+	if len(snapshot) > 0 {
+		metadata = snapshot[0]
+	}
 
 	// Strip markdown code fences (```json ... ```) that AI sometimes wraps around JSON
 	aiResponse = strings.TrimSpace(aiResponse)
@@ -723,11 +785,10 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 		passed = qcResult.Verdict == "PASS"
 
 		// Save conversation evaluation record (for every conversation)
-		evalDetailJSON, _ := json.Marshal(map[string]interface{}{
-			"review":  qcResult.Review,
-			"score":   qcResult.Score,
-			"summary": qcResult.Summary,
-		})
+		evalDetailJSON, err := buildQCEvaluationDetail(qcResult.Review, qcResult.Score, qcResult.Summary, metadata)
+		if err != nil {
+			return 0, false, fmt.Errorf("failed to encode QC evaluation: %w", err)
+		}
 		evalResult := models.JobResult{
 			ID:             pkg.NewUUID(),
 			JobRunID:       runID,
@@ -808,11 +869,7 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 		// analytics can consume them without changing violation/tag counts.
 		// Legacy responses omit the insights field and do not create this row.
 		if classResult.Insights != nil {
-			var sourceTimestamp *time.Time
-			if len(sourceLastMessageAt) > 0 {
-				sourceTimestamp = sourceLastMessageAt[0]
-			}
-			insightDetail, err := buildConversationInsightDetail(classResult, sourceTimestamp)
+			insightDetail, err := buildConversationInsightDetail(classResult, metadata.SourceLastMessageAt)
 			if err != nil {
 				return count, false, fmt.Errorf("failed to encode conversation insight: %w", err)
 			}
@@ -937,6 +994,7 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 	type convWithTranscript struct {
 		Conv       models.Conversation
 		Transcript string
+		Metadata   analysisSnapshotMetadata
 	}
 	var prepared []convWithTranscript
 	for _, conv := range conversations {
@@ -964,8 +1022,10 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 				SentAt:     pkg.ToVN(m.SentAt).Format("2006-01-02T15:04:05-07:00"),
 			}
 		}
+		transcript := ai.FormatChatTranscript(chatMessages)
+		snapshotMetadata := newAnalysisSnapshotMetadata(messages, transcript, systemPrompt)
 		if guardedContent, guarded := messengerInsightsGuardResponse(job, messages); guarded {
-			count, passed, saveErr := a.saveResults(run.ID, job.TenantID, conv.ID, job.JobType, guardedContent, conv.LastMessageAt)
+			count, passed, saveErr := a.saveResults(run.ID, job.TenantID, conv.ID, job.JobType, guardedContent, snapshotMetadata)
 			if saveErr != nil {
 				errorCount++
 				if firstErr == "" {
@@ -982,7 +1042,8 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 		}
 		prepared = append(prepared, convWithTranscript{
 			Conv:       conv,
-			Transcript: ai.FormatChatTranscript(chatMessages),
+			Transcript: transcript,
+			Metadata:   snapshotMetadata,
 		})
 	}
 
@@ -1058,7 +1119,10 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 			if len(batch) == 1 {
 				// Providers occasionally return one object instead of a one-element array.
 				b := batch[0]
-				count, passed, saveErr := a.saveResults(run.ID, job.TenantID, b.Conv.ID, job.JobType, content, b.Conv.LastMessageAt)
+				metadata := b.Metadata
+				metadata.AIProvider = aiResp.Provider
+				metadata.AIModel = aiResp.Model
+				count, passed, saveErr := a.saveResults(run.ID, job.TenantID, b.Conv.ID, job.JobType, content, metadata)
 				if saveErr != nil {
 					log.Printf("[analyzer-batch] save error for %s: %v", b.Conv.ID, saveErr)
 					errorCount++
@@ -1099,8 +1163,12 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 			}
 
 			for _, mappedResult := range mappedResults {
-				conversation := batch[mappedResult.ConversationIndex].Conv
-				count, passed, saveErr := a.saveResults(run.ID, job.TenantID, conversation.ID, job.JobType, string(mappedResult.Result), conversation.LastMessageAt)
+				batchConversation := batch[mappedResult.ConversationIndex]
+				metadata := batchConversation.Metadata
+				metadata.AIProvider = aiResp.Provider
+				metadata.AIModel = aiResp.Model
+				conversation := batchConversation.Conv
+				count, passed, saveErr := a.saveResults(run.ID, job.TenantID, conversation.ID, job.JobType, string(mappedResult.Result), metadata)
 				if saveErr != nil {
 					log.Printf("[analyzer-batch] save error for %s: %v", conversation.ID, saveErr)
 					errorCount++

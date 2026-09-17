@@ -348,23 +348,33 @@
               <v-icon size="48" color="grey-lighten-1">mdi-clipboard-text-off</v-icon>
               <div class="text-grey mt-3">Cuộc chat này chưa được đánh giá chất lượng.</div>
             </div>
-            <div v-else>
-              <v-card v-for="g in qcGroups" :key="g.job_run_id" variant="outlined" class="mb-3">
+            <div v-else-if="latestQcSnapshot">
+              <v-card variant="outlined" class="qc-latest-card mb-3">
                 <v-card-text class="pa-3">
-                  <div class="d-flex align-center mb-2">
-                    <v-chip size="x-small" :color="getQcVerdict(g) === 'PASS' ? 'success' : getQcVerdict(g) === 'SKIP' ? 'grey' : 'error'" variant="tonal" class="mr-2">
-                      {{ getQcVerdict(g) === 'PASS' ? 'Đạt' : getQcVerdict(g) === 'SKIP' ? 'Bỏ qua' : 'Không đạt' }}
+                  <div class="d-flex align-center flex-wrap ga-2 mb-2">
+                    <v-chip size="x-small" :color="qcVerdictColor(latestQcSnapshot.verdict)" variant="tonal">
+                      {{ qcVerdictLabel(latestQcSnapshot.verdict) }}
                     </v-chip>
-                    <v-chip v-if="getQcScore(g) != null" size="x-small" variant="tonal" class="mr-2">{{ getQcScore(g) }}/100</v-chip>
-                    <span class="text-body-2 font-weight-medium flex-grow-1">{{ g.job_name }}</span>
-                    <span class="text-caption text-grey">{{ formatTime(g.evaluated_at) }}</span>
+                    <v-chip v-if="latestQcSnapshot.score != null" size="x-small" color="primary" variant="tonal">{{ latestQcSnapshot.score }}/100</v-chip>
+                    <v-chip v-if="latestQcSnapshot.scoreDelta != null" size="x-small" :color="qcDeltaColor(latestQcSnapshot.scoreDelta)" variant="tonal">
+                      {{ qcDeltaLabel(latestQcSnapshot.scoreDelta) }}
+                    </v-chip>
+                    <v-chip size="x-small" color="primary" variant="flat">Mới nhất</v-chip>
+                    <span class="text-body-2 font-weight-medium flex-grow-1">{{ latestQcSnapshot.jobName }}</span>
+                    <span class="text-caption text-grey">{{ formatTime(latestQcSnapshot.evaluatedAt) }}</span>
                   </div>
-                  <div v-if="getQcReview(g)" class="text-body-2 text-grey-darken-1 mb-2" style="font-size: 13px;">{{ getQcReview(g) }}</div>
-                  <v-btn v-if="getQcViolations(g).length > 0" size="x-small" variant="text" color="primary" @click="toggleQcExpand(g.job_run_id)">
-                    {{ expandedQc[g.job_run_id] ? 'Thu gọn' : `Xem chi tiết (${getQcViolations(g).length} vấn đề)` }}
+                  <div v-if="latestQcSnapshot.review" class="text-body-2 text-grey-darken-1 mb-2" style="font-size: 13px;">{{ latestQcSnapshot.review }}</div>
+                  <div v-if="hasQcMetadata(latestQcSnapshot)" class="qc-snapshot-meta mb-2">
+                    <span v-if="latestQcSnapshot.sourceMessageCount != null"><v-icon size="14">mdi-message-text-outline</v-icon> {{ latestQcSnapshot.sourceMessageCount }} tin nhắn</span>
+                    <span v-if="latestQcSnapshot.sourceLastMessageAt"><v-icon size="14">mdi-clock-outline</v-icon> Dữ liệu đến {{ formatTime(latestQcSnapshot.sourceLastMessageAt) }}</span>
+                    <span v-if="qcModelLabel(latestQcSnapshot)"><v-icon size="14">mdi-robot-outline</v-icon> {{ qcModelLabel(latestQcSnapshot) }}</span>
+                    <span v-if="latestQcSnapshot.transcriptSHA256" :title="latestQcSnapshot.transcriptSHA256"><v-icon size="14">mdi-fingerprint</v-icon> {{ shortHash(latestQcSnapshot.transcriptSHA256) }}</span>
+                  </div>
+                  <v-btn v-if="latestQcSnapshot.violations.length > 0" size="x-small" variant="text" color="primary" @click="toggleQcExpand(latestQcSnapshot.jobRunId)">
+                    {{ expandedQc[latestQcSnapshot.jobRunId] ? 'Thu gọn' : `Xem chi tiết (${latestQcSnapshot.violations.length} vấn đề)` }}
                   </v-btn>
-                  <div v-if="expandedQc[g.job_run_id]" class="mt-2">
-                    <div v-for="(v, idx) in getQcViolations(g)" :key="idx" class="mb-2">
+                  <div v-if="expandedQc[latestQcSnapshot.jobRunId]" class="mt-2">
+                    <div v-for="(v, idx) in latestQcSnapshot.violations" :key="idx" class="mb-2">
                       <div class="d-flex align-center mb-1">
                         <v-chip size="x-small" :color="v.severity === 'NGHIEM_TRONG' ? 'error' : 'warning'" variant="tonal" class="mr-2">
                           {{ v.severity === 'NGHIEM_TRONG' ? 'Nghiêm trọng' : 'Cần cải thiện' }}
@@ -376,8 +386,62 @@
                       </div>
                     </div>
                   </div>
+                  <template v-if="qcHistory.length > 0">
+                    <v-divider class="my-2" />
+                    <v-btn
+                      block
+                      size="small"
+                      variant="text"
+                      color="primary"
+                      :append-icon="showQcHistory ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                      :aria-expanded="showQcHistory"
+                      @click="showQcHistory = !showQcHistory"
+                    >
+                      {{ showQcHistory ? 'Ẩn lịch sử' : `Xem lịch sử ${qcTimeline.length} lần đánh giá` }}
+                    </v-btn>
+                  </template>
                 </v-card-text>
               </v-card>
+
+              <v-expand-transition>
+                <div v-if="showQcHistory && qcHistory.length" class="qc-timeline" aria-label="Lịch sử đánh giá chất lượng">
+                  <div v-for="snapshot in qcHistory" :key="snapshot.jobRunId" class="qc-timeline-item">
+                    <div class="qc-timeline-dot" />
+                    <v-card variant="outlined" class="qc-history-card">
+                      <v-card-text class="pa-3">
+                        <div class="d-flex align-center flex-wrap ga-2 mb-2">
+                          <v-chip size="x-small" :color="qcVerdictColor(snapshot.verdict)" variant="tonal">{{ qcVerdictLabel(snapshot.verdict) }}</v-chip>
+                          <v-chip v-if="snapshot.score != null" size="x-small" variant="tonal">{{ snapshot.score }}/100</v-chip>
+                          <v-chip v-if="snapshot.scoreDelta != null" size="x-small" :color="qcDeltaColor(snapshot.scoreDelta)" variant="tonal">{{ qcDeltaLabel(snapshot.scoreDelta) }}</v-chip>
+                          <span class="text-body-2 font-weight-medium flex-grow-1">{{ snapshot.jobName }}</span>
+                          <span class="text-caption text-grey">{{ formatTime(snapshot.evaluatedAt) }}</span>
+                        </div>
+                        <div v-if="snapshot.review" class="text-body-2 text-grey-darken-1 mb-2" style="font-size: 13px;">{{ snapshot.review }}</div>
+                        <div v-if="hasQcMetadata(snapshot)" class="qc-snapshot-meta mb-2">
+                          <span v-if="snapshot.sourceMessageCount != null"><v-icon size="14">mdi-message-text-outline</v-icon> {{ snapshot.sourceMessageCount }} tin nhắn</span>
+                          <span v-if="snapshot.sourceLastMessageAt"><v-icon size="14">mdi-clock-outline</v-icon> Dữ liệu đến {{ formatTime(snapshot.sourceLastMessageAt) }}</span>
+                          <span v-if="qcModelLabel(snapshot)"><v-icon size="14">mdi-robot-outline</v-icon> {{ qcModelLabel(snapshot) }}</span>
+                          <span v-if="snapshot.transcriptSHA256" :title="snapshot.transcriptSHA256"><v-icon size="14">mdi-fingerprint</v-icon> {{ shortHash(snapshot.transcriptSHA256) }}</span>
+                        </div>
+                        <v-btn v-if="snapshot.violations.length > 0" size="x-small" variant="text" color="primary" @click="toggleQcExpand(snapshot.jobRunId)">
+                          {{ expandedQc[snapshot.jobRunId] ? 'Thu gọn' : `Xem chi tiết (${snapshot.violations.length} vấn đề)` }}
+                        </v-btn>
+                        <div v-if="expandedQc[snapshot.jobRunId]" class="mt-2">
+                          <div v-for="(v, idx) in snapshot.violations" :key="idx" class="mb-2">
+                            <div class="d-flex align-center mb-1">
+                              <v-chip size="x-small" :color="v.severity === 'NGHIEM_TRONG' ? 'error' : 'warning'" variant="tonal" class="mr-2">
+                                {{ v.severity === 'NGHIEM_TRONG' ? 'Nghiêm trọng' : 'Cần cải thiện' }}
+                              </v-chip>
+                              <span class="font-weight-medium text-body-2">{{ v.rule_name }}</span>
+                            </div>
+                            <div class="text-body-2 bg-orange-lighten-5 pa-2 rounded" style="font-size: 13px; border-left: 3px solid #ff9800;">{{ v.evidence }}</div>
+                          </div>
+                        </div>
+                      </v-card-text>
+                    </v-card>
+                  </div>
+                </div>
+              </v-expand-transition>
             </div>
           </div>
 
@@ -443,6 +507,7 @@ import {
 } from '../utils/message-render'
 import api from '../api'
 import { channelTypeColor, channelTypeIcon, channelTypeLabel } from '../utils/channel'
+import { buildQcTimeline, type QcSnapshot } from '../utils/qc-evaluation'
 
 const route = useRoute()
 const router = useRouter()
@@ -564,13 +629,14 @@ function downloadConversation() {
   }
 
   // Add evaluation if available
-  if (qcGroups.value.length > 0) {
+  if (qcTimeline.value.length > 0) {
     text += '─'.repeat(50) + '\n'
-    for (const g of qcGroups.value) {
-      const verdict = getQcVerdict(g)
-      text += `${t('evaluate')} (${g.job_name}): ${verdict === 'PASS' ? 'Đạt' : verdict === 'SKIP' ? 'Bỏ qua' : 'Không đạt'}\n`
-      const review = getQcReview(g)
-      if (review) text += `Nhận xét: ${review}\n`
+    for (const snapshot of qcTimeline.value) {
+      text += `${t('evaluate')} (${snapshot.jobName}): ${qcVerdictLabel(snapshot.verdict)}`
+      if (snapshot.score != null) text += ` · ${snapshot.score}/100`
+      if (snapshot.scoreDelta != null) text += ` · ${qcDeltaLabel(snapshot.scoreDelta)}`
+      text += '\n'
+      if (snapshot.review) text += `Nhận xét: ${snapshot.review}\n`
     }
   }
 
@@ -588,6 +654,10 @@ const qcGroups = computed(() => {
   if (!evaluation.value?.groups) return []
   return evaluation.value.groups.filter((g: any) => g.job_type === 'qc_analysis')
 })
+const qcTimeline = computed(() => buildQcTimeline(qcGroups.value))
+const latestQcSnapshot = computed(() => qcTimeline.value[0] || null)
+const qcHistory = computed(() => qcTimeline.value.slice(1))
+const showQcHistory = ref(false)
 const classGroups = computed(() => {
   if (!evaluation.value?.groups) return []
   return evaluation.value.groups.filter((g: any) => g.job_type === 'classification')
@@ -606,22 +676,28 @@ function msgTagColor(tag: string): string {
   return idx >= 0 ? MSG_TAG_COLORS[idx % MSG_TAG_COLORS.length] : MSG_TAG_COLORS[0]
 }
 
-// QC group helpers
-function getQcVerdict(g: any): string {
-  const ev = g.results?.find((r: any) => r.result_type === 'conversation_evaluation')
-  return ev?.severity || ''
+// QC timeline helpers
+function qcVerdictLabel(verdict: string): string {
+  return verdict === 'PASS' ? 'Đạt' : verdict === 'SKIP' ? 'Bỏ qua' : 'Không đạt'
 }
-function getQcScore(g: any): number | null {
-  const ev = g.results?.find((r: any) => r.result_type === 'conversation_evaluation')
-  if (!ev?.detail) return null
-  try { return JSON.parse(ev.detail)?.score ?? null } catch { return null }
+function qcVerdictColor(verdict: string): string {
+  return verdict === 'PASS' ? 'success' : verdict === 'SKIP' ? 'grey' : 'error'
 }
-function getQcReview(g: any): string {
-  const ev = g.results?.find((r: any) => r.result_type === 'conversation_evaluation')
-  return ev?.evidence || ''
+function qcDeltaColor(delta: number): string {
+  return delta > 0 ? 'success' : delta < 0 ? 'error' : 'grey'
 }
-function getQcViolations(g: any): any[] {
-  return (g.results || []).filter((r: any) => r.result_type === 'qc_violation')
+function qcDeltaLabel(delta: number): string {
+  if (delta === 0) return 'Không đổi so với lần trước'
+  return `${delta > 0 ? '+' : ''}${delta} điểm so với lần trước`
+}
+function qcModelLabel(snapshot: QcSnapshot): string {
+  return [snapshot.aiProvider, snapshot.aiModel].filter(Boolean).join(' · ')
+}
+function shortHash(hash: string): string {
+  return hash.length > 12 ? `${hash.slice(0, 12)}…` : hash
+}
+function hasQcMetadata(snapshot: QcSnapshot): boolean {
+  return snapshot.sourceMessageCount != null || Boolean(snapshot.sourceLastMessageAt || snapshot.aiProvider || snapshot.aiModel || snapshot.transcriptSHA256)
 }
 const expandedQc = ref<Record<string, boolean>>({})
 function toggleQcExpand(runId: string) {
@@ -711,6 +787,8 @@ async function loadConversations() {
 
 async function selectConversation(convId: string, tab?: string) {
   selectedConvId.value = convId
+  showQcHistory.value = false
+  expandedQc.value = {}
   detailTab.value = tab === 'evaluation' ? 'qc' : tab === 'classification' ? 'classification' : 'messages'
   const conv = conversationStore.conversations.find(c => c.id === convId)
   if (conv) {
@@ -744,6 +822,8 @@ function closeConversation() {
   selectedConvId.value = null
   detailTab.value = 'messages'
   evaluation.value = null
+  showQcHistory.value = false
+  expandedQc.value = {}
   // Clear deep-link query params so the detail doesn't reopen on refresh
   if (route.query.conv || route.query.tab) {
     const query = { ...route.query }
@@ -936,6 +1016,54 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.qc-latest-card {
+  border-color: rgba(var(--v-theme-primary), 0.35);
+  background: linear-gradient(180deg, rgba(var(--v-theme-primary), 0.045), transparent 52%);
+}
+.qc-snapshot-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: rgba(var(--v-theme-on-surface), 0.62);
+  font-size: 11px;
+}
+.qc-snapshot-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.qc-timeline {
+  position: relative;
+  padding-left: 24px;
+}
+.qc-timeline::before {
+  position: absolute;
+  top: 8px;
+  bottom: 12px;
+  left: 8px;
+  width: 2px;
+  background: rgba(var(--v-theme-primary), 0.22);
+  content: '';
+}
+.qc-timeline-item {
+  position: relative;
+  margin-bottom: 12px;
+}
+.qc-timeline-dot {
+  position: absolute;
+  top: 18px;
+  left: -22px;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  border: 3px solid rgb(var(--v-theme-surface));
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-primary), 0.35);
+}
+.qc-history-card {
+  background: rgba(var(--v-theme-on-surface), 0.018);
+}
 .lightbox-overlay {
   position: fixed;
   top: 0;

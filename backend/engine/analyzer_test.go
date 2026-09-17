@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +29,56 @@ func TestTranscriptSinceForJob(t *testing.T) {
 	qc := models.Job{JobType: "qc_analysis", RulesConfig: `{"profile":"messenger_insights","rules":[]}`}
 	if got := transcriptSinceForJob(qc, since); !got.IsZero() {
 		t.Fatalf("CSKH quality analysis should load full conversation history: %v", got)
+	}
+}
+
+func TestNewAnalysisSnapshotMetadataCapturesExactInput(t *testing.T) {
+	older := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
+	latest := older.Add(15 * time.Minute)
+	messages := []models.Message{
+		{SentAt: latest},
+		{SentAt: older},
+	}
+
+	metadata := newAnalysisSnapshotMetadata(messages, "full transcript", "quality prompt")
+	if metadata.SourceMessageCount != 2 {
+		t.Fatalf("unexpected source message count: %d", metadata.SourceMessageCount)
+	}
+	if metadata.SourceLastMessageAt == nil || !metadata.SourceLastMessageAt.Equal(latest) {
+		t.Fatalf("unexpected source timestamp: %#v", metadata.SourceLastMessageAt)
+	}
+	transcriptHash := fmt.Sprintf("%x", sha256.Sum256([]byte("full transcript")))
+	promptHash := fmt.Sprintf("%x", sha256.Sum256([]byte("quality prompt")))
+	if metadata.TranscriptSHA256 != transcriptHash || metadata.PromptSHA256 != promptHash {
+		t.Fatalf("unexpected input hashes: %#v", metadata)
+	}
+}
+
+func TestBuildQCEvaluationDetailIncludesSnapshotMetadata(t *testing.T) {
+	source := time.Date(2026, 9, 17, 8, 15, 0, 0, time.UTC)
+	detailJSON, err := buildQCEvaluationDetail("Cần cải thiện", 62, "Có ba vấn đề", analysisSnapshotMetadata{
+		SourceLastMessageAt: &source,
+		SourceMessageCount:  24,
+		TranscriptSHA256:    "transcript-hash",
+		PromptSHA256:        "prompt-hash",
+		AIProvider:          "openai",
+		AIModel:             "gpt-5.6",
+	})
+	if err != nil {
+		t.Fatalf("build detail: %v", err)
+	}
+	var detail map[string]interface{}
+	if err := json.Unmarshal(detailJSON, &detail); err != nil {
+		t.Fatalf("invalid detail JSON: %v", err)
+	}
+	if detail["snapshot_version"] != float64(1) || detail["source_message_count"] != float64(24) {
+		t.Fatalf("missing snapshot metadata: %#v", detail)
+	}
+	if detail["source_last_message_at"] != "2026-09-17T08:15:00Z" || detail["transcript_sha256"] != "transcript-hash" || detail["prompt_sha256"] != "prompt-hash" {
+		t.Fatalf("unexpected source metadata: %#v", detail)
+	}
+	if detail["ai_provider"] != "openai" || detail["ai_model"] != "gpt-5.6" {
+		t.Fatalf("unexpected AI metadata: %#v", detail)
 	}
 }
 
