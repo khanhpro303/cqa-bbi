@@ -25,8 +25,8 @@ func TestTranscriptSinceForJob(t *testing.T) {
 	}
 
 	qc := models.Job{JobType: "qc_analysis", RulesConfig: `{"profile":"messenger_insights","rules":[]}`}
-	if got := transcriptSinceForJob(qc, since); !got.Equal(since) {
-		t.Fatalf("non-classification jobs should retain cutoff: %v", got)
+	if got := transcriptSinceForJob(qc, since); !got.IsZero() {
+		t.Fatalf("CSKH quality analysis should load full conversation history: %v", got)
 	}
 }
 

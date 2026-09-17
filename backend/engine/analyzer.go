@@ -183,8 +183,11 @@ func (a *Analyzer) runJobInternal(ctx context.Context, job models.Job, maxConver
 }
 
 // transcriptSinceForJob keeps incremental conversation selection intact while
-// giving structured Messenger extraction the complete conversation history.
+// giving AI jobs that depend on conversation context the complete transcript.
 func transcriptSinceForJob(job models.Job, since time.Time) time.Time {
+	if job.JobType == "qc_analysis" {
+		return time.Time{}
+	}
 	if job.JobType == "classification" && ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
 		return time.Time{}
 	}
