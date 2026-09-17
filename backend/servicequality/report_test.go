@@ -7,51 +7,49 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 )
 
-func TestClassificationsForRunsKeepsOnlySelectedRunPerConversation(t *testing.T) {
+func TestQualityAnalysesForRunsBuildsLatestQCDetailsOnly(t *testing.T) {
+	evaluatedAt := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
+	evaluations := []qualityEvaluationRecord{
+		{JobResult: models.JobResult{ConversationID: "conversation-1", JobRunID: "qc-run", Severity: "FAIL", Evidence: "Cần cải thiện", Detail: `{"score":20}`, CreatedAt: evaluatedAt}, JobName: "Chất lượng CSKH"},
+		{JobResult: models.JobResult{ConversationID: "conversation-2", JobRunID: "qc-run-2", Severity: "PASS", Evidence: "Đạt yêu cầu", Detail: `{"score":100}`, CreatedAt: evaluatedAt}, JobName: "Chất lượng CSKH"},
+	}
 	results := []models.JobResult{
-		{ConversationID: "conversation-1", JobRunID: "new-run", RuleName: "Hỏi giá", Evidence: "Giá bao nhiêu?", Detail: `{"explanation":"Khách đang hỏi giá."}`, Confidence: 0.94},
-		{ConversationID: "conversation-1", JobRunID: "new-run", RuleName: "Tiềm năng", Evidence: "Muốn mua ngay"},
-		{ConversationID: "conversation-1", JobRunID: "old-run", RuleName: "Khiếu nại"},
-		{ConversationID: "conversation-2", JobRunID: "new-run", RuleName: "Obsolete shared-run tag"},
-		{ConversationID: "conversation-2", JobRunID: "run-2", RuleName: "Feedback", Detail: `{invalid`},
+		{ConversationID: "conversation-1", JobRunID: "qc-run", Severity: "CAN_CAI_THIEN", RuleName: "Chất lượng nội dung", Evidence: "Chúng tôi sẽ sớm trả lời.", Detail: `{"explanation":"Không trả lời trọng tâm.","suggestion":"Cung cấp giá cụ thể."}`},
+		{ConversationID: "conversation-1", JobRunID: "old-run", RuleName: "Kết quả cũ", Detail: `{}`},
+		{ConversationID: "conversation-2", JobRunID: "qc-run", RuleName: "Sai hội thoại", Detail: `{}`},
 	}
 
-	got := classificationsForRuns(results, map[string]map[string]struct{}{
-		"conversation-1": {"new-run": {}},
-		"conversation-2": {"run-2": {}},
-	})
-	if len(got["conversation-1"]) != 2 {
-		t.Fatalf("conversation-1 classifications = %d; want 2", len(got["conversation-1"]))
+	got := qualityAnalysesForRuns(evaluations, results)
+	analysis := got["conversation-1"]
+	if analysis == nil || analysis.Score == nil || *analysis.Score != 20 || analysis.Verdict != "FAIL" || analysis.JobName != "Chất lượng CSKH" {
+		t.Fatalf("unexpected quality analysis: %#v", analysis)
 	}
-	if got["conversation-1"][0].RuleName != "Hỏi giá" || got["conversation-1"][0].Explanation != "Khách đang hỏi giá." {
-		t.Fatalf("unexpected first classification: %#v", got["conversation-1"][0])
+	if len(analysis.Violations) != 1 {
+		t.Fatalf("violations = %d; want 1", len(analysis.Violations))
 	}
-	if !got["conversation-2"][0].DetailError {
-		t.Fatal("invalid detail should be exposed as detail_error")
+	violation := analysis.Violations[0]
+	if violation.RuleName != "Chất lượng nội dung" || violation.Explanation != "Không trả lời trọng tâm." || violation.Suggestion != "Cung cấp giá cụ thể." {
+		t.Fatalf("unexpected violation: %#v", violation)
 	}
-	if len(got["conversation-2"]) != 1 || got["conversation-2"][0].RuleName != "Feedback" {
-		t.Fatalf("conversation-2 classifications = %#v; want only its selected run", got["conversation-2"])
+	if len(got["conversation-2"].Violations) != 0 {
+		t.Fatalf("cross-conversation violation leaked into analysis: %#v", got["conversation-2"].Violations)
 	}
 }
 
-func TestClassificationStateUsesLatestEvaluationOutcomeAndFreshness(t *testing.T) {
-	classifiedAt := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
-	analysedThrough := classifiedAt.Add(-time.Minute)
-	newMessageAt := classifiedAt.Add(-30 * time.Second)
-	tags := []ClassificationTag{{RuleName: "Hỏi giá"}}
-	freshDetail := `{"source_last_message_at":"` + analysedThrough.Format(time.RFC3339) + `"}`
+func TestQualityAnalysisFreshnessUsesEvaluationTime(t *testing.T) {
+	evaluatedAt := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
+	analysis := &QualityAnalysis{EvaluatedAt: evaluatedAt}
+	before := evaluatedAt.Add(-time.Second)
+	after := evaluatedAt.Add(time.Second)
 
-	if status, stale := classificationState(nil, nil, &newMessageAt); status != "never_run" || stale {
-		t.Fatalf("never-run state = %q, %v; want never_run, false", status, stale)
+	if isQualityAnalysisStale(nil, &after) {
+		t.Fatal("missing analysis must not be marked stale")
 	}
-	if status, stale := classificationState([]models.JobResult{{Severity: "SKIP", CreatedAt: classifiedAt, Detail: freshDetail}}, nil, &newMessageAt); status != "no_match" || !stale {
-		t.Fatalf("newer skip state = %q, %v; want no_match, true", status, stale)
+	if isQualityAnalysisStale(analysis, &before) {
+		t.Fatal("analysis newer than the last message must be fresh")
 	}
-	if status, stale := classificationState([]models.JobResult{{Severity: "PASS", CreatedAt: classifiedAt, Detail: freshDetail}}, tags, &analysedThrough); status != "classified" || stale {
-		t.Fatalf("classified state = %q, %v; want classified, false", status, stale)
-	}
-	if status, stale := classificationState([]models.JobResult{{Severity: "PASS", CreatedAt: classifiedAt, Detail: `{}`}}, tags, nil); status != "classified" || !stale {
-		t.Fatalf("legacy state = %q, %v; want classified, true", status, stale)
+	if !isQualityAnalysisStale(analysis, &after) {
+		t.Fatal("analysis must be stale when a newer message exists")
 	}
 }
 

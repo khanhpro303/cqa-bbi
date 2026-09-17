@@ -253,18 +253,20 @@
             </v-chip>
             <span v-else class="text-medium-emphasis">{{ t('sq_none') }}</span>
           </template>
-          <template #item.classifications="{ item }">
-            <div class="classification-status-cell">
-              <v-chip v-if="item.classification_stale" color="warning" size="x-small" variant="tonal">
-                {{ t('sq_reclassify') }}
+          <template #item.quality_analysis="{ item }">
+            <div class="quality-analysis-status-cell">
+              <v-chip v-if="item.quality_analysis_stale" color="warning" size="x-small" variant="tonal">
+                {{ t('sq_quality_reanalyse') }}
               </v-chip>
-              <v-chip v-else-if="item.classification_status === 'classified'" color="success" size="x-small" variant="tonal">
-                {{ t('sq_classified') }}
+              <v-chip
+                v-else-if="item.quality_analysis"
+                :color="qualityVerdictColor(item.quality_analysis.verdict)"
+                size="x-small"
+                variant="tonal"
+              >
+                {{ t('sq_quality_analysed') }}<template v-if="item.quality_analysis.score != null"> · {{ item.quality_analysis.score }}/100</template>
               </v-chip>
-              <v-chip v-else-if="item.classification_status === 'no_match'" color="info" size="x-small" variant="tonal">
-                {{ t('sq_classified_no_match') }}
-              </v-chip>
-              <span v-else class="text-medium-emphasis">{{ t('sq_unclassified') }}</span>
+              <span v-else class="text-medium-emphasis">{{ t('sq_quality_not_analysed') }}</span>
             </div>
           </template>
           <template #item.actions="{ item }">
@@ -342,35 +344,62 @@
             {{ t('sq_no_analysis') }}
           </v-alert>
 
-          <div class="text-subtitle-2 font-weight-bold mt-4 mb-2">{{ t('sq_classification_detail') }}</div>
-          <v-alert v-if="selectedRow.classification_stale" type="warning" variant="tonal" density="compact" class="mb-2">
-            {{ t('sq_classification_stale_warning') }}
+          <div class="text-subtitle-2 font-weight-bold mt-4 mb-2">{{ t('sq_quality_analysis_detail') }}</div>
+          <v-alert v-if="selectedRow.quality_analysis_stale" type="warning" variant="tonal" density="compact" class="mb-2">
+            {{ t('sq_quality_stale_warning') }}
           </v-alert>
-          <v-expansion-panels v-if="selectedRow.classifications?.length" variant="accordion" class="classification-panels">
+          <v-expansion-panels v-if="selectedRow.quality_analysis" variant="accordion" class="quality-analysis-panels">
             <v-expansion-panel>
               <v-expansion-panel-title>
-                <div class="d-flex align-center ga-2 classification-panel-title">
-                  <v-icon size="small" color="primary">mdi-tag-multiple-outline</v-icon>
-                  <span>{{ t('sq_classification_count', { count: selectedRow.classifications.length }) }}</span>
+                <div class="d-flex align-center flex-wrap ga-2 quality-analysis-panel-title">
+                  <v-icon size="small" :color="qualityVerdictColor(selectedRow.quality_analysis.verdict)">mdi-clipboard-check-outline</v-icon>
+                  <strong>{{ qualityVerdictLabel(selectedRow.quality_analysis.verdict) }}</strong>
+                  <v-chip v-if="selectedRow.quality_analysis.score != null" size="x-small" :color="qualityScoreColor(selectedRow.quality_analysis.score)" variant="tonal">
+                    {{ selectedRow.quality_analysis.score }}/100
+                  </v-chip>
+                  <span class="text-caption text-medium-emphasis">{{ t('sq_quality_issue_count', { count: selectedRow.quality_analysis.violations.length }) }}</span>
                 </div>
               </v-expansion-panel-title>
               <v-expansion-panel-text>
-                <div v-for="(classification, index) in selectedRow.classifications" :key="`${classification.rule_name}-${index}`" class="classification-detail-item">
-                  <v-chip size="small" color="primary" variant="tonal">
-                    <v-icon start size="small">mdi-tag</v-icon>
-                    {{ classification.rule_name }}
-                  </v-chip>
-                  <blockquote v-if="classification.evidence" class="classification-evidence">{{ classification.evidence }}</blockquote>
-                  <p v-if="classification.explanation" class="text-body-2 text-medium-emphasis mb-0">{{ classification.explanation }}</p>
-                  <v-alert v-if="classification.detail_error" type="warning" variant="tonal" density="compact" class="mt-2">
-                    {{ t('sq_classification_detail_error') }}
+                <div class="text-caption text-medium-emphasis mb-2">
+                  {{ selectedRow.quality_analysis.job_name }} · {{ formatDateTime(selectedRow.quality_analysis.evaluated_at) }}
+                </div>
+                <v-alert
+                  v-if="selectedRow.quality_analysis.review"
+                  :type="selectedRow.quality_analysis.verdict === 'PASS' ? 'success' : 'warning'"
+                  variant="tonal"
+                  density="compact"
+                  class="mb-3"
+                >
+                  {{ selectedRow.quality_analysis.review }}
+                </v-alert>
+                <div v-for="(violation, index) in selectedRow.quality_analysis.violations" :key="`${violation.rule_name}-${index}`" class="quality-analysis-detail-item">
+                  <div class="d-flex align-center flex-wrap ga-2 mb-2">
+                    <v-chip size="x-small" :color="qualityViolationColor(violation.severity)" variant="tonal">
+                      {{ qualitySeverityLabel(violation.severity) }}
+                    </v-chip>
+                    <strong class="text-body-2">{{ violation.rule_name }}</strong>
+                  </div>
+                  <blockquote v-if="violation.evidence" class="quality-analysis-evidence">{{ violation.evidence }}</blockquote>
+                  <p v-if="violation.explanation" class="text-body-2 text-medium-emphasis mb-1">{{ violation.explanation }}</p>
+                  <p v-if="violation.suggestion" class="text-body-2 text-success mb-0">
+                    <v-icon size="small" class="mr-1">mdi-lightbulb</v-icon>{{ violation.suggestion }}
+                  </p>
+                  <v-alert v-if="violation.detail_error" type="warning" variant="tonal" density="compact" class="mt-2">
+                    {{ t('sq_quality_detail_error') }}
                   </v-alert>
                 </div>
+                <div v-if="!selectedRow.quality_analysis.violations.length" class="text-body-2 text-medium-emphasis">
+                  {{ selectedRow.quality_analysis.verdict === 'PASS' ? t('sq_quality_no_issues') : t('sq_quality_no_issue_details') }}
+                </div>
+                <v-alert v-if="selectedRow.quality_analysis.detail_error" type="warning" variant="tonal" density="compact" class="mt-2">
+                  {{ t('sq_quality_detail_error') }}
+                </v-alert>
               </v-expansion-panel-text>
             </v-expansion-panel>
           </v-expansion-panels>
           <div v-else class="text-body-2 text-medium-emphasis">
-            {{ selectedRow.classification_status === 'no_match' ? t('sq_no_classification_match') : t('sq_no_classification') }}
+            {{ t('sq_no_quality_analysis') }}
           </div>
 
           <v-divider class="my-4" />
@@ -502,18 +531,29 @@ interface Row {
   insight_at?: string
   insight_job_id?: string
   insight_stale: boolean
-  classification_status: 'never_run' | 'classified' | 'no_match'
-  classification_stale: boolean
-  classifications: ClassificationTag[]
+  quality_analysis?: QualityAnalysis
+  quality_analysis_stale: boolean
   resolution_note?: string
   history_from?: string
 }
 
-interface ClassificationTag {
+interface QualityAnalysis {
+  job_run_id: string
+  job_name: string
+  evaluated_at: string
+  verdict: 'PASS' | 'FAIL' | 'SKIP' | string
+  score?: number
+  review?: string
+  violations: QualityViolation[]
+  detail_error?: boolean
+}
+
+interface QualityViolation {
+  severity: string
   rule_name: string
   evidence?: string
   explanation?: string
-  confidence?: number
+  suggestion?: string
   detail_error?: boolean
 }
 
@@ -604,7 +644,7 @@ const headers = computed(() => [
   { title: t('sq_waiting'), key: 'waiting', sortable: false },
   { title: t('sq_last_message'), key: 'last_message_at', sortable: true },
   { title: t('sq_ai_content'), key: 'insight', sortable: false },
-  { title: t('sq_classification'), key: 'classifications', sortable: false },
+  { title: t('sq_quality_analysis'), key: 'quality_analysis', sortable: false },
   { title: '', key: 'actions', sortable: false, align: 'end' as const },
 ])
 
@@ -816,6 +856,28 @@ function statusColor(status: ServiceQualityStatus) {
   return ({ answered: 'success', waiting: 'warning', overdue: 'error', resolved: 'teal', no_request: 'grey' } as Record<string, string>)[status] || 'grey'
 }
 
+function qualityVerdictLabel(verdict: string) {
+  return ({ PASS: t('sq_quality_pass'), FAIL: t('sq_quality_fail'), SKIP: t('sq_quality_skip') } as Record<string, string>)[verdict] || verdict
+}
+
+function qualityVerdictColor(verdict: string) {
+  return ({ PASS: 'success', FAIL: 'error', SKIP: 'grey' } as Record<string, string>)[verdict] || 'info'
+}
+
+function qualityScoreColor(score: number) {
+  if (score >= 80) return 'success'
+  if (score >= 50) return 'warning'
+  return 'error'
+}
+
+function qualitySeverityLabel(severity: string) {
+  return severity === 'NGHIEM_TRONG' ? t('sq_quality_critical') : t('sq_quality_improve')
+}
+
+function qualityViolationColor(severity: string) {
+  return severity === 'NGHIEM_TRONG' ? 'error' : 'warning'
+}
+
 function sentimentLabel(sentiment: string) {
   return ({ positive: t('sq_positive'), neutral: t('sq_neutral'), negative: t('sq_negative'), mixed: t('sq_mixed'), unknown: t('sq_unknown_label') } as Record<string, string>)[sentiment] || sentiment
 }
@@ -935,17 +997,17 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
-.classification-status-cell,
-.classification-panel-title {
+.quality-analysis-status-cell,
+.quality-analysis-panel-title {
   min-width: 0;
   white-space: nowrap;
 }
 
-.classification-detail-item + .classification-detail-item {
+.quality-analysis-detail-item + .quality-analysis-detail-item {
   margin-top: 16px;
 }
 
-.classification-evidence {
+.quality-analysis-evidence {
   margin: 10px 0 6px;
   padding: 10px 12px;
   border-left: 3px solid rgb(var(--v-theme-primary));
@@ -954,7 +1016,7 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
-.classification-panels :deep(.v-expansion-panel-title__overlay) {
+.quality-analysis-panels :deep(.v-expansion-panel-title__overlay) {
   border-radius: inherit;
 }
 

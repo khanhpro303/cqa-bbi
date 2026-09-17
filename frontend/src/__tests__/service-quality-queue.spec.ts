@@ -29,7 +29,7 @@ const Table = defineComponent({
     h('div', { class: 'queue-headers' }, (props.headers as { title: string }[]).map(header => header.title).join(' | ')),
     ...(props.items as { conversation_id: string; customer_name: string }[]).map(row => h('div', { class: 'queue-row', 'data-id': row.conversation_id }, [
       row.customer_name,
-      slots['item.classifications']?.({ item: row }),
+      slots['item.quality_analysis']?.({ item: row }),
       slots['item.actions']?.({ item: row }),
     ])),
     h('button', { class: 'next-page', onClick: () => emit('update:page', Number(props.page) + 1) }, 'Trang tiếp'),
@@ -45,7 +45,7 @@ const stubs = Object.fromEntries([
 const wrappers: VueWrapper[] = []
 const scrollIntoView = vi.fn()
 
-function report(statuses: string[], staleIndexes: number[] = [], classifiedIndexes: number[] = [], classificationStaleIndexes: number[] = [], noMatchIndexes: number[] = []) {
+function report(statuses: string[], staleIndexes: number[] = [], qualityIndexes: number[] = [], qualityStaleIndexes: number[] = []) {
   return {
     policy: { timezone: 'Asia/Ho_Chi_Minh', work_start: '08:00', work_end: '22:00', all_day: false, target_minutes: 5, overdue_minutes: 15 },
     generated_at: '2026-09-15T03:00:00Z', from: '2026-09-09T00:00:00Z', to: '2026-09-16T00:00:00Z',
@@ -55,18 +55,21 @@ function report(statuses: string[], staleIndexes: number[] = [], classifiedIndex
       conversation_id: `c${index}`, customer_name: `Khách ${index}`, channel_id: 'page-one', channel_name: 'Fanpage A', last_message_at: null, status, turns: [],
       insight_stale: staleIndexes.includes(index), insight_job_id: staleIndexes.includes(index) ? `job-${index % 2}` : undefined,
       insight: index === 0 ? { lead_quality: { level: 'high', reason: 'Khách có nhu cầu rõ ràng' } } : undefined,
-      classification_status: noMatchIndexes.includes(index) ? 'no_match' : classifiedIndexes.includes(index) ? 'classified' : 'never_run',
-      classification_stale: classificationStaleIndexes.includes(index),
-      classifications: classifiedIndexes.includes(index) ? [{ rule_name: 'Hỏi giá', evidence: 'Giá bao nhiêu?', explanation: 'Khách đang hỏi giá sản phẩm.' }] : [],
+      quality_analysis_stale: qualityStaleIndexes.includes(index),
+      quality_analysis: qualityIndexes.includes(index) ? {
+        job_run_id: 'qc-run', job_name: 'Chất lượng CSKH', evaluated_at: '2026-09-15T02:00:00Z', verdict: 'FAIL', score: 20,
+        review: 'Cuộc chat chưa đạt yêu cầu chất lượng chăm sóc khách hàng.',
+        violations: [{ severity: 'CAN_CAI_THIEN', rule_name: 'Chất lượng nội dung', evidence: 'Chúng tôi sẽ sớm trả lời.', explanation: 'Không trả lời trọng tâm.', suggestion: 'Cung cấp giá cụ thể.' }],
+      } : undefined,
     })),
     invalid_timestamps: 0, conversations_scanned: statuses.length,
   }
 }
 
 let i18n: ReturnType<typeof createI18n>
-async function render(statuses: string[], staleIndexes: number[] = [], classifiedIndexes: number[] = [], showDialogs = false, classificationStaleIndexes: number[] = [], noMatchIndexes: number[] = []) {
+async function render(statuses: string[], staleIndexes: number[] = [], qualityIndexes: number[] = [], showDialogs = false, qualityStaleIndexes: number[] = []) {
   i18n = createI18n({ legacy: false, locale: 'vi', messages: { vi: qualityVi, en: qualityEn } })
-  mocks.get.mockResolvedValue({ data: report(statuses, staleIndexes, classifiedIndexes, classificationStaleIndexes, noMatchIndexes) })
+  mocks.get.mockResolvedValue({ data: report(statuses, staleIndexes, qualityIndexes, qualityStaleIndexes) })
   const wrapper = mount(ServiceQuality, {
     attachTo: document.body,
     global: { plugins: [i18n], stubs: {
@@ -98,30 +101,32 @@ afterEach(() => {
 })
 
 describe('ServiceQuality queue banner navigation', () => {
-  it('shows classification status in one compact column and exposes classification details in the dialog', async () => {
+  it('shows customer-service quality analysis status and details instead of classification tags', async () => {
     const wrapper = await render(['answered', 'waiting'], [], [0], true)
 
-    expect(wrapper.get('.queue-headers').text()).toContain('AI nội dung | Đã phân loại')
-    expect(wrapper.get('[data-id="c0"]').text()).toContain('Đã phân loại')
-    expect(wrapper.get('[data-id="c1"]').text()).toContain('Chưa phân loại')
+    expect(wrapper.get('.queue-headers').text()).toContain('AI nội dung | Phân tích CSKH')
+    expect(wrapper.get('[data-id="c0"]').text()).toContain('Đã phân tích · 20/100')
+    expect(wrapper.get('[data-id="c1"]').text()).toContain('Chưa phân tích')
 
     await wrapper.get('[data-id="c0"] button[title="Xem chi tiết"]').trigger('click')
     await nextTick()
 
     expect(wrapper.text()).toContain('Chất lượng khách hàng')
-    expect(wrapper.text()).toContain('Chi tiết phân loại')
-    expect(wrapper.text()).toContain('1 kết quả phân loại')
-    expect(wrapper.text()).toContain('Hỏi giá')
-    expect(wrapper.text()).toContain('Giá bao nhiêu?')
-    expect(wrapper.text()).toContain('Khách đang hỏi giá sản phẩm.')
+    expect(wrapper.text()).toContain('Đánh giá chất lượng CSKH')
+    expect(wrapper.text()).toContain('Không đạt')
+    expect(wrapper.text()).toContain('1 vấn đề')
+    expect(wrapper.text()).toContain('Chất lượng nội dung')
+    expect(wrapper.text()).toContain('Chúng tôi sẽ sớm trả lời.')
+    expect(wrapper.text()).toContain('Không trả lời trọng tâm.')
+    expect(wrapper.text()).toContain('Cung cấp giá cụ thể.')
     expect(wrapper.get('.expansion-panels').attributes('variant')).toBe('accordion')
   })
 
-  it('distinguishes stale classification and a completed run without matching tags', async () => {
-    const wrapper = await render(['answered', 'answered'], [], [0], false, [0], [1])
+  it('marks outdated customer-service quality analysis for reanalysis', async () => {
+    const wrapper = await render(['answered', 'answered'], [], [0], false, [0])
 
-    expect(wrapper.get('[data-id="c0"]').text()).toContain('Cần phân loại lại')
-    expect(wrapper.get('[data-id="c1"]').text()).toContain('Đã phân loại · không khớp')
+    expect(wrapper.get('[data-id="c0"]').text()).toContain('Cần phân tích lại')
+    expect(wrapper.get('[data-id="c1"]').text()).toContain('Chưa phân tích')
   })
 
   it('reanalyses only rows carrying the stale badge and groups them by insight job', async () => {

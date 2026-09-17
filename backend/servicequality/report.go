@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"time"
 
@@ -26,76 +25,82 @@ type Page struct {
 }
 
 type Row struct {
-	ConversationID       string              `json:"conversation_id"`
-	CustomerName         string              `json:"customer_name"`
-	ChannelID            string              `json:"channel_id"`
-	ChannelName          string              `json:"channel_name"`
-	LastMessageAt        *time.Time          `json:"last_message_at"`
-	Status               string              `json:"status"`
-	Waiting              *Turn               `json:"waiting,omitempty"`
-	Turns                []Turn              `json:"turns"`
-	Insight              json.RawMessage     `json:"insight,omitempty"`
-	InsightAt            *time.Time          `json:"insight_at,omitempty"`
-	InsightJobID         string              `json:"insight_job_id,omitempty"`
-	InsightStale         bool                `json:"insight_stale"`
-	ClassificationStatus string              `json:"classification_status"`
-	ClassificationStale  bool                `json:"classification_stale"`
-	Classifications      []ClassificationTag `json:"classifications"`
-	ResolutionNote       string              `json:"resolution_note,omitempty"`
-	HistoryFrom          *time.Time          `json:"history_from,omitempty"`
+	ConversationID       string           `json:"conversation_id"`
+	CustomerName         string           `json:"customer_name"`
+	ChannelID            string           `json:"channel_id"`
+	ChannelName          string           `json:"channel_name"`
+	LastMessageAt        *time.Time       `json:"last_message_at"`
+	Status               string           `json:"status"`
+	Waiting              *Turn            `json:"waiting,omitempty"`
+	Turns                []Turn           `json:"turns"`
+	Insight              json.RawMessage  `json:"insight,omitempty"`
+	InsightAt            *time.Time       `json:"insight_at,omitempty"`
+	InsightJobID         string           `json:"insight_job_id,omitempty"`
+	InsightStale         bool             `json:"insight_stale"`
+	QualityAnalysis      *QualityAnalysis `json:"quality_analysis,omitempty"`
+	QualityAnalysisStale bool             `json:"quality_analysis_stale"`
+	ResolutionNote       string           `json:"resolution_note,omitempty"`
+	HistoryFrom          *time.Time       `json:"history_from,omitempty"`
 }
 
-type ClassificationTag struct {
-	RuleName    string  `json:"rule_name"`
-	Evidence    string  `json:"evidence,omitempty"`
-	Explanation string  `json:"explanation,omitempty"`
-	Confidence  float64 `json:"confidence,omitempty"`
-	DetailError bool    `json:"detail_error,omitempty"`
+type QualityAnalysis struct {
+	JobRunID    string             `json:"job_run_id"`
+	JobName     string             `json:"job_name"`
+	EvaluatedAt time.Time          `json:"evaluated_at"`
+	Verdict     string             `json:"verdict"`
+	Score       *int               `json:"score,omitempty"`
+	Review      string             `json:"review,omitempty"`
+	Violations  []QualityViolation `json:"violations"`
+	DetailError bool               `json:"detail_error,omitempty"`
 }
 
-func classificationsForRuns(results []models.JobResult, latestRunsByConversation map[string]map[string]struct{}) map[string][]ClassificationTag {
-	classifications := make(map[string][]ClassificationTag)
+type QualityViolation struct {
+	Severity    string `json:"severity"`
+	RuleName    string `json:"rule_name"`
+	Evidence    string `json:"evidence,omitempty"`
+	Explanation string `json:"explanation,omitempty"`
+	Suggestion  string `json:"suggestion,omitempty"`
+	DetailError bool   `json:"detail_error,omitempty"`
+}
+
+type qualityEvaluationRecord struct {
+	models.JobResult
+	JobName string `gorm:"column:quality_job_name"`
+}
+
+func qualityAnalysesForRuns(evaluations []qualityEvaluationRecord, results []models.JobResult) map[string]*QualityAnalysis {
+	analyses := make(map[string]*QualityAnalysis, len(evaluations))
+	for _, evaluation := range evaluations {
+		var detail struct {
+			Score *int `json:"score"`
+		}
+		detailError := json.Unmarshal([]byte(evaluation.Detail), &detail) != nil
+		analyses[evaluation.ConversationID] = &QualityAnalysis{
+			JobRunID: evaluation.JobRunID, JobName: evaluation.JobName, EvaluatedAt: evaluation.CreatedAt,
+			Verdict: evaluation.Severity, Score: detail.Score, Review: evaluation.Evidence,
+			Violations: []QualityViolation{}, DetailError: detailError,
+		}
+	}
 	for _, result := range results {
-		conversationRuns := latestRunsByConversation[result.ConversationID]
-		if _, ok := conversationRuns[result.JobRunID]; !ok {
+		analysis := analyses[result.ConversationID]
+		if analysis == nil || analysis.JobRunID != result.JobRunID {
 			continue
 		}
 		var detail struct {
 			Explanation string `json:"explanation"`
+			Suggestion  string `json:"suggestion"`
 		}
 		detailError := json.Unmarshal([]byte(result.Detail), &detail) != nil
-		if detailError {
-			log.Printf("[service-quality] invalid classification detail: conversation_id=%s run_id=%s result_id=%s", result.ConversationID, result.JobRunID, result.ID)
-		}
-		classifications[result.ConversationID] = append(classifications[result.ConversationID], ClassificationTag{
-			RuleName: result.RuleName, Evidence: result.Evidence, Explanation: detail.Explanation, Confidence: result.Confidence, DetailError: detailError,
+		analysis.Violations = append(analysis.Violations, QualityViolation{
+			Severity: result.Severity, RuleName: result.RuleName, Evidence: result.Evidence,
+			Explanation: detail.Explanation, Suggestion: detail.Suggestion, DetailError: detailError,
 		})
 	}
-	return classifications
+	return analyses
 }
 
-func classificationState(evaluations []models.JobResult, tags []ClassificationTag, lastMessageAt *time.Time) (string, bool) {
-	if len(evaluations) == 0 {
-		return "never_run", false
-	}
-	status := "classified"
-	if len(tags) == 0 {
-		status = "no_match"
-	}
-	stale := false
-	for _, evaluation := range evaluations {
-		var detail struct {
-			SourceLastMessageAt *time.Time `json:"source_last_message_at"`
-		}
-		if json.Unmarshal([]byte(evaluation.Detail), &detail) != nil || detail.SourceLastMessageAt == nil {
-			stale = true
-			continue
-		}
-		if lastMessageAt != nil && lastMessageAt.After(*detail.SourceLastMessageAt) {
-			stale = true
-		}
-	}
-	return status, stale
+func isQualityAnalysisStale(analysis *QualityAnalysis, lastMessageAt *time.Time) bool {
+	return analysis != nil && lastMessageAt != nil && (analysis.EvaluatedAt.IsZero() || lastMessageAt.After(analysis.EvaluatedAt))
 }
 
 type Report struct {
@@ -249,44 +254,33 @@ func Build(ctx context.Context, database *gorm.DB, tenantID, channelID string, n
 		for _, v := range insights {
 			latest[v.ConversationID] = v
 		}
-		var classificationEvaluations []models.JobResult
-		if err := database.Table("job_results AS j").Select("j.conversation_id, j.job_run_id, j.severity, j.created_at, j.detail").Joins("JOIN job_runs AS jr ON jr.id = j.job_run_id").Joins("JOIN jobs AS job ON job.id = jr.job_id AND job.job_type = ?", "classification").Where("j.tenant_id = ? AND j.conversation_id IN ? AND j.result_type = ?", tenantID, cids, "conversation_evaluation").Where(`NOT EXISTS (
+		var qualityEvaluations []qualityEvaluationRecord
+		if err := database.Table("job_results AS j").Select("j.*, job.name AS quality_job_name").Joins("JOIN job_runs AS jr ON jr.id = j.job_run_id").Joins("JOIN jobs AS job ON job.id = jr.job_id AND job.job_type = ?", "qc_analysis").Where("j.tenant_id = ? AND j.conversation_id IN ? AND j.result_type = ?", tenantID, cids, "conversation_evaluation").Where(`NOT EXISTS (
 			SELECT 1 FROM job_results newer
 			JOIN job_runs newer_run ON newer_run.id = newer.job_run_id
-			JOIN jobs newer_job ON newer_job.id = newer_run.job_id AND newer_job.job_type = 'classification'
-			WHERE newer.tenant_id = j.tenant_id AND newer.conversation_id = j.conversation_id AND newer.result_type = j.result_type AND newer_run.job_id = jr.job_id
+			JOIN jobs newer_job ON newer_job.id = newer_run.job_id AND newer_job.job_type = 'qc_analysis'
+			WHERE newer.tenant_id = j.tenant_id AND newer.conversation_id = j.conversation_id AND newer.result_type = j.result_type
 			AND (newer.created_at > j.created_at OR (newer.created_at = j.created_at AND newer.id > j.id))
-		)`).Scan(&classificationEvaluations).Error; err != nil {
+		)`).Scan(&qualityEvaluations).Error; err != nil {
 			return nil, err
 		}
-		latestClassificationRunsByConversation := make(map[string]map[string]struct{}, len(classificationEvaluations))
-		classificationEvaluationsByConversation := make(map[string][]models.JobResult, len(classificationEvaluations))
-		classificationRuns := make([]string, 0, len(classificationEvaluations))
-		for _, evaluation := range classificationEvaluations {
-			if latestClassificationRunsByConversation[evaluation.ConversationID] == nil {
-				latestClassificationRunsByConversation[evaluation.ConversationID] = make(map[string]struct{})
-			}
-			latestClassificationRunsByConversation[evaluation.ConversationID][evaluation.JobRunID] = struct{}{}
-			classificationEvaluationsByConversation[evaluation.ConversationID] = append(classificationEvaluationsByConversation[evaluation.ConversationID], evaluation)
-			classificationRuns = append(classificationRuns, evaluation.JobRunID)
+		qualityRuns := make([]string, 0, len(qualityEvaluations))
+		for _, evaluation := range qualityEvaluations {
+			qualityRuns = append(qualityRuns, evaluation.JobRunID)
 		}
-		var classificationResults []models.JobResult
-		if len(classificationRuns) > 0 {
-			if err := database.Select("id, job_run_id, conversation_id, rule_name, evidence, detail, confidence").Where("tenant_id = ? AND conversation_id IN ? AND job_run_id IN ? AND result_type = ?", tenantID, cids, classificationRuns, "classification_tag").Order("created_at ASC, id ASC").Find(&classificationResults).Error; err != nil {
+		var qualityResults []models.JobResult
+		if len(qualityRuns) > 0 {
+			if err := database.Select("id, job_run_id, conversation_id, severity, rule_name, evidence, detail").Where("tenant_id = ? AND conversation_id IN ? AND job_run_id IN ? AND result_type = ?", tenantID, cids, qualityRuns, "qc_violation").Order("created_at ASC, id ASC").Find(&qualityResults).Error; err != nil {
 				return nil, err
 			}
 		}
-		classifications := classificationsForRuns(classificationResults, latestClassificationRunsByConversation)
+		qualityAnalyses := qualityAnalysesForRuns(qualityEvaluations, qualityResults)
 		for _, c := range batch {
 			timeline := Calculate(byConv[c.ID], resolved[c.ID], now, policy)
 			timelines = append(timelines, timeline)
 			r.InvalidTimestamps += timeline.InvalidTimestamps
-			classificationItems := classifications[c.ID]
-			if classificationItems == nil {
-				classificationItems = []ClassificationTag{}
-			}
-			classificationStatus, classificationStale := classificationState(classificationEvaluationsByConversation[c.ID], classificationItems, c.LastMessageAt)
-			row := Row{ConversationID: c.ID, CustomerName: c.CustomerName, ChannelID: c.ChannelID, ChannelName: names[c.ChannelID], LastMessageAt: c.LastMessageAt, Status: timeline.Status, Waiting: timeline.Pending, Turns: []Turn{}, ClassificationStatus: classificationStatus, ClassificationStale: classificationStale, Classifications: classificationItems}
+			qualityAnalysis := qualityAnalyses[c.ID]
+			row := Row{ConversationID: c.ID, CustomerName: c.CustomerName, ChannelID: c.ChannelID, ChannelName: names[c.ChannelID], LastMessageAt: c.LastMessageAt, Status: timeline.Status, Waiting: timeline.Pending, Turns: []Turn{}, QualityAnalysis: qualityAnalysis, QualityAnalysisStale: isQualityAnalysisStale(qualityAnalysis, c.LastMessageAt)}
 			inWindow := false
 			for _, m := range byConv[c.ID] {
 				if !m.SentAt.IsZero() && !m.SentAt.After(now) && (row.HistoryFrom == nil || m.SentAt.Before(*row.HistoryFrom)) {
