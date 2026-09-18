@@ -35,6 +35,14 @@ type staleInsightCandidate struct {
 	Detail        string
 }
 
+type staleQCCandidate struct {
+	ID            string
+	LastMessageAt *time.Time
+	EvaluationID  string
+	EvaluatedAt   time.Time
+	Detail        string
+}
+
 type analysisSnapshotMetadata struct {
 	SourceLastMessageAt *time.Time
 	SourceMessageCount  int
@@ -60,6 +68,19 @@ func pendingInsightConversationIDs(candidates []staleInsightCandidate, requiredJ
 	return ids
 }
 
+func pendingQCConversationIDs(candidates []staleQCCandidate, limit int) []string {
+	ids := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.EvaluationID == "" || servicequality.IsQualityEvaluationStale(candidate.Detail, candidate.EvaluatedAt, candidate.LastMessageAt) {
+			ids = append(ids, candidate.ID)
+			if limit > 0 && len(ids) >= limit {
+				break
+			}
+		}
+	}
+	return ids
+}
+
 func NewAnalyzer(cfg *config.Config) *Analyzer {
 	return &Analyzer{cfg: cfg}
 }
@@ -69,10 +90,13 @@ func (a *Analyzer) RunJobWithLimit(ctx context.Context, job models.Job, limit in
 	return a.runJob(ctx, job, limit, nil)
 }
 
-// RunJob executes a single job. Messenger Insights jobs select every
-// conversation that has never been analysed or whose latest insight is stale;
+// RunJob executes a single job. Messenger Insights and QC jobs select every
+// conversation that has never been analysed or whose latest result is stale;
 // other job types retain their incremental last-run behaviour.
 func (a *Analyzer) RunJob(ctx context.Context, job models.Job) (*models.JobRun, error) {
+	if job.JobType == "qc_analysis" {
+		return a.runPendingQCEvaluations(ctx, job, 0, nil)
+	}
 	if job.JobType == "classification" && ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
 		return a.runPendingMessengerInsights(ctx, job, 0, nil)
 	}
@@ -95,9 +119,12 @@ func (a *Analyzer) RunJobUnanalyzed(ctx context.Context, job models.Job, maxConv
 }
 
 // RunJobSinceLast keeps the legacy timestamp mode for other jobs. Messenger
-// Insights jobs instead select pending/stale conversations so older chats with
-// newly synced messages cannot be skipped by a global timestamp watermark.
+// Insights and QC jobs instead select pending/stale conversations so older
+// chats with newly synced messages cannot be skipped by a global watermark.
 func (a *Analyzer) RunJobSinceLast(ctx context.Context, job models.Job, maxConv int) (*models.JobRun, error) {
+	if job.JobType == "qc_analysis" {
+		return a.runPendingQCEvaluations(ctx, job, maxConv, nil)
+	}
 	if job.JobType == "classification" && ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
 		return a.runPendingMessengerInsights(ctx, job, maxConv, nil)
 	}
@@ -154,6 +181,23 @@ func (a *Analyzer) runPendingMessengerInsights(ctx context.Context, job models.J
 	return a.runJobInternalExt(ctx, job, 0, provider, true, "", "", nil, false, ids)
 }
 
+// runPendingQCEvaluations selects QC work per conversation, rather than using
+// a job-wide last-run watermark. A channel can return delayed historical
+// messages during sync, and those messages must still refresh their own QC
+// evaluation even when their sent_at time predates the previous job run.
+func (a *Analyzer) runPendingQCEvaluations(ctx context.Context, job models.Job, maxConversations int, provider ai.AIProvider) (*models.JobRun, error) {
+	candidates, err := pendingQCCandidates(ctx, job)
+	if err != nil {
+		return nil, fmt.Errorf("find pending QC evaluations: %w", err)
+	}
+	limit := maxConversations
+	if limit <= 0 || limit > MaxStaleReanalysisConversations {
+		limit = MaxStaleReanalysisConversations
+	}
+	ids := pendingQCConversationIDs(candidates, limit)
+	return a.runJobInternalExt(ctx, job, 0, provider, true, "", "", nil, false, ids)
+}
+
 func pendingMessengerInsightCandidates(ctx context.Context, job models.Job, requestedIDs []string) ([]staleInsightCandidate, error) {
 	var channelIDs []string
 	if err := json.Unmarshal([]byte(job.InputChannelIDs), &channelIDs); err != nil {
@@ -174,6 +218,30 @@ func pendingMessengerInsightCandidates(ctx context.Context, job models.Job, requ
 	}
 	var candidates []staleInsightCandidate
 	if err := query.Scan(&candidates).Error; err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+func pendingQCCandidates(ctx context.Context, job models.Job) ([]staleQCCandidate, error) {
+	var channelIDs []string
+	if err := json.Unmarshal([]byte(job.InputChannelIDs), &channelIDs); err != nil {
+		return nil, fmt.Errorf("invalid input_channel_ids: %w", err)
+	}
+	var candidates []staleQCCandidate
+	err := db.DB.WithContext(ctx).Table("conversations AS c").
+		Select("c.id, c.last_message_at, j.id AS evaluation_id, j.created_at AS evaluated_at, j.detail").
+		Joins(`LEFT JOIN job_results AS j ON j.id = (
+			SELECT newest.id FROM job_results AS newest
+			JOIN job_runs AS newest_run ON newest_run.id = newest.job_run_id
+			WHERE newest.tenant_id = c.tenant_id AND newest.conversation_id = c.id
+			AND newest.result_type = ? AND newest_run.job_id = ?
+			ORDER BY newest.created_at DESC, newest.id DESC LIMIT 1
+		)`, "conversation_evaluation", job.ID).
+		Where("c.tenant_id = ? AND c.channel_id IN ?", job.TenantID, channelIDs).
+		Order("c.last_message_at DESC, c.id ASC").
+		Scan(&candidates).Error
+	if err != nil {
 		return nil, err
 	}
 	return candidates, nil

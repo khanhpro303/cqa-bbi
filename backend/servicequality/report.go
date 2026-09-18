@@ -47,6 +47,7 @@ type QualityAnalysis struct {
 	JobRunID    string             `json:"job_run_id"`
 	JobName     string             `json:"job_name"`
 	EvaluatedAt time.Time          `json:"evaluated_at"`
+	Detail      string             `json:"-"`
 	Verdict     string             `json:"verdict"`
 	Score       *int               `json:"score,omitempty"`
 	Review      string             `json:"review,omitempty"`
@@ -77,7 +78,7 @@ func qualityAnalysesForRuns(evaluations []qualityEvaluationRecord, results []mod
 		detailError := json.Unmarshal([]byte(evaluation.Detail), &detail) != nil
 		analyses[evaluation.ConversationID] = &QualityAnalysis{
 			JobRunID: evaluation.JobRunID, JobName: evaluation.JobName, EvaluatedAt: evaluation.CreatedAt,
-			Verdict: evaluation.Severity, Score: detail.Score, Review: evaluation.Evidence,
+			Detail: evaluation.Detail, Verdict: evaluation.Severity, Score: detail.Score, Review: evaluation.Evidence,
 			Violations: []QualityViolation{}, DetailError: detailError,
 		}
 	}
@@ -100,7 +101,10 @@ func qualityAnalysesForRuns(evaluations []qualityEvaluationRecord, results []mod
 }
 
 func isQualityAnalysisStale(analysis *QualityAnalysis, lastMessageAt *time.Time) bool {
-	return analysis != nil && lastMessageAt != nil && (analysis.EvaluatedAt.IsZero() || lastMessageAt.After(analysis.EvaluatedAt))
+	if analysis == nil {
+		return false
+	}
+	return IsQualityEvaluationStale(analysis.Detail, analysis.EvaluatedAt, lastMessageAt)
 }
 
 type Report struct {
@@ -127,6 +131,23 @@ func IsInsightStale(detail string, lastMessageAt *time.Time) bool {
 		return true
 	}
 	return lastMessageAt != nil && lastMessageAt.After(*source.LastMessageAt)
+}
+
+// IsQualityEvaluationStale reports whether a QC evaluation no longer includes
+// the latest synced message. New evaluations carry the exact last-message
+// timestamp read by the AI. Older evaluations fall back to their creation time
+// so existing results keep their previous freshness behaviour.
+func IsQualityEvaluationStale(detail string, evaluatedAt time.Time, lastMessageAt *time.Time) bool {
+	if lastMessageAt == nil {
+		return false
+	}
+	var source struct {
+		LastMessageAt *time.Time `json:"source_last_message_at"`
+	}
+	if json.Unmarshal([]byte(detail), &source) == nil && source.LastMessageAt != nil {
+		return lastMessageAt.After(*source.LastMessageAt)
+	}
+	return evaluatedAt.IsZero() || lastMessageAt.After(evaluatedAt)
 }
 
 func LoadPolicy(database *gorm.DB, tenantID string) (Policy, error) {

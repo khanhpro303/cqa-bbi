@@ -185,6 +185,25 @@ func TestPendingInsightConversationIDsIncludesNeverAnalysedAndStale(t *testing.T
 	}
 }
 
+func TestPendingQCConversationIDsIncludesNeverAnalysedAndStale(t *testing.T) {
+	latest := time.Date(2026, 9, 16, 8, 30, 0, 0, time.UTC)
+	evaluatedAt := latest.Add(10 * time.Minute)
+	candidates := []staleQCCandidate{
+		{ID: "never"},
+		{ID: "fresh", EvaluationID: "result-fresh", EvaluatedAt: evaluatedAt, LastMessageAt: &latest, Detail: `{"source_last_message_at":"2026-09-16T08:30:00Z"}`},
+		{ID: "new-message", EvaluationID: "result-stale", EvaluatedAt: evaluatedAt, LastMessageAt: &latest, Detail: `{"source_last_message_at":"2026-09-16T08:00:00Z"}`},
+		{ID: "legacy", EvaluationID: "result-legacy", EvaluatedAt: latest.Add(-time.Minute), LastMessageAt: &latest, Detail: `{}`},
+	}
+	got := pendingQCConversationIDs(candidates, 0)
+	if len(got) != 3 || got[0] != "never" || got[1] != "new-message" || got[2] != "legacy" {
+		t.Fatalf("pendingQCConversationIDs() = %#v; want never-analysed and stale conversations", got)
+	}
+	limited := pendingQCConversationIDs(candidates, 2)
+	if len(limited) != 2 || limited[0] != "never" || limited[1] != "new-message" {
+		t.Fatalf("limited pending QC IDs = %#v", limited)
+	}
+}
+
 func TestMapBatchResultsRejectsUnknownDuplicateAndCountsMissing(t *testing.T) {
 	results := []json.RawMessage{
 		json.RawMessage(`{"conversation_id":"conv-b","summary":"B"}`),

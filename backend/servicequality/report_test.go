@@ -36,7 +36,7 @@ func TestQualityAnalysesForRunsBuildsLatestQCDetailsOnly(t *testing.T) {
 	}
 }
 
-func TestQualityAnalysisFreshnessUsesEvaluationTime(t *testing.T) {
+func TestQualityAnalysisFreshnessUsesSnapshotThenEvaluationTimeFallback(t *testing.T) {
 	evaluatedAt := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
 	analysis := &QualityAnalysis{EvaluatedAt: evaluatedAt}
 	before := evaluatedAt.Add(-time.Second)
@@ -49,7 +49,16 @@ func TestQualityAnalysisFreshnessUsesEvaluationTime(t *testing.T) {
 		t.Fatal("analysis newer than the last message must be fresh")
 	}
 	if !isQualityAnalysisStale(analysis, &after) {
-		t.Fatal("analysis must be stale when a newer message exists")
+		t.Fatal("legacy analysis must be stale when a newer message exists")
+	}
+
+	snapshotAt := evaluatedAt.Add(-10 * time.Minute)
+	analysis.Detail = `{"source_last_message_at":"2026-09-17T07:50:00Z"}`
+	if !isQualityAnalysisStale(analysis, &evaluatedAt) {
+		t.Fatal("analysis must be stale when a message arrived after its AI snapshot")
+	}
+	if isQualityAnalysisStale(analysis, &snapshotAt) {
+		t.Fatal("analysis whose snapshot includes the latest message must be fresh")
 	}
 }
 
