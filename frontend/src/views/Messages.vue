@@ -767,17 +767,23 @@ function debouncedSearch() {
   }, 300)
 }
 
+function conversationFilterParams(): Record<string, string> {
+  const params: Record<string, string> = {}
+  if (filterChannelType.value) params.channel_type = filterChannelType.value
+  if (filterChannelId.value) params.channel_id = filterChannelId.value
+  if (searchQuery.value) params.search = searchQuery.value
+  if (filterEvaluation.value) params.evaluation = filterEvaluation.value
+  return params
+}
+
 async function loadConversations() {
   loading.value = true
   try {
     const params: Record<string, string | number> = {
       page: currentPage.value,
       per_page: perPage,
+      ...conversationFilterParams(),
     }
-    if (filterChannelType.value) params.channel_type = filterChannelType.value
-    if (filterChannelId.value) params.channel_id = filterChannelId.value
-    if (searchQuery.value) params.search = searchQuery.value
-    if (filterEvaluation.value) params.evaluation = filterEvaluation.value
 
     await conversationStore.fetchConversations(tenantId.value, params)
   } finally {
@@ -1003,8 +1009,10 @@ onMounted(async () => {
   if (route.query.conv) {
     const convId = route.query.conv as string
     try {
-      // Find which page this conversation is on
-      const { data } = await api.get(`/tenants/${tenantId.value}/conversations/${convId}/page`, { params: { per_page: perPage } })
+      // Find this conversation inside the same filtered list currently shown.
+      const { data } = await api.get(`/tenants/${tenantId.value}/conversations/${convId}/page`, {
+        params: { per_page: perPage, ...conversationFilterParams() },
+      })
       if (data?.page && data.page !== currentPage.value) {
         currentPage.value = data.page
         await loadConversations()

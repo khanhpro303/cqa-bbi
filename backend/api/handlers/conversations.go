@@ -13,7 +13,59 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
 )
+
+type conversationListFilters struct {
+	ChannelID   string
+	ChannelType string
+	Search      string
+	Evaluation  string
+}
+
+func conversationListFiltersFromRequest(c *gin.Context) conversationListFilters {
+	return conversationListFilters{
+		ChannelID:   c.Query("channel_id"),
+		ChannelType: c.Query("channel_type"),
+		Search:      c.Query("search"),
+		Evaluation:  c.Query("evaluation"),
+	}
+}
+
+// conversationListQuery defines the shared scope and filters for both the list
+// endpoint and the deep-link page lookup. Keeping these queries identical
+// prevents a deep-link from calculating a page in one result set, then loading
+// that page from a different (filtered) result set.
+func conversationListQuery(database *gorm.DB, tenantID string, filters conversationListFilters) *gorm.DB {
+	query := database.Where("conversations.tenant_id = ?", tenantID)
+
+	if filters.ChannelID != "" {
+		query = query.Where("conversations.channel_id = ?", filters.ChannelID)
+	}
+	if filters.ChannelType != "" {
+		query = query.Joins("JOIN channels ON channels.id = conversations.channel_id").
+			Where("channels.channel_type = ?", filters.ChannelType)
+	}
+	if filters.Search != "" {
+		query = query.Where("conversations.customer_name LIKE ?", "%"+filters.Search+"%")
+	}
+
+	if filters.Evaluation != "" {
+		evalSubquery := "conversations.id IN (SELECT DISTINCT conversation_id FROM job_results WHERE tenant_id = ? AND result_type = 'conversation_evaluation')"
+		switch filters.Evaluation {
+		case "evaluated":
+			query = query.Where(evalSubquery, tenantID)
+		case "not_evaluated":
+			query = query.Where("conversations.id NOT IN (SELECT DISTINCT conversation_id FROM job_results WHERE tenant_id = ? AND result_type = 'conversation_evaluation')", tenantID)
+		case "PASS":
+			query = query.Where("conversations.id IN (SELECT jr.conversation_id FROM job_results jr INNER JOIN (SELECT conversation_id, MAX(created_at) as mc FROM job_results WHERE tenant_id = ? AND result_type = 'conversation_evaluation' GROUP BY conversation_id) latest ON jr.conversation_id = latest.conversation_id AND jr.created_at = latest.mc WHERE jr.severity = 'PASS')", tenantID)
+		case "FAIL":
+			query = query.Where("conversations.id IN (SELECT jr.conversation_id FROM job_results jr INNER JOIN (SELECT conversation_id, MAX(created_at) as mc FROM job_results WHERE tenant_id = ? AND result_type = 'conversation_evaluation' GROUP BY conversation_id) latest ON jr.conversation_id = latest.conversation_id AND jr.created_at = latest.mc WHERE jr.severity = 'FAIL')", tenantID)
+		}
+	}
+
+	return query
+}
 
 func ListConversations(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
@@ -27,38 +79,7 @@ func ListConversations(c *gin.Context) {
 		perPage = 50
 	}
 
-	channelID := c.Query("channel_id")
-	channelType := c.Query("channel_type")
-	search := c.Query("search")
-	evalFilter := c.Query("evaluation") // evaluated | not_evaluated | PASS | FAIL
-
-	query := db.DB.Where("conversations.tenant_id = ?", tenantID)
-
-	if channelID != "" {
-		query = query.Where("conversations.channel_id = ?", channelID)
-	}
-	if channelType != "" {
-		query = query.Joins("JOIN channels ON channels.id = conversations.channel_id").
-			Where("channels.channel_type = ?", channelType)
-	}
-	if search != "" {
-		query = query.Where("conversations.customer_name LIKE ?", "%"+search+"%")
-	}
-
-	// Evaluation filter
-	if evalFilter != "" {
-		evalSubquery := "conversations.id IN (SELECT DISTINCT conversation_id FROM job_results WHERE tenant_id = ? AND result_type = 'conversation_evaluation')"
-		switch evalFilter {
-		case "evaluated":
-			query = query.Where(evalSubquery, tenantID)
-		case "not_evaluated":
-			query = query.Where("conversations.id NOT IN (SELECT DISTINCT conversation_id FROM job_results WHERE tenant_id = ? AND result_type = 'conversation_evaluation')", tenantID)
-		case "PASS":
-			query = query.Where("conversations.id IN (SELECT jr.conversation_id FROM job_results jr INNER JOIN (SELECT conversation_id, MAX(created_at) as mc FROM job_results WHERE tenant_id = ? AND result_type = 'conversation_evaluation' GROUP BY conversation_id) latest ON jr.conversation_id = latest.conversation_id AND jr.created_at = latest.mc WHERE jr.severity = 'PASS')", tenantID)
-		case "FAIL":
-			query = query.Where("conversations.id IN (SELECT jr.conversation_id FROM job_results jr INNER JOIN (SELECT conversation_id, MAX(created_at) as mc FROM job_results WHERE tenant_id = ? AND result_type = 'conversation_evaluation' GROUP BY conversation_id) latest ON jr.conversation_id = latest.conversation_id AND jr.created_at = latest.mc WHERE jr.severity = 'FAIL')", tenantID)
-		}
-	}
+	query := conversationListQuery(db.DB, tenantID, conversationListFiltersFromRequest(c))
 
 	var total int64
 	query.Model(&models.Conversation{}).Count(&total)
@@ -357,9 +378,11 @@ func GetConversationPage(c *gin.Context) {
 		return
 	}
 
-	// Count conversations that come before this one (ordered by last_message_at DESC)
+	// Count within the same scope as ListConversations, so deep links with a
+	// channel/search/evaluation filter land on a page that exists in that list.
 	var position int64
-	db.DB.Model(&models.Conversation{}).
+	conversationListQuery(db.DB, tenantID, conversationListFiltersFromRequest(c)).
+		Model(&models.Conversation{}).
 		Where("tenant_id = ? AND last_message_at > ?", tenantID, conv.LastMessageAt).
 		Count(&position)
 
