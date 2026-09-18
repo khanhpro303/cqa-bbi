@@ -71,7 +71,7 @@
       {{ t('quality_meta_no_pages') }}
     </v-alert>
 
-    <template v-if="channelId">
+    <template v-if="data">
       <WarningBatch :warnings="labelWarnings" class="mb-4">
         <template #action="{ warning }">
           <v-btn v-if="warning.id === 'unclassified'" size="small" variant="outlined" @click="statusFilter = 'unclassified'">{{ t('quality_meta_view_unclassified') }}</v-btn>
@@ -138,7 +138,7 @@
                 {{ t('quality_meta_conversations') }}
               </div>
               <div class="panel-description text-medium-emphasis mt-1">
-                {{ t('quality_meta_total_description', { total: formatNumber(data.counts.total) }) }}
+                {{ totalDescription(data.counts.total) }}
               </div>
             </div>
             <v-spacer />
@@ -177,6 +177,11 @@
               <div class="d-flex align-center ga-2 flex-nowrap">
                 <span class="font-weight-medium text-no-wrap">{{ item.customer_name || t('quality_meta_unnamed_customer') }}</span>
               </div>
+            </template>
+            <template #item.channel_name="{ item }">
+              <v-chip size="small" color="secondary" variant="tonal">
+                {{ item.channel_name }}
+              </v-chip>
             </template>
             <template #item.customer_error="{ item }">
               <v-tooltip v-if="item.error" :text="item.error" location="top">
@@ -357,6 +362,7 @@ interface ClassificationRow {
   conversation_id: string
   customer_name: string
   channel_id: string
+  channel_name: string
   classification: Classification
   labels: MetaLabel[]
   intake_labels: MetaLabel[]
@@ -407,7 +413,7 @@ const channelId = ref('')
 const data = ref<LabelsReport | null>(null)
 const labelWarnings = computed(() => {
   const report = data.value
-  if (!report) return []
+  if (!report || !channelId.value) return []
   const warnings: { id: string; title: string; detail: string }[] = []
   if (!report.enabled) {
     warnings.push({ id: 'disabled', title: t('quality_meta_disabled_title'), detail: t('quality_meta_disabled_detail') })
@@ -452,10 +458,14 @@ function invalidateActions() {
   syncing.value = false
 }
 
-const pageOptions = computed(() => pages.value.map(page => ({
-  title: `${page.name}${page.is_active ? '' : t('quality_meta_inactive_suffix')}`,
-  value: page.id,
-})))
+const isAllPages = computed(() => channelId.value === '')
+const pageOptions = computed(() => [
+  { title: t('quality_meta_all_pages'), value: '' },
+  ...pages.value.map(page => ({
+    title: `${page.name}${page.is_active ? '' : t('quality_meta_inactive_suffix')}`,
+    value: page.id,
+  })),
+])
 
 const refreshSeconds = computed(() => data.value?.sync.status === 'syncing' ? 5 : 60)
 const mappingRules = computed(() => buildMetaLabelRules(policySelections))
@@ -500,6 +510,7 @@ const statusOptions = computed(() => [
 
 const headers = computed(() => [
   { title: t('quality_meta_customer'), key: 'customer_name', sortable: true },
+  ...(isAllPages.value ? [{ title: t('quality_meta_page'), key: 'channel_name', sortable: true }] : []),
   { title: '', key: 'customer_error', width: '42px', sortable: false },
   { title: t('quality_meta_classification'), key: 'classification', sortable: true },
   { title: t('quality_meta_meta_labels'), key: 'labels', sortable: false },
@@ -538,10 +549,6 @@ async function loadData(force = false) {
     })
     if (sequence !== requestSequence) return
     pages.value = response.pages || []
-    if (!channelId.value && pages.value.length) {
-      channelId.value = pages.value[0].id
-      return
-    }
     if (channelId.value && !pages.value.some(page => page.id === channelId.value)) {
       channelId.value = pages.value[0]?.id || ''
       data.value = null
@@ -647,6 +654,10 @@ async function startSync() {
 
 function messageLink(row: ClassificationRow) {
   return { name: 'messages', params: { tenantId: tenantId.value }, query: { conv: row.conversation_id, channel_id: row.channel_id } }
+}
+
+function totalDescription(total: number) {
+  return t(isAllPages.value ? 'quality_meta_total_description_all' : 'quality_meta_total_description', { total: formatNumber(total) })
 }
 
 function classificationLabel(status: Classification) {

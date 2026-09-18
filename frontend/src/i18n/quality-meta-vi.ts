@@ -1,5 +1,6 @@
 export default {
   quality_meta_page: 'Fanpage',
+  quality_meta_all_pages: 'Tất cả Fanpage',
   quality_meta_description: "Đếm hội thoại theo nhãn mà nhân viên gắn trực tiếp trong Meta Inbox. Kết quả này không dùng AI và không đọc được mục giai đoạn khách hàng có sẵn của Meta.",
   quality_meta_syncing_description: "Đang đọc nhãn từ Meta. Số phân loại và cảnh báo sẽ được tính khi lượt đồng bộ hoàn tất; hội thoại đang chờ được tính vào “Chưa xác định”.",
   quality_meta_settings_description: "Nhân viên tiếp tục gắn nhãn trong Meta Inbox. Hệ thống chỉ đọc nhãn và lưu bản chụp để đếm; không tự gắn, sửa hoặc xóa nhãn trên Meta.",
@@ -72,6 +73,7 @@ export default {
   quality_meta_intake_summary: "Đã lưu nhãn mặc định lúc tiếp nhận cho {captured}/{total} hội thoại; {withLabels} hội thoại có ít nhất một nhãn mặc định.",
   quality_meta_intake_failed: "{count} hội thoại đang lỗi: {error}",
   quality_meta_total_description: "Tổng {total} hội thoại đã lưu cục bộ của Fanpage. Nhãn chỉ thay đổi sau lần đồng bộ gần nhất.",
+  quality_meta_total_description_all: "Tổng {total} hội thoại đã lưu cục bộ của tất cả Fanpage. Nhãn chỉ thay đổi sau lần đồng bộ gần nhất.",
   quality_meta_intake_locked: "{count} nhãn đã có sẵn lúc tiếp nhận hội thoại được khóa ở backend. Các nhãn này có thể gồm nguồn quảng cáo/campaign; chúng vẫn được lưu và hiển thị, nhưng không thể chọn làm nhãn theo dõi.",
   quality_meta_catalog_updated: "Danh mục cập nhật {date}",
   quality_meta_inactive_suffix: " (ngừng hoạt động)",

@@ -1,5 +1,6 @@
 export default {
   quality_meta_page: 'Facebook page',
+  quality_meta_all_pages: 'All Pages',
   quality_meta_description: "Count conversations using labels assigned by staff directly in Meta Inbox. These results do not use AI and cannot read Meta’s built-in customer stages.",
   quality_meta_syncing_description: "Reading labels from Meta. Classification counts and warnings will be calculated when synchronization finishes; pending conversations are counted as “Unknown”.",
   quality_meta_settings_description: "Staff continue assigning labels in Meta Inbox. The system only reads labels and saves snapshots for counting; it does not assign, edit or delete labels on Meta.",
@@ -72,6 +73,7 @@ export default {
   quality_meta_intake_summary: "Default intake labels saved for {captured}/{total} conversations; {withLabels} conversations have at least one default label.",
   quality_meta_intake_failed: "{count} conversations have errors: {error}",
   quality_meta_total_description: "A total of {total} page conversations saved locally. Labels reflect the most recent synchronization.",
+  quality_meta_total_description_all: "A total of {total} conversations from all pages saved locally. Labels reflect the most recent synchronization.",
   quality_meta_intake_locked: "{count} labels present at conversation intake are locked by the backend. These may include advertising/campaign sources; they are saved and displayed but cannot be selected as tracking labels.",
   quality_meta_catalog_updated: "Catalog updated {date}",
   quality_meta_inactive_suffix: " (inactive)",

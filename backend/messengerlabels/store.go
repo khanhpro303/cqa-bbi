@@ -153,6 +153,7 @@ type Row struct {
 	ConversationID string                   `json:"conversation_id"`
 	CustomerName   string                   `json:"customer_name"`
 	ChannelID      string                   `json:"channel_id"`
+	ChannelName    string                   `json:"channel_name"`
 	Classification string                   `json:"classification"`
 	Labels         []channels.FacebookLabel `json:"labels"`
 	IntakeLabels   []channels.FacebookLabel `json:"intake_labels"`
@@ -201,7 +202,7 @@ func BuildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 
 func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID string, now time.Time) (*Report, error) {
 	database = database.WithContext(ctx)
-	r := &Report{GeneratedAt: now, Pages: []Page{}, Rules: []Rule{}, Catalog: []channels.FacebookLabel{}, IntakeLabelIDs: []string{}, FreshnessMinutes: FreshnessMinutes, Rows: []Row{}, Sync: SyncStatus{Status: "never"}}
+	r := newReport(now)
 	var pages []models.Channel
 	if err := database.Where("tenant_id = ? AND channel_type = ?", tenantID, "facebook").Order("name ASC").Find(&pages).Error; err != nil {
 		return nil, err
@@ -215,13 +216,66 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 		}
 	}
 	if channelID == "" {
+		r.Counts = &Counts{}
+		for _, page := range pages {
+			pageReport, err := buildChannelReport(ctx, database, tenantID, page, now)
+			if err != nil {
+				return r, err
+			}
+			r.Rows = append(r.Rows, pageReport.Rows...)
+			addCounts(r.Counts, pageReport.Counts)
+			r.Intake.Total += pageReport.Intake.Total
+			r.Intake.Captured += pageReport.Intake.Captured
+			r.Intake.WithLabels += pageReport.Intake.WithLabels
+			r.Intake.Failed += pageReport.Intake.Failed
+			if r.Intake.Error == "" {
+				r.Intake.Error = pageReport.Intake.Error
+			}
+		}
+		sortRows(r.Rows)
 		return r, nil
 	}
 	if selected == nil {
 		return r, gorm.ErrRecordNotFound
 	}
+	r, err := buildChannelReport(ctx, database, tenantID, *selected, now)
+	if err != nil {
+		return r, err
+	}
+	r.Pages = make([]Page, 0, len(pages))
+	for _, page := range pages {
+		r.Pages = append(r.Pages, Page{page.ID, page.Name, page.IsActive})
+	}
+	return r, nil
+}
+
+func newReport(now time.Time) *Report {
+	return &Report{GeneratedAt: now, Pages: []Page{}, Rules: []Rule{}, Catalog: []channels.FacebookLabel{}, IntakeLabelIDs: []string{}, FreshnessMinutes: FreshnessMinutes, Rows: []Row{}, Sync: SyncStatus{Status: "never"}}
+}
+
+func addCounts(total, added *Counts) {
+	if total == nil || added == nil {
+		return
+	}
+	total.Total += added.Total
+	total.Unclassified += added.Unclassified
+	total.Qualified += added.Qualified
+	total.Unqualified += added.Unqualified
+	total.Potential += added.Potential
+	total.Conflict += added.Conflict
+	total.Unknown += added.Unknown
+}
+
+func sortRows(rows []Row) {
+	order := map[string]int{"unclassified": 0, "conflict": 1, "unknown": 2, "potential": 3, "qualified": 4, "unqualified": 5}
+	sort.SliceStable(rows, func(i, j int) bool { return order[rows[i].Classification] < order[rows[j].Classification] })
+}
+
+func buildChannelReport(ctx context.Context, database *gorm.DB, tenantID string, selected models.Channel, now time.Time) (*Report, error) {
+	r := newReport(now)
+	channelID := selected.ID
 	r.ChannelID = channelID
-	state, err := LoadState(database, *selected)
+	state, err := LoadState(database, selected)
 	if err != nil {
 		return nil, err
 	}
@@ -315,6 +369,7 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 			ConversationID: conv.ID,
 			CustomerName:   conv.CustomerName,
 			ChannelID:      channelID,
+			ChannelName:    selected.Name,
 			Classification: classification,
 			Labels:         labels,
 			IntakeLabels:   intakeLabels,
@@ -326,8 +381,7 @@ func buildReport(ctx context.Context, database *gorm.DB, tenantID, channelID str
 		})
 		r.Counts.Add(classification)
 	}
-	order := map[string]int{"unclassified": 0, "conflict": 1, "unknown": 2, "potential": 3, "qualified": 4, "unqualified": 5}
-	sort.SliceStable(r.Rows, func(i, j int) bool { return order[r.Rows[i].Classification] < order[r.Rows[j].Classification] })
+	sortRows(r.Rows)
 	return r, nil
 }
 

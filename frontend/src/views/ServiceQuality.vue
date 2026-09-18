@@ -204,13 +204,13 @@
             size="small"
             color="warning"
             variant="tonal"
-            prepend-icon="mdi-creation"
+            icon="mdi-creation"
+            :aria-label="t('sq_reanalyse_now', { count: staleInsightCount })"
+            :title="t('sq_reanalyse_now', { count: staleInsightCount })"
             :loading="reanalysingStale"
             :disabled="loading"
             @click="reanalyseStaleInsights"
-          >
-            {{ t('sq_reanalyse_now', { count: staleInsightCount }) }}
-          </v-btn>
+          />
           <v-text-field
             v-model="search"
             :label="t('sq_search_customer')"

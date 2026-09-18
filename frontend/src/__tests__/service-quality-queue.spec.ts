@@ -132,9 +132,10 @@ describe('ServiceQuality queue banner navigation', () => {
   it('reanalyses only rows carrying the stale badge and groups them by insight job', async () => {
     mocks.canEditJobs = true
     const wrapper = await render(['answered', 'waiting', 'overdue', 'resolved'], [0, 2, 3])
-    const button = wrapper.findAll('button').find(item => item.text().includes('Phân tích lại ngay'))
-    expect(button?.text()).toContain('(3)')
+    const button = wrapper.findAll('button').find(item => item.attributes('icon') === 'mdi-creation')
+    expect(button?.attributes('icon')).toBe('mdi-creation')
     expect(button?.attributes('size')).toBe('small')
+    expect(button?.attributes('aria-label')).toBe('Phân tích lại ngay (3)')
 
     await button!.trigger('click')
     await flushPromises()
