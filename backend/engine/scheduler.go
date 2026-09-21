@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -18,9 +19,63 @@ import (
 
 // Scheduler manages periodic tasks: channel sync, job analysis, output delivery.
 type Scheduler struct {
-	scheduler  gocron.Scheduler
-	syncEngine *SyncEngine
-	cfg        *config.Config
+	scheduler     gocron.Scheduler
+	syncEngine    *SyncEngine
+	afterSyncRuns *jobRunCoordinator
+	cfg           *config.Config
+}
+
+// jobRunCoordinator serializes executions of the same job while allowing
+// different jobs to run concurrently. Duplicate triggers are collapsed into
+// one trailing run so data synced during the active run is not missed.
+type jobRunCoordinator struct {
+	mu      sync.Mutex
+	running map[string]*jobRunState
+}
+
+type jobRunState struct {
+	pending bool
+}
+
+func newJobRunCoordinator() *jobRunCoordinator {
+	return &jobRunCoordinator{running: make(map[string]*jobRunState)}
+}
+
+// Run owns the execution loop for jobID. It returns false when another owner
+// is already running; in that case it records one pending rerun for the owner.
+func (c *jobRunCoordinator) Run(jobID string, run func()) bool {
+	c.mu.Lock()
+	if state, exists := c.running[jobID]; exists {
+		state.pending = true
+		c.mu.Unlock()
+		return false
+	}
+	c.running[jobID] = &jobRunState{}
+	c.mu.Unlock()
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			c.mu.Lock()
+			delete(c.running, jobID)
+			c.mu.Unlock()
+			panic(recovered)
+		}
+	}()
+
+	for {
+		run()
+
+		c.mu.Lock()
+		state := c.running[jobID]
+		if state.pending {
+			state.pending = false
+			c.mu.Unlock()
+			continue
+		}
+		delete(c.running, jobID)
+		c.mu.Unlock()
+		return true
+	}
 }
 
 // defaultScheduler is the global scheduler instance, accessible from handlers.
@@ -43,9 +98,10 @@ func NewScheduler(cfg *config.Config) (*Scheduler, error) {
 	}
 
 	return &Scheduler{
-		scheduler:  s,
-		syncEngine: NewSyncEngine(cfg),
-		cfg:        cfg,
+		scheduler:     s,
+		syncEngine:    NewSyncEngine(cfg),
+		afterSyncRuns: newJobRunCoordinator(),
+		cfg:           cfg,
 	}, nil
 }
 
@@ -267,11 +323,16 @@ func (s *Scheduler) TriggerAfterSyncJobs(tenantID, channelID string) {
 					log.Printf("[security] panic in after-sync job %s: %v", j.Name, r)
 				}
 			}()
-			analyzer := NewAnalyzer(s.cfg)
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-			defer cancel()
-			if _, err := analyzer.RunJob(ctx, j); err != nil {
-				log.Printf("[scheduler] after-sync job %s failed: %v", j.Name, err)
+			started := s.afterSyncRuns.Run(j.ID, func() {
+				analyzer := NewAnalyzer(s.cfg)
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+				defer cancel()
+				if _, err := analyzer.RunJob(ctx, j); err != nil {
+					log.Printf("[scheduler] after-sync job %s failed: %v", j.Name, err)
+				}
+			})
+			if !started {
+				log.Printf("[scheduler] coalesced duplicate after-sync trigger for job %s", j.Name)
 			}
 		}()
 	}
