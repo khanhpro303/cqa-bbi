@@ -158,7 +158,7 @@
               :key="item.id"
               class="d-flex align-center pa-2 mb-1 rounded"
               style="cursor: pointer"
-              :style="{ background: item._type === 'qc' ? '#fff5f5' : '#f8f8fc' }"
+              :style="{ background: item._type === 'qc' ? 'rgba(var(--v-theme-error), 0.08)' : 'rgba(var(--v-theme-on-surface), 0.04)' }"
               @click="goToConversation(item.conversation_id, item._type === 'qc' ? 'evaluation' : 'classification')"
             >
               <!-- QC Alert row -->
@@ -171,7 +171,7 @@
               <!-- Classification row -->
               <template v-else>
                 <span class="text-body-2 font-weight-medium mr-2 flex-shrink-0">{{ item.customer_name || '—' }}</span>
-                <span class="text-body-2 text-grey-darken-1 mr-2 flex-shrink-0">Phân loại:</span>
+                <span class="text-body-2 mr-2 flex-shrink-0" style="color: rgba(var(--v-theme-on-surface), 0.7)">Phân loại:</span>
                 <v-chip size="x-small" color="deep-purple" variant="tonal" class="mr-1 flex-shrink-0">{{ item.rule_name }}</v-chip>
               </template>
               <v-spacer />
