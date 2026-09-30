@@ -44,8 +44,9 @@ Danh sách đầy đủ các biến môi trường trong file `.env`.
 | `FACEBOOK_APP_ID` | App ID của ứng dụng Meta; được gửi ra trình duyệt để khởi tạo JavaScript SDK | _(trống = tắt nút đăng nhập)_ |
 | `FACEBOOK_APP_SECRET` | App Secret dùng ở backend để xác minh access token; không bao giờ gửi ra trình duyệt | |
 | `FACEBOOK_API_VERSION` | Phiên bản Facebook Graph API dùng cho SDK và backend | `v26.0` |
+| `FACEBOOK_PAGE_LOGIN_CONFIG_ID` | ID cấu hình Facebook Login for Business loại User access token có các quyền Page; cần cho kết nối Page qua Meta | _(trống = tắt OAuth Page, vẫn giữ nhập thủ công)_ |
 
-Đăng nhập Facebook chỉ ánh xạ tới người dùng đã tồn tại có cùng email. Hệ thống không tự tạo user hoặc tự cấp quyền công ty từ tài khoản Facebook.
+Đăng nhập Facebook chỉ áp dụng cho tài khoản CQA đã chủ động liên kết Facebook trong Hồ sơ cá nhân bằng xác nhận mật khẩu. Hệ thống không tự ghép tài khoản theo email, tự tạo user hoặc tự cấp quyền công ty từ tài khoản Facebook. Kết nối Page là luồng riêng của workspace; xem [chuẩn bị App Review](../usage/facebook-app-review.md).
 
 ## SSL (tùy chọn)
 

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -21,6 +22,16 @@ import (
 )
 
 const facebookWebhookBodyLimit = 1 << 20
+
+var loadActiveFacebookChannels = func(ctx context.Context, pageID string) ([]models.Channel, error) {
+	var channels []models.Channel
+	err := db.DB.WithContext(ctx).Where("channel_type = ? AND external_id = ? AND is_active = ?", "facebook", pageID, true).Find(&channels).Error
+	return channels, err
+}
+
+var captureFacebookReferral = func(ctx context.Context, channel models.Channel, referral messengerintake.Referral) error {
+	return messengerintake.CaptureReferral(db.DB.WithContext(ctx), channel, referral)
+}
 
 type facebookWebhookPayload struct {
 	Object string                 `json:"object"`
@@ -139,8 +150,8 @@ func FacebookWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 					log.Printf("[facebook-webhook] database unavailable")
 					continue
 				}
-				var channel models.Channel
-				if err := db.DB.Where("channel_type = ? AND external_id = ? AND is_active = ?", "facebook", pageID, true).First(&channel).Error; err != nil {
+				channels, err := loadActiveFacebookChannels(c.Request.Context(), pageID)
+				if err != nil || len(channels) == 0 {
 					log.Printf("[facebook-webhook] no active channel for page %s", pageID)
 					continue
 				}
@@ -152,15 +163,17 @@ func FacebookWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 				if event.Timestamp > 0 {
 					capturedAt = time.UnixMilli(event.Timestamp)
 				}
-				if err := messengerintake.CaptureReferral(db.DB.WithContext(c.Request.Context()), channel, messengerintake.Referral{
-					PageID: pageID, PSID: event.Sender.ID, AdID: referral.AdID, Ref: referral.Ref,
-					Source: referral.Source, ReferralType: referral.Type, MessageID: messageID,
-					RawJSON: string(rawReferral), CapturedAt: capturedAt,
-				}); err != nil {
-					log.Printf("[facebook-webhook] store failed page=%s psid=%s: %v", pageID, event.Sender.ID, err)
-					continue
+				for _, channel := range channels {
+					if err := captureFacebookReferral(c.Request.Context(), channel, messengerintake.Referral{
+						PageID: pageID, PSID: event.Sender.ID, AdID: referral.AdID, Ref: referral.Ref,
+						Source: referral.Source, ReferralType: referral.Type, MessageID: messageID,
+						RawJSON: string(rawReferral), CapturedAt: capturedAt,
+					}); err != nil {
+						log.Printf("[facebook-webhook] store failed channel=%s page=%s psid=%s: %v", channel.ID, pageID, event.Sender.ID, err)
+						continue
+					}
+					captured++
 				}
-				captured++
 			}
 		}
 		c.Header("X-CQA-Captured-Referrals", strconv.Itoa(captured))

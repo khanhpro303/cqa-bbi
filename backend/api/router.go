@@ -106,6 +106,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// Public API
 	api := r.Group("/api/v1")
 	facebookAuth := handlers.NewFacebookAuthHandler(cfg)
+	facebookPageOAuth := handlers.NewFacebookPageOAuthHandler(cfg)
 	{
 		// Version check (public, no auth required)
 		api.GET("/version/check", handlers.CheckVersion)
@@ -135,7 +136,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// OAuth callbacks (public — platforms redirect here)
 	api.GET("/channels/zalo/callback", handlers.ZaloOAuthCallback)
-	api.GET("/channels/facebook/callback", handlers.FacebookOAuthCallback)
+	api.GET("/channels/facebook/callback", handlers.FacebookOAuthCallbackDispatcher(facebookPageOAuth))
 
 	internal := r.Group("/api/internal")
 	internal.Use(middleware.InternalHMACAuth(
@@ -172,6 +173,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 			// Channels
 			tenant.GET("/channels", middleware.RequirePermission("channels", "r"), handlers.ListChannels)
+			tenant.GET("/facebook/connect/config", middleware.RequirePermission("channels", "w"), facebookPageOAuth.Config)
+			tenant.POST("/facebook/connect", middleware.RequirePermission("channels", "w"), facebookPageOAuth.Start)
+			tenant.GET("/facebook/connect/:sessionId", middleware.RequirePermission("channels", "w"), facebookPageOAuth.Pages)
+			tenant.POST("/facebook/connect/:sessionId/select", middleware.RequirePermission("channels", "w"), facebookPageOAuth.Select)
 			tenant.POST("/channels", middleware.RequirePermission("channels", "w"), handlers.CreateChannel)
 			tenant.GET("/channels/:channelId", middleware.RequirePermission("channels", "r"), handlers.GetChannel)
 			tenant.PUT("/channels/:channelId", middleware.RequirePermission("channels", "w"), handlers.UpdateChannel)

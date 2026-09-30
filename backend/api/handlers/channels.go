@@ -712,6 +712,11 @@ func ReauthChannel(c *gin.Context) {
 			appID, url.QueryEscape(callbackURL), state)
 	case "facebook":
 		appID := creds["app_id"]
+		pageOAuth := NewFacebookPageOAuthHandler(cfg)
+		if pageOAuth.enabled() && strings.TrimSpace(appID) == strings.TrimSpace(cfg.FacebookAppID) {
+			pageOAuth.Start(c)
+			return
+		}
 		callbackURL := baseURL + "/api/v1/channels/facebook/callback"
 		redirectURL = fmt.Sprintf("https://www.facebook.com/v21.0/dialog/oauth?client_id=%s&redirect_uri=%s&state=%s&scope=pages_show_list,pages_messaging,pages_read_engagement,pages_manage_metadata",
 			appID, url.QueryEscape(callbackURL), state)
@@ -861,7 +866,16 @@ func FacebookOAuthCallback(c *gin.Context) {
 	}
 
 	// Step 3: Get user's pages and find the page access token
-	pageID, pageToken, pageName, err := getFBPageToken(longLivedToken, "")
+	targetPageID := strings.TrimSpace(channel.ExternalID)
+	if targetPageID == "" {
+		targetPageID = strings.TrimSpace(creds["page_id"])
+	}
+	if targetPageID == "" {
+		log.Printf("[security] Facebook reauth rejected channel without bound page: channel=%s", channelID)
+		redirectWithError(c, tenantID, "Page binding missing")
+		return
+	}
+	pageID, pageToken, pageName, err := getFBPageToken(longLivedToken, targetPageID)
 	if err != nil {
 		log.Printf("[error] facebook get page token for channel %s: %v", channelID, err)
 		redirectWithError(c, tenantID, "Page token retrieval failed")

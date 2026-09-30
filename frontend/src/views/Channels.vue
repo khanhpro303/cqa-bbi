@@ -117,7 +117,7 @@
       <div class="text-body-2 text-grey mb-4" style="max-width: 500px; margin: 0 auto;">
         {{ $t('connect_channel_guide') }}
       </div>
-      <v-btn color="primary" prepend-icon="mdi-plus" @click="showDialog = true">{{ $t('connect_channel_short') }}</v-btn>
+      <v-btn v-if="authStore.canEdit('channels')" color="primary" prepend-icon="mdi-plus" @click="showDialog = true">{{ $t('connect_channel_short') }}</v-btn>
     </div>
 
     <!-- Connect Channel Dialog -->
@@ -135,7 +135,7 @@
             ]"
             class="mb-3"
           />
-          <v-text-field v-model="newChannel.name" :label="$t('channel_name')" class="mb-3" />
+          <v-text-field v-if="newChannel.channel_type !== 'facebook' || facebookManualMode" v-model="newChannel.name" :label="$t('channel_name')" class="mb-3" />
 
           <!-- Zalo OA -->
           <template v-if="newChannel.channel_type === 'zalo_oa'">
@@ -152,11 +152,32 @@
 
           <!-- Facebook -->
           <template v-else-if="newChannel.channel_type === 'facebook'">
+            <FacebookPageConnect
+              :tenant-id="tenantId"
+              :can-edit="authStore.canEdit('channels')"
+              :sync-interval-options="syncIntervalOptions"
+              @connected="handleFacebookConnected"
+            />
             <v-btn variant="tonal" color="info" prepend-icon="mdi-book-open-variant" href="https://khanhpro303.github.io/cqa-bbi/usage/facebook.html" target="_blank" class="mb-3">
               {{ $t('fb_guide') }}
             </v-btn>
-            <v-text-field v-model="newChannel.creds.page_id" :label="$t('fb_page_id')" density="compact" class="mb-2" hint="Page ID từ Cài đặt trang Facebook" persistent-hint />
-            <v-text-field v-model="newChannel.creds.access_token" :label="$t('fb_access_token')" density="compact" class="mb-2" hint="Page Access Token (nên dùng long-lived token)" persistent-hint />
+            <v-btn
+              block
+              variant="text"
+              color="grey-darken-1"
+              :prepend-icon="facebookManualMode ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+              class="mb-2"
+              @click="facebookManualMode = !facebookManualMode"
+            >
+              {{ $t('facebook_page_manual_toggle') }}
+            </v-btn>
+            <template v-if="facebookManualMode">
+              <v-alert type="info" variant="tonal" density="compact" class="mb-3">
+                {{ $t('facebook_page_manual_hint') }}
+              </v-alert>
+              <v-text-field v-model="newChannel.creds.page_id" :label="$t('fb_page_id')" density="compact" class="mb-2" :hint="$t('facebook_page_id_hint')" persistent-hint />
+              <v-text-field v-model="newChannel.creds.access_token" :label="$t('fb_access_token')" type="password" density="compact" class="mb-2" :hint="$t('facebook_page_token_hint')" persistent-hint />
+            </template>
           </template>
           <template v-else>
             <v-alert type="info" variant="tonal" class="mb-3">
@@ -178,7 +199,7 @@
           </template>
 
           <!-- Sync settings -->
-          <template v-if="newChannel.channel_type !== 'personal_zalo_import'">
+          <template v-if="newChannel.channel_type === 'zalo_oa' || (newChannel.channel_type === 'facebook' && facebookManualMode)">
             <v-divider class="my-3" />
             <v-select
               v-model="newChannel.sync_interval"
@@ -225,7 +246,7 @@
             {{ $t('create_personal_zalo') }}
           </v-btn>
           <v-btn
-            v-else
+            v-else-if="facebookManualMode"
             color="indigo"
             :loading="creating"
             :disabled="!newChannel.name || !newChannel.creds.page_id || !newChannel.creds.access_token"
@@ -332,6 +353,7 @@ import { useChatbotStore } from '../stores/chatbot'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
 import CampaignAlertOutputs from '../components/channels/CampaignAlertOutputs.vue'
+import FacebookPageConnect from '../components/channels/FacebookPageConnect.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -342,6 +364,7 @@ const authStore = useAuthStore()
 const tenantId = computed(() => route.params.tenantId as string)
 
 const showDialog = ref(false)
+const facebookManualMode = ref(false)
 const creating = ref(false)
 const syncing = ref('')
 const reauthing = ref('')
@@ -397,7 +420,22 @@ onMounted(() => {
     showSnack(params.get('message') || t('zalo_auth_failed'), 'error')
     window.history.replaceState({}, '', window.location.pathname)
   }
+
+  if (params.has('facebook_connect') || params.has('facebook_connect_error')) {
+    newChannel.channel_type = 'facebook'
+    facebookManualMode.value = false
+    showDialog.value = true
+  }
 })
+
+async function handleFacebookConnected(channel: Record<string, any>) {
+  showDialog.value = false
+  showSnack(t('facebook_page_connect_success'), 'success')
+  await channelStore.fetchChannels(tenantId.value)
+  if (channel?.id) {
+    await router.push(`/${tenantId.value}/channels/${channel.id}`)
+  }
+}
 
 async function createAndAuthZalo() {
   creating.value = true

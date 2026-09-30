@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +14,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/messengerintake"
 )
 
 func TestFacebookWebhookVerifyTokenIsStableAndAppScoped(t *testing.T) {
@@ -115,5 +119,53 @@ func TestFacebookWebhookHTTPVerificationAndSignature(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("unsigned delivery status=%d", response.Code)
+	}
+}
+
+func TestFacebookWebhookFansOutReferralAcrossTenantsDespiteOneCaptureFailure(t *testing.T) {
+	previousLoad := loadActiveFacebookChannels
+	previousCapture := captureFacebookReferral
+	t.Cleanup(func() {
+		loadActiveFacebookChannels = previousLoad
+		captureFacebookReferral = previousCapture
+	})
+
+	loadActiveFacebookChannels = func(_ context.Context, pageID string) ([]models.Channel, error) {
+		if pageID != "page-shared" {
+			t.Fatalf("unexpected Page ID %q", pageID)
+		}
+		return []models.Channel{
+			{ID: "channel-a", TenantID: "tenant-a", ExternalID: pageID},
+			{ID: "channel-b", TenantID: "tenant-b", ExternalID: pageID},
+		}, nil
+	}
+	captured := make([]string, 0, 2)
+	captureFacebookReferral = func(_ context.Context, channel models.Channel, referral messengerintake.Referral) error {
+		captured = append(captured, channel.ID)
+		if referral.PageID != "page-shared" || referral.PSID != "psid-1" || referral.AdID != "ad-42" {
+			t.Fatalf("unexpected referral: %+v", referral)
+		}
+		if channel.ID == "channel-a" {
+			return errors.New("tenant-a storage unavailable")
+		}
+		return nil
+	}
+
+	cfg := &config.Config{FacebookAppSecret: "app-secret"}
+	body := `{"object":"page","entry":[{"id":"page-shared","messaging":[{"sender":{"id":"psid-1"},"recipient":{"id":"page-shared"},"timestamp":1700000000123,"message":{"mid":"mid-1","referral":{"ref":"campaign-a","source":"ADS","type":"OPEN_THREAD","ad_id":"ad-42"}}}]}]}`
+	mac := hmac.New(sha256.New, []byte(cfg.FacebookAppSecret))
+	_, _ = mac.Write([]byte(body))
+	request := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(body))
+	request.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/webhook", FacebookWebhookHandler(cfg))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("X-CQA-Captured-Referrals") != "1" {
+		t.Fatalf("fanout response=%d captured=%q body=%q", response.Code, response.Header().Get("X-CQA-Captured-Referrals"), response.Body.String())
+	}
+	if len(captured) != 2 || captured[0] != "channel-a" || captured[1] != "channel-b" {
+		t.Fatalf("fanout stopped after one tenant failed: %v", captured)
 	}
 }

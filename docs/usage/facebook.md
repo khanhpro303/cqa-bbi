@@ -1,6 +1,22 @@
 # Kết nối Facebook Messenger
 
-CQA cần **Page ID** và **Page Access Token** của fanpage để lấy tin nhắn từ Messenger.
+CQA dùng **Page ID** và **Page Access Token** để lấy lịch sử tin nhắn Messenger. Bạn có thể kết nối qua Meta hoặc nhập thông tin thủ công.
+
+## Kết nối qua Meta
+
+1. Đăng nhập CQA bằng tài khoản có quyền chỉnh sửa kênh trong workspace.
+2. Vào **Kênh chat → Kết nối kênh mới → Facebook → Kết nối Facebook Page**.
+3. Đăng nhập Facebook và cấp quyền cho những Page cần kết nối trên màn hình Meta.
+4. Khi trở lại CQA, chọn **một Page** trong danh sách và xác nhận kết nối. CQA không tự chọn Page đầu tiên.
+5. Trong chi tiết kênh, bấm **Đồng bộ ngay**, rồi kiểm tra cuộc hội thoại và tin nhắn đã nhập.
+
+Token được lưu mã hóa ở backend, không trả về trình duyệt trong luồng này. CQA chỉ lưu kênh sau khi bạn xác nhận Page và Meta chấp nhận đăng ký webhook. Kết nối lại cùng Page trong cùng workspace cập nhật kênh hiện có.
+
+Nếu nút kết nối chưa khả dụng, quản trị viên cần hoàn tất cấu hình Facebook Login for Business cho quyền Page. Xem [chuẩn bị App Review](./facebook-app-review.md). Cách nhập token thủ công bên dưới vẫn được giữ lại.
+
+::: info Hai kết nối khác nhau
+Liên kết Facebook trong **Hồ sơ cá nhân** dùng để đăng nhập CQA. Kết nối Facebook Page ở **Kênh chat** dùng để truy cập dữ liệu fanpage trong workspace; không thay đổi cách đăng nhập hoặc quyền thành viên.
+:::
 
 ## Bạn thuộc trường hợp nào?
 

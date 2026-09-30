@@ -35,6 +35,7 @@ export default defineConfig({
           { text: 'Cấu hình AI', link: '/usage/ai-settings' },
           { text: 'Kết nối Zalo OA', link: '/usage/channels' },
           { text: 'Kết nối Facebook', link: '/usage/facebook' },
+          { text: 'Chuẩn bị Facebook App Review', link: '/usage/facebook-app-review' },
           { text: 'Quản lý tin nhắn', link: '/usage/messages' },
           { text: 'Chất lượng CSKH Messenger', link: '/usage/service-quality' },
           { text: 'Theo dõi nhãn Meta Inbox', link: '/usage/meta-inbox-labels' },

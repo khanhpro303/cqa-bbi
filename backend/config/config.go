@@ -21,12 +21,13 @@ type Config struct {
 	DBName     string
 
 	// Security
-	JWTSecret            string
-	EncryptionKey        string // 32 bytes for AES-256-GCM
-	InternalImportSecret string
-	FacebookAppID        string
-	FacebookAppSecret    string
-	FacebookAPIVersion   string
+	JWTSecret                 string
+	EncryptionKey             string // 32 bytes for AES-256-GCM
+	InternalImportSecret      string
+	FacebookAppID             string
+	FacebookAppSecret         string
+	FacebookAPIVersion        string
+	FacebookPageLoginConfigID string
 
 	// Rate limiting
 	RateLimitPerIP   int // requests per minute
@@ -108,6 +109,7 @@ func Load() (*Config, error) {
 		FacebookAppID:                getEnv("FACEBOOK_APP_ID", ""),
 		FacebookAppSecret:            getEnv("FACEBOOK_APP_SECRET", ""),
 		FacebookAPIVersion:           getEnv("FACEBOOK_API_VERSION", "v26.0"),
+		FacebookPageLoginConfigID:    getEnv("FACEBOOK_PAGE_LOGIN_CONFIG_ID", ""),
 		RateLimitPerIP:               getEnvInt("RATE_LIMIT_PER_IP", 500),
 		RateLimitPerUser:             getEnvInt("RATE_LIMIT_PER_USER", 1000),
 		AIMaxTokens:                  getEnvInt("AI_MAX_TOKENS", 16384),
