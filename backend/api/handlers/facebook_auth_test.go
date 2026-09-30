@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -84,6 +85,9 @@ func TestVerifyFacebookAccessToken(t *testing.T) {
 			if got := r.URL.Query().Get("appsecret_proof"); got != handler.appSecretProof(accessToken) {
 				t.Errorf("appsecret_proof = %q, want HMAC proof", got)
 			}
+			if got := r.URL.Query().Get("fields"); got != "id,name" {
+				t.Errorf("fields = %q, want id,name only", got)
+			}
 			return jsonResponse(http.StatusOK, `{"id":"fb-user-1","name":"Test User","email":"USER@example.com"}`), nil
 		default:
 			return jsonResponse(http.StatusNotFound, `{}`), nil
@@ -102,7 +106,7 @@ func TestVerifyFacebookAccessToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verifyAccessToken returned error: %v", err)
 	}
-	if profile.ID != "fb-user-1" || profile.Email != "USER@example.com" {
+	if profile.ID != "fb-user-1" || profile.Name != "Test User" {
 		t.Fatalf("profile = %#v, want verified Facebook identity", profile)
 	}
 }
@@ -123,7 +127,7 @@ func TestVerifyFacebookAccessTokenRejectsWrongApp(t *testing.T) {
 	}
 }
 
-func TestVerifyFacebookAccessTokenRequiresEmail(t *testing.T) {
+func TestVerifyFacebookAccessTokenDoesNotRequireEmail(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path == "/v26.0/debug_token" {
 			return jsonResponse(http.StatusOK, `{"data":{"app_id":"123","is_valid":true,"user_id":"fb-user-1"}}`), nil
@@ -139,8 +143,12 @@ func TestVerifyFacebookAccessTokenRequiresEmail(t *testing.T) {
 	handler.graphBaseURL = "https://graph.test"
 	handler.httpClient = httpClient
 
-	if _, err := handler.verifyAccessToken(t.Context(), "token"); err != errFacebookEmailMissing {
-		t.Fatalf("error = %v, want %v", err, errFacebookEmailMissing)
+	profile, err := handler.verifyAccessToken(t.Context(), "token")
+	if err != nil {
+		t.Fatalf("verifyAccessToken returned error: %v", err)
+	}
+	if profile.ID != "fb-user-1" || profile.Name != "No Email" {
+		t.Fatalf("profile = %#v, want verified identity without email", profile)
 	}
 }
 
@@ -166,9 +174,9 @@ func TestVerifyFacebookAccessTokenRedactsCredentialsFromTransportErrors(t *testi
 func TestFacebookLoginIssuesApplicationTokens(t *testing.T) {
 	middleware.SetJWTSecret("test-jwt-secret-at-least-32-chars-long")
 	handler := configuredFacebookLoginHandler()
-	handler.findUser = func(email string) (models.User, error) {
-		if email != "user@example.com" {
-			t.Fatalf("lookup email = %q, want normalized Facebook email", email)
+	handler.findLinkedUser = func(facebookUserID string) (models.User, error) {
+		if facebookUserID != "fb-user-1" {
+			t.Fatalf("lookup Facebook user ID = %q, want fb-user-1", facebookUserID)
 		}
 		return models.User{
 			ID:           "user-1",
@@ -210,14 +218,14 @@ func TestFacebookLoginDistinguishesMissingAccountFromDatabaseFailure(t *testing.
 		wantStatus int
 		wantError  string
 	}{
-		{name: "not provisioned", lookupErr: gorm.ErrRecordNotFound, wantStatus: http.StatusForbidden, wantError: "facebook_account_not_provisioned"},
+		{name: "not linked", lookupErr: gorm.ErrRecordNotFound, wantStatus: http.StatusForbidden, wantError: "facebook_account_not_linked"},
 		{name: "database unavailable", lookupErr: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantError: "database_error"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			handler := configuredFacebookLoginHandler()
-			handler.findUser = func(string) (models.User, error) {
+			handler.findLinkedUser = func(string) (models.User, error) {
 				return models.User{}, tc.lookupErr
 			}
 
@@ -249,7 +257,7 @@ func TestFacebookLoginReportsMetaOutagesSeparatelyFromInvalidTokens(t *testing.T
 			handler.verifyToken = func(context.Context, string) (facebookProfile, error) {
 				return facebookProfile{}, tc.graphError
 			}
-			handler.findUser = func(string) (models.User, error) {
+			handler.findLinkedUser = func(string) (models.User, error) {
 				t.Fatal("user lookup must not run during a Meta outage")
 				return models.User{}, nil
 			}
@@ -265,6 +273,116 @@ func TestFacebookLoginReportsMetaOutagesSeparatelyFromInvalidTokens(t *testing.T
 	}
 }
 
+func TestFacebookLinkConnectsVerifiedIdentityToCurrentUser(t *testing.T) {
+	handler := configuredFacebookLoginHandler()
+	var linkedUserID string
+	var linkedProfile facebookProfile
+	handler.linkIdentity = func(userID string, profile facebookProfile) error {
+		linkedUserID = userID
+		linkedProfile = profile
+		return nil
+	}
+
+	response := performFacebookProfileRequest(handler.Link, http.MethodPost, "/api/v1/profile/facebook/link", `{"access_token":"facebook-token","current_password":"correct-password"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if linkedUserID != "user-1" || linkedProfile.ID != "fb-user-1" {
+		t.Fatalf("linked user=%q profile=%#v", linkedUserID, linkedProfile)
+	}
+	if !strings.Contains(response.Body.String(), `"linked":true`) {
+		t.Fatalf("body = %s, want linked status", response.Body.String())
+	}
+}
+
+func TestFacebookLinkRejectsIdentityAlreadyOwnedByAnotherUser(t *testing.T) {
+	handler := configuredFacebookLoginHandler()
+	handler.linkIdentity = func(string, facebookProfile) error {
+		return errFacebookIdentityAlreadyLinked
+	}
+
+	response := performFacebookProfileRequest(handler.Link, http.MethodPost, "/api/v1/profile/facebook/link", `{"access_token":"facebook-token","current_password":"correct-password"}`)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusConflict, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "facebook_account_already_linked") {
+		t.Fatalf("body = %s, want identity conflict", response.Body.String())
+	}
+}
+
+func TestFacebookLinkStatusAndUnlink(t *testing.T) {
+	handler := configuredFacebookLoginHandler()
+	handler.getIdentity = func(userID string) (models.FacebookIdentity, error) {
+		if userID != "user-1" {
+			t.Fatalf("status lookup user = %q, want user-1", userID)
+		}
+		return models.FacebookIdentity{UserID: userID, FacebookUserID: "fb-user-1", FacebookName: "Review User"}, nil
+	}
+	unlinkedUserID := ""
+	handler.unlinkIdentity = func(userID string) (int, error) {
+		unlinkedUserID = userID
+		return 5, nil
+	}
+
+	statusResponse := performFacebookProfileRequest(handler.LinkStatus, http.MethodGet, "/api/v1/profile/facebook", "")
+	if statusResponse.Code != http.StatusOK || !strings.Contains(statusResponse.Body.String(), `"facebook_name":"Review User"`) {
+		t.Fatalf("status response = %d %s", statusResponse.Code, statusResponse.Body.String())
+	}
+
+	unlinkResponse := performFacebookProfileRequest(handler.Unlink, http.MethodDelete, "/api/v1/profile/facebook/link", `{"current_password":"correct-password"}`)
+	if unlinkResponse.Code != http.StatusOK || unlinkedUserID != "user-1" {
+		t.Fatalf("unlink response = %d %s; user=%q", unlinkResponse.Code, unlinkResponse.Body.String(), unlinkedUserID)
+	}
+	if cookie := unlinkResponse.Header().Get("Set-Cookie"); !strings.Contains(cookie, "cqa_refresh_token=") {
+		t.Fatalf("Set-Cookie = %q, want rotated refresh token", cookie)
+	}
+}
+
+func TestFacebookLinkStatusKeepsLinkedIdentityVisibleWhenLoginIsDisabled(t *testing.T) {
+	handler := configuredFacebookLoginHandler()
+	handler.appSecret = ""
+	handler.getIdentity = func(string) (models.FacebookIdentity, error) {
+		return models.FacebookIdentity{UserID: "user-1", FacebookUserID: "fb-user-1", FacebookName: "Review User"}, nil
+	}
+
+	response := performFacebookProfileRequest(handler.LinkStatus, http.MethodGet, "/api/v1/profile/facebook", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"enabled":false`) || !strings.Contains(response.Body.String(), `"linked":true`) {
+		t.Fatalf("body = %s, want disabled but linked status", response.Body.String())
+	}
+}
+
+func TestFacebookLinkRequiresCurrentPassword(t *testing.T) {
+	handler := configuredFacebookLoginHandler()
+	handler.verifyToken = func(context.Context, string) (facebookProfile, error) {
+		t.Fatal("Facebook token must not be verified with the wrong local password")
+		return facebookProfile{}, nil
+	}
+	handler.verifyPassword = func(string, string) error {
+		return errFacebookWrongPassword
+	}
+	handler.linkIdentity = func(string, facebookProfile) error {
+		t.Fatal("identity must not be linked with the wrong password")
+		return nil
+	}
+
+	response := performFacebookProfileRequest(handler.Link, http.MethodPost, "/api/v1/profile/facebook/link", `{"access_token":"facebook-token","current_password":"wrong-password"}`)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "wrong_current_password") {
+		t.Fatalf("response = %d %s, want wrong password", response.Code, response.Body.String())
+	}
+}
+
+func TestMySQLDuplicateEntryIsRecognizedAsLinkConflict(t *testing.T) {
+	if !isMySQLDuplicateEntry(&mysqlDriver.MySQLError{Number: 1062, Message: "Duplicate entry"}) {
+		t.Fatal("MySQL duplicate entry should be recognized")
+	}
+	if isMySQLDuplicateEntry(errors.New("database unavailable")) {
+		t.Fatal("unrelated database error must not be treated as a conflict")
+	}
+}
+
 func configuredFacebookLoginHandler() *FacebookAuthHandler {
 	handler := NewFacebookAuthHandler(&config.Config{
 		FacebookAppID:      "123",
@@ -272,10 +390,13 @@ func configuredFacebookLoginHandler() *FacebookAuthHandler {
 		FacebookAPIVersion: "v26.0",
 	})
 	handler.verifyToken = func(context.Context, string) (facebookProfile, error) {
-		return facebookProfile{ID: "fb-user-1", Email: " USER@example.com "}, nil
+		return facebookProfile{ID: "fb-user-1", Name: "Review User"}, nil
 	}
 	handler.logSuccess = func(*gin.Context, models.User) {}
-	handler.logNotFound = func(*gin.Context, facebookProfile, string) {}
+	handler.logNotFound = func(*gin.Context, facebookProfile) {}
+	handler.logLinked = func(*gin.Context, models.FacebookIdentity) {}
+	handler.logUnlinked = func(*gin.Context) {}
+	handler.verifyPassword = func(string, string) error { return nil }
 	return handler
 }
 
@@ -285,6 +406,24 @@ func performFacebookLogin(handler *FacebookAuthHandler, body string) *httptest.R
 	router.POST("/api/v1/auth/facebook", handler.Login)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/facebook", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	return response
+}
+
+func performFacebookProfileRequest(handler gin.HandlerFunc, method, path, body string) *httptest.ResponseRecorder {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("user_id", "user-1")
+		c.Set("user_email", "user@example.com")
+		c.Next()
+	})
+	router.Handle(method, path, handler)
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	return response

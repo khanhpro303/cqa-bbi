@@ -18,6 +18,10 @@ export interface FacebookLoginResponse {
 interface FacebookSDK {
   init(config: { appId: string; cookie: boolean; xfbml: boolean; version: string }): void
   getLoginStatus(callback: (response: FacebookLoginResponse) => void): void
+  login(
+    callback: (response: FacebookLoginResponse) => void,
+    options: { scope: string; return_scopes: boolean },
+  ): void
   XFBML?: {
     parse(rootNode?: HTMLElement): void
   }
@@ -129,11 +133,35 @@ export async function getFacebookLoginStatus(sdk: FacebookSDK): Promise<Facebook
   })
 }
 
+export async function requestFacebookLogin(sdk: FacebookSDK): Promise<FacebookLoginResponse> {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const timeoutID = window.setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(new Error('facebook_login_timeout'))
+    }, 60_000)
+
+    try {
+      sdk.login((response) => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timeoutID)
+        resolve(response)
+      }, { scope: 'public_profile', return_scopes: true })
+    } catch {
+      settled = true
+      window.clearTimeout(timeoutID)
+      reject(new Error('facebook_login_failed'))
+    }
+  })
+}
+
 export function renderFacebookLoginButton(sdk: FacebookSDK, container: HTMLElement): void {
   if (!sdk.XFBML?.parse) throw new Error('facebook_sdk_xfbml_unavailable')
 
   const button = document.createElement('fb:login-button')
-  button.setAttribute('scope', 'public_profile,email')
+  button.setAttribute('scope', 'public_profile')
   button.setAttribute('onlogin', 'checkLoginState();')
   container.replaceChildren(button)
   sdk.XFBML.parse(container)

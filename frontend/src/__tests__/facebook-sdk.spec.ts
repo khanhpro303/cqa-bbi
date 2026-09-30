@@ -23,7 +23,7 @@ describe('Facebook JavaScript SDK', () => {
     expect(script.async).toBe(true)
     expect(script.src).toBe('https://connect.facebook.net/en_US/sdk.js')
 
-    window.FB = { init, getLoginStatus: vi.fn() }
+    window.FB = { init, getLoginStatus: vi.fn(), login: vi.fn() }
     window.fbAsyncInit?.()
     const sdk = await pendingSDK
 
@@ -47,7 +47,7 @@ describe('Facebook JavaScript SDK', () => {
 
     const secondAttempt = loadFacebookSDK({ appId: '123', apiVersion: 'v26.0' })
     const init = vi.fn()
-    window.FB = { init, getLoginStatus: vi.fn() }
+    window.FB = { init, getLoginStatus: vi.fn(), login: vi.fn() }
     window.fbAsyncInit?.()
 
     await expect(secondAttempt).resolves.toBe(window.FB)
@@ -60,6 +60,7 @@ describe('Facebook JavaScript SDK', () => {
     window.FB = {
       init: vi.fn(() => { throw new Error('bad Facebook configuration') }),
       getLoginStatus: vi.fn(),
+      login: vi.fn(),
     }
 
     await expect(loadFacebookSDK({ appId: '123', apiVersion: 'v26.0' }))
@@ -80,6 +81,7 @@ describe('Facebook JavaScript SDK', () => {
     const sdk = {
       init: vi.fn(),
       getLoginStatus: vi.fn((callback: (value: typeof response) => void) => callback(response)),
+      login: vi.fn(),
     }
 
     await expect(getFacebookLoginStatus(sdk)).resolves.toEqual(response)
@@ -91,6 +93,7 @@ describe('Facebook JavaScript SDK', () => {
     const sdk = {
       init: vi.fn(),
       getLoginStatus: vi.fn((callback: (value: { status: typeof status }) => void) => callback({ status })),
+      login: vi.fn(),
     }
 
     await expect(getFacebookLoginStatus(sdk)).resolves.toEqual({ status })
@@ -102,6 +105,7 @@ describe('Facebook JavaScript SDK', () => {
     const sdk = {
       init: vi.fn(),
       getLoginStatus: vi.fn(),
+      login: vi.fn(),
       XFBML: { parse },
     }
     const container = document.createElement('div')
@@ -110,8 +114,21 @@ describe('Facebook JavaScript SDK', () => {
 
     const button = container.firstElementChild
     expect(button?.tagName.toLowerCase()).toBe('fb:login-button')
-    expect(button?.getAttribute('scope')).toBe('public_profile,email')
+    expect(button?.getAttribute('scope')).toBe('public_profile')
     expect(button?.getAttribute('onlogin')).toBe('checkLoginState();')
     expect(parse).toHaveBeenCalledWith(container)
+  })
+
+  it('requests an explicit Facebook session for account linking', async () => {
+    const { requestFacebookLogin } = await import('../utils/facebook-sdk')
+    const response = {
+      status: 'connected' as const,
+      authResponse: { accessToken: 'link-token', userID: 'fb-user-1' },
+    }
+    const login = vi.fn((callback: (value: typeof response) => void) => callback(response))
+    const sdk = { init: vi.fn(), getLoginStatus: vi.fn(), login }
+
+    await expect(requestFacebookLogin(sdk)).resolves.toEqual(response)
+    expect(login).toHaveBeenCalledWith(expect.any(Function), { scope: 'public_profile', return_scopes: true })
   })
 })

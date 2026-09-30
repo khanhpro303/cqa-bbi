@@ -134,8 +134,8 @@ function setFacebookError(error: any) {
   const code = error?.response?.data?.error
   if (error?.message?.startsWith('facebook_sdk_')) {
     errorMsg.value = t('facebook_sdk_load_failed')
-  } else if (code === 'facebook_account_not_provisioned') {
-    errorMsg.value = t('facebook_account_not_provisioned')
+  } else if (code === 'facebook_account_not_linked') {
+    errorMsg.value = t('facebook_account_not_linked')
   } else if (code === 'facebook_email_required') {
     errorMsg.value = t('facebook_email_required')
   } else if (code === 'facebook_service_unavailable') {

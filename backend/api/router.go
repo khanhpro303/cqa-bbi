@@ -105,6 +105,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// Public API
 	api := r.Group("/api/v1")
+	facebookAuth := handlers.NewFacebookAuthHandler(cfg)
 	{
 		// Version check (public, no auth required)
 		api.GET("/version/check", handlers.CheckVersion)
@@ -120,7 +121,6 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 		auth := api.Group("/auth")
 		{
-			facebookAuth := handlers.NewFacebookAuthHandler(cfg)
 			auth.POST("/login", handlers.Login)
 			auth.GET("/facebook/config", facebookAuth.PublicConfig)
 			auth.POST("/facebook", facebookAuth.Login)
@@ -153,6 +153,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		authed.GET("/profile", handlers.GetProfile)
 		authed.PUT("/profile", handlers.UpdateProfile)
 		authed.PUT("/profile/password", handlers.ChangeProfilePassword)
+		authed.GET("/profile/facebook", facebookAuth.LinkStatus)
+		authed.POST("/profile/facebook/link", facebookAuth.Link)
+		authed.DELETE("/profile/facebook/link", facebookAuth.Unlink)
 
 		// Tenants (list + create don't need tenant context)
 		authed.GET("/tenants", handlers.ListTenants)
