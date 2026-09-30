@@ -147,6 +147,70 @@ func TestFacebookPageOAuthStartUsesBusinessConfigAndBrowserBoundState(t *testing
 	}
 }
 
+func TestFacebookPageOAuthStartUsesSameHostBrowserOriginBehindProxy(t *testing.T) {
+	store := &fakeFacebookPageOAuthStore{}
+	handler := newFacebookPageOAuthTestHandler(store)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/v1/tenants/:tenantId/facebook/connect", func(c *gin.Context) {
+		c.Set("tenant_id", c.Param("tenantId"))
+		c.Set("user_id", "user-a")
+		handler.Start(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "http://internal/api/v1/tenants/tenant-a/facebook/connect", nil)
+	request.Host = "crm.example.com"
+	request.Header.Set("Origin", "https://crm.example.com")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || store.created == nil {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	wantCallback := "https://crm.example.com/api/v1/channels/facebook/callback"
+	if store.created.RedirectURI != wantCallback {
+		t.Fatalf("stored redirect URI = %q, want %q", store.created.RedirectURI, wantCallback)
+	}
+	var payload struct {
+		RedirectURL string `json:"redirect_url"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	redirect, err := url.Parse(payload.RedirectURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := redirect.Query().Get("redirect_uri"); got != wantCallback {
+		t.Fatalf("Facebook redirect URI = %q, want %q", got, wantCallback)
+	}
+}
+
+func TestFacebookPageOAuthCallbackReusesStoredRedirectURI(t *testing.T) {
+	state, browser := "page_state-secret", "browser-secret"
+	const storedRedirect = "https://crm.example.com/api/v1/channels/facebook/callback"
+	store := &fakeFacebookPageOAuthStore{claim: func(stateHash, browserHash string, _ time.Time) (models.FacebookOAuthSession, error) {
+		if stateHash != hashFacebookOAuthSecret(state) || browserHash != hashFacebookOAuthSecret(browser) {
+			return models.FacebookOAuthSession{}, errFacebookPageOAuthInvalid
+		}
+		return models.FacebookOAuthSession{ID: "session-a", TenantID: "tenant-a", RedirectURI: storedRedirect}, nil
+	}}
+	handler := newFacebookPageOAuthTestHandler(store)
+	var exchangedRedirect string
+	handler.httpClient.Transport = facebookOAuthRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		exchangedRedirect = req.URL.Query().Get("redirect_uri")
+		return facebookOAuthJSONResponse(http.StatusBadRequest, `{"error":{"message":"stop after exchange"}}`), nil
+	})
+
+	response := facebookOAuthRequest(handler.Callback, http.MethodGet, "/api/v1/channels/facebook/callback?state="+url.QueryEscape(state)+"&code=code-a", "", "", "", &http.Cookie{Name: facebookPageOAuthCookie, Value: browser})
+	if response.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if exchangedRedirect != storedRedirect {
+		t.Fatalf("token exchange redirect URI = %q, want %q", exchangedRedirect, storedRedirect)
+	}
+}
+
 func TestFacebookPageOAuthCallbackConsumesDeniedStateAndRejectsReplay(t *testing.T) {
 	state, browser := "page_state-secret", "browser-secret"
 	store := &fakeFacebookPageOAuthStore{}

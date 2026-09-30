@@ -11,6 +11,7 @@ type FacebookOAuthSession struct {
 	UserID         string     `gorm:"type:char(36);not null;index:idx_fb_oauth_tenant_user" json:"-"`
 	StateHash      string     `gorm:"type:char(64);not null;uniqueIndex" json:"-"`
 	BrowserHash    string     `gorm:"type:char(64);not null" json:"-"`
+	RedirectURI    string     `gorm:"type:varchar(2048)" json:"-"`
 	Status         string     `gorm:"type:varchar(24);not null;index" json:"-"`
 	SelectedPageID string     `gorm:"type:varchar(255)" json:"-"`
 	PagesEncrypted []byte     `gorm:"type:mediumblob" json:"-"`

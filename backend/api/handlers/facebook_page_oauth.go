@@ -106,7 +106,25 @@ func (h *FacebookPageOAuthHandler) enabled() bool {
 }
 
 func (h *FacebookPageOAuthHandler) callbackURL(c *gin.Context) string {
-	return getBaseURL(c) + "/api/v1/channels/facebook/callback"
+	baseURL := browserRequestOrigin(c)
+	if baseURL == "" {
+		baseURL = getBaseURL(c)
+	}
+	return baseURL + "/api/v1/channels/facebook/callback"
+}
+
+func browserRequestOrigin(c *gin.Context) string {
+	for _, raw := range []string{c.GetHeader("Origin"), c.GetHeader("Referer")} {
+		candidate, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || candidate.Host == "" || !strings.EqualFold(candidate.Host, c.Request.Host) {
+			continue
+		}
+		if candidate.Scheme != "http" && candidate.Scheme != "https" {
+			continue
+		}
+		return candidate.Scheme + "://" + candidate.Host
+	}
+	return ""
 }
 
 func (h *FacebookPageOAuthHandler) Config(c *gin.Context) {
@@ -132,12 +150,14 @@ func (h *FacebookPageOAuthHandler) Start(c *gin.Context) {
 		return
 	}
 	now := h.now().UTC()
+	redirectURI := h.callbackURL(c)
 	session := models.FacebookOAuthSession{
 		ID:          pkg.NewUUID(),
 		TenantID:    middleware.GetTenantID(c),
 		UserID:      middleware.GetUserID(c),
 		StateHash:   hashFacebookOAuthSecret(facebookPageOAuthStatePrefix + stateSecret),
 		BrowserHash: hashFacebookOAuthSecret(browserSecret),
+		RedirectURI: redirectURI,
 		Status:      "pending",
 		ExpiresAt:   now.Add(facebookPageOAuthTTL),
 		CreatedAt:   now,
@@ -163,7 +183,7 @@ func (h *FacebookPageOAuthHandler) Start(c *gin.Context) {
 	authorizeURL, _ := url.Parse("https://www.facebook.com/" + facebookAPIVersion(h.cfg) + "/dialog/oauth")
 	query := authorizeURL.Query()
 	query.Set("client_id", h.cfg.FacebookAppID)
-	query.Set("redirect_uri", h.callbackURL(c))
+	query.Set("redirect_uri", redirectURI)
 	query.Set("state", facebookPageOAuthStatePrefix+stateSecret)
 	query.Set("config_id", h.cfg.FacebookPageLoginConfigID)
 	query.Set("response_type", "code")
@@ -212,7 +232,11 @@ func (h *FacebookPageOAuthHandler) Callback(c *gin.Context) {
 		return
 	}
 
-	userToken, err := h.exchangeCode(c.Request.Context(), c.Query("code"), h.callbackURL(c))
+	redirectURI := strings.TrimSpace(session.RedirectURI)
+	if redirectURI == "" {
+		redirectURI = h.callbackURL(c)
+	}
+	userToken, err := h.exchangeCode(c.Request.Context(), c.Query("code"), redirectURI)
 	if err == nil {
 		userToken, err = h.exchangeLongLivedToken(c.Request.Context(), userToken)
 	}
