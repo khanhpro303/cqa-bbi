@@ -663,7 +663,8 @@ func fetchZaloOAInfo(accessToken string) (*zaloOAInfo, error) {
 
 func getBaseURL(c *gin.Context) string {
 	scheme := "http"
-	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+	forwardedProto := strings.TrimSpace(strings.Split(c.GetHeader("X-Forwarded-Proto"), ",")[0])
+	if c.Request.TLS != nil || strings.EqualFold(forwardedProto, "https") {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s", scheme, c.Request.Host)
