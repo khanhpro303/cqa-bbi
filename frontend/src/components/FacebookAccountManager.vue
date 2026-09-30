@@ -63,7 +63,7 @@
 
   <v-divider v-if="showDivider && (status.enabled || status.linked)" class="my-4" />
 
-  <v-alert v-else-if="showUnavailable" type="info" variant="tonal">
+  <v-alert v-if="showUnavailable && !status.enabled && !status.linked" type="info" variant="tonal" class="mt-4">
     {{ t('facebook_login_not_configured') }}
   </v-alert>
 

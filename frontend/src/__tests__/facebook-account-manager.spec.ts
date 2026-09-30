@@ -57,4 +57,16 @@ describe('FacebookAccountManager', () => {
     expect(wrapper.text()).toContain('facebook_login_not_configured')
     expect(mocks.get).toHaveBeenCalledTimes(1)
   })
+
+  it('does not show the unavailable notice below an enabled linking form', async () => {
+    mocks.get.mockImplementation(async (url: string) => ({
+      data: url === '/profile/facebook'
+        ? { enabled: true, linked: false }
+        : { enabled: true, app_id: 'app-id', api_version: 'v26.0' },
+    }))
+    const wrapper = mountManager(true, true)
+    await flushPromises()
+    expect(wrapper.text()).toContain('facebook_link_action')
+    expect(wrapper.text()).not.toContain('facebook_login_not_configured')
+  })
 })
