@@ -46,6 +46,7 @@ export default {
   or: 'or',
   continue_with_facebook: 'Continue with Facebook',
   facebook_login_failed: 'Unable to sign in with Facebook. Please try again.',
+  facebook_login_not_configured: 'Facebook sign-in is not configured. Contact your system administrator.',
   facebook_sdk_load_failed: 'Could not load the Facebook SDK. Check your connection and try again.',
   facebook_service_unavailable: 'Facebook is temporarily unavailable. Please try again later.',
   facebook_account_not_linked: 'This Facebook account is not linked yet. Sign in with email, then link Facebook from your profile.',

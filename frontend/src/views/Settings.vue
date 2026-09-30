@@ -171,6 +171,10 @@
 
           <v-btn color="primary" :loading="savingGeneral" @click="saveGeneral">{{ $t('save_settings') }}</v-btn>
         </v-card>
+
+        <v-card v-if="activeTab === 'facebook'" class="pa-6">
+          <FacebookAccountManager :active="activeTab === 'facebook'" show-unavailable />
+        </v-card>
       </v-col>
     </v-row>
 
@@ -183,6 +187,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import FacebookAccountManager from '../components/FacebookAccountManager.vue'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -202,6 +207,7 @@ const tabs = [
   { label: 'ai_config', value: 'ai', icon: 'mdi-robot' },
   { label: 'analysis_settings', value: 'analysis', icon: 'mdi-chart-bar' },
   { label: 'general', value: 'general', icon: 'mdi-cog' },
+  { label: 'facebook_account', value: 'facebook', icon: 'mdi-facebook' },
 ]
 
 type AIProvider = 'claude' | 'gemini' | 'openai'
