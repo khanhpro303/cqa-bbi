@@ -193,7 +193,7 @@ const route = useRoute()
 const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
 
-const activeTab = ref('ai')
+const activeTab = ref(typeof route.query.facebook_link === 'string' ? 'facebook' : 'ai')
 const showKey = ref(false)
 const snackbar = ref(false)
 const snackText = ref('')

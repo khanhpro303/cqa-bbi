@@ -561,6 +561,9 @@ watch(profileDialog, async (val) => {
     passwordForm.value = { currentPassword: '', newPassword: '', confirmPassword: '' }
   }
 })
+watch(() => route.query.facebook_link, (result) => {
+  if (typeof result === 'string' && route.name !== 'settings') profileDialog.value = true
+}, { immediate: true })
 
 const navItems = computed(() => {
   if (!tenantId.value) return []

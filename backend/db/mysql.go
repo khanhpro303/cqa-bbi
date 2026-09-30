@@ -50,6 +50,7 @@ func AutoMigrate() error {
 	err := DB.AutoMigrate(
 		&models.User{},
 		&models.FacebookIdentity{},
+		&models.FacebookAccountOAuthSession{},
 		&models.FacebookOAuthSession{},
 		&models.Tenant{},
 		&models.UserTenant{},

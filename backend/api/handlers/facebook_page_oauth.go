@@ -191,10 +191,15 @@ func (h *FacebookPageOAuthHandler) Start(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"redirect_url": authorizeURL.String()})
 }
 
-func FacebookOAuthCallbackDispatcher(pageOAuth *FacebookPageOAuthHandler) gin.HandlerFunc {
+func FacebookOAuthCallbackDispatcher(pageOAuth *FacebookPageOAuthHandler, accountOAuth ...*FacebookAccountOAuthHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if strings.HasPrefix(c.Query("state"), facebookPageOAuthStatePrefix) {
+		state := c.Query("state")
+		if strings.HasPrefix(state, facebookPageOAuthStatePrefix) {
 			pageOAuth.Callback(c)
+			return
+		}
+		if strings.HasPrefix(state, facebookAccountOAuthStatePrefix) && len(accountOAuth) > 0 && accountOAuth[0] != nil {
+			accountOAuth[0].Callback(c)
 			return
 		}
 		FacebookOAuthCallback(c)

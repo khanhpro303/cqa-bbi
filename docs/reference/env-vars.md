@@ -48,6 +48,10 @@ Danh sách đầy đủ các biến môi trường trong file `.env`.
 
 Đăng nhập Facebook chỉ áp dụng cho tài khoản CQA đã chủ động liên kết Facebook trong Hồ sơ cá nhân bằng xác nhận mật khẩu. Hệ thống không tự ghép tài khoản theo email, tự tạo user hoặc tự cấp quyền công ty từ tài khoản Facebook. Kết nối Page là luồng riêng của workspace; xem [chuẩn bị App Review](../usage/facebook-app-review.md).
 
+Liên kết tài khoản tại **Cài đặt → Tài khoản Facebook** hoặc hồ sơ ở avatar: nhập mật khẩu CQA, bấm liên kết, xác nhận trên Facebook rồi quay về CQA. Luồng này chuyển trang trong cùng cửa sổ, không chờ callback popup của JavaScript SDK. Backend đổi authorization code và xác minh danh tính; state chỉ dùng một lần, hết hạn sau 10 phút và ràng buộc với trình duyệt/tài khoản khởi tạo. Không lưu mật khẩu hay access token trong phiên liên kết.
+
+Callback cần đăng ký chính xác với Meta: `https://<tên-miền-CQA>/api/v1/channels/facebook/callback`. Với app Facebook Login for Business hiện có, hệ thống giữ `FACEBOOK_PAGE_LOGIN_CONFIG_ID` khi mở dialog; Meta yêu cầu cấu hình này có ít nhất một quyền business/asset ngoài `public_profile` và `email`. Không thể dùng riêng `public_profile` để bỏ qua yêu cầu này. Người dùng vẫn phải tự kiểm tra và chấp thuận các quyền Meta hiển thị; quyền chưa được App Review phê duyệt có thể hạn chế người dùng không thuộc vai trò của app. Nếu cần đăng nhập danh tính cá nhân không xin quyền Page/business, dùng app Facebook Login cổ điển phù hợp, không chuyển đổi app Business đang phục vụ kết nối Page chỉ để khắc phục lỗi popup. Xem [yêu cầu của Meta](https://developers.facebook.com/docs/facebook-login/facebook-login-for-business/#supported-permissions).
+
 ## SSL (tùy chọn)
 
 | Biến | Mô tả | Mặc định |

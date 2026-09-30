@@ -64,7 +64,7 @@ func facebookOAuthTestDatabase(t *testing.T) *gorm.DB {
 	}
 	pool.SetMaxOpenConns(8)
 	t.Cleanup(func() { _ = pool.Close() })
-	if err := database.AutoMigrate(&models.Tenant{}, &models.Channel{}, &models.FacebookOAuthSession{}); err != nil {
+	if err := database.AutoMigrate(&models.User{}, &models.Tenant{}, &models.Channel{}, &models.FacebookOAuthSession{}, &models.FacebookAccountOAuthSession{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Exec("ALTER TABLE channels ADD UNIQUE INDEX uq_channel_tenant_type_ext (tenant_id, channel_type, external_id)").Error; err != nil {
