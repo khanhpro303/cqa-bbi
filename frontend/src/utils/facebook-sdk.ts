@@ -133,26 +133,39 @@ export async function getFacebookLoginStatus(sdk: FacebookSDK): Promise<Facebook
   })
 }
 
-export async function requestFacebookLogin(sdk: FacebookSDK): Promise<FacebookLoginResponse> {
+export async function requestFacebookLogin(sdk: FacebookSDK, signal?: AbortSignal): Promise<FacebookLoginResponse> {
   return new Promise((resolve, reject) => {
     let settled = false
-    const timeoutID = window.setTimeout(() => {
+    const cleanup = () => {
+      window.clearTimeout(timeoutID)
+      signal?.removeEventListener('abort', cancel)
+    }
+    const fail = (code: string) => {
       if (settled) return
       settled = true
-      reject(new Error('facebook_login_timeout'))
-    }, 60_000)
+      cleanup()
+      reject(new Error(code))
+    }
+    const cancel = () => fail('facebook_login_cancelled')
+    const timeoutID = window.setTimeout(() => {
+      fail('facebook_login_timeout')
+    }, 20_000)
+
+    if (signal?.aborted) {
+      cancel()
+      return
+    }
+    signal?.addEventListener('abort', cancel, { once: true })
 
     try {
       sdk.login((response) => {
         if (settled) return
         settled = true
-        window.clearTimeout(timeoutID)
+        cleanup()
         resolve(response)
       }, { scope: 'public_profile', return_scopes: true })
     } catch {
-      settled = true
-      window.clearTimeout(timeoutID)
-      reject(new Error('facebook_login_failed'))
+      fail('facebook_login_failed')
     }
   })
 }

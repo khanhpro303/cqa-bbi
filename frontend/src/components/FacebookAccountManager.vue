@@ -37,17 +37,26 @@
       class="mb-2"
     />
 
-    <v-btn
-      v-if="status.enabled && !status.linked"
-      color="#1877F2"
-      variant="outlined"
-      prepend-icon="mdi-facebook"
-      :loading="linking"
-      :disabled="!facebookSDK || !currentPassword"
-      @click="linkAccount"
-    >
-      {{ t('facebook_link_action') }}
-    </v-btn>
+    <template v-if="status.enabled && !status.linked">
+      <div class="d-flex align-center ga-2 flex-wrap">
+        <v-btn
+          color="#1877F2"
+          variant="outlined"
+          prepend-icon="mdi-facebook"
+          :loading="linking"
+          :disabled="!facebookSDK || !currentPassword"
+          @click="linkAccount"
+        >
+          {{ t('facebook_link_action') }}
+        </v-btn>
+        <v-btn v-if="linking" variant="text" @click="cancelLinkAccount">
+          {{ t('cancel') }}
+        </v-btn>
+      </div>
+      <div v-if="linking" class="text-caption text-medium-emphasis mt-2" aria-live="polite">
+        {{ t('facebook_login_waiting') }}
+      </div>
+    </template>
     <v-btn
       v-else
       color="error"
@@ -92,6 +101,7 @@ const statusError = ref('')
 const snackbar = ref(false)
 const snackbarText = ref('')
 const snackbarColor = ref('success')
+const facebookLoginAbort = ref<AbortController | null>(null)
 
 function showSnack(text: string, color: string) {
   snackbarText.value = text
@@ -135,8 +145,10 @@ async function linkAccount() {
   if (!facebookSDK.value || linking.value) return
   linking.value = true
   statusError.value = ''
+  const abortController = new AbortController()
+  facebookLoginAbort.value = abortController
   try {
-    const response = await requestFacebookLogin(facebookSDK.value)
+    const response = await requestFacebookLogin(facebookSDK.value, abortController.signal)
     const accessToken = response.status === 'connected' ? response.authResponse?.accessToken : undefined
     if (!accessToken) {
       statusError.value = t('facebook_login_failed')
@@ -151,8 +163,11 @@ async function linkAccount() {
     currentPassword.value = ''
     showSnack(t('facebook_link_success'), 'success')
   } catch (error: any) {
+    if (error?.message === 'facebook_login_cancelled') return
     const code = error?.response?.data?.error
-    if (code === 'facebook_account_already_linked') {
+    if (error?.message === 'facebook_login_timeout') {
+      statusError.value = t('facebook_login_timeout')
+    } else if (code === 'facebook_account_already_linked') {
       statusError.value = t('facebook_account_already_linked')
     } else if (code === 'wrong_current_password') {
       statusError.value = t('wrong_password')
@@ -163,8 +178,13 @@ async function linkAccount() {
     }
     showSnack(statusError.value, 'error')
   } finally {
+    if (facebookLoginAbort.value === abortController) facebookLoginAbort.value = null
     linking.value = false
   }
+}
+
+function cancelLinkAccount() {
+  facebookLoginAbort.value?.abort()
 }
 
 async function unlinkAccount() {

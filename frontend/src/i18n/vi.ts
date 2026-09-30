@@ -46,6 +46,8 @@ export default {
   or: 'hoặc',
   continue_with_facebook: 'Tiếp tục với Facebook',
   facebook_login_failed: 'Không thể đăng nhập bằng Facebook. Vui lòng thử lại.',
+  facebook_login_waiting: 'Đang chờ Facebook mở hoặc xác nhận đăng nhập…',
+  facebook_login_timeout: 'Facebook không phản hồi. Hãy kiểm tra cửa sổ đăng nhập không bị chặn rồi thử lại.',
   facebook_login_not_configured: 'Đăng nhập Facebook chưa được cấu hình. Hãy liên hệ quản trị viên hệ thống.',
   facebook_sdk_load_failed: 'Không tải được Facebook SDK. Hãy kiểm tra kết nối và thử lại.',
   facebook_service_unavailable: 'Dịch vụ Facebook tạm thời không khả dụng. Vui lòng thử lại sau.',

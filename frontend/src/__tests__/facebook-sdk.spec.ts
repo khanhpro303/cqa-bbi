@@ -131,4 +131,15 @@ describe('Facebook JavaScript SDK', () => {
     await expect(requestFacebookLogin(sdk)).resolves.toEqual(response)
     expect(login).toHaveBeenCalledWith(expect.any(Function), { scope: 'public_profile', return_scopes: true })
   })
+
+  it('stops waiting when the user cancels account linking', async () => {
+    const { requestFacebookLogin } = await import('../utils/facebook-sdk')
+    const controller = new AbortController()
+    const sdk = { init: vi.fn(), getLoginStatus: vi.fn(), login: vi.fn() }
+
+    const login = requestFacebookLogin(sdk, controller.signal)
+    controller.abort()
+
+    await expect(login).rejects.toThrow('facebook_login_cancelled')
+  })
 })
