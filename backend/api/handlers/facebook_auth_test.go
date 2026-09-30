@@ -38,9 +38,10 @@ func TestFacebookPublicConfig(t *testing.T) {
 
 	t.Run("never exposes app secret", func(t *testing.T) {
 		handler := NewFacebookAuthHandler(&config.Config{
-			FacebookAppID:      "123",
-			FacebookAppSecret:  "do-not-expose",
-			FacebookAPIVersion: "v26.0",
+			FacebookAppID:             "123",
+			FacebookAppSecret:         "do-not-expose",
+			FacebookAPIVersion:        "v26.0",
+			FacebookPageLoginConfigID: "business-config",
 		})
 		response := httptest.NewRecorder()
 		ctx, _ := gin.CreateTestContext(response)
@@ -51,7 +52,7 @@ func TestFacebookPublicConfig(t *testing.T) {
 		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 			t.Fatalf("decode response: %v", err)
 		}
-		if body["enabled"] != true || body["app_id"] != "123" || body["api_version"] != "v26.0" {
+		if body["enabled"] != true || body["app_id"] != "123" || body["api_version"] != "v26.0" || body["login_config_id"] != "business-config" {
 			t.Fatalf("unexpected public config: %#v", body)
 		}
 		if _, exists := body["app_secret"]; exists {

@@ -67,7 +67,7 @@ const facebookEnabled = ref(false)
 const facebookLoading = ref(false)
 const facebookSDKLoading = ref(false)
 const facebookSDK = ref<Awaited<ReturnType<typeof loadFacebookSDK>> | null>(null)
-const facebookConfig = ref<{ appId: string; apiVersion: string } | null>(null)
+const facebookConfig = ref<{ appId: string; apiVersion: string; loginConfigId?: string } | null>(null)
 const facebookButtonContainer = ref<HTMLElement | null>(null)
 const skipFacebookAutoLoginKey = 'cqa_skip_facebook_auto_login'
 const facebookLoginStateCallback = () => { void checkLoginState() }
@@ -78,7 +78,7 @@ onMounted(async () => {
     if (!data.enabled) return
     window.checkLoginState = facebookLoginStateCallback
     facebookEnabled.value = true
-    facebookConfig.value = { appId: data.app_id, apiVersion: data.api_version }
+    facebookConfig.value = { appId: data.app_id, apiVersion: data.api_version, loginConfigId: data.login_config_id || undefined }
     await initializeFacebookSDK()
     await restoreFacebookSession()
   } catch (error: any) {
@@ -152,7 +152,7 @@ async function initializeFacebookSDK() {
     facebookSDK.value = await loadFacebookSDK(facebookConfig.value)
     await nextTick()
     if (!facebookButtonContainer.value) throw new Error('facebook_sdk_button_container_unavailable')
-    renderFacebookLoginButton(facebookSDK.value, facebookButtonContainer.value)
+    renderFacebookLoginButton(facebookSDK.value, facebookButtonContainer.value, facebookConfig.value.loginConfigId)
   } finally {
     facebookSDKLoading.value = false
   }

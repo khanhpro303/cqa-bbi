@@ -58,6 +58,7 @@ type FacebookAuthHandler struct {
 	appID          string
 	appSecret      string
 	apiVersion     string
+	loginConfigID  string
 	graphBaseURL   string
 	httpClient     *http.Client
 	verifyToken    func(context.Context, string) (facebookProfile, error)
@@ -100,10 +101,11 @@ type facebookDebugTokenResponse struct {
 
 func NewFacebookAuthHandler(cfg *config.Config) *FacebookAuthHandler {
 	handler := &FacebookAuthHandler{
-		appID:        strings.TrimSpace(cfg.FacebookAppID),
-		appSecret:    strings.TrimSpace(cfg.FacebookAppSecret),
-		apiVersion:   strings.TrimSpace(cfg.FacebookAPIVersion),
-		graphBaseURL: facebookGraphBaseURL,
+		appID:         strings.TrimSpace(cfg.FacebookAppID),
+		appSecret:     strings.TrimSpace(cfg.FacebookAppSecret),
+		apiVersion:    strings.TrimSpace(cfg.FacebookAPIVersion),
+		loginConfigID: strings.TrimSpace(cfg.FacebookPageLoginConfigID),
+		graphBaseURL:  facebookGraphBaseURL,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -229,9 +231,10 @@ func (h *FacebookAuthHandler) PublicConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"enabled":     true,
-		"app_id":      h.appID,
-		"api_version": h.apiVersion,
+		"enabled":         true,
+		"app_id":          h.appID,
+		"api_version":     h.apiVersion,
+		"login_config_id": h.loginConfigID,
 	})
 }
 

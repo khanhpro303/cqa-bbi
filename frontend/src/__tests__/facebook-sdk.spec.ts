@@ -132,6 +132,17 @@ describe('Facebook JavaScript SDK', () => {
     expect(login).toHaveBeenCalledWith(expect.any(Function), { scope: 'public_profile', return_scopes: true })
   })
 
+  it('uses the configured Facebook Login for Business configuration when present', async () => {
+    const { requestFacebookLogin } = await import('../utils/facebook-sdk')
+    const response = { status: 'connected' as const, authResponse: { accessToken: 'link-token' } }
+    const login = vi.fn((callback: (value: typeof response) => void) => callback(response))
+    const sdk = { init: vi.fn(), getLoginStatus: vi.fn(), login }
+
+    await requestFacebookLogin(sdk, undefined, 'business-config')
+
+    expect(login).toHaveBeenCalledWith(expect.any(Function), { config_id: 'business-config' })
+  })
+
   it('stops waiting when the user cancels account linking', async () => {
     const { requestFacebookLogin } = await import('../utils/facebook-sdk')
     const controller = new AbortController()

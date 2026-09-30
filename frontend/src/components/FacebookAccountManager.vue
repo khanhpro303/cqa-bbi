@@ -102,6 +102,7 @@ const snackbar = ref(false)
 const snackbarText = ref('')
 const snackbarColor = ref('success')
 const facebookLoginAbort = ref<AbortController | null>(null)
+const facebookLoginConfigID = ref('')
 
 function showSnack(text: string, color: string) {
   snackbarText.value = text
@@ -127,6 +128,7 @@ async function loadStatus() {
 
     const configResponse = await api.get('/auth/facebook/config')
     if (!configResponse.data.enabled) return
+    facebookLoginConfigID.value = configResponse.data.login_config_id || ''
     facebookSDK.value = await loadFacebookSDK({
       appId: configResponse.data.app_id,
       apiVersion: configResponse.data.api_version,
@@ -148,7 +150,7 @@ async function linkAccount() {
   const abortController = new AbortController()
   facebookLoginAbort.value = abortController
   try {
-    const response = await requestFacebookLogin(facebookSDK.value, abortController.signal)
+    const response = await requestFacebookLogin(facebookSDK.value, abortController.signal, facebookLoginConfigID.value || undefined)
     const accessToken = response.status === 'connected' ? response.authResponse?.accessToken : undefined
     if (!accessToken) {
       statusError.value = t('facebook_login_failed')

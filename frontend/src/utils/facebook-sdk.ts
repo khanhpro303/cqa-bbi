@@ -20,7 +20,7 @@ interface FacebookSDK {
   getLoginStatus(callback: (response: FacebookLoginResponse) => void): void
   login(
     callback: (response: FacebookLoginResponse) => void,
-    options: { scope: string; return_scopes: boolean },
+    options: { scope?: string; return_scopes?: boolean; config_id?: string },
   ): void
   XFBML?: {
     parse(rootNode?: HTMLElement): void
@@ -133,7 +133,7 @@ export async function getFacebookLoginStatus(sdk: FacebookSDK): Promise<Facebook
   })
 }
 
-export async function requestFacebookLogin(sdk: FacebookSDK, signal?: AbortSignal): Promise<FacebookLoginResponse> {
+export async function requestFacebookLogin(sdk: FacebookSDK, signal?: AbortSignal, loginConfigID?: string): Promise<FacebookLoginResponse> {
   return new Promise((resolve, reject) => {
     let settled = false
     const cleanup = () => {
@@ -163,18 +163,21 @@ export async function requestFacebookLogin(sdk: FacebookSDK, signal?: AbortSigna
         settled = true
         cleanup()
         resolve(response)
-      }, { scope: 'public_profile', return_scopes: true })
+      }, loginConfigID
+        ? { config_id: loginConfigID }
+        : { scope: 'public_profile', return_scopes: true })
     } catch {
       fail('facebook_login_failed')
     }
   })
 }
 
-export function renderFacebookLoginButton(sdk: FacebookSDK, container: HTMLElement): void {
+export function renderFacebookLoginButton(sdk: FacebookSDK, container: HTMLElement, loginConfigID?: string): void {
   if (!sdk.XFBML?.parse) throw new Error('facebook_sdk_xfbml_unavailable')
 
   const button = document.createElement('fb:login-button')
   button.setAttribute('scope', 'public_profile')
+  if (loginConfigID) button.setAttribute('config_id', loginConfigID)
   button.setAttribute('onlogin', 'checkLoginState();')
   container.replaceChildren(button)
   sdk.XFBML.parse(container)
