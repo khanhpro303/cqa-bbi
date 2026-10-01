@@ -41,6 +41,51 @@ type productGroupingMockProvider struct {
 	timeout  time.Duration
 }
 
+type schemaProductGroupingProvider struct {
+	productGroupingMockProvider
+	schema map[string]interface{}
+}
+
+func (p *schemaProductGroupingProvider) AnalyzeJSONSchema(_ context.Context, _, _ string, schema map[string]interface{}) (ai.AIResponse, error) {
+	p.schema = schema
+	return p.response, nil
+}
+
+func TestResolveProductGroupsUsesRequiredAssignmentsSchema(t *testing.T) {
+	provider := &schemaProductGroupingProvider{productGroupingMockProvider: productGroupingMockProvider{response: ai.AIResponse{Content: `{"assignments":{"1":"E-24","2":"E-24","3":""}}`}}}
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, false, nil
+		},
+		saveCache: func(context.Context, string, string, []serviceQualityProductGroup) error { return nil },
+		aiClient:  func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage:  func(context.Context, string, ai.AIResponse) {},
+	}
+	groups, err := resolveProductGroups(context.Background(), "tenant-a", []string{"Mũ E-24", "E-24", "LS2"}, deps)
+	if err != nil || len(groups) != 2 || provider.schema == nil || provider.calls != 0 || !reflect.DeepEqual(groups[0].Members, []string{"Mũ E-24", "E-24"}) {
+		t.Fatalf("schema provider: groups=%#v err=%v schema=%#v", groups, err, provider.schema)
+	}
+	assignments := provider.schema["properties"].(map[string]interface{})["assignments"].(map[string]interface{})
+	if !reflect.DeepEqual(assignments["required"], []string{"1", "2", "3"}) || assignments["additionalProperties"] != false {
+		t.Fatalf("schema does not require exactly each ID: %#v", assignments)
+	}
+}
+
+func TestParseProductGroupAssignmentsRejectsMissingDuplicateAndUnknownIDs(t *testing.T) {
+	for _, content := range []string{
+		`{"assignments":{"1":"E-24"}}`,
+		`{"assignments":{"1":"E-24","1":"FF818","2":"E-24"}}`,
+		`{"assignments":{"1":"E-24","3":"E-24"}}`,
+		`{"assignments":{"1":null,"2":"E-24"}}`,
+		`{"assignments":["E-24","E-24"]}`,
+		`{"assignments":{"1":"E-24","2":"E-24"},"groups":[{"name":"FF818","member_ids":[1,2]}]}`,
+	} {
+		if _, err := parseAndValidateProductGroups(content, []string{"Mũ E-24", "E-24"}); !errors.Is(err, errInvalidProductGrouping) {
+			t.Fatalf("invalid assignments accepted: %s err=%v", content, err)
+		}
+	}
+}
+
 type jsonProductGroupingProvider struct {
 	productGroupingMockProvider
 	jsonCalls int

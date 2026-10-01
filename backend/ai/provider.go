@@ -34,6 +34,10 @@ type JSONProvider interface {
 	AnalyzeJSON(ctx context.Context, systemPrompt string, input string) (AIResponse, error)
 }
 
+type JSONSchemaProvider interface {
+	AnalyzeJSONSchema(ctx context.Context, systemPrompt, input string, schema map[string]interface{}) (AIResponse, error)
+}
+
 // CalculateCostUSD returns estimated cost in USD based on provider, model, and token counts.
 func CalculateCostUSD(provider, model string, inputTokens, outputTokens int) float64 {
 	var inputRate, outputRate float64 // per million tokens

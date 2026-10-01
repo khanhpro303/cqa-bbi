@@ -88,7 +88,7 @@ func TestMessengerProductGroupingPromptRequiresCompleteExactMapping(t *testing.T
 		`"FF 818" thành "FF818"`,
 		`"E - 24" thành "E-24"`,
 		"cho phép name là chuỗi rỗng",
-		"member_ids",
+		"assignments",
 		"bắt đầu từ 1",
 		"Không bỏ sót, không lặp ID",
 	} {

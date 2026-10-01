@@ -5,8 +5,49 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
+
+func TestOpenAIAnalyzeJSONSchemaUsesStrictSchemaInBothAPIs(t *testing.T) {
+	schema := map[string]interface{}{"type": "object", "properties": map[string]interface{}{"assignments": map[string]interface{}{"type": "object"}}, "required": []interface{}{"assignments"}, "additionalProperties": false}
+	for _, fallback := range []bool{false, true} {
+		t.Run(map[bool]string{false: "responses", true: "chat fallback"}[fallback], func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if fallback && r.URL.Path == "/responses" {
+					http.Error(w, "unsupported", http.StatusNotFound)
+					return
+				}
+				var request map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				var format, config map[string]interface{}
+				if fallback {
+					format = request["response_format"].(map[string]interface{})
+					config = format["json_schema"].(map[string]interface{})
+				} else {
+					format = request["text"].(map[string]interface{})["format"].(map[string]interface{})
+					config = format
+				}
+				if format["type"] != "json_schema" || config["strict"] != true || !reflect.DeepEqual(config["schema"], schema) {
+					t.Errorf("strict schema missing: %#v", format)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if fallback {
+					_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"assignments\":{\"1\":\"E-24\"}}"}}]}`))
+				} else {
+					_, _ = w.Write([]byte(`{"output_text":"{\"assignments\":{\"1\":\"E-24\"}}"}`))
+				}
+			}))
+			defer server.Close()
+			response, err := NewOpenAIProvider("test-key", "gpt-4o-mini", server.URL).AnalyzeJSONSchema(context.Background(), "Return JSON", `{"product_names":["Mũ E-24"]}`, schema)
+			if err != nil || response.Content != `{"assignments":{"1":"E-24"}}` {
+				t.Fatalf("schema request failed: %#v %v", response, err)
+			}
+		})
+	}
+}
 
 func TestOpenAIAnalyzeJSONRequestsResponsesJSONObjectAndPreservesUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

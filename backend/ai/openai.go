@@ -44,11 +44,15 @@ func (o *OpenAIProvider) AnalyzeJSON(ctx context.Context, systemPrompt string, i
 	return o.analyze(ctx, systemPrompt, input, true)
 }
 
-func (o *OpenAIProvider) analyze(ctx context.Context, systemPrompt string, input string, jsonOutput bool) (AIResponse, error) {
+func (o *OpenAIProvider) AnalyzeJSONSchema(ctx context.Context, systemPrompt, input string, schema map[string]interface{}) (AIResponse, error) {
+	return o.analyze(ctx, systemPrompt, input, true, schema)
+}
+
+func (o *OpenAIProvider) analyze(ctx context.Context, systemPrompt string, input string, jsonOutput bool, schemas ...map[string]interface{}) (AIResponse, error) {
 	return withRetry(ctx, "openai", func() (AIResponse, error) {
 		// Prefer Responses API for modern OpenAI models, then fallback to Chat Completions
 		// for compatible proxies/older deployments.
-		resp, err := o.analyzeWithResponses(ctx, systemPrompt, input, jsonOutput)
+		resp, err := o.analyzeWithResponses(ctx, systemPrompt, input, jsonOutput, schemas...)
 		if err == nil {
 			return resp, nil
 		}
@@ -57,7 +61,7 @@ func (o *OpenAIProvider) analyze(ctx context.Context, systemPrompt string, input
 			return AIResponse{}, err
 		}
 
-		resp, chatErr := o.analyzeWithChatCompletions(ctx, systemPrompt, input, jsonOutput)
+		resp, chatErr := o.analyzeWithChatCompletions(ctx, systemPrompt, input, jsonOutput, schemas...)
 		if chatErr == nil {
 			return resp, nil
 		}
@@ -94,7 +98,7 @@ func (o *OpenAIProvider) responsesURL() string {
 	return base + "/responses"
 }
 
-func (o *OpenAIProvider) analyzeWithResponses(ctx context.Context, systemPrompt string, chatTranscript string, jsonOutput bool) (AIResponse, error) {
+func (o *OpenAIProvider) analyzeWithResponses(ctx context.Context, systemPrompt string, chatTranscript string, jsonOutput bool, schemas ...map[string]interface{}) (AIResponse, error) {
 	reqBody := map[string]interface{}{
 		"model": o.model,
 		"input": []map[string]interface{}{
@@ -116,6 +120,9 @@ func (o *OpenAIProvider) analyzeWithResponses(ctx context.Context, systemPrompt 
 		reqBody["text"] = map[string]interface{}{
 			"format": map[string]string{"type": "json_object"},
 		}
+	}
+	if len(schemas) > 0 && schemas[0] != nil {
+		reqBody["text"] = map[string]interface{}{"format": map[string]interface{}{"type": "json_schema", "name": "product_grouping", "strict": true, "schema": schemas[0]}}
 	}
 
 	body, err := o.doJSONPost(ctx, o.responsesURL(), reqBody)
@@ -175,7 +182,7 @@ func (o *OpenAIProvider) analyzeWithResponses(ctx context.Context, systemPrompt 
 	}, nil
 }
 
-func (o *OpenAIProvider) analyzeWithChatCompletions(ctx context.Context, systemPrompt string, chatTranscript string, jsonOutput bool) (AIResponse, error) {
+func (o *OpenAIProvider) analyzeWithChatCompletions(ctx context.Context, systemPrompt string, chatTranscript string, jsonOutput bool, schemas ...map[string]interface{}) (AIResponse, error) {
 	reqBody := map[string]interface{}{
 		"model": o.model,
 		"messages": []map[string]string{
@@ -185,6 +192,9 @@ func (o *OpenAIProvider) analyzeWithChatCompletions(ctx context.Context, systemP
 	}
 	if jsonOutput {
 		reqBody["response_format"] = map[string]string{"type": "json_object"}
+	}
+	if len(schemas) > 0 && schemas[0] != nil {
+		reqBody["response_format"] = map[string]interface{}{"type": "json_schema", "json_schema": map[string]interface{}{"name": "product_grouping", "strict": true, "schema": schemas[0]}}
 	}
 
 	body, err := o.doJSONPost(ctx, o.chatCompletionsURL(), reqBody)

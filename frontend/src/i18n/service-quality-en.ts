@@ -6,7 +6,7 @@ export default {
   sq_task_delete_confirm: 'Delete this task?',
   sq_system_prompt: 'System prompt',
   sq_grouping_task_description: 'This task runs when the CS quality treemap has products to aggregate.',
-  sq_prompt_hint: 'This is the system prompt in use. Save changes to apply them to the next aggregation. Keep the JSON groups format with name and member_ids (input label positions starting at 1); members with exact original labels is also supported.',
+  sq_prompt_hint: 'This is the system prompt in use. Save changes to apply them to the next aggregation. Default format: JSON assignments maps each input label ID (starting at 1) to its canonical name. Custom prompts using groups with member_ids or members are also supported.',
   sq_prompt_saved: 'System prompt saved.',
   sq_prompt_save_error: 'Unable to save system prompt.',
   sq_prompt_admin_only: 'Only admins can edit the system prompt.',
