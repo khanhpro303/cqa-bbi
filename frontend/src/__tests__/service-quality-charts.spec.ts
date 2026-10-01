@@ -31,7 +31,11 @@ function render(source = rows, enabled = true) {
   return { wrapper, i18n }
 }
 beforeEach(() => { mocks.post.mockReset(); mocks.post.mockResolvedValue({ data: { enabled: true, groups } }) })
-afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
+afterEach(() => {
+  wrappers.splice(0).forEach(wrapper => wrapper.unmount())
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
 
 describe('ServiceQuality AI chart carousel', () => {
   it('renders the pie and AI grouped treemap, filters without new AI calls, and avoids calls on unchanged refresh', async () => {
@@ -51,6 +55,117 @@ describe('ServiceQuality AI chart carousel', () => {
     expect(wrapper.text()).toContain('Chưa có sản phẩm')
     await wrapper.setProps({ rows: structuredClone(rows), reportVersion: '2026-10-01T02:00:00Z' })
     expect(mocks.post).toHaveBeenCalledTimes(1)
+  })
+
+  it('shrinks every narrow tile label until the full product name and count fit on one line', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('treemap-tile') ? 4 : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('treemap-tile') ? 18 : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      if (!this.classList.contains('tile-text')) return 0
+      return Math.ceil(100 * ((Number.parseFloat(this.style.fontSize) || 13) / 13))
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (!this.classList.contains('tile-text')) return 0
+      return 16 * ((Number.parseFloat(this.style.fontSize) || 13) / 13)
+    })
+
+    const { wrapper } = render()
+    await flushPromises()
+    await wrapper.get('button[aria-label="Biểu đồ tiếp theo"]').trigger('click')
+    await flushPromises()
+
+    const labels = wrapper.findAll<HTMLElement>('.tile-text')
+    expect(labels.map(label => label.text())).toEqual(['E-24 1', 'FF818 1'])
+    for (const label of labels) {
+      const fittedSize = Number.parseFloat(label.element.style.fontSize)
+      expect(fittedSize).toBeLessThan(1)
+      expect(Math.ceil(100 * (fittedSize / 13))).toBeLessThanOrEqual(4)
+      expect(16 * (fittedSize / 13)).toBeLessThanOrEqual(16)
+    }
+  })
+
+  it('scales the complete label when browser font rounding prevents an ultra-small tile from fitting', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('treemap-tile') ? 0 : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('treemap-tile') ? 0 : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('tile-text') ? 5 : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('tile-text') ? 4 : 0
+    })
+
+    const { wrapper } = render()
+    await flushPromises()
+    await wrapper.get('button[aria-label="Biểu đồ tiếp theo"]').trigger('click')
+    await flushPromises()
+
+    for (const label of wrapper.findAll<HTMLElement>('.tile-text')) {
+      expect(label.element.style.fontSize).toBe('0.1px')
+      expect(label.element.style.transform).toBe('scale(0.2)')
+      expect(5 * 0.2).toBeLessThanOrEqual(1)
+      expect(4 * 0.2).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('refits labels after tile resize and releases the observer lifecycle', async () => {
+    let tileWidth = 46
+    let resizeCallback: ResizeObserverCallback | undefined
+    let frameCallback: FrameRequestCallback | undefined
+    const observe = vi.fn()
+    const unobserve = vi.fn()
+    const disconnect = vi.fn()
+    class ResizeObserverStub {
+      constructor(callback: ResizeObserverCallback) { resizeCallback = callback }
+      observe = observe
+      unobserve = unobserve
+      disconnect = disconnect
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frameCallback = callback; return 1 })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.spyOn(Node.prototype, 'isConnected', 'get').mockReturnValue(true)
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('treemap-tile') ? tileWidth : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('treemap-tile') ? 18 : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      if (!this.classList.contains('tile-text')) return 0
+      return Math.ceil(100 * ((Number.parseFloat(this.style.fontSize) || 13) / 13))
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (!this.classList.contains('tile-text')) return 0
+      return Math.ceil(16 * ((Number.parseFloat(this.style.fontSize) || 13) / 13))
+    })
+
+    const { wrapper } = render()
+    await flushPromises()
+    await wrapper.get('button[aria-label="Biểu đồ tiếp theo"]').trigger('click')
+    await flushPromises()
+    expect(observe).toHaveBeenCalledTimes(2)
+    const firstTile = wrapper.get<HTMLElement>('.treemap-tile').element
+    const firstLabel = wrapper.get<HTMLElement>('.tile-text').element
+    const initialSize = Number.parseFloat(firstLabel.style.fontSize)
+
+    tileWidth = 20
+    resizeCallback!([{ target: firstTile } as unknown as ResizeObserverEntry], {} as ResizeObserver)
+    frameCallback!(0)
+    expect(Number.parseFloat(firstLabel.style.fontSize)).toBeLessThan(initialSize)
+
+    await wrapper.get('select').setValue('high')
+    expect(unobserve).toHaveBeenCalled()
+    wrappers.splice(wrappers.indexOf(wrapper), 1)
+    wrapper.unmount()
+    expect(disconnect).toHaveBeenCalledOnce()
   })
 
   it('offers retry on AI failure and never displays locally grouped fallback names', async () => {

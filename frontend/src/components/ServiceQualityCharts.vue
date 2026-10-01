@@ -43,7 +43,7 @@
         <div v-if="grouping || refreshingReport" class="chart-empty product-empty text-medium-emphasis" role="status"><v-progress-circular indeterminate size="30" /><span>{{ t(refreshingReport ? 'sq_chart_refreshing_report' : 'sq_chart_ai_grouping') }}</span></div>
         <div v-else-if="groupingError" class="chart-empty product-empty text-error" role="alert"><span>{{ t(groupingTooLarge ? 'sq_chart_ai_too_large' : 'sq_chart_ai_error') }}</span><v-btn v-if="!groupingTooLarge" variant="text" size="small" @click="loadGroups">{{ t('sq_retry') }}</v-btn></div>
         <div v-else-if="tiles.length" class="product-treemap" role="list" :aria-label="t('sq_chart_products')">
-          <div v-for="(tile, index) in tiles" :key="tile.key" class="treemap-tile" role="listitem" tabindex="0" :title="t('sq_chart_product_count', { product: tile.label, count: tile.count })" :aria-label="t('sq_chart_product_count', { product: tile.label, count: tile.count })" :style="{ left: `${tile.x}%`, top: `${tile.y}%`, width: `${tile.width}%`, height: `${tile.height}%`, background: tileColors[index % tileColors.length], fontSize: `${tileFontSize(tile)}px` }">
+          <div v-for="(tile, index) in tiles" :key="tile.key" v-fit-text class="treemap-tile" role="listitem" tabindex="0" :title="t('sq_chart_product_count', { product: tile.label, count: tile.count })" :aria-label="t('sq_chart_product_count', { product: tile.label, count: tile.count })" :style="{ left: `${tile.x}%`, top: `${tile.y}%`, width: `${tile.width}%`, height: `${tile.height}%`, background: tileColors[index % tileColors.length] }">
             <span class="tile-text">{{ tile.label }} <b>{{ tile.count }}</b></span>
           </div>
         </div>
@@ -58,7 +58,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch, type ObjectDirective } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { aggregateInsights, type InsightRow } from '../utils/service-quality'
 import { aggregateProductDemand, collectProductNames, layoutTreemap, potentialLevels, type AIProductGroup, type PotentialFilter } from '../utils/quality-charts'
@@ -93,10 +93,70 @@ const sourceNames = computed(() => collectProductNames(props.rows, props.from, p
 const groupingSignature = computed(() => JSON.stringify([props.tenantId, props.scope, sourceNames.value, !!props.productGroupingEnabled, props.productGroupingVersion]))
 const tiles = computed(() => layoutTreemap(aggregateProductDemand(props.rows, props.from, props.to, filter.value, groups.value).slice(0, 20)))
 
-/** Dynamic font size per tile so text fits inside small cells. */
-function tileFontSize(tile: { width: number; height: number }): number {
-  const size = Math.min(tile.width * 1.1, tile.height * 1.4)
-  return Math.max(6, Math.min(13, size))
+const maxTileFontSize = 13
+const minTileFontSize = 0.1
+
+/** Fit the complete product label and count to the tile's real pixel dimensions. */
+function fitTileText(tile: HTMLElement) {
+  const text = tile.querySelector<HTMLElement>('.tile-text')
+  if (!text) return
+  const availableWidth = Math.max(tile.clientWidth, 1)
+  const availableHeight = Math.max(tile.clientHeight, 1)
+
+  const fits = () => text.scrollWidth <= availableWidth && text.scrollHeight <= availableHeight
+  text.style.transform = 'none'
+  text.style.fontSize = `${maxTileFontSize}px`
+  if (fits()) return
+
+  text.style.fontSize = `${minTileFontSize}px`
+  if (!fits()) {
+    const scale = Math.min(
+      1,
+      availableWidth / Math.max(text.scrollWidth, 1),
+      availableHeight / Math.max(text.scrollHeight, 1),
+    )
+    text.style.transform = `scale(${scale})`
+    return
+  }
+
+  let lower = minTileFontSize
+  let upper = maxTileFontSize
+  while (upper - lower > 0.1) {
+    const candidate = (lower + upper) / 2
+    text.style.fontSize = `${candidate}px`
+    if (fits()) lower = candidate
+    else upper = candidate
+  }
+  text.style.fontSize = `${Math.max(minTileFontSize, Math.floor(lower * 10) / 10)}px`
+}
+
+const pendingResizeTiles = new Set<HTMLElement>()
+let resizeFrame: number | undefined
+function scheduleTileFit(tile: HTMLElement) {
+  pendingResizeTiles.add(tile)
+  if (resizeFrame !== undefined) return
+  resizeFrame = requestAnimationFrame(() => {
+    for (const pendingTile of pendingResizeTiles) {
+      if (pendingTile.isConnected) fitTileText(pendingTile)
+    }
+    pendingResizeTiles.clear()
+    resizeFrame = undefined
+  })
+}
+const tileResizeObserver = typeof ResizeObserver === 'undefined'
+  ? undefined
+  : new ResizeObserver(entries => entries.forEach(entry => scheduleTileFit(entry.target as HTMLElement)))
+const vFitText: ObjectDirective<HTMLElement> = {
+  mounted(tile) {
+    fitTileText(tile)
+    tileResizeObserver?.observe(tile)
+    void document.fonts?.ready.then(() => { if (tile.isConnected) fitTileText(tile) })
+  },
+  updated: fitTileText,
+  beforeUnmount(tile) {
+    pendingResizeTiles.delete(tile)
+    tileResizeObserver?.unobserve(tile)
+  },
 }
 
 async function loadGroups() {
@@ -141,7 +201,13 @@ async function loadGroups() {
 }
 watch(groupingSignature, loadGroups, { immediate: true })
 watch(() => props.reportVersion, () => { if (refreshingReport.value || (disabledByServer.value && props.productGroupingEnabled)) void loadGroups() })
-onBeforeUnmount(() => { requestSequence++; controller?.abort() })
+onBeforeUnmount(() => {
+  requestSequence++
+  controller?.abort()
+  tileResizeObserver?.disconnect()
+  if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame)
+  pendingResizeTiles.clear()
+})
 const pieSegments = computed(() => {
   let angle = -Math.PI / 2
   return leads.value.map(lead => {
@@ -174,8 +240,8 @@ const pieDescription = computed(() => pieSegments.value.map(segment => segment.d
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
 .potential-filter { max-width: 270px; margin-bottom: 12px; }
 .product-treemap { position: relative; height: calc(100% - 56px); min-height: 100px; }
-.treemap-tile { position: absolute; border: 2px solid rgb(var(--v-theme-surface)); border-radius: 6px; color: white; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 1px 3px; text-align: center; }
-.treemap-tile .tile-text { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
+.treemap-tile { position: absolute; box-sizing: border-box; min-width: 1px; min-height: 1px; border-radius: 6px; box-shadow: inset 0 0 0 2px rgb(var(--v-theme-surface)); color: white; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0; text-align: center; }
+.treemap-tile .tile-text { display: block; flex: 0 0 auto; white-space: nowrap; line-height: 1.2; transform-origin: center; }
 .treemap-tile .tile-text b { font-weight: 800; }
 .treemap-tile:focus { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: -2px; }
 .chart-note { margin: 0; padding: 12px 16px; line-height: 1.4; font-size: 12px; }
