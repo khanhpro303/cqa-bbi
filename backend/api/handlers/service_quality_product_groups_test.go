@@ -41,6 +41,32 @@ type productGroupingMockProvider struct {
 	timeout  time.Duration
 }
 
+type jsonProductGroupingProvider struct {
+	productGroupingMockProvider
+	jsonCalls int
+}
+
+func (p *jsonProductGroupingProvider) AnalyzeJSON(_ context.Context, _, _ string) (ai.AIResponse, error) {
+	p.jsonCalls++
+	return p.response, p.err
+}
+
+func TestResolveProductGroupsRequestsJSONFromSupportingProvider(t *testing.T) {
+	provider := &jsonProductGroupingProvider{productGroupingMockProvider: productGroupingMockProvider{response: ai.AIResponse{Content: `{"groups":[{"name":"E-24","member_ids":[1]}]}`}}}
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, false, nil
+		},
+		saveCache: func(context.Context, string, string, []serviceQualityProductGroup) error { return nil },
+		aiClient:  func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage:  func(context.Context, string, ai.AIResponse) {},
+	}
+	groups, err := resolveProductGroups(context.Background(), "tenant-a", []string{"Mũ E-24"}, deps)
+	if err != nil || len(groups) != 1 || provider.jsonCalls != 1 || provider.calls != 0 {
+		t.Fatalf("JSON provider selection: groups=%#v err=%v json=%d chat=%d", groups, err, provider.jsonCalls, provider.calls)
+	}
+}
+
 type productGroupingEchoProvider struct {
 	calls int
 }

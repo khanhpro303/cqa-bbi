@@ -37,10 +37,18 @@ func NewOpenAIProvider(apiKey, model, baseURL string) *OpenAIProvider {
 }
 
 func (o *OpenAIProvider) AnalyzeChat(ctx context.Context, systemPrompt string, chatTranscript string) (AIResponse, error) {
+	return o.analyze(ctx, systemPrompt, chatTranscript, false)
+}
+
+func (o *OpenAIProvider) AnalyzeJSON(ctx context.Context, systemPrompt string, input string) (AIResponse, error) {
+	return o.analyze(ctx, systemPrompt, input, true)
+}
+
+func (o *OpenAIProvider) analyze(ctx context.Context, systemPrompt string, input string, jsonOutput bool) (AIResponse, error) {
 	return withRetry(ctx, "openai", func() (AIResponse, error) {
 		// Prefer Responses API for modern OpenAI models, then fallback to Chat Completions
 		// for compatible proxies/older deployments.
-		resp, err := o.analyzeWithResponses(ctx, systemPrompt, chatTranscript)
+		resp, err := o.analyzeWithResponses(ctx, systemPrompt, input, jsonOutput)
 		if err == nil {
 			return resp, nil
 		}
@@ -49,7 +57,7 @@ func (o *OpenAIProvider) AnalyzeChat(ctx context.Context, systemPrompt string, c
 			return AIResponse{}, err
 		}
 
-		resp, chatErr := o.analyzeWithChatCompletions(ctx, systemPrompt, chatTranscript)
+		resp, chatErr := o.analyzeWithChatCompletions(ctx, systemPrompt, input, jsonOutput)
 		if chatErr == nil {
 			return resp, nil
 		}
@@ -86,7 +94,7 @@ func (o *OpenAIProvider) responsesURL() string {
 	return base + "/responses"
 }
 
-func (o *OpenAIProvider) analyzeWithResponses(ctx context.Context, systemPrompt string, chatTranscript string) (AIResponse, error) {
+func (o *OpenAIProvider) analyzeWithResponses(ctx context.Context, systemPrompt string, chatTranscript string, jsonOutput bool) (AIResponse, error) {
 	reqBody := map[string]interface{}{
 		"model": o.model,
 		"input": []map[string]interface{}{
@@ -103,6 +111,11 @@ func (o *OpenAIProvider) analyzeWithResponses(ctx context.Context, systemPrompt 
 				},
 			},
 		},
+	}
+	if jsonOutput {
+		reqBody["text"] = map[string]interface{}{
+			"format": map[string]string{"type": "json_object"},
+		}
 	}
 
 	body, err := o.doJSONPost(ctx, o.responsesURL(), reqBody)
@@ -162,13 +175,16 @@ func (o *OpenAIProvider) analyzeWithResponses(ctx context.Context, systemPrompt 
 	}, nil
 }
 
-func (o *OpenAIProvider) analyzeWithChatCompletions(ctx context.Context, systemPrompt string, chatTranscript string) (AIResponse, error) {
+func (o *OpenAIProvider) analyzeWithChatCompletions(ctx context.Context, systemPrompt string, chatTranscript string, jsonOutput bool) (AIResponse, error) {
 	reqBody := map[string]interface{}{
 		"model": o.model,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": chatTranscript},
 		},
+	}
+	if jsonOutput {
+		reqBody["response_format"] = map[string]string{"type": "json_object"}
 	}
 
 	body, err := o.doJSONPost(ctx, o.chatCompletionsURL(), reqBody)

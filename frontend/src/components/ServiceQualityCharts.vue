@@ -124,6 +124,9 @@ async function loadGroups() {
       emit('refresh-report')
       return
     }
+    if (error?.response?.status === 502 && typeof error?.response?.data?.reason === 'string') {
+      console.warn('Product grouping validation failed:', error.response.data.reason)
+    }
     groupingError.value = true
     groupingTooLarge.value = error?.response?.status === 422
   } finally {

@@ -27,6 +27,13 @@ type AIProvider interface {
 	AnalyzeChatBatch(ctx context.Context, systemPrompt string, items []BatchItem) (AIResponse, error)
 }
 
+// JSONProvider is an optional capability for providers that can ask the model
+// to return a JSON object at the transport level. Callers must still validate
+// the returned object's application-specific schema.
+type JSONProvider interface {
+	AnalyzeJSON(ctx context.Context, systemPrompt string, input string) (AIResponse, error)
+}
+
 // CalculateCostUSD returns estimated cost in USD based on provider, model, and token counts.
 func CalculateCostUSD(provider, model string, inputTokens, outputTokens int) float64 {
 	var inputRate, outputRate float64 // per million tokens

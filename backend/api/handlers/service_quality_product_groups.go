@@ -249,9 +249,13 @@ func resolveProductGroups(ctx context.Context, tenantID string, names []string, 
 	}
 	aiCtx, cancel := context.WithTimeout(ctx, productGroupingAITimeout)
 	defer cancel()
+	analyze := provider.AnalyzeChat
+	if jsonProvider, ok := provider.(ai.JSONProvider); ok {
+		analyze = jsonProvider.AnalyzeJSON
+	}
 	var groups []serviceQualityProductGroup
 	for attempt := 0; attempt < 2; attempt++ {
-		response, err := provider.AnalyzeChat(aiCtx, prompt, string(input))
+		response, err := analyze(aiCtx, prompt, string(input))
 		if err != nil {
 			return nil, err
 		}
