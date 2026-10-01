@@ -84,10 +84,10 @@
                     <v-table density="compact" class="source-table">
                       <thead><tr><th>{{ t('pg_conversation') }}</th><th>{{ t('pg_keyword_evidence') }}</th><th>{{ t('pg_lead_assessment') }}</th><th>{{ t('pg_quality_assessment') }}</th></tr></thead>
                       <tbody><tr v-for="source in group.sources.slice((sourcePage - 1) * sourcePageSize, sourcePage * sourcePageSize)" :key="source.conversation_id">
-                        <td><router-link :to="{ path: `/${tenantId}/messages`, query: { conv: source.conversation_id, channel_id: source.channel_id } }" class="font-weight-medium">{{ source.customer_name || source.conversation_id }}</router-link><div class="text-caption text-medium-emphasis">{{ source.channel_name }}</div><div class="text-caption text-medium-emphasis">{{ formatDate(source.insight_at) }}</div><p v-if="source.summary" class="text-body-2 mt-2 detail-copy">{{ source.summary }}</p></td>
-                        <td><div v-for="(product, index) in source.matched_products" :key="index" class="mb-2"><div class="font-weight-medium">{{ product.name }}<span v-if="product.sku" class="text-caption text-medium-emphasis"> · {{ product.sku }}</span></div><blockquote v-if="product.evidence" class="evidence mt-1">{{ product.evidence }}</blockquote><span v-else class="text-caption text-medium-emphasis">{{ t('pg_no_evidence') }}</span></div></td>
-                        <td><v-chip :color="leadColor(source.lead_quality?.level)" size="x-small" variant="tonal">{{ leadLabel(source.lead_quality?.level) }}</v-chip><p class="text-body-2 mt-2 detail-copy">{{ source.lead_quality?.reason || t('pg_no_reason') }}</p><blockquote v-if="source.lead_quality?.evidence" class="evidence mt-2">{{ source.lead_quality.evidence }}</blockquote></td>
-                        <td><template v-if="source.quality_analysis"><v-chip :color="source.quality_analysis.verdict === 'PASS' ? 'success' : source.quality_analysis.verdict === 'FAIL' ? 'error' : 'grey'" variant="tonal" size="x-small">{{ verdictLabel(source.quality_analysis.verdict) }}</v-chip><span v-if="source.quality_analysis.score != null" class="text-caption ml-2">{{ source.quality_analysis.score }}/100</span><v-chip v-if="source.quality_analysis_stale" color="warning" variant="tonal" size="x-small" class="ml-1">{{ t('pg_stale_quality') }}</v-chip><div v-if="source.quality_analysis.job_name || source.quality_analysis.evaluated_at" class="text-caption text-medium-emphasis mt-2">{{ source.quality_analysis.job_name }} · {{ formatDate(source.quality_analysis.evaluated_at) }}</div><p class="text-body-2 mt-2 detail-copy">{{ source.quality_analysis.review || t('pg_no_review') }}</p><div v-for="(violation, index) in source.quality_analysis.violations || []" :key="index" class="mt-2 detail-copy text-body-2"><strong>{{ violation.rule_name }}</strong><span v-if="violation.severity" class="text-caption ml-1">({{ violation.severity }})</span><p v-if="violation.explanation">{{ violation.explanation }}</p><p v-if="violation.suggestion" class="mt-1">{{ t('pg_suggestion') }} {{ violation.suggestion }}</p><blockquote v-if="violation.evidence" class="evidence mt-1">{{ violation.evidence }}</blockquote></div></template><span v-else class="text-caption text-medium-emphasis">{{ t('pg_no_quality') }}</span></td>
+                        <td :data-label="t('pg_conversation')"><router-link :to="{ path: `/${tenantId}/messages`, query: { conv: source.conversation_id, channel_id: source.channel_id } }" class="font-weight-medium">{{ source.customer_name || source.conversation_id }}</router-link><div class="text-caption text-medium-emphasis">{{ source.channel_name }}</div><div class="text-caption text-medium-emphasis">{{ formatDate(source.insight_at) }}</div><p v-if="source.summary" class="text-body-2 mt-2 detail-copy">{{ source.summary }}</p></td>
+                        <td :data-label="t('pg_keyword_evidence')"><div v-for="(product, index) in source.matched_products" :key="index" class="mb-2"><div class="font-weight-medium">{{ product.name }}<span v-if="product.sku" class="text-caption text-medium-emphasis"> · {{ product.sku }}</span></div><blockquote v-if="product.evidence" class="evidence mt-1">{{ product.evidence }}</blockquote><span v-else class="text-caption text-medium-emphasis">{{ t('pg_no_evidence') }}</span></div></td>
+                        <td :data-label="t('pg_lead_assessment')"><v-chip :color="leadColor(source.lead_quality?.level)" size="x-small" variant="tonal">{{ leadLabel(source.lead_quality?.level) }}</v-chip><p class="text-body-2 mt-2 detail-copy">{{ source.lead_quality?.reason || t('pg_no_reason') }}</p><blockquote v-if="source.lead_quality?.evidence" class="evidence mt-2">{{ source.lead_quality.evidence }}</blockquote></td>
+                        <td :data-label="t('pg_quality_assessment')"><template v-if="source.quality_analysis"><v-chip :color="source.quality_analysis.verdict === 'PASS' ? 'success' : source.quality_analysis.verdict === 'FAIL' ? 'error' : 'grey'" variant="tonal" size="x-small">{{ verdictLabel(source.quality_analysis.verdict) }}</v-chip><span v-if="source.quality_analysis.score != null" class="text-caption ml-2">{{ source.quality_analysis.score }}/100</span><v-chip v-if="source.quality_analysis_stale" color="warning" variant="tonal" size="x-small" class="ml-1">{{ t('pg_stale_quality') }}</v-chip><div v-if="source.quality_analysis.job_name || source.quality_analysis.evaluated_at" class="text-caption text-medium-emphasis mt-2">{{ source.quality_analysis.job_name }} · {{ formatDate(source.quality_analysis.evaluated_at) }}</div><p class="text-body-2 mt-2 detail-copy">{{ source.quality_analysis.review || t('pg_no_review') }}</p><div v-for="(violation, index) in source.quality_analysis.violations || []" :key="index" class="mt-2 detail-copy text-body-2"><strong>{{ violation.rule_name }}</strong><span v-if="violation.severity" class="text-caption ml-1">({{ violation.severity }})</span><p v-if="violation.explanation">{{ violation.explanation }}</p><p v-if="violation.suggestion" class="mt-1">{{ t('pg_suggestion') }} {{ violation.suggestion }}</p><blockquote v-if="violation.evidence" class="evidence mt-1">{{ violation.evidence }}</blockquote></div></template><span v-else class="text-caption text-medium-emphasis">{{ t('pg_no_quality') }}</span></td>
                       </tr></tbody>
                     </v-table>
                     <v-pagination v-if="group.sources.length > sourcePageSize" v-model="sourcePage" :length="Math.ceil(group.sources.length / sourcePageSize)" :total-visible="5" density="compact" class="mt-3" />
@@ -292,6 +292,7 @@ onUnmounted(() => { disposed = true; requestSequence++; controller?.abort(); cle
 </script>
 
 <style scoped>
+.product-grouping-job { min-width: 0; max-width: 100%; }
 .job-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
 .job-header h1 { overflow-wrap: anywhere; }
 .min-width-0 { min-width: 0; }
@@ -305,12 +306,43 @@ onUnmounted(() => { disposed = true; requestSequence++; controller?.abort(); cle
 .product-table :deep(th), .history-table :deep(th) { white-space: nowrap; }
 .product-table :deep(td) { vertical-align: middle; }
 .product-table :deep(th:first-child) { min-width: 180px; }
-.source-row > td { background: rgb(var(--v-theme-on-surface), .025); }
-.source-panel { min-width: 820px; }
-.source-table :deep(th) { white-space: nowrap; }
-.source-table :deep(td) { vertical-align: top; padding-top: 12px; padding-bottom: 12px; width: 25%; }
-.detail-copy { white-space: pre-wrap; overflow-wrap: anywhere; }
-.evidence { border-left: 3px solid rgb(var(--v-theme-primary), .3); padding-left: 10px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: rgb(var(--v-theme-on-surface), .7); }
+/* Keep the expanded report inside the product table's available width. */
+.source-row > td { padding: 0 !important; background: rgb(var(--v-theme-on-surface), .025); }
+.source-panel { min-width: 0; padding: 20px !important; }
+.source-panel :deep(.v-chip) { max-width: 100%; height: auto; min-height: 26px; padding-top: 4px; padding-bottom: 4px; }
+.source-panel :deep(.v-chip__content) { white-space: normal; overflow-wrap: anywhere; }
+.source-table { border: 1px solid rgb(var(--v-theme-on-surface), .12); border-radius: 8px; }
+.source-table :deep(table) { width: 100%; table-layout: fixed; }
+.source-table :deep(th) { background: rgb(var(--v-theme-on-surface), .04); font-weight: 600; }
+.source-table :deep(th), .source-table :deep(td) { min-width: 0 !important; white-space: normal; overflow-wrap: anywhere; line-height: 1.55; }
+.source-table :deep(td) { vertical-align: top; padding: 16px; font-size: 13px; }
+.source-table :deep(th:nth-child(1)), .source-table :deep(td:nth-child(1)) { width: 22%; }
+.source-table :deep(th:nth-child(2)), .source-table :deep(td:nth-child(2)) { width: 24%; }
+.source-table :deep(th:nth-child(3)), .source-table :deep(td:nth-child(3)) { width: 22%; }
+.source-table :deep(th:nth-child(4)), .source-table :deep(td:nth-child(4)) { width: 32%; }
+.source-table :deep(a), .source-table :deep(a:visited) { color: rgb(var(--v-theme-primary)); text-decoration: none; }
+.source-table :deep(a:hover) { text-decoration: underline; }
+.source-table :deep(.text-caption) { line-height: 1.5; }
+.detail-copy { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px !important; line-height: 1.6; }
+.evidence { margin: 6px 0 0; border-left: 3px solid rgb(var(--v-theme-primary), .3); border-radius: 0 4px 4px 0; background: rgb(var(--v-theme-primary), .04); padding: 8px 10px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: rgb(var(--v-theme-on-surface), .75); }
+@media (max-width: 760px) {
+  .product-table :deep(.v-table__wrapper > table) { width: 100%; table-layout: fixed; }
+  .product-table > :deep(.v-table__wrapper > table), .product-table > :deep(.v-table__wrapper > table > tbody), .product-table > :deep(.v-table__wrapper > table > thead) { display: block; }
+  .product-table :deep(.product-row), .product-table > :deep(.v-table__wrapper > table > thead > tr) { display: grid; grid-template-columns: minmax(0, 1fr) 80px 100px; align-items: center; height: auto !important; }
+  .product-table :deep(.source-row), .product-table :deep(.source-row > td) { display: block; width: 100%; height: auto !important; }
+  .product-table :deep(.product-row > td) { min-width: 0; height: auto !important; padding: 8px; overflow-wrap: anywhere; }
+  .product-table > :deep(.v-table__wrapper > table > thead > tr > th) { min-width: 0; padding: 8px; font-size: 12px; white-space: normal; }
+  .product-table :deep(.product-row > td:nth-child(3)), .product-table :deep(.product-row > td:nth-child(4)),
+  .product-table > :deep(.v-table__wrapper > table > thead > tr > th:nth-child(3)), .product-table > :deep(.v-table__wrapper > table > thead > tr > th:nth-child(4)) { display: none; }
+  .source-panel { padding: 12px !important; }
+  .source-table :deep(table), .source-table :deep(tbody) { display: block; }
+  .source-table :deep(thead) { display: none; }
+  .source-table :deep(tr) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); height: auto !important; }
+  .source-table :deep(tr + tr) { border-top: 1px solid rgb(var(--v-theme-on-surface), .12); }
+  .source-table :deep(td:nth-child(n)) { display: block; width: auto; height: auto !important; padding: 12px; border-bottom: 0 !important; }
+  .source-table :deep(td)::before { content: attr(data-label); display: block; margin-bottom: 8px; font-size: 12px; font-weight: 600; color: rgb(var(--v-theme-on-surface), .65); }
+}
+@media (max-width: 480px) { .source-table :deep(tr) { grid-template-columns: minmax(0, 1fr); } }
 .error-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .empty-state { padding: 44px 16px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; text-align: center; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
