@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -251,6 +252,7 @@ func resolveProductGroups(ctx context.Context, tenantID string, names []string, 
 	aiCtx, cancel := context.WithTimeout(ctx, productGroupingAITimeout)
 	defer cancel()
 	analyze := provider.AnalyzeChat
+	usageLoggedByAnalyzer := false
 	if jsonProvider, ok := provider.(ai.JSONProvider); ok {
 		analyze = jsonProvider.AnalyzeJSON
 	}
@@ -259,6 +261,12 @@ func resolveProductGroups(ctx context.Context, tenantID string, names []string, 
 		analyze = func(ctx context.Context, prompt, input string) (ai.AIResponse, error) {
 			return schemaProvider.AnalyzeJSONSchema(ctx, prompt, input, schema)
 		}
+		if len(names) > 8 {
+			usageLoggedByAnalyzer = true
+			analyze = func(batchCtx context.Context, prompt, input string) (ai.AIResponse, error) {
+				return analyzeProductGroupingBatches(batchCtx, schemaProvider, prompt, input, func(response ai.AIResponse) { deps.logUsage(ctx, tenantID, response) })
+			}
+		}
 	}
 	var groups []serviceQualityProductGroup
 	for attempt := 0; attempt < 2; attempt++ {
@@ -266,7 +274,9 @@ func resolveProductGroups(ctx context.Context, tenantID string, names []string, 
 		if err != nil {
 			return nil, err
 		}
-		deps.logUsage(ctx, tenantID, response)
+		if !usageLoggedByAnalyzer {
+			deps.logUsage(ctx, tenantID, response)
+		}
 		groups, err = parseAndValidateProductGroups(response.Content, names)
 		if err == nil {
 			break
@@ -294,6 +304,88 @@ func resolveProductGroups(ctx context.Context, tenantID string, names []string, 
 		}
 	}
 	return groups, nil
+}
+
+// Small schemas keep every source/value association explicit for the AI.
+// Only transport results are joined here; AI decides all names and membership.
+func analyzeProductGroupingBatches(ctx context.Context, provider ai.JSONSchemaProvider, prompt, input string, logUsage func(ai.AIResponse)) (ai.AIResponse, error) {
+	var request map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(input), &request); err != nil {
+		return ai.AIResponse{}, err
+	}
+	var names []string
+	if err := json.Unmarshal(request["product_names"], &names); err != nil {
+		return ai.AIResponse{}, err
+	}
+	type batchResult struct {
+		assignments map[string]string
+		err         error
+	}
+	results := make([]batchResult, (len(names)+7)/8)
+	semaphore := make(chan struct{}, 3)
+	var wg sync.WaitGroup
+	for index := range results {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				results[index].err = ctx.Err()
+				return
+			}
+			end := min((index+1)*8, len(names))
+			batch := names[index*8 : end]
+			batchRequest := make(map[string]json.RawMessage, len(request))
+			for key, value := range request {
+				batchRequest[key] = value
+			}
+			batchRequest["product_names"], _ = json.Marshal(batch)
+			body, _ := json.Marshal(batchRequest)
+			response, err := provider.AnalyzeJSONSchema(ctx, prompt, string(body), productGroupingAssignmentSchema(batch))
+			if err != nil {
+				results[index].err = err
+				return
+			}
+			logUsage(response)
+			var parsed struct {
+				Assignments json.RawMessage `json:"assignments"`
+			}
+			if err := json.Unmarshal([]byte(response.Content), &parsed); err != nil {
+				results[index].err = fmt.Errorf("%w: invalid batch JSON: %v", errInvalidProductGrouping, err)
+				return
+			}
+			assignments, err := readProductGroupAssignments(parsed.Assignments)
+			if err != nil {
+				results[index].err = err
+				return
+			}
+			if len(assignments) != len(batch) {
+				results[index].err = fmt.Errorf("%w: batch does not contain exactly every original label", errInvalidProductGrouping)
+				return
+			}
+			for _, name := range batch {
+				if _, exists := assignments[name]; !exists {
+					results[index].err = fmt.Errorf("%w: batch contains unknown or missing original labels", errInvalidProductGrouping)
+					return
+				}
+			}
+			results[index].assignments = assignments
+		}(index)
+	}
+	wg.Wait()
+	assignments := make(map[string]string, len(names))
+	for _, result := range results {
+		if result.err != nil {
+			return ai.AIResponse{}, result.err
+		}
+		for name, canonical := range result.assignments {
+			assignments[name] = canonical
+		}
+	}
+	content, err := json.Marshal(map[string]interface{}{"assignments": assignments})
+	return ai.AIResponse{Content: string(content)}, err
 }
 
 func productGroupingInput(names []string) ([]byte, error) {
@@ -390,13 +482,13 @@ func canOmitProductLabel(label string) bool {
 	return true
 }
 
-func parseProductGroupAssignments(raw json.RawMessage, names []string) ([]serviceQualityProductGroup, error) {
+func readProductGroupAssignments(raw json.RawMessage) (map[string]string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {
 		return nil, fmt.Errorf("%w: assignments must be an object", errInvalidProductGrouping)
 	}
-	assignments := make(map[string]string, len(names))
+	assignments := make(map[string]string)
 	for decoder.More() {
 		token, err := decoder.Token()
 		id, ok := token.(string)
@@ -412,6 +504,14 @@ func parseProductGroupAssignments(raw json.RawMessage, names []string) ([]servic
 			return nil, fmt.Errorf("%w: assignment name must be a string", errInvalidProductGrouping)
 		}
 		assignments[id] = name
+	}
+	return assignments, nil
+}
+
+func parseProductGroupAssignments(raw json.RawMessage, names []string) ([]serviceQualityProductGroup, error) {
+	assignments, err := readProductGroupAssignments(raw)
+	if err != nil {
+		return nil, err
 	}
 	if len(assignments) != len(names) {
 		return nil, fmt.Errorf("%w: assignments must contain every input ID", errInvalidProductGrouping)

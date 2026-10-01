@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,6 +109,77 @@ func TestProductGroupingAssignmentsBindExactSourceNames(t *testing.T) {
 		if _, err := parseAndValidateProductGroups(content, []string{"EGO E-24", "Bulldog Beagle"}); !errors.Is(err, errInvalidProductGrouping) {
 			t.Fatalf("invalid exact source mapping accepted: %s err=%v", content, err)
 		}
+	}
+}
+
+type batchedProductGroupingProvider struct {
+	productGroupingMockProvider
+	mu      sync.Mutex
+	batches [][]string
+}
+
+func (p *batchedProductGroupingProvider) AnalyzeJSONSchema(_ context.Context, _, input string, schema map[string]interface{}) (ai.AIResponse, error) {
+	var request struct {
+		Names []string `json:"product_names"`
+	}
+	if err := json.Unmarshal([]byte(input), &request); err != nil {
+		return ai.AIResponse{}, err
+	}
+	required := schema["properties"].(map[string]interface{})["assignments"].(map[string]interface{})["required"]
+	if !reflect.DeepEqual(required, request.Names) {
+		return ai.AIResponse{}, errors.New("schema is not bound to batch labels")
+	}
+	p.mu.Lock()
+	p.batches = append(p.batches, request.Names)
+	p.mu.Unlock()
+	assignments := make(map[string]string)
+	for _, name := range request.Names {
+		assignments[name] = "E-24"
+	}
+	content, _ := json.Marshal(map[string]interface{}{"assignments": assignments})
+	return ai.AIResponse{Content: string(content), Provider: "openai", InputTokens: 10, OutputTokens: 5}, nil
+}
+
+func TestProductGroupingBatchesKeepEveryAIProductAndUsage(t *testing.T) {
+	names := make([]string, 19)
+	for i := range names {
+		names[i] = fmt.Sprintf("Mũ E-24 màu %d", i)
+	}
+	provider := &batchedProductGroupingProvider{}
+	var usages atomic.Int32
+	saves := 0
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, false, nil
+		},
+		saveCache: func(_ context.Context, _, _ string, groups []serviceQualityProductGroup) error {
+			saves++
+			if len(groups) != 1 || groups[0].Name != "E-24" || !reflect.DeepEqual(groups[0].Members, names) {
+				t.Fatalf("batch lost AI product assignments: %#v", groups)
+			}
+			return nil
+		},
+		aiClient: func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage: func(_ context.Context, _ string, response ai.AIResponse) {
+			if response.InputTokens != 10 || response.OutputTokens != 5 {
+				t.Error("synthetic or missing batch usage")
+			}
+			usages.Add(1)
+		},
+	}
+	_, err := resolveProductGroups(context.Background(), "tenant", names, deps)
+	if err != nil || len(provider.batches) != 3 || usages.Load() != 3 || saves != 1 {
+		t.Fatalf("batch pipeline err=%v batches=%d usages=%d saves=%d", err, len(provider.batches), usages.Load(), saves)
+	}
+	var actual []string
+	for _, batch := range provider.batches {
+		if len(batch) > 8 {
+			t.Fatal("oversized batch")
+		}
+		actual = append(actual, batch...)
+	}
+	if !sameProductNameSet(actual, names) {
+		t.Fatal("batch inputs missed or repeated source labels")
 	}
 }
 
