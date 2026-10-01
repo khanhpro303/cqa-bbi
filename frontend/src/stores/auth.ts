@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api from '../api'
+import axios from 'axios'
 
 interface User {
   id: string
@@ -60,6 +61,14 @@ export const useAuthStore = defineStore('auth', () => {
     await acceptLogin(data.access_token)
   }
 
+  async function completeFacebookRedirect() {
+    // The callback sets an HttpOnly refresh cookie; no Facebook token enters the browser app.
+    // Use axios directly so a rejected refresh cannot recurse through the API refresh interceptor.
+    const { data } = await axios.post('/api/v1/auth/refresh', {}, { withCredentials: true, timeout: 15000 })
+    if (typeof data.access_token !== 'string' || !data.access_token) throw new Error('invalid_login_response')
+    await acceptLogin(data.access_token)
+  }
+
   async function acceptLogin(token: string) {
     accessToken.value = token
     localStorage.setItem('cqa_access_token', token)
@@ -96,5 +105,5 @@ export const useAuthStore = defineStore('auth', () => {
     sessionStorage.setItem(skipFacebookAutoLoginKey, '1')
   }
 
-  return { user, accessToken, isAuthenticated, tenantPerms, canView, canEdit, fetchTenantPermissions, login, loginWithFacebook, register, fetchProfile, updateProfile, logout }
+  return { user, accessToken, isAuthenticated, tenantPerms, canView, canEdit, fetchTenantPermissions, login, loginWithFacebook, completeFacebookRedirect, register, fetchProfile, updateProfile, logout }
 })

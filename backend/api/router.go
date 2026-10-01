@@ -107,6 +107,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	api := r.Group("/api/v1")
 	facebookAuth := handlers.NewFacebookAuthHandler(cfg)
 	facebookAccountOAuth := handlers.NewFacebookAccountOAuthHandler(facebookAuth)
+	facebookLoginOAuth := handlers.NewFacebookLoginOAuthHandler(facebookAuth, facebookAccountOAuth)
 	facebookPageOAuth := handlers.NewFacebookPageOAuthHandler(cfg)
 	{
 		// Version check (public, no auth required)
@@ -125,6 +126,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		{
 			auth.POST("/login", handlers.Login)
 			auth.GET("/facebook/config", facebookAuth.PublicConfig)
+			auth.POST("/facebook/start", facebookLoginOAuth.Start)
 			auth.POST("/facebook", facebookAuth.Login)
 			auth.POST("/refresh", handlers.RefreshTokenHandler)
 			auth.POST("/logout", handlers.Logout)
@@ -137,7 +139,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// OAuth callbacks (public — platforms redirect here)
 	api.GET("/channels/zalo/callback", handlers.ZaloOAuthCallback)
-	api.GET("/channels/facebook/callback", handlers.FacebookOAuthCallbackDispatcher(facebookPageOAuth, facebookAccountOAuth))
+	api.GET("/channels/facebook/callback", handlers.FacebookOAuthCallbackDispatcher(facebookPageOAuth, facebookAccountOAuth, facebookLoginOAuth))
 
 	internal := r.Group("/api/internal")
 	internal.Use(middleware.InternalHMACAuth(

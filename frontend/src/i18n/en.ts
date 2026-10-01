@@ -46,6 +46,8 @@ export default {
   or: 'or',
   continue_with_facebook: 'Continue with Facebook',
   facebook_login_failed: 'Unable to sign in with Facebook. Please try again.',
+  facebook_signin_session_expired: 'The Facebook sign-in session has expired or is invalid. Select Continue with Facebook to start again.',
+  facebook_signin_cancelled: 'Facebook sign-in was cancelled. You can try again.',
   facebook_login_waiting: 'Waiting for Facebook to open or confirm sign-in…',
   facebook_login_timeout: 'Facebook did not respond. Check that the sign-in window is not blocked, then try again.',
   facebook_login_not_configured: 'Facebook sign-in is not configured. Contact your system administrator.',

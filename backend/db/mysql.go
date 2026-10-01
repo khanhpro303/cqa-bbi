@@ -51,6 +51,7 @@ func AutoMigrate() error {
 		&models.User{},
 		&models.FacebookIdentity{},
 		&models.FacebookAccountOAuthSession{},
+		&models.FacebookLoginOAuthSession{},
 		&models.FacebookOAuthSession{},
 		&models.Tenant{},
 		&models.UserTenant{},

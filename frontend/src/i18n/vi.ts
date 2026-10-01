@@ -46,6 +46,8 @@ export default {
   or: 'hoặc',
   continue_with_facebook: 'Tiếp tục với Facebook',
   facebook_login_failed: 'Không thể đăng nhập bằng Facebook. Vui lòng thử lại.',
+  facebook_signin_session_expired: 'Phiên đăng nhập Facebook đã hết hạn hoặc không hợp lệ. Vui lòng bấm Tiếp tục với Facebook để bắt đầu lại.',
+  facebook_signin_cancelled: 'Bạn đã hủy đăng nhập Facebook. Có thể thử lại.',
   facebook_login_waiting: 'Đang chờ Facebook mở hoặc xác nhận đăng nhập…',
   facebook_login_timeout: 'Facebook không phản hồi. Hãy kiểm tra cửa sổ đăng nhập không bị chặn rồi thử lại.',
   facebook_login_not_configured: 'Đăng nhập Facebook chưa được cấu hình. Hãy liên hệ quản trị viên hệ thống.',

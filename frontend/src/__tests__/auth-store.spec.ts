@@ -7,9 +7,11 @@ import { useAuthStore } from '../stores/auth'
 const apiMock = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  refresh: vi.fn(),
 }))
 
 vi.mock('../api', () => ({ default: apiMock }))
+vi.mock('axios', () => ({ default: { post: apiMock.refresh } }))
 
 describe('auth store login methods', () => {
   beforeEach(() => {
@@ -18,6 +20,7 @@ describe('auth store login methods', () => {
     vi.stubGlobal('sessionStorage', createMemoryStorage())
     apiMock.get.mockReset()
     apiMock.post.mockReset()
+    apiMock.refresh.mockReset()
     apiMock.get.mockResolvedValue({
       data: { id: 'user-1', email: 'user@example.com', name: 'User', is_admin: false, language: 'vi' },
     })
@@ -61,6 +64,31 @@ describe('auth store login methods', () => {
     await auth.logout()
 
     expect(sessionStorage.getItem('cqa_skip_facebook_auto_login')).toBe('1')
+  })
+  it('accepts server OAuth using only the HttpOnly refresh cookie then loads the profile', async () => {
+    apiMock.refresh.mockResolvedValue({ data: { access_token: 'redirect-jwt' } })
+    const auth = useAuthStore()
+    await auth.completeFacebookRedirect()
+    expect(apiMock.refresh).toHaveBeenCalledWith('/api/v1/auth/refresh', {}, { withCredentials: true, timeout: 15000 })
+    expect(apiMock.post).not.toHaveBeenCalled()
+    expect(localStorage.getItem('cqa_access_token')).toBe('redirect-jwt')
+    expect(auth.user?.id).toBe('user-1')
+  })
+
+  it.each([{}, { access_token: '' }, { access_token: 123 }])('rejects malformed OAuth completion without installing a session: %j', async (data) => {
+    apiMock.refresh.mockResolvedValue({ data })
+    const auth = useAuthStore()
+    await expect(auth.completeFacebookRedirect()).rejects.toThrow('invalid_login_response')
+    expect(auth.isAuthenticated).toBe(false)
+    expect(apiMock.get).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a rejected OAuth refresh through the API interceptor', async () => {
+    apiMock.refresh.mockRejectedValue({ response: { status: 401 } })
+    const auth = useAuthStore()
+    await expect(auth.completeFacebookRedirect()).rejects.toEqual({ response: { status: 401 } })
+    expect(apiMock.refresh).toHaveBeenCalledOnce()
+    expect(auth.isAuthenticated).toBe(false)
   })
 })
 
