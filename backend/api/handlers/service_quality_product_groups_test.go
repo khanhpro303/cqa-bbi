@@ -147,6 +147,55 @@ func (p *batchedProductGroupingProvider) AnalyzeJSONSchema(_ context.Context, _,
 	return ai.AIResponse{Content: string(content), Provider: "openai", InputTokens: 10, OutputTokens: 5}, nil
 }
 
+type inconsistentCanonicalBatchedProvider struct {
+	productGroupingMockProvider
+	calls atomic.Int32
+}
+
+func (p *inconsistentCanonicalBatchedProvider) AnalyzeJSONSchema(_ context.Context, _, input string, _ map[string]interface{}) (ai.AIResponse, error) {
+	var request struct {
+		Names []string `json:"product_names"`
+	}
+	if err := json.Unmarshal([]byte(input), &request); err != nil {
+		return ai.AIResponse{}, err
+	}
+	p.calls.Add(1)
+	assignments := make(map[string]string, len(request.Names))
+	for _, name := range request.Names {
+		canonical := "E-24"
+		if strings.Contains(name, "E24") {
+			canonical = "E24"
+		}
+		assignments[name] = canonical
+	}
+	content, _ := json.Marshal(map[string]interface{}{"assignments": assignments})
+	return ai.AIResponse{Content: string(content), Provider: "openai"}, nil
+}
+
+func TestProductGroupingBatchesMergeEquivalentCanonicalSpellings(t *testing.T) {
+	names := make([]string, 0, 9)
+	for i := 0; i < 8; i++ {
+		names = append(names, fmt.Sprintf("Mũ E-24 màu %d", i))
+	}
+	names = append(names, "Mũ E24 màu 8")
+	provider := &inconsistentCanonicalBatchedProvider{}
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, false, nil
+		},
+		saveCache: func(context.Context, string, string, []serviceQualityProductGroup) error { return nil },
+		aiClient:  func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage:  func(context.Context, string, ai.AIResponse) {},
+	}
+	groups, err := resolveProductGroups(context.Background(), "tenant", names, deps)
+	if err != nil || len(groups) != 1 || groups[0].Name != "E-24" || !reflect.DeepEqual(groups[0].Members, names) {
+		t.Fatalf("equivalent canonical spellings were not merged: groups=%#v err=%v", groups, err)
+	}
+	if provider.calls.Load() != 2 {
+		t.Fatalf("globally equivalent batches triggered a full retry: calls=%d", provider.calls.Load())
+	}
+}
+
 func TestProductGroupingBatchesKeepEveryAIProductAndUsage(t *testing.T) {
 	names := make([]string, 19)
 	for i := range names {

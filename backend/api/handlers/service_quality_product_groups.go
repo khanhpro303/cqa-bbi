@@ -404,11 +404,21 @@ func analyzeProductGroupingBatches(ctx context.Context, provider ai.JSONSchemaPr
 	}
 	wg.Wait()
 	assignments := make(map[string]string, len(names))
+	canonicalNames := make(map[string]string, len(names))
 	for _, result := range results {
 		if result.err != nil {
 			return ai.AIResponse{}, result.err
 		}
 		for name, canonical := range result.assignments {
+			// Each batch is valid on its own, but independent batches may format
+			// the same model differently (for example E-24 and E24). Keep the
+			// first AI spelling so the combined response remains one group.
+			identity := productMappingIdentity(canonical)
+			if first, exists := canonicalNames[identity]; identity != "" && exists {
+				canonical = first
+			} else if identity != "" {
+				canonicalNames[identity] = canonical
+			}
 			assignments[name] = canonical
 		}
 	}
