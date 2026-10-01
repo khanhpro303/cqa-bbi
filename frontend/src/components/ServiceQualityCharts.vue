@@ -43,8 +43,8 @@
         <div v-if="grouping || refreshingReport" class="chart-empty product-empty text-medium-emphasis" role="status"><v-progress-circular indeterminate size="30" /><span>{{ t(refreshingReport ? 'sq_chart_refreshing_report' : 'sq_chart_ai_grouping') }}</span></div>
         <div v-else-if="groupingError" class="chart-empty product-empty text-error" role="alert"><span>{{ t(groupingTooLarge ? 'sq_chart_ai_too_large' : 'sq_chart_ai_error') }}</span><v-btn v-if="!groupingTooLarge" variant="text" size="small" @click="loadGroups">{{ t('sq_retry') }}</v-btn></div>
         <div v-else-if="tiles.length" class="product-treemap" role="list" :aria-label="t('sq_chart_products')">
-          <div v-for="(tile, index) in tiles" :key="tile.key" class="treemap-tile" role="listitem" tabindex="0" :title="t('sq_chart_product_count', { product: tile.label, count: tile.count })" :aria-label="t('sq_chart_product_count', { product: tile.label, count: tile.count })" :style="{ left: `${tile.x}%`, top: `${tile.y}%`, width: `${tile.width}%`, height: `${tile.height}%`, background: tileColors[index % tileColors.length] }">
-            <strong>{{ tile.label }}</strong><span>{{ tile.count }}</span>
+          <div v-for="(tile, index) in tiles" :key="tile.key" class="treemap-tile" role="listitem" tabindex="0" :title="t('sq_chart_product_count', { product: tile.label, count: tile.count })" :aria-label="t('sq_chart_product_count', { product: tile.label, count: tile.count })" :style="{ left: `${tile.x}%`, top: `${tile.y}%`, width: `${tile.width}%`, height: `${tile.height}%`, background: tileColors[index % tileColors.length], fontSize: `${tileFontSize(tile)}px` }">
+            <strong v-if="tileShowsLabel(tile)" :style="{ fontSize: `${tileFontSize(tile) * 0.85}px` }">{{ tile.label }}</strong><span>{{ tile.count }}</span>
           </div>
         </div>
         <div v-else class="chart-empty product-empty text-medium-emphasis"><v-icon size="36">mdi-package-variant-closed</v-icon><span>{{ t('sq_chart_products_empty') }}</span></div>
@@ -92,6 +92,16 @@ let requestSequence = 0
 const sourceNames = computed(() => collectProductNames(props.rows, props.from, props.to))
 const groupingSignature = computed(() => JSON.stringify([props.tenantId, props.scope, sourceNames.value, !!props.productGroupingEnabled, props.productGroupingVersion]))
 const tiles = computed(() => layoutTreemap(aggregateProductDemand(props.rows, props.from, props.to, filter.value, groups.value).slice(0, 20)))
+
+/** Dynamic font size per tile so product names fit inside small cells. */
+function tileFontSize(tile: { width: number; height: number }): number {
+  const size = Math.min(tile.width * 1.1, tile.height * 1.6)
+  return Math.max(7, Math.min(13, size))
+}
+/** Whether the tile is large enough to display the product name legibly. */
+function tileShowsLabel(tile: { width: number; height: number }): boolean {
+  return tile.width >= 10 && tile.height >= 12
+}
 
 async function loadGroups() {
   controller?.abort()
@@ -168,8 +178,9 @@ const pieDescription = computed(() => pieSegments.value.map(segment => segment.d
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
 .potential-filter { max-width: 270px; margin-bottom: 12px; }
 .product-treemap { position: relative; height: calc(100% - 56px); min-height: 100px; }
-.treemap-tile { position: absolute; border: 2px solid rgb(var(--v-theme-surface)); border-radius: 6px; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; padding: 4px; font-size: 12px; }
-.treemap-tile strong { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.treemap-tile { position: absolute; border: 2px solid rgb(var(--v-theme-surface)); border-radius: 6px; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; padding: 2px; gap: 0; line-height: 1.2; text-align: center; }
+.treemap-tile strong { max-width: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; line-height: 1.15; }
+.treemap-tile span { font-weight: 700; }
 .treemap-tile:focus { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: -2px; }
 .chart-note { margin: 0; padding: 12px 16px; line-height: 1.4; font-size: 12px; }
 .chart-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; height: 100%; }
