@@ -3,8 +3,8 @@
     <div class="d-flex align-center justify-space-between flex-wrap ga-3 mb-6">
       <h1 class="text-h5 font-weight-bold">{{ $t('jobs') }}</h1>
       <div class="d-flex ga-2 flex-wrap justify-end">
-      <v-btn v-if="isAdmin && !hasProductGrouping && !loadingJobs" class="grouping-create-button" variant="outlined" color="primary" :loading="creatingGrouping" @click="addProductGrouping">{{ $t('sq_add_product_grouping') }}</v-btn>
-      <v-btn v-if="authStore.canEdit('jobs')" color="primary" prepend-icon="mdi-plus" :to="`/${tenantId}/jobs/create`">
+      <v-btn v-if="isAdmin && !hasProductGrouping && !loadingJobs" class="job-action-button" variant="outlined" color="primary" :loading="creatingGrouping" @click="addProductGrouping">{{ $t('sq_add_product_grouping') }}</v-btn>
+      <v-btn v-if="authStore.canEdit('jobs')" class="job-action-button" color="primary" prepend-icon="mdi-plus" :to="`/${tenantId}/jobs/create`">
         {{ $t('create_job') }}
       </v-btn>
       </div>
@@ -113,6 +113,5 @@ async function remove(job: Job) {
 </script>
 
 <style scoped>
-.grouping-create-button { max-width: 100%; height: auto; min-height: 36px; padding-top: 8px; padding-bottom: 8px; }
-.grouping-create-button :deep(.v-btn__content) { white-space: normal; }
+.job-action-button { height: 48px; }
 </style>
