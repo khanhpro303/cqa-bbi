@@ -152,6 +152,26 @@ type inconsistentCanonicalBatchedProvider struct {
 	calls atomic.Int32
 }
 
+func TestProductGroupingBatchReconcilesEquivalentCanonicalSpellings(t *testing.T) {
+	names := []string{"EGO E-42", "ego e42", "mũ E-42"}
+	content := `{"assignments":{"EGO E-42":"E42","ego e42":"e42","mũ E-42":"E-42"}}`
+	groups, err := parseAndValidateProductGroupingBatch(content, names)
+	if err != nil || len(groups) != 1 || groups[0].Name != "E42" || !reflect.DeepEqual(groups[0].Members, names) {
+		t.Fatalf("valid batch failed with production duplicate canonical error: groups=%#v err=%v", groups, err)
+	}
+	for _, invalid := range []string{
+		`{"assignments":{"EGO E-42":"E42","ego e42":"E51","mũ E-42":"E-42"}}`,
+		`{"assignments":{"EGO E-42":"E42","ego e42":"","mũ E-42":"E-42"}}`,
+		`{"assignments":{"EGO E-42":"E42","ego e42":"E42"}}`,
+		`{"assignments":{"EGO E-42":"E42","ego e42":"E42","ego e42":"E42","mũ E-42":"E-42"}}`,
+		`{"assignments":{"EGO E-42":"E42","ego e42":"E42","unknown":"E-42"}}`,
+	} {
+		if _, err := parseAndValidateProductGroupingBatch(invalid, names); !errors.Is(err, errInvalidProductGrouping) {
+			t.Fatalf("invalid batch accepted after spelling reconciliation: content=%s err=%v", invalid, err)
+		}
+	}
+}
+
 func (p *inconsistentCanonicalBatchedProvider) AnalyzeJSONSchema(_ context.Context, _, input string, _ map[string]interface{}) (ai.AIResponse, error) {
 	var request struct {
 		Names []string `json:"product_names"`

@@ -449,7 +449,25 @@ func parseAndValidateProductGroupingBatch(content string, names []string) ([]ser
 			return nil, fmt.Errorf("%w: batch contains unknown or missing original labels", errInvalidProductGrouping)
 		}
 	}
-	return parseAndValidateProductGroups(content, names)
+	// A schema guarantees source keys, not consistent model spelling. Reconcile
+	// equivalent AI values inside the batch before the strict semantic check.
+	// Iterate source order so the chosen display spelling is deterministic.
+	canonicalNames := make(map[string]string, len(names))
+	for _, name := range names {
+		canonical := strings.TrimSpace(assignments[name])
+		identity := productMappingIdentity(canonical)
+		if first, exists := canonicalNames[identity]; identity != "" && exists {
+			canonical = first
+		} else if identity != "" {
+			canonicalNames[identity] = canonical
+		}
+		assignments[name] = canonical
+	}
+	raw, err := json.Marshal(assignments)
+	if err != nil {
+		return nil, err
+	}
+	return parseProductGroupAssignments(raw, names)
 }
 
 func productGroupingInput(names []string) ([]byte, error) {
