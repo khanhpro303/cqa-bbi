@@ -341,6 +341,27 @@ func TestProductGroupingCannotSilentlyDiscardNamedProducts(t *testing.T) {
 	}
 }
 
+func TestProductGroupingRejectsSemanticMappingErrors(t *testing.T) {
+	for _, test := range []struct {
+		names    []string
+		response string
+	}{
+		{[]string{"LS2 OF618 Verso II"}, `{"assignments":{"1":"FF618VersoII"}}`},
+		{[]string{"nón LS2 OF597"}, `{"assignments":{"1":"LS2OF597"}}`},
+		{[]string{"mũ EGO E-24"}, `{"assignments":{"1":"EGO"}}`},
+		{[]string{"xịt trượt nước cho nón bảo hiểm"}, `{"assignments":{"1":"bảo hiểm"}}`},
+		{[]string{"E-24", "Mũ E-24"}, `{"assignments":{"1":"E-24","2":"E24"}}`},
+	} {
+		if _, err := parseAndValidateProductGroups(test.response, test.names); !errors.Is(err, errInvalidProductGrouping) {
+			t.Fatalf("invalid model mapping accepted: %s err=%v", test.response, err)
+		}
+	}
+	groups, err := parseAndValidateProductGroups(`{"assignments":{"1":"OF618VersoII","2":"OF597","3":"E-24","4":"FF818","5":"Corgi"}}`, []string{"mũ bảo hiểm 3/4 LS2 OF618 Verso II", "nón LS2 OF597", "mũ EGO E-24", "LS2 FF 818", "Bulldog Corgi"})
+	if err != nil || len(groups) != 5 {
+		t.Fatalf("valid AI model/code normalization rejected: %v", err)
+	}
+}
+
 func TestProductGroupingRepairsDiscardedProductsAndRejectsTheirCache(t *testing.T) {
 	names := []string{"mũ bảo hiểm nửa đầu EGO E-24", "EGO E-24", "LS2"}
 	provider := &repairingProductGroupingProvider{responses: []string{

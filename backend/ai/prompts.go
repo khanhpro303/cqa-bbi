@@ -8,7 +8,7 @@ import (
 
 const MessengerInsightsPromptSettingKey = "ai_engine_system_prompt_messenger_insights"
 
-const MessengerProductGroupingPromptVersion = "2026-10-01-v4"
+const MessengerProductGroupingPromptVersion = "2026-10-01-v5"
 
 const MessengerProductGroupingPrompt = `Bạn là tác vụ chuẩn hóa và gom nhóm tên sản phẩm từ dữ liệu Messenger Insights.
 

@@ -457,8 +457,25 @@ func validateProductGroups(names []string, groups []serviceQualityProductGroup) 
 		allowed[name] = true
 	}
 	seen := make(map[string]bool, len(names))
+	canonicalGroups := make(map[string]bool)
+	var semanticErrors []string
 	for i := range groups {
 		groups[i].Name = strings.TrimSpace(groups[i].Name)
+		canonical := productMappingIdentity(groups[i].Name)
+		if canonical != "" {
+			if canonicalGroups[canonical] {
+				semanticErrors = append(semanticErrors, fmt.Sprintf("merge duplicate canonical model %q into one group", groups[i].Name))
+			}
+			canonicalGroups[canonical] = true
+			if canOmitProductLabel(groups[i].Name) {
+				semanticErrors = append(semanticErrors, fmt.Sprintf("%q is a brand/generic description, not a canonical model", groups[i].Name))
+			}
+			for _, brand := range []string{"ego", "ls2", "bulldog", "yohe", "zeus"} {
+				if strings.Contains(canonical, brand) {
+					semanticErrors = append(semanticErrors, fmt.Sprintf("remove brand %q from canonical name %q", brand, groups[i].Name))
+				}
+			}
+		}
 		if len(groups[i].Members) == 0 {
 			return nil, fmt.Errorf("%w: group %d has no original labels in members", errInvalidProductGrouping, i+1)
 		}
@@ -470,7 +487,10 @@ func validateProductGroups(names []string, groups []serviceQualityProductGroup) 
 				return nil, fmt.Errorf("%w: group %d repeats an original label already assigned", errInvalidProductGrouping, i+1)
 			}
 			if groups[i].Name == "" && !canOmitProductLabel(member) {
-				return nil, fmt.Errorf("%w: group %d discards a named product; return its canonical model instead of an empty name", errInvalidProductGrouping, i+1)
+				semanticErrors = append(semanticErrors, fmt.Sprintf("do not discard %q; return its canonical model instead of an empty name", member))
+			}
+			if canonical != "" && !strings.Contains(productMappingIdentity(member), canonical) {
+				semanticErrors = append(semanticErrors, fmt.Sprintf("canonical %q does not occur in original %q; preserve its actual model/code", groups[i].Name, member))
 			}
 			seen[member] = true
 		}
@@ -478,7 +498,15 @@ func validateProductGroups(names []string, groups []serviceQualityProductGroup) 
 	if len(seen) != len(allowed) {
 		return nil, fmt.Errorf("%w: %d original labels are missing from members", errInvalidProductGrouping, len(allowed)-len(seen))
 	}
+	if len(semanticErrors) > 0 {
+		return nil, fmt.Errorf("%w: %s", errInvalidProductGrouping, strings.Join(semanticErrors, "; "))
+	}
 	return groups, nil
+}
+
+// Comparison only: AI still supplies every canonical name and group membership.
+func productMappingIdentity(label string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(label, "-", "")), ""))
 }
 
 func productGroupingInputHash(names []string, prompts ...string) string {
