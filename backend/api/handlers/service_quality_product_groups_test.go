@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -72,6 +73,9 @@ func TestResolveProductGroupsUsesRequiredAssignmentsSchema(t *testing.T) {
 		t.Fatalf("schema does not require exactly each ID: %#v", assignments)
 	}
 	properties := assignments["properties"].(map[string]interface{})
+	if !reflect.DeepEqual(properties["LS2"].(map[string]interface{})["enum"], []string{""}) {
+		t.Fatal("brand-only label must be omitted by the native schema")
+	}
 	if properties["Mũ E-24"].(map[string]interface{})["minLength"] != 1 || properties["E-24"].(map[string]interface{})["minLength"] != 1 || properties["LS2"].(map[string]interface{})["minLength"] != nil {
 		t.Fatalf("schema permits discarding models or prohibits brand-only omission: %#v", properties)
 	}
@@ -449,6 +453,32 @@ func TestProductGroupingRejectsSemanticMappingErrors(t *testing.T) {
 	groups, err := parseAndValidateProductGroups(`{"assignments":{"1":"OF618VersoII","2":"OF597","3":"E-24","4":"FF818","5":"Corgi"}}`, []string{"mũ bảo hiểm 3/4 LS2 OF618 Verso II", "nón LS2 OF597", "mũ EGO E-24", "LS2 FF 818", "Bulldog Corgi"})
 	if err != nil || len(groups) != 5 {
 		t.Fatalf("valid AI model/code normalization rejected: %v", err)
+	}
+}
+
+func TestProductGroupingAllowsRemovingBrandsInsideProductNames(t *testing.T) {
+	names := []string{"áo mưa LS2 AQUA", "kính LS2 OF603", "3/4"}
+	groups, err := parseAndValidateProductGroups(`{"assignments":{"áo mưa LS2 AQUA":"áo mưa AQUA","kính LS2 OF603":"kính OF603","3/4":""}}`, names)
+	if err != nil || len(groups) != 3 || groups[0].Name != "áo mưa AQUA" {
+		t.Fatalf("AI-selected names with an internal brand removed were rejected: groups=%#v err=%v", groups, err)
+	}
+	properties := productGroupingAssignmentSchema(names)["properties"].(map[string]interface{})["assignments"].(map[string]interface{})["properties"].(map[string]interface{})
+	if !reflect.DeepEqual(properties["3/4"].(map[string]interface{})["enum"], []string{""}) {
+		t.Fatal("generic helmet category can still become a chart product")
+	}
+	pattern := regexp.MustCompile(properties[names[0]].(map[string]interface{})["pattern"].(string))
+	for _, invalid := range []string{".", "---", "   "} {
+		if pattern.MatchString(invalid) {
+			t.Fatalf("named product schema permits punctuation-only assignment %q", invalid)
+		}
+	}
+	for _, valid := range []string{"E-24", "áo mưa AQUA", "kính", "24"} {
+		if !pattern.MatchString(valid) {
+			t.Fatalf("named product schema rejects a real product %q", valid)
+		}
+	}
+	if _, err := parseAndValidateProductGroups(`{"assignments":{"1":"áo mưa AQUA","2":"kính FF603","3":""}}`, names); !errors.Is(err, errInvalidProductGrouping) {
+		t.Fatal("removing a brand also permitted a changed product code")
 	}
 }
 

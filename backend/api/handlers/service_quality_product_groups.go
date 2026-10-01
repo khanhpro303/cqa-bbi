@@ -461,6 +461,9 @@ func productGroupingAssignmentSchema(names []string) map[string]interface{} {
 		property := map[string]interface{}{"type": "string", "description": "Tên chuẩn của đúng nhãn gốc: " + names[i]}
 		if !canOmitProductLabel(names[i]) {
 			property["minLength"] = 1
+			property["pattern"] = "[A-Za-z0-9À-ỹ]"
+		} else {
+			property["enum"] = []string{""}
 		}
 		properties[id] = property
 		required[i] = id
@@ -582,7 +585,7 @@ func validateProductGroups(names []string, groups []serviceQualityProductGroup) 
 			if groups[i].Name == "" && !canOmitProductLabel(member) {
 				semanticErrors = append(semanticErrors, fmt.Sprintf("do not discard %q; return its canonical model instead of an empty name", member))
 			}
-			if canonical != "" && !strings.Contains(productMappingIdentity(member), canonical) {
+			if canonical != "" && !strings.Contains(productSourceIdentity(member), canonical) {
 				semanticErrors = append(semanticErrors, fmt.Sprintf("canonical %q does not occur in original %q; preserve its actual model/code", groups[i].Name, member))
 			}
 			seen[member] = true
@@ -600,6 +603,21 @@ func validateProductGroups(names []string, groups []serviceQualityProductGroup) 
 // Comparison only: AI still supplies every canonical name and group membership.
 func productMappingIdentity(label string) string {
 	return strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(label, "-", "")), ""))
+}
+
+// Compare against the source with removable brand words stripped. This does not
+// choose a model or membership; those still come from the AI assignment.
+func productSourceIdentity(label string) string {
+	words := strings.Fields(strings.ToLower(label))
+	kept := make([]string, 0, len(words))
+	for _, word := range words {
+		switch word {
+		case "ego", "ls2", "bulldog", "yohe", "zeus":
+			continue
+		}
+		kept = append(kept, word)
+	}
+	return productMappingIdentity(strings.Join(kept, " "))
 }
 
 func productGroupingInputHash(names []string, prompts ...string) string {
