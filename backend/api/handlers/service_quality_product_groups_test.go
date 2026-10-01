@@ -236,6 +236,95 @@ func TestProductGroupingAllowsBrandOnlyLabelWithEmptyCanonicalName(t *testing.T)
 	}
 }
 
+type repairingProductGroupingProvider struct {
+	productGroupingMockProvider
+	inputs    []string
+	responses []string
+}
+
+func (p *repairingProductGroupingProvider) AnalyzeChat(ctx context.Context, prompt, input string) (ai.AIResponse, error) {
+	p.inputs = append(p.inputs, input)
+	if len(p.inputs) > len(p.responses) {
+		return ai.AIResponse{}, errors.New("unexpected extra AI repair attempt")
+	}
+	p.prompt = prompt
+	return ai.AIResponse{Content: p.responses[len(p.inputs)-1], Provider: "openai", InputTokens: 50, OutputTokens: 30}, nil
+}
+
+func TestResolveProductGroupsRepairsInvalidMappingWithAI(t *testing.T) {
+	names := []string{"LS2 FF 818", "Mũ E-24", "E-24", "LS2"}
+	valid := `{"groups":[{"name":"FF818","members":["LS2 FF 818"]},{"name":"E-24","members":["Mũ E-24","E-24"]},{"name":"","members":["LS2"]}]}`
+	for name, invalid := range map[string]string{
+		"missing brand-only label": `{"groups":[{"name":"FF818","members":["LS2 FF 818"]},{"name":"E-24","members":["Mũ E-24","E-24"]}]}`,
+		"rewritten original label": `{"groups":[{"name":"FF818","members":["LS2 FF818"]},{"name":"E-24","members":["Mũ E-24","E-24"]},{"name":"","members":["LS2"]}]}`,
+		"invalid JSON":             `{"groups":[`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			provider := &repairingProductGroupingProvider{responses: []string{invalid, valid}}
+			starts, finishes, usages, saves := 0, 0, 0, 0
+			deps := productGroupingDependencies{
+				prompt: "Prompt do admin chỉnh sửa",
+				loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+					return nil, false, nil
+				},
+				saveCache: func(_ context.Context, _, _ string, groups []serviceQualityProductGroup) error {
+					saves++
+					if _, err := validateProductGroups(names, groups); err != nil {
+						t.Fatal("cached incomplete mapping", err)
+					}
+					return nil
+				},
+				aiClient: func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+				startRun: func(context.Context) error { starts++; return nil },
+				finishRun: func(err error) {
+					finishes++
+					if err != nil {
+						t.Fatal(err)
+					}
+				},
+				logUsage: func(context.Context, string, ai.AIResponse) { usages++ },
+			}
+			groups, err := resolveProductGroups(context.Background(), "tenant", names, deps)
+			if err != nil || len(groups) != 3 || len(provider.inputs) != 2 || saves != 1 || usages != 2 || starts != 1 || finishes != 1 {
+				t.Fatalf("AI repair did not complete one run: groups=%v err=%v calls=%d saves=%d usage=%d starts=%d finishes=%d", groups, err, len(provider.inputs), saves, usages, starts, finishes)
+			}
+			var correction struct {
+				Names      []string `json:"product_names"`
+				Previous   string   `json:"previous_response"`
+				Correction string   `json:"correction"`
+			}
+			if json.Unmarshal([]byte(provider.inputs[1]), &correction) != nil || !reflect.DeepEqual(correction.Names, names) || correction.Previous != invalid || !strings.Contains(correction.Correction, "members") || provider.prompt != deps.prompt {
+				t.Fatal("repair did not use exact original labels, previous response and configured system prompt")
+			}
+		})
+	}
+}
+
+func TestResolveProductGroupsBoundsInvalidAIRepairWithoutCaching(t *testing.T) {
+	provider := &repairingProductGroupingProvider{responses: []string{`{"groups":[]}`, `{"groups":[]}`}}
+	usages, finishes := 0, 0
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, false, nil
+		},
+		saveCache: func(context.Context, string, string, []serviceQualityProductGroup) error {
+			t.Fatal("cached invalid result")
+			return nil
+		},
+		aiClient: func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage: func(context.Context, string, ai.AIResponse) { usages++ },
+		finishRun: func(err error) {
+			finishes++
+			if !errors.Is(err, errInvalidProductGrouping) {
+				t.Fatal("lost validation error", err)
+			}
+		},
+	}
+	if _, err := resolveProductGroups(context.Background(), "tenant", []string{"E-24"}, deps); !errors.Is(err, errInvalidProductGrouping) || len(provider.inputs) != 2 || usages != 2 || finishes != 1 {
+		t.Fatalf("invalid repair not bounded: err=%v calls=%d usage=%d finish=%d", err, len(provider.inputs), usages, finishes)
+	}
+}
+
 func TestResolveProductGroupsRejectsOversizedInputsWithoutCallingAI(t *testing.T) {
 	provider := &productGroupingMockProvider{}
 	deps := productGroupingDependencies{
