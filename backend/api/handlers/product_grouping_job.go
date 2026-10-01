@@ -26,7 +26,7 @@ func isProductGroupingAdmin(c *gin.Context) bool {
 }
 
 func productGroupingPrompt(job models.Job) string {
-	if strings.TrimSpace(job.RulesContent) != "" {
+	if strings.TrimSpace(job.RulesContent) != "" && job.RulesContent != ai.LegacyMessengerProductGroupingPrompt {
 		return job.RulesContent
 	}
 	return ai.MessengerProductGroupingPrompt

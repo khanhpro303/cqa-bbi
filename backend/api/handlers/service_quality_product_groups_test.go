@@ -325,6 +325,57 @@ func TestResolveProductGroupsBoundsInvalidAIRepairWithoutCaching(t *testing.T) {
 	}
 }
 
+func TestParseProductGroupsUsesAISelectedIDsToPreserveExactOriginalLabels(t *testing.T) {
+	names := []string{"Mũ\u00a0E-24", "E-24", "LS2 FF 818", "LS2"}
+	groups, err := parseAndValidateProductGroups(`{"groups":[{"name":"E-24","member_ids":[1,2]},{"name":"FF818","member_ids":[3]},{"name":"","member_ids":[4]}]}`, names)
+	want := []serviceQualityProductGroup{{Name: "E-24", Members: names[:2]}, {Name: "FF818", Members: names[2:3]}, {Name: "", Members: names[3:]}}
+	if err != nil || !reflect.DeepEqual(groups, want) {
+		t.Fatalf("AI ID mapping did not preserve exact labels: groups=%#v err=%v", groups, err)
+	}
+	for name, invalid := range map[string]string{
+		"zero ID":          `{"groups":[{"name":"E-24","member_ids":[0,1,2,3,4]}]}`,
+		"foreign ID":       `{"groups":[{"name":"E-24","member_ids":[1,2,3,4,5]}]}`,
+		"duplicate ID":     `{"groups":[{"name":"E-24","member_ids":[1,2,3,4,1]}]}`,
+		"missing ID":       `{"groups":[{"name":"E-24","member_ids":[1,2,3]}]}`,
+		"fractional ID":    `{"groups":[{"name":"E-24","member_ids":[1,2,3,4.1]}]}`,
+		"conflicting text": `{"groups":[{"name":"E-24","member_ids":[1,2,3,4],"members":["forged"]}]}`,
+		"empty IDs":        `{"groups":[{"name":"E-24","member_ids":[],"members":["E-24"]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseAndValidateProductGroups(invalid, names); !errors.Is(err, errInvalidProductGrouping) {
+				t.Fatalf("invalid AI ID mapping accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveProductGroupsCanRepairLabelsUsingAISelectedIDs(t *testing.T) {
+	names := []string{"Mũ\u00a0E-24", "E-24", "LS2"}
+	provider := &repairingProductGroupingProvider{responses: []string{
+		`{"groups":[{"name":"E-24","members":["Mũ E-24","E-24"]}]}`,
+		`{"groups":[{"name":"E-24","member_ids":[1,2]},{"name":"","member_ids":[3]}]}`,
+	}}
+	saves := 0
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, false, nil
+		},
+		saveCache: func(_ context.Context, _, _ string, groups []serviceQualityProductGroup) error {
+			saves++
+			if groups[0].Members[0] != names[0] {
+				t.Fatal("AI original label was rewritten")
+			}
+			return nil
+		},
+		aiClient: func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage: func(context.Context, string, ai.AIResponse) {},
+	}
+	groups, err := resolveProductGroups(context.Background(), "tenant", names, deps)
+	if err != nil || len(groups) != 2 || len(provider.inputs) != 2 || saves != 1 {
+		t.Fatalf("AI did not repair transport errors using IDs: groups=%v err=%v calls=%d saves=%d", groups, err, len(provider.inputs), saves)
+	}
+}
+
 func TestResolveProductGroupsRejectsOversizedInputsWithoutCallingAI(t *testing.T) {
 	provider := &productGroupingMockProvider{}
 	deps := productGroupingDependencies{

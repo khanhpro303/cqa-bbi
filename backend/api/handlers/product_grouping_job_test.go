@@ -52,7 +52,7 @@ func TestProductGroupingAdminAndPromptValidationBeforeDatabase(t *testing.T) {
 }
 
 func TestProductGroupingResponseShowsExactEffectivePrompt(t *testing.T) {
-	for _, stored := range []string{"", " ", "Prompt tùy chỉnh\nGiữ nguyên xuống dòng."} {
+	for _, stored := range []string{"", " ", ai.LegacyMessengerProductGroupingPrompt, "Prompt tùy chỉnh\nGiữ nguyên xuống dòng."} {
 		job := models.Job{RulesContent: stored}
 		raw, err := json.Marshal(productGroupingJobResponse(job))
 		if err != nil {
@@ -65,7 +65,7 @@ func TestProductGroupingResponseShowsExactEffectivePrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := stored
-		if strings.TrimSpace(stored) == "" {
+		if strings.TrimSpace(stored) == "" || stored == ai.LegacyMessengerProductGroupingPrompt {
 			want = ai.MessengerProductGroupingPrompt
 		}
 		if payload.SystemPrompt != want {

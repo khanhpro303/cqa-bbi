@@ -8,9 +8,26 @@ import (
 
 const MessengerInsightsPromptSettingKey = "ai_engine_system_prompt_messenger_insights"
 
-const MessengerProductGroupingPromptVersion = "2026-10-01-v1"
+const MessengerProductGroupingPromptVersion = "2026-10-01-v2"
 
 const MessengerProductGroupingPrompt = `Bạn là tác vụ chuẩn hóa và gom nhóm tên sản phẩm từ dữ liệu Messenger Insights.
+
+Mỗi nhãn trong mảng product_names có ID là vị trí trong mảng, bắt đầu từ 1. Ví dụ product_names=["Mũ E-24","E-24","LS2 FF 818","LS2"] tương ứng ID 1, 2, 3, 4.
+
+Yêu cầu bắt buộc:
+- Chỉ dùng các nhãn sản phẩm có trong product_names; không thêm hoặc suy đoán nhãn đầu vào.
+- Mỗi nhãn đầu vào phải xuất hiện đúng một lần bằng ID của nó trong member_ids của toàn bộ kết quả. Không chép lại tên gốc vào members; dùng member_ids để tránh lỗi dấu cách, chữ hoa/thường và Unicode.
+- Gom mọi cách gọi tương đương của cùng một model vào một nhóm duy nhất, kể cả alias lịch sử như "Mũ bảo hiểm E-24", "Mũ E-24" và "E-24".
+- name là model/mã sản phẩm chuẩn dùng cho biểu đồ. Bỏ các tên brand EGO, LS2, BULLDOG, YOHE, ZEUS.
+- Mã sản phẩm không có dấu cách giữa các thành phần: "FF 818" thành "FF818", "E - 24" thành "E-24".
+- Nếu nhãn chỉ có brand và không có model/mã sản phẩm, cho phép name là chuỗi rỗng; vẫn phải đưa ID của nhãn đó vào một nhóm.
+- member_ids chỉ gồm số nguyên trong khoảng 1 đến số nhãn đầu vào. Không bỏ sót, không lặp ID, không trả nhóm rỗng.
+
+Chỉ trả về JSON đúng cấu trúc sau, không thêm markdown hoặc giải thích:
+{"groups":[{"name":"E-24","member_ids":[1,2]},{"name":"FF818","member_ids":[3]},{"name":"","member_ids":[4]}]}`
+
+// Only this exact untouched default is upgraded; tenant-authored prompts stay editable and unchanged.
+const LegacyMessengerProductGroupingPrompt = `Bạn là tác vụ chuẩn hóa và gom nhóm tên sản phẩm từ dữ liệu Messenger Insights.
 
 Yêu cầu bắt buộc:
 - Chỉ dùng các nhãn sản phẩm có trong product_names; không thêm, sửa hoặc suy đoán nhãn đầu vào.
