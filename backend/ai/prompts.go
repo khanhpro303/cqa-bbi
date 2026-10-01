@@ -8,9 +8,28 @@ import (
 
 const MessengerInsightsPromptSettingKey = "ai_engine_system_prompt_messenger_insights"
 
-const MessengerProductGroupingPromptVersion = "2026-10-01-v3"
+const MessengerProductGroupingPromptVersion = "2026-10-01-v4"
 
 const MessengerProductGroupingPrompt = `Bạn là tác vụ chuẩn hóa và gom nhóm tên sản phẩm từ dữ liệu Messenger Insights.
+
+Mỗi nhãn có ID trong products=[{"id":1,"name":"nhãn gốc"},...], bắt đầu từ 1. Dùng đúng id đi kèm name, không tự đếm hoặc thay đổi thứ tự. product_names chứa cùng danh sách để tương thích.
+Trả về assignments là object ánh xạ từng ID (key chuỗi "1", "2", ...) sang tên sản phẩm chuẩn (value chuỗi).
+Mỗi nhãn đầu vào phải xuất hiện đúng một lần: bắt buộc trả đủ mọi ID từ 1 đến số nhãn. Không bỏ sót, không lặp ID, không thêm ID.
+
+Quy tắc tên chuẩn:
+- Gom mọi cách gọi tương đương của cùng một model về cùng một tên chuẩn. Ví dụ "Mũ bảo hiểm E-24", "Mũ E-24" và "E-24" đều có giá trị "E-24".
+- Bỏ tên brand EGO, LS2, BULLDOG, YOHE, ZEUS và tiền tố mô tả chung Mũ bảo hiểm/Mũ.
+- Mã sản phẩm không có dấu cách giữa các thành phần: "FF 818" thành "FF818", "E - 24" thành "E-24".
+- Chỉ dùng model/mã có trong nhãn đầu vào; không suy đoán model hoặc tự tạo SKU.
+- Chỉ nhãn hoàn toàn là brand hoặc mô tả chung không có model mới cho phép name là chuỗi rỗng (giá trị ""); vẫn trả ID đó.
+- Tuyệt đối không bỏ sản phẩm có model/mã hoặc tên riêng. "mũ bảo hiểm nửa đầu EGO E-24", "mũ bảo hiểm EGO E-24", "EGO E-24" đều phải ánh xạ "E-24", không được trả chuỗi rỗng. "Bulldog Corgi" phải giữ "Corgi".
+- Tên chuẩn phải phản ánh đúng nhãn của chính ID đó; không lấy tên model từ ID khác. Kiểm tra lại từng cặp id/name trước khi trả kết quả.
+- Cùng model phải có cùng tên chuẩn, không tách lẻ theo cách viết, màu hoặc tiền tố.
+
+Chỉ trả về JSON, không thêm markdown hoặc giải thích. Ví dụ product_names=["Mũ E-24","E-24","LS2 FF 818","LS2"]:
+{"assignments":{"1":"E-24","2":"E-24","3":"FF818","4":""}}`
+
+const LegacyMessengerProductGroupingAssignmentsPrompt = `Bạn là tác vụ chuẩn hóa và gom nhóm tên sản phẩm từ dữ liệu Messenger Insights.
 
 Mỗi nhãn trong mảng product_names có ID là vị trí trong mảng, bắt đầu từ 1.
 Trả về assignments là object ánh xạ từng ID (key chuỗi "1", "2", ...) sang tên sản phẩm chuẩn (value chuỗi).

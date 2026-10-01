@@ -29,6 +29,32 @@ describe('CSKH chart data', () => {
     }
   })
 
+  it('preserves audited E-24 conversation totals after AI groups its raw aliases', () => {
+    const aliases = [
+      { name: 'mũ bảo hiểm nửa đầu EGO E-24', levels: { high: 3, medium: 7, unknown: 5 } },
+      { name: 'mũ bảo hiểm EGO E-24', levels: { high: 1, medium: 2, unknown: 2 } },
+      { name: 'E-24', levels: { high: 0, medium: 3, unknown: 0 } },
+      { name: 'EGO E-24', levels: { high: 2, medium: 1, unknown: 0 } },
+    ] as const
+    const rows = aliases.flatMap((alias, aliasIndex) =>
+      (Object.entries(alias.levels) as Array<['high' | 'medium' | 'unknown', number]>).flatMap(([level, count]) =>
+        Array.from({ length: count }, (_, index) => row(`e24-${aliasIndex}-${level}-${index}`, level, [alias.name])),
+      ),
+    )
+    const e24Group: AIProductGroup[] = [{ name: 'E-24', members: aliases.map(alias => alias.name) }]
+
+    expect(aggregateInsights(rows, from, to).products.map(item => [item.label, item.count])).toEqual([
+      ['mũ bảo hiểm nửa đầu EGO E-24', 15],
+      ['mũ bảo hiểm EGO E-24', 5],
+      ['E-24', 3],
+      ['EGO E-24', 3],
+    ])
+    expect(aggregateProductDemand(rows, from, to, 'all', e24Group)).toMatchObject([{ label: 'E-24', count: 19 }])
+    expect(aggregateProductDemand(rows, from, to, 'high', e24Group)).toMatchObject([{ label: 'E-24', count: 6 }])
+    expect(aggregateProductDemand(rows, from, to, 'medium', e24Group)).toMatchObject([{ label: 'E-24', count: 13 }])
+    expect(aggregateProductDemand(rows, from, to, 'low', e24Group)).toEqual([])
+  })
+
   it('keeps demand and pie aligned with report freshness and dates, excluding unclassified leads', () => {
     const rows = [row('a', 'high', ['FF818']), row('b', 'low', ['FF800']), row('old', 'high', ['FF818'], { insight_stale: true }), row('end', 'medium', ['FF818'], { insight_at: to }), row('unknown', 'unknown', ['FF818']), row('spam', 'spam', ['FF818'])]
     expect(aggregateProductDemand(rows, from, to, 'all', groups).map(item => item.count)).toEqual([1, 1])

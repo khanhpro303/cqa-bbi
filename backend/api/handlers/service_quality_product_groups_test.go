@@ -69,6 +69,13 @@ func TestResolveProductGroupsUsesRequiredAssignmentsSchema(t *testing.T) {
 	if !reflect.DeepEqual(assignments["required"], []string{"1", "2", "3"}) || assignments["additionalProperties"] != false {
 		t.Fatalf("schema does not require exactly each ID: %#v", assignments)
 	}
+	properties := assignments["properties"].(map[string]interface{})
+	if properties["1"].(map[string]interface{})["minLength"] != 1 || properties["2"].(map[string]interface{})["minLength"] != 1 || properties["3"].(map[string]interface{})["minLength"] != nil {
+		t.Fatalf("schema permits discarding models or prohibits brand-only omission: %#v", properties)
+	}
+	if properties["1"].(map[string]interface{})["description"] != "Tên chuẩn của đúng nhãn gốc: Mũ E-24" {
+		t.Fatal("schema does not bind the original label to its assignment ID")
+	}
 }
 
 func TestParseProductGroupAssignmentsRejectsMissingDuplicateAndUnknownIDs(t *testing.T) {
@@ -241,7 +248,7 @@ func TestResolveProductGroupsUsesTenantScopedCache(t *testing.T) {
 	if !reflect.DeepEqual(loadedTenants, []string{"tenant-a", "tenant-b"}) || !reflect.DeepEqual(savedTenants, []string{"tenant-b"}) {
 		t.Fatalf("cache tenant scope wrong: loaded=%v saved=%v", loadedTenants, savedTenants)
 	}
-	if provider.prompt != ai.MessengerProductGroupingPrompt || provider.input != `{"product_names":["E-24","Mũ E-24"]}` {
+	if provider.prompt != ai.MessengerProductGroupingPrompt || provider.input != `{"product_names":["E-24","Mũ E-24"],"products":[{"id":1,"name":"E-24"},{"id":2,"name":"Mũ E-24"}]}` {
 		t.Fatalf("unexpected AI request: prompt=%q input=%s", provider.prompt, provider.input)
 	}
 	if provider.timeout < 50*time.Second || provider.timeout > productGroupingAITimeout {
@@ -320,6 +327,44 @@ func TestProductGroupingAllowsBrandOnlyLabelWithEmptyCanonicalName(t *testing.T)
 	}
 	if len(groups) != 1 || groups[0].Name != "" || !reflect.DeepEqual(groups[0].Members, []string{"LS2"}) {
 		t.Fatalf("unexpected brand-only mapping: %#v", groups)
+	}
+}
+
+func TestProductGroupingCannotSilentlyDiscardNamedProducts(t *testing.T) {
+	for _, name := range []string{"mũ bảo hiểm nửa đầu EGO E-24", "mũ bảo hiểm EGO E-24", "E-24", "EGO E-24", "Bulldog Corgi", "LS2 FF 818"} {
+		for _, canonical := range []string{"", "   "} {
+			content, _ := json.Marshal(map[string]interface{}{"assignments": map[string]string{"1": canonical}})
+			if _, err := parseAndValidateProductGroups(string(content), []string{name}); !errors.Is(err, errInvalidProductGrouping) {
+				t.Fatalf("named product %q silently discarded: %v", name, err)
+			}
+		}
+	}
+}
+
+func TestProductGroupingRepairsDiscardedProductsAndRejectsTheirCache(t *testing.T) {
+	names := []string{"mũ bảo hiểm nửa đầu EGO E-24", "EGO E-24", "LS2"}
+	provider := &repairingProductGroupingProvider{responses: []string{
+		`{"assignments":{"1":"","2":"E-24","3":""}}`,
+		`{"assignments":{"1":"E-24","2":"E-24","3":""}}`,
+	}}
+	saves := 0
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return []serviceQualityProductGroup{{Name: "", Members: names}}, true, nil
+		},
+		saveCache: func(_ context.Context, _, _ string, groups []serviceQualityProductGroup) error {
+			saves++
+			if groups[0].Name != "E-24" || !reflect.DeepEqual(groups[0].Members, names[:2]) {
+				t.Fatalf("incomplete product demand cached: %#v", groups)
+			}
+			return nil
+		},
+		aiClient: func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage: func(context.Context, string, ai.AIResponse) {},
+	}
+	groups, err := resolveProductGroups(context.Background(), "tenant", names, deps)
+	if err != nil || len(provider.inputs) != 2 || saves != 1 || len(groups) != 2 {
+		t.Fatalf("discarded products not repaired by AI: groups=%#v calls=%d saves=%d err=%v", groups, len(provider.inputs), saves, err)
 	}
 }
 
