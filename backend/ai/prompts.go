@@ -8,7 +8,25 @@ import (
 
 const MessengerInsightsPromptSettingKey = "ai_engine_system_prompt_messenger_insights"
 
+const MessengerProductGroupingPromptVersion = "2026-10-01-v1"
+
+const MessengerProductGroupingPrompt = `Bạn là tác vụ chuẩn hóa và gom nhóm tên sản phẩm từ dữ liệu Messenger Insights.
+
+Yêu cầu bắt buộc:
+- Chỉ dùng các nhãn sản phẩm có trong product_names; không thêm, sửa hoặc suy đoán nhãn đầu vào.
+- Mỗi nhãn đầu vào phải xuất hiện đúng một lần trong members của toàn bộ kết quả.
+- Gom mọi cách gọi tương đương của cùng một model vào một nhóm duy nhất, kể cả alias lịch sử như "Mũ bảo hiểm E-24", "Mũ E-24" và "E-24".
+- name là model/mã sản phẩm chuẩn dùng cho biểu đồ. Bỏ các tên brand EGO, LS2, BULLDOG, YOHE, ZEUS.
+- Mã sản phẩm không có dấu cách giữa các thành phần: "FF 818" thành "FF818", "E - 24" thành "E-24".
+- Nếu nhãn chỉ có brand và không có model/mã sản phẩm, cho phép name là chuỗi rỗng.
+- members phải giữ nguyên chính xác từng nhãn đầu vào.
+
+Chỉ trả về JSON đúng cấu trúc sau, không thêm markdown hoặc giải thích:
+{"groups":[{"name":"tên chuẩn hoặc chuỗi rỗng","members":["nhãn gốc"]}]}`
+
 const mandatorySenderRoleHeading = "## Quy tắc vai trò bắt buộc"
+
+const mandatoryProductNormalizationHeading = "## Quy tắc chuẩn hóa sản phẩm bắt buộc"
 
 const mandatorySenderRoleInstructions = `
 
@@ -20,11 +38,29 @@ const mandatorySenderRoleInstructions = `
 - Nếu không có dòng (customer), phải ghi rõ chưa ghi nhận tin nhắn khách hàng, không gán nhãn dựa trên ý định khách và để các customer insights rỗng với lead_quality.level="unknown".
 - Ví dụ: "[agent] Cho em xin chiều cao và cân nặng để tư vấn size" phải được hiểu là Fanpage đang hỏi; không được viết "khách đã cung cấp chiều cao và cân nặng".`
 
+const mandatoryProductNormalizationInstructions = `
+
+## Quy tắc chuẩn hóa sản phẩm bắt buộc
+- Trong insights.products[].name, bỏ tên brand EGO, LS2, BULLDOG, YOHE, ZEUS; chỉ giữ model/mã sản phẩm mà khách thực sự nhắc tới.
+- Bỏ tiền tố mô tả chung "Mũ bảo hiểm" hoặc "Mũ" khỏi tên sản phẩm. Ví dụ: "Mũ bảo hiểm E-24", "Mũ E-24" và "E-24" đều phải trả về name="E-24".
+- Mã sản phẩm không được có dấu cách giữa các thành phần. Ví dụ: "FF 818" phải chuẩn hóa thành "FF818"; "E - 24" thành "E-24".
+- Gộp cách gọi khác nhau của cùng một model về đúng một tên chuẩn, không tách thành các sản phẩm lẻ tẻ.
+- Không suy đoán model hoặc tự tạo SKU. Nếu SKU không được khách nói rõ thì để sku="".
+- evidence phải giữ nguyên trích dẫn chính xác lời khách hàng; không sửa nội dung evidence theo tên đã chuẩn hóa.`
+
 func appendMandatorySenderRoleInstructions(prompt string) string {
 	if strings.Contains(prompt, mandatorySenderRoleHeading) {
 		return prompt
 	}
 	return prompt + mandatorySenderRoleInstructions
+}
+
+func appendMandatoryMessengerInsightsInstructions(prompt string) string {
+	prompt = appendMandatorySenderRoleInstructions(prompt)
+	if strings.Contains(prompt, mandatoryProductNormalizationHeading) {
+		return prompt
+	}
+	return prompt + mandatoryProductNormalizationInstructions
 }
 
 // DefaultMessengerInsightsPrompt exposes the existing structured prompt as an
@@ -90,11 +126,11 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
 		prompt := promptOverride[0]
 		if strings.Contains(prompt, "{{rules}}") {
 			prompt = strings.ReplaceAll(prompt, "{{rules}}", string(rulesJSON))
-			return appendMandatorySenderRoleInstructions(prompt)
+			return appendMandatoryMessengerInsightsInstructions(prompt)
 		}
 		// Keep each job's rules even if the administrator removes the placeholder.
 		prompt += "\n\n## Các quy tắc phân loại:\n" + string(rulesJSON)
-		return appendMandatorySenderRoleInstructions(prompt)
+		return appendMandatoryMessengerInsightsInstructions(prompt)
 	}
 	insightsOutput := ""
 	insightsInstructions := ""
@@ -143,7 +179,7 @@ Trả về JSON:
 %s
 CHỈ trả về JSON, không thêm text khác.`, string(rulesJSON), insightsOutput, insightsInstructions)
 	if config.MessengerInsightsEnabled() {
-		return appendMandatorySenderRoleInstructions(prompt)
+		return appendMandatoryMessengerInsightsInstructions(prompt)
 	}
 	return prompt
 }

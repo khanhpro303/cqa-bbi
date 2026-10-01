@@ -146,6 +146,10 @@ func GetJob(c *gin.Context) {
 		return
 	}
 
+	if job.JobType == productGroupingJobType {
+		c.JSON(http.StatusOK, productGroupingJobResponse(job))
+		return
+	}
 	c.JSON(http.StatusOK, job)
 }
 
@@ -166,6 +170,16 @@ func UpdateJob(c *gin.Context) {
 	var raw map[string]interface{}
 	if err := c.ShouldBindJSON(&raw); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+		return
+	}
+
+	var job models.Job
+	if err := db.DB.Where("id = ? AND tenant_id = ?", jobID, tenantID).First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job_not_found"})
+		return
+	}
+	if job.JobType == productGroupingJobType {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tác vụ cố định; chỉ sửa prompt trong tab Prompt hệ thống."})
 		return
 	}
 
@@ -228,6 +242,20 @@ func DeleteJob(c *gin.Context) {
 	var job models.Job
 	if err := db.DB.Where("id = ? AND tenant_id = ?", jobID, tenantID).First(&job).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job_not_found"})
+		return
+	}
+
+	if job.JobType == productGroupingJobType {
+		if !isProductGroupingAdmin(c) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "insufficient_role"})
+			return
+		}
+		if err := deleteProductGroupingJob(c.Request.Context(), db.DB, job); err != nil {
+			serviceQualityError(c, err)
+			return
+		}
+		db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "job.delete", "job", jobID, "Deleted job: "+job.Name, "", c.ClientIP())
+		c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 		return
 	}
 
@@ -320,6 +348,11 @@ func TestRunJob(c *gin.Context) {
 		return
 	}
 
+	if job.JobType == productGroupingJobType {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tác vụ này chạy tự động khi mở treemap trong Chất lượng CSKH."})
+		return
+	}
+
 	// Run in background (async) — AI calls can take 30-120s and SDK may not respect context timeout
 	go func() {
 		defer func() {
@@ -348,6 +381,11 @@ func TriggerJob(c *gin.Context) {
 	var job models.Job
 	if err := db.DB.Where("id = ? AND tenant_id = ?", jobID, tenantID).First(&job).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job_not_found"})
+		return
+	}
+
+	if job.JobType == productGroupingJobType {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tác vụ này chạy tự động khi mở treemap trong Chất lượng CSKH."})
 		return
 	}
 

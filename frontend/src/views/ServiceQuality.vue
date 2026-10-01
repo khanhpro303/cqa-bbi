@@ -126,32 +126,37 @@
         </v-col>
       </v-row>
 
-      <v-card variant="outlined" class="mb-4">
-        <v-card-title class="text-subtitle-1 font-weight-bold d-flex align-center flex-wrap ga-2">
-          <v-icon start color="primary">mdi-cloud-sync</v-icon>
-          {{ t('sq_data_source') }}
-          <v-spacer />
-          <span class="panel-description text-medium-emphasis">{{ t('sq_scanned', { count: report.conversations_scanned }) }}</span>
-        </v-card-title>
-        <v-divider />
-        <v-card-text v-if="report.pages.length" class="d-flex flex-wrap ga-2">
-          <v-chip
-            v-for="page in report.pages"
-            :key="page.id"
-            :color="syncColor(page)"
-            variant="tonal"
-            size="small"
-          >
-            <v-icon start :icon="page.is_active ? 'mdi-facebook' : 'mdi-link-off'" />
-            {{ page.name }} · {{ page.last_sync_at ? formatDateTime(page.last_sync_at) : t('sq_not_synced') }} · {{ syncLabel(page.last_sync_status) }}
-          </v-chip>
-        </v-card-text>
-        <v-card-text v-else class="text-center py-8">
-          <v-icon size="42" color="grey">mdi-facebook</v-icon>
-          <div class="text-subtitle-1 mt-2">{{ t('sq_no_pages') }}</div>
-          <v-btn v-if="authStore.canView('channels')" class="mt-3" color="primary" variant="tonal" :to="`/${tenantId}/channels`">{{ t('sq_connect_page') }}</v-btn>
-        </v-card-text>
-      </v-card>
+      <v-row class="mb-4 source-chart-row">
+        <v-col cols="12" md="6">
+          <v-card variant="outlined" class="messenger-source-card">
+            <v-card-title class="text-subtitle-1 font-weight-bold d-flex align-center flex-wrap ga-2">
+              <v-icon start color="primary">mdi-cloud-sync</v-icon>
+              {{ t('sq_data_source') }}
+              <v-spacer />
+              <span class="panel-description text-medium-emphasis">{{ t('sq_scanned', { count: report.conversations_scanned }) }}</span>
+            </v-card-title>
+            <v-divider />
+            <v-card-text v-if="report.pages.length" class="messenger-source-list">
+              <div v-for="page in report.pages" :key="page.id" class="messenger-source-page">
+                <v-icon :color="syncColor(page)" :icon="page.is_active ? 'mdi-facebook' : 'mdi-link-off'" />
+                <div class="source-page-info">
+                  <div class="font-weight-medium">{{ page.name }}</div>
+                  <div class="text-caption text-medium-emphasis">{{ page.last_sync_at ? formatDateTime(page.last_sync_at) : t('sq_not_synced') }}</div>
+                </div>
+                <v-chip :color="syncColor(page)" variant="tonal" size="small">{{ syncLabel(page.last_sync_status) }}</v-chip>
+              </div>
+            </v-card-text>
+            <v-card-text v-else class="text-center py-8">
+              <v-icon size="42" color="grey">mdi-facebook</v-icon>
+              <div class="text-subtitle-1 mt-2">{{ t('sq_no_pages') }}</div>
+              <v-btn v-if="authStore.canView('channels')" class="mt-3" color="primary" variant="tonal" :to="`/${tenantId}/channels`">{{ t('sq_connect_page') }}</v-btn>
+            </v-card-text>
+          </v-card>
+        </v-col>
+        <v-col cols="12" md="6">
+          <ServiceQualityCharts :rows="report.rows" :from="report.from" :to="report.to" :tenant-id="tenantId" :report-version="report.generated_at" :product-grouping-enabled="report.product_grouping_enabled" :product-grouping-version="report.product_grouping_version" :scope="reportScope" @refresh-report="loadReport(true)" />
+        </v-col>
+      </v-row>
 
       <v-card variant="outlined" class="mb-4">
         <v-card-title class="d-flex align-center flex-wrap ga-2">
@@ -478,6 +483,7 @@
 
 <script setup lang="ts">
 import MetaLabelsPanel from '../components/MetaLabelsPanel.vue'
+import ServiceQualityCharts from '../components/ServiceQualityCharts.vue'
 import InsightWordcloudPanel from '../components/InsightWordcloudPanel.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -558,6 +564,8 @@ interface QualityViolation {
 }
 
 interface Report {
+  product_grouping_enabled: boolean
+  product_grouping_version: string
   policy: Policy
   generated_at: string
   from: string
@@ -586,6 +594,7 @@ const authStore = useAuthStore()
 const tenantId = computed(() => route.params.tenantId as string)
 const loading = ref(false)
 const report = ref<Report | null>(null)
+const reportScope = ref({ from: '', to: '', channel_id: '' })
 const pageCatalog = ref<Page[]>([])
 const errorMessage = ref('')
 const channelId = ref('')
@@ -725,12 +734,14 @@ async function loadReport(force = false) {
   const sequence = ++requestSequence
   loading.value = true
   errorMessage.value = ''
+  const scope = { channel_id: channelId.value, from: dateFrom.value, to: dateTo.value }
   try {
     const { data } = await api.get<Report>(`/tenants/${tenantId.value}/service-quality`, {
-      params: { channel_id: channelId.value || undefined, from: dateFrom.value, to: dateTo.value },
+      params: scope,
       signal: controller.signal,
     })
     if (sequence !== requestSequence) return
+    reportScope.value = scope
     report.value = data
     pageCatalog.value = data.pages
     if (channelId.value && !data.pages.some(page => page.id === channelId.value)) channelId.value = ''
@@ -944,6 +955,15 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.messenger-source-card { height: 370px; display: flex; flex-direction: column; }
+.messenger-source-list { overflow-y: auto; min-height: 0; }
+.messenger-source-page { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+.messenger-source-page + .messenger-source-page { border-top: thin solid rgba(var(--v-border-color), var(--v-border-opacity)); }
+.source-page-info { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 959px) {
+  .messenger-source-card { height: auto; max-height: 280px; }
+}
+
 .service-quality-page {
   max-width: 1680px;
   margin: 0 auto;

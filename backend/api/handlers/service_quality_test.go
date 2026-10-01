@@ -25,6 +25,7 @@ func TestServiceQualityRejectsInvalidMutationsBeforeDB(t *testing.T) {
 		{"missing stale conversation ids", `{}`, ReanalyseStaleJobConversations},
 		{"empty stale conversation ids", `{"conversation_ids":[]}`, ReanalyseStaleJobConversations},
 		{"blank stale conversation id", `{"conversation_ids":[" "]}`, ReanalyseStaleJobConversations},
+		{"invalid product grouping filters", `{`, GroupServiceQualityProducts},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := gin.New()
@@ -47,6 +48,7 @@ func TestServiceQualityPermissionsDenyWithoutDatabaseAccess(t *testing.T) {
 		handler          gin.HandlerFunc
 	}{
 		{"messages", "r", GetServiceQuality},
+		{"messages", "r", GroupServiceQualityProducts},
 		{"settings", "w", SaveServiceQualityPolicy},
 		{"messages", "w", ResolveServiceConversation},
 	} {

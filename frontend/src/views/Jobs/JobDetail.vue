@@ -1,5 +1,6 @@
 <template>
-  <div>
+  <ProductGroupingJob v-if="job?.job_type === 'messenger_product_groups'" :job="job" :tenant-id="tenantId" @updated="job = $event" />
+  <div v-else>
     <!-- Header -->
     <div class="d-flex align-center mb-4">
       <v-btn icon="mdi-arrow-left" variant="text" size="small" :to="`/${tenantId}/jobs`" />
@@ -1220,6 +1221,7 @@
 </template>
 
 <script setup lang="ts">
+import ProductGroupingJob from '../../components/ProductGroupingJob.vue'
 import { emptyAnalysisRunReason } from '../../utils/analysis-run'
 import { formatJobSchedule } from '../../utils/job-schedule'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
@@ -1950,6 +1952,7 @@ async function clearERPCustomerCache() {
 
 onMounted(async () => {
   job.value = await jobStore.fetchJob(tenantId.value, jobId.value)
+  if (job.value?.job_type === 'messenger_product_groups') return
   if (job.value?.job_type === 'classification') resultFilter.value = 'classified'
   if (job.value?.job_type === 'chatbot_toggle') activeTab.value = 'history'
   if (job.value?.job_type === 'erp_product_cache') {

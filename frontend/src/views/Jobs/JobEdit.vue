@@ -147,6 +147,10 @@ const outputCount = computed(() => {
 onMounted(async () => {
   try {
     const job = await jobStore.fetchJob(tenantId.value, jobId.value)
+    if (job.job_type === 'messenger_product_groups') {
+      await router.replace(`/${tenantId.value}/jobs/${jobId.value}`)
+      return
+    }
     // Map job data to form
     form.value = {
       name: job.name || '',

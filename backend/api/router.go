@@ -208,6 +208,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 			// Dashboard
 			tenant.GET("/service-quality", middleware.RequirePermission("messages", "r"), handlers.GetServiceQuality)
+			tenant.POST("/service-quality/product-groups", middleware.RequirePermission("messages", "r"), handlers.GroupServiceQualityProducts)
 			tenant.GET("/messenger-labels", middleware.RequirePermission("messages", "r"), handlers.GetMessengerLabels)
 			tenant.GET("/messenger-intake/:channelId", middleware.RequirePermission("messages", "r"), handlers.GetMessengerIntakeAttributions)
 			tenant.POST("/messenger-labels/:channelId/catalog", middleware.RequirePermission("settings", "w"), handlers.RefreshMessengerLabelCatalog)
@@ -219,6 +220,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.GET("/analytics/ai-cost", handlers.GetAICostAnalytics)
 
 			// Jobs
+			tenant.POST("/jobs/product-grouping", middleware.RequireRole("owner", "admin"), handlers.CreateProductGroupingJob)
+			tenant.PUT("/jobs/:jobId/product-grouping-prompt", middleware.RequireRole("owner", "admin"), handlers.SaveProductGroupingPrompt)
 			tenant.GET("/jobs", middleware.RequirePermission("jobs", "r"), handlers.ListJobs)
 			tenant.POST("/jobs", middleware.RequirePermission("jobs", "w"), handlers.CreateJob)
 			tenant.GET("/jobs/:jobId", middleware.RequirePermission("jobs", "r"), handlers.GetJob)

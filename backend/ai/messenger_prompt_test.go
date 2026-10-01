@@ -45,6 +45,25 @@ func TestMessengerPromptAlwaysIncludesMandatorySenderRoleRules(t *testing.T) {
 	}
 }
 
+func TestMessengerPromptAlwaysIncludesMandatoryProductNormalizationRules(t *testing.T) {
+	config := `{"profile":"messenger_insights","rules":[]}`
+	for _, override := range []string{"", "Prompt tùy chỉnh {{rules}}", "Prompt tùy chỉnh không có placeholder"} {
+		prompt := BuildClassificationPrompt(config, override)
+		for _, expected := range []string{
+			mandatoryProductNormalizationHeading,
+			"EGO, LS2, BULLDOG, YOHE, ZEUS",
+			`"FF 818" phải chuẩn hóa thành "FF818"`,
+			`"Mũ bảo hiểm E-24", "Mũ E-24" và "E-24"`,
+			"evidence phải giữ nguyên trích dẫn chính xác",
+			"Không suy đoán model hoặc tự tạo SKU",
+		} {
+			if !strings.Contains(prompt, expected) {
+				t.Errorf("prompt override %q missing mandatory product rule %q: %s", override, expected, prompt)
+			}
+		}
+	}
+}
+
 func TestMessengerPromptDoesNotOverrideLegacyClassification(t *testing.T) {
 	config := `[{"name":"Hỏi giá","description":"Khách hỏi giá"}]`
 	if got, want := BuildClassificationPrompt(config, "Messenger override {{rules}}"), BuildClassificationPrompt(config); got != want {
@@ -55,9 +74,24 @@ func TestMessengerPromptDoesNotOverrideLegacyClassification(t *testing.T) {
 func TestMessengerPromptBatchRetainsStructuredOutput(t *testing.T) {
 	prompt := BuildClassificationPrompt(`{"profile":"messenger_insights","rules":[]}`, DefaultMessengerInsightsPrompt())
 	batch := WrapBatchPrompt(prompt, 2)
-	for _, expected := range []string{`"tags"`, `"summary"`, `"insights"`, `"intents"`, `"products"`, `"feedback"`, `"lead_quality"`, "JSON ARRAY chứa 2 phần tử", `"conversation_id"`} {
+	for _, expected := range []string{`"tags"`, `"summary"`, `"insights"`, `"intents"`, `"products"`, `"feedback"`, `"lead_quality"`, "JSON ARRAY chứa 2 phần tử", `"conversation_id"`, mandatoryProductNormalizationHeading, `"FF 818" phải chuẩn hóa thành "FF818"`} {
 		if !strings.Contains(batch, expected) {
 			t.Errorf("batch prompt missing %q", expected)
+		}
+	}
+}
+
+func TestMessengerProductGroupingPromptRequiresCompleteExactMapping(t *testing.T) {
+	for _, expected := range []string{
+		"Mỗi nhãn đầu vào phải xuất hiện đúng một lần",
+		"EGO, LS2, BULLDOG, YOHE, ZEUS",
+		`"FF 818" thành "FF818"`,
+		`"E - 24" thành "E-24"`,
+		"cho phép name là chuỗi rỗng",
+		"members phải giữ nguyên chính xác",
+	} {
+		if !strings.Contains(MessengerProductGroupingPrompt, expected) {
+			t.Errorf("product grouping prompt missing %q", expected)
 		}
 	}
 }

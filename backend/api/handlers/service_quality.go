@@ -39,7 +39,20 @@ func GetServiceQuality(c *gin.Context) {
 		serviceQualityError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, r)
+	job, err := findProductGroupingJob(c.Request.Context(), db.DB, tid)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		serviceQualityError(c, err)
+		return
+	}
+	version := ""
+	if err == nil {
+		version = productGroupingInputHash(nil, productGroupingPrompt(job)+job.ID)
+	}
+	c.JSON(http.StatusOK, struct {
+		*servicequality.Report
+		ProductGroupingEnabled bool   `json:"product_grouping_enabled"`
+		ProductGroupingVersion string `json:"product_grouping_version"`
+	}{r, err == nil, version})
 }
 
 func SaveServiceQualityPolicy(c *gin.Context) {

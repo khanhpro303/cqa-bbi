@@ -34,6 +34,23 @@ Mẫu AI trích xuất nhu cầu, tên sản phẩm/SKU được khách đề c�
 
 Mỗi hội thoại được tính một lần cho mỗi nhãn hoặc sản phẩm. Chỉ tổng hợp kết quả mới nhất, còn khớp thời điểm tin nhắn nguồn và được tạo trong khoảng ngày đã chọn, trong các hội thoại xuất hiện ở báo cáo. Hội thoại có tin mới sau khi phân tích được đánh dấu kết quả cũ và tạm loại khỏi tổng hợp cho đến lần phân tích tiếp theo.
 
+## Biểu đồ tiềm năng và sản phẩm
+
+Trong **Tác vụ AI**, admin/owner bấm **Thêm tác vụ tổng hợp sản phẩm** để bật treemap. Hệ thống tạo tác vụ cố định **Tổng hợp sản phẩm CSKH** ngay, không qua wizard hay cấu hình đầu vào, lịch chạy và đầu ra. Mỗi công ty có tối đa một tác vụ này. Tác vụ dùng AI của công ty và ghi lịch sử chạy/chi phí khi gọi AI; đọc cache không tạo lượt chạy mới.
+
+Mở tác vụ và chọn tab **Prompt hệ thống** để xem đầy đủ prompt thực tế đang dùng. Admin/owner có thể chỉnh nội dung rồi bấm **Lưu prompt**. Prompt mới áp dụng cho lần tổng hợp tiếp theo; cache cũ không được dùng cho prompt mới. Thành viên được phép đọc tác vụ chỉ xem prompt, kể cả có quyền sửa/xóa tác vụ thông thường.
+
+Chỉ admin/owner được thêm hoặc xóa tác vụ tổng hợp. Khi chưa thêm hoặc đã xóa, card treemap chỉ hiện **“Đã tắt tính năng tổng hợp sản phẩm, để bật vui lòng đến Tác vụ AI”**, với liên kết đến danh sách tác vụ. Pie chart vẫn hoạt động. Hệ thống không tự tạo lại tác vụ đã xóa.
+
+Khối **Nguồn dữ liệu Messenger** chiếm nửa chiều ngang trên desktop; carousel biểu đồ nằm ở nửa còn lại. Trên điện thoại, hai khối xếp dọc.
+
+- **Phân bố tiềm năng**: pie chart gồm cao, vừa, thấp từ phân tích AI mới trong kỳ. Spam và chưa rõ được loại khỏi tỷ lệ. Bấm một mức trong chú thích để xem sản phẩm tương ứng.
+- **Sản phẩm được hỏi nhiều nhất**: treemap Top 20, lọc theo cao/vừa/thấp hoặc cả ba. Mỗi hội thoại chỉ được tính một lần cho mỗi sản phẩm, kể cả khách hỏi lại hoặc có nhiều SKU cùng mẫu.
+
+AI gom các tên sản phẩm hiện có trong báo cáo về nhóm thống nhất trước khi đếm: bỏ brand **EGO, LS2, BULLDOG, YOHE, ZEUS**, viết mã liền như **FF818**, gộp **Mũ bảo hiểm E-24 / Mũ E-24 / E-24** thành **E-24**. Prompt của tác vụ Messenger Insights cũng áp dụng các yêu cầu này cho phân tích mới. Nội dung trích dẫn gốc được giữ nguyên.
+
+Treemap dùng nhà cung cấp/model AI trong cấu hình AI của công ty. Kết quả gom được cache riêng theo công ty, tác vụ, prompt và danh sách tên nguồn; thay đổi bộ lọc tiềm năng không gọi lại AI. Nếu AI lỗi hoặc trả thiếu tên, giao diện có nút **Thử lại**. Với hơn 500 tên sản phẩm hoặc dữ liệu tên vượt 64 KiB, chọn khoảng ngày ngắn hơn hoặc một Fanpage để gom đầy đủ.
+
 Các mục này là kết quả AI. Chúng không phản ánh việc nhân viên đã chọn giai đoạn “phù hợp”, “chưa phù hợp”, “tiềm năng” trong Meta Business Suite. Hiện chưa xác minh được API công khai đọc mục giai đoạn đó; vì vậy không dùng kết quả AI còn thiếu để đếm nhân viên quên phân loại trên Meta. Xem [nghiên cứu về giai đoạn khách hàng Meta](../research/meta-native-lead-stages.md).
 
 ## Phạm vi và phân quyền

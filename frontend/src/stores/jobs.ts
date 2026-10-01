@@ -56,10 +56,12 @@ export const useJobStore = defineStore('jobs', () => {
   const currentJob = ref<Job | null>(null)
   const jobRuns = ref<JobRun[]>([])
   const jobResults = ref<JobResult[]>([])
+  let jobsRequest = 0
 
   async function fetchJobs(tenantId: string) {
+    const request = ++jobsRequest
     const { data } = await api.get(`/tenants/${tenantId}/jobs`)
-    jobs.value = data
+    if (request === jobsRequest) jobs.value = data
   }
 
   async function fetchJob(tenantId: string, jobId: string) {
