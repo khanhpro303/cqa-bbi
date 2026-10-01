@@ -52,7 +52,7 @@ func (p *schemaProductGroupingProvider) AnalyzeJSONSchema(_ context.Context, _, 
 }
 
 func TestResolveProductGroupsUsesRequiredAssignmentsSchema(t *testing.T) {
-	provider := &schemaProductGroupingProvider{productGroupingMockProvider: productGroupingMockProvider{response: ai.AIResponse{Content: `{"assignments":{"1":"E-24","2":"E-24","3":""}}`}}}
+	provider := &schemaProductGroupingProvider{productGroupingMockProvider: productGroupingMockProvider{response: ai.AIResponse{Content: `{"assignments":{"Mũ E-24":"E-24","E-24":"E-24","LS2":""}}`}}}
 	deps := productGroupingDependencies{
 		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
 			return nil, false, nil
@@ -66,14 +66,14 @@ func TestResolveProductGroupsUsesRequiredAssignmentsSchema(t *testing.T) {
 		t.Fatalf("schema provider: groups=%#v err=%v schema=%#v", groups, err, provider.schema)
 	}
 	assignments := provider.schema["properties"].(map[string]interface{})["assignments"].(map[string]interface{})
-	if !reflect.DeepEqual(assignments["required"], []string{"1", "2", "3"}) || assignments["additionalProperties"] != false {
+	if !reflect.DeepEqual(assignments["required"], []string{"Mũ E-24", "E-24", "LS2"}) || assignments["additionalProperties"] != false {
 		t.Fatalf("schema does not require exactly each ID: %#v", assignments)
 	}
 	properties := assignments["properties"].(map[string]interface{})
-	if properties["1"].(map[string]interface{})["minLength"] != 1 || properties["2"].(map[string]interface{})["minLength"] != 1 || properties["3"].(map[string]interface{})["minLength"] != nil {
+	if properties["Mũ E-24"].(map[string]interface{})["minLength"] != 1 || properties["E-24"].(map[string]interface{})["minLength"] != 1 || properties["LS2"].(map[string]interface{})["minLength"] != nil {
 		t.Fatalf("schema permits discarding models or prohibits brand-only omission: %#v", properties)
 	}
-	if properties["1"].(map[string]interface{})["description"] != "Tên chuẩn của đúng nhãn gốc: Mũ E-24" {
+	if properties["Mũ E-24"].(map[string]interface{})["description"] != "Tên chuẩn của đúng nhãn gốc: Mũ E-24" {
 		t.Fatal("schema does not bind the original label to its assignment ID")
 	}
 }
@@ -89,6 +89,23 @@ func TestParseProductGroupAssignmentsRejectsMissingDuplicateAndUnknownIDs(t *tes
 	} {
 		if _, err := parseAndValidateProductGroups(content, []string{"Mũ E-24", "E-24"}); !errors.Is(err, errInvalidProductGrouping) {
 			t.Fatalf("invalid assignments accepted: %s err=%v", content, err)
+		}
+	}
+}
+
+func TestProductGroupingAssignmentsBindExactSourceNames(t *testing.T) {
+	names := []string{"mũ bảo hiểm nửa đầu EGO E-24", "Bulldog Beagle", "EGO E-24", "chốt kính của nón LS2"}
+	groups, err := parseAndValidateProductGroups(`{"assignments":{"Bulldog Beagle":"Beagle","chốt kính của nón LS2":"chốt kính","EGO E-24":"E-24","mũ bảo hiểm nửa đầu EGO E-24":"E-24"}}`, names)
+	if err != nil || len(groups) != 3 || groups[0].Name != "E-24" || !reflect.DeepEqual(groups[0].Members, []string{names[0], names[2]}) || groups[1].Name != "Beagle" {
+		t.Fatalf("source-key mapping changed product identity: groups=%#v err=%v", groups, err)
+	}
+	for _, content := range []string{
+		`{"assignments":{"EGO E-24":"E-24","foreign":"E-24"}}`,
+		`{"assignments":{"EGO E-24":"E-24","EGO E-24":"Beagle","Bulldog Beagle":"Beagle"}}`,
+		`{"assignments":{"EGO E-24":"Beagle","Bulldog Beagle":"E-24"}}`,
+	} {
+		if _, err := parseAndValidateProductGroups(content, []string{"EGO E-24", "Bulldog Beagle"}); !errors.Is(err, errInvalidProductGrouping) {
+			t.Fatalf("invalid exact source mapping accepted: %s err=%v", content, err)
 		}
 	}
 }
@@ -248,7 +265,7 @@ func TestResolveProductGroupsUsesTenantScopedCache(t *testing.T) {
 	if !reflect.DeepEqual(loadedTenants, []string{"tenant-a", "tenant-b"}) || !reflect.DeepEqual(savedTenants, []string{"tenant-b"}) {
 		t.Fatalf("cache tenant scope wrong: loaded=%v saved=%v", loadedTenants, savedTenants)
 	}
-	if provider.prompt != ai.MessengerProductGroupingPrompt || provider.input != `{"product_names":["E-24","Mũ E-24"],"products":[{"id":1,"name":"E-24"},{"id":2,"name":"Mũ E-24"}]}` {
+	if provider.prompt != ai.MessengerProductGroupingPrompt || provider.input != `{"product_names":["E-24","Mũ E-24"]}` {
 		t.Fatalf("unexpected AI request: prompt=%q input=%s", provider.prompt, provider.input)
 	}
 	if provider.timeout < 50*time.Second || provider.timeout > productGroupingAITimeout {

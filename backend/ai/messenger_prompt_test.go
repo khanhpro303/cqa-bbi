@@ -89,8 +89,8 @@ func TestMessengerProductGroupingPromptRequiresCompleteExactMapping(t *testing.T
 		`"E - 24" thành "E-24"`,
 		"cho phép name là chuỗi rỗng",
 		"assignments",
-		"bắt đầu từ 1",
-		"Không bỏ sót, không lặp ID",
+		"KHÔNG dùng ID số",
+		"không bỏ sót, không thêm hoặc sửa key",
 	} {
 		if !strings.Contains(MessengerProductGroupingPrompt, expected) {
 			t.Errorf("product grouping prompt missing %q", expected)
