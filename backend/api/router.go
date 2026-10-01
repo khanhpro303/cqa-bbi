@@ -222,6 +222,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			// Jobs
 			tenant.POST("/jobs/product-grouping", middleware.RequireRole("owner", "admin"), handlers.CreateProductGroupingJob)
 			tenant.PUT("/jobs/:jobId/product-grouping-prompt", middleware.RequireRole("owner", "admin"), handlers.SaveProductGroupingPrompt)
+			tenant.GET("/jobs/:jobId/product-grouping-results", middleware.RequirePermission("jobs", "r"), middleware.RequirePermission("messages", "r"), handlers.GetProductGroupingResults)
 			tenant.GET("/jobs", middleware.RequirePermission("jobs", "r"), handlers.ListJobs)
 			tenant.POST("/jobs", middleware.RequirePermission("jobs", "w"), handlers.CreateJob)
 			tenant.GET("/jobs/:jobId", middleware.RequirePermission("jobs", "r"), handlers.GetJob)
