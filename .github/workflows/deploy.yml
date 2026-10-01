@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '.github/workflows/deploy.yml'
 
 concurrency:
   group: deploy-vps-main
@@ -56,7 +58,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy with health verification
+      - name: Deploy with backup and health verification
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -65,24 +67,45 @@ jobs:
           command_timeout: 30m
           script: |
             set -eu
+            umask 077
             cd /home/karien/cqa-personal-zalo
+            backup_dir="/home/karien/cqa-backups/${{ github.run_id }}"
+            mkdir -p "$backup_dir"
+            previous_image=$(docker inspect --format '{{.Image}}' cqa-app)
+            app_tag=$(docker inspect --format '{{.Config.Image}}' cqa-app)
+            docker image tag "$previous_image" "cqa-app:rollback-${{ github.run_id }}"
+            git rev-parse HEAD > "$backup_dir/previous-commit"
+            docker exec cqa-db sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysqldump --user=root --single-transaction --quick --routines --triggers --no-tablespaces --set-gtid-purged=OFF "$MYSQL_DATABASE"' > "$backup_dir/database.sql"
+            test -s "$backup_dir/database.sql"
+            gzip "$backup_dir/database.sql"
+            echo "Database backup and previous app image saved."
+
+            rollback_app() {
+              echo "Deployment failed; restoring previous application image."
+              docker image tag "cqa-app:rollback-${{ github.run_id }}" "$app_tag"
+              docker compose up -d --no-build --no-deps app
+              echo "Previous application image restored; database backup remains on the VPS."
+            }
 
             if ! /home/karien/cqa-personal-zalo/deploy.sh; then
+              rollback_app
               exit 1
             fi
             if [ "$(git rev-parse HEAD)" != '${{ github.sha }}' ]; then
               echo "VPS checkout does not match requested commit."
+              rollback_app
               exit 1
             fi
             healthy=0
             for attempt in $(seq 1 36); do
-              if health=$(docker exec cqa-app wget -q -T 5 -O - http://127.0.0.1:8080/health); then
+              if docker exec cqa-app wget -q -T 5 -O - http://127.0.0.1:8080/health > "$backup_dir/health.json"; then
                 healthy=1
                 break
               fi
               sleep 5
             done
             if [ "$healthy" -ne 1 ]; then
+              rollback_app
               exit 1
             fi
             table_count=$(docker exec -i cqa-db sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --user=root --batch --skip-column-names "$MYSQL_DATABASE"' <<'SQL'
@@ -91,12 +114,14 @@ jobs:
             )
             if [ "$table_count" != '4' ]; then
               echo "Messenger migration verification failed."
+              rollback_app
               exit 1
             fi
             if ! docker exec cqa-app sh -c 'test -n "$(find /app/static/assets -name "ServiceQuality-*.js" -print -quit)"'; then
               echo "Messenger frontend artifact is missing."
+              rollback_app
               exit 1
             fi
             docker compose ps
-            printf '%s\n' "$health"
+            cat "$backup_dir/health.json"
             echo "Verified commit ${{ github.sha }}: app healthy, Messenger tables and frontend present."
