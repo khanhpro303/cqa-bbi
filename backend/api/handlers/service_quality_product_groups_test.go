@@ -16,6 +16,22 @@ import (
 	"github.com/vietbui/chat-quality-agent/servicequality"
 )
 
+func TestParseProductGroupsAcceptsWrappedAIJSONWithoutChangingMapping(t *testing.T) {
+	content := `{"groups":[{"name":"E-24","member_ids":[1,2]}]}`
+	encoded, _ := json.Marshal(content)
+	for _, wrapped := range []string{content, "```json\n" + content + "\n```", "Kết quả tổng hợp:\n```json\n" + content + "\n```\nĐã gom đầy đủ.", string(encoded)} {
+		groups, err := parseAndValidateProductGroups(wrapped, []string{"Mũ E-24", "E-24"})
+		if err != nil || len(groups) != 1 || groups[0].Name != "E-24" || !reflect.DeepEqual(groups[0].Members, []string{"Mũ E-24", "E-24"}) {
+			t.Fatalf("wrapped response failed: groups=%#v err=%v", groups, err)
+		}
+	}
+	for _, invalid := range []string{"Kết quả: " + `{"groups":[{"name":"E-24","member_ids":[1]}]}`, content + "\n" + content, `{"groups":[{"name":"E-24","member_ids":["1",2]}]}`} {
+		if _, err := parseAndValidateProductGroups(invalid, []string{"Mũ E-24", "E-24"}); !errors.Is(err, errInvalidProductGrouping) {
+			t.Fatalf("invalid mapping was accepted: %v", err)
+		}
+	}
+}
+
 type productGroupingMockProvider struct {
 	response ai.AIResponse
 	err      error

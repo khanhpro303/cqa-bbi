@@ -300,14 +300,16 @@ func productGroupingInput(names []string) ([]byte, error) {
 
 func parseAndValidateProductGroups(content string, names []string) ([]serviceQualityProductGroup, error) {
 	content = strings.TrimSpace(content)
-	if strings.HasPrefix(content, "```") {
-		if newline := strings.Index(content, "\n"); newline >= 0 {
-			content = content[newline+1:]
+	// Some compatible providers wrap the JSON in a string or explanatory text.
+	// Strip only that transport envelope; the AI's complete mapping is still validated below.
+	if strings.HasPrefix(content, `"`) {
+		var decoded string
+		if json.Unmarshal([]byte(content), &decoded) == nil {
+			content = strings.TrimSpace(decoded)
 		}
-		if end := strings.LastIndex(content, "```"); end >= 0 {
-			content = content[:end]
-		}
-		content = strings.TrimSpace(content)
+	}
+	if start, end := strings.Index(content, "{"), strings.LastIndex(content, "}"); start >= 0 && end >= start {
+		content = content[start : end+1]
 	}
 	var response struct {
 		Groups []struct {
@@ -316,8 +318,8 @@ func parseAndValidateProductGroups(content string, names []string) ([]serviceQua
 			MemberIDs []int    `json:"member_ids"`
 		} `json:"groups"`
 	}
-	if json.Unmarshal([]byte(content), &response) != nil {
-		return nil, fmt.Errorf("%w: response must be a JSON object containing groups with name and member_ids (integer IDs starting at 1) or members (exact original labels)", errInvalidProductGrouping)
+	if err := json.Unmarshal([]byte(content), &response); err != nil {
+		return nil, fmt.Errorf("%w: response must be a JSON object containing groups with name and member_ids (integer IDs starting at 1) or members (exact original labels): %v", errInvalidProductGrouping, err)
 	}
 	groups := make([]serviceQualityProductGroup, 0, len(response.Groups))
 	for i, group := range response.Groups {

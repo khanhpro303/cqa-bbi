@@ -6,7 +6,7 @@ export default {
   sq_task_delete_confirm: 'Xóa tác vụ này?',
   sq_system_prompt: 'Prompt hệ thống',
   sq_grouping_task_description: 'Tác vụ chạy khi mở treemap trong Chất lượng CSKH và có dữ liệu sản phẩm cần tổng hợp.',
-  sq_prompt_hint: 'Đây là prompt hệ thống đang dùng. Lưu thay đổi để áp dụng cho lần tổng hợp tiếp theo. Giữ định dạng JSON groups gồm name và members.',
+  sq_prompt_hint: 'Đây là prompt hệ thống đang dùng. Lưu thay đổi để áp dụng cho lần tổng hợp tiếp theo. Giữ định dạng JSON groups gồm name và member_ids (vị trí nhãn đầu vào, bắt đầu từ 1); members với nhãn gốc chính xác vẫn được hỗ trợ.',
   sq_prompt_saved: 'Đã lưu prompt hệ thống.',
   sq_prompt_save_error: 'Không thể lưu prompt hệ thống.',
   sq_prompt_admin_only: 'Chỉ admin mới có quyền chỉnh prompt hệ thống.',
