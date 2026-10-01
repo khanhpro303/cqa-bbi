@@ -22,7 +22,7 @@ export default {
   pg_latest_failed: 'Lần chạy gần nhất bị lỗi',
   pg_unknown_run_error: 'Lần chạy thất bại nhưng chưa có chi tiết lỗi.',
   pg_running: 'AI đang tổng hợp sản phẩm…',
-  pg_run_success: 'Đã tổng hợp sản phẩm. Dữ liệu hiện có được tái sử dụng nếu còn khớp.',
+  pg_run_success: 'Đã chạy lại AI và cập nhật kết quả tổng hợp sản phẩm.',
   pg_results: 'Kết quả đánh giá',
   pg_history: 'Lịch sử chạy',
   pg_from: 'Từ ngày',

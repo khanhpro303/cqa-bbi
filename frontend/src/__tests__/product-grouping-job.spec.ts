@@ -145,7 +145,7 @@ describe('product aggregation monitoring and provenance', () => {
     expect(wrapper.text()).toContain('Chưa có kết quả tổng hợp cho bộ lọc này')
     await button(wrapper, 'Chạy ngay').trigger('click')
     await flushPromises()
-    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-a/service-quality/product-groups', expect.objectContaining({ product_names: results.product_names }))
+    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-a/service-quality/product-groups', expect.objectContaining({ product_names: results.product_names, force: true }))
     expect(mocks.get.mock.calls.filter(([url]) => url.endsWith('product-grouping-results'))).toHaveLength(2)
   })
   it('requires applying changed date filters before running a loaded snapshot', async () => {

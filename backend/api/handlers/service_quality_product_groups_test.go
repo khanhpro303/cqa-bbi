@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"regexp"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/servicequality"
@@ -184,6 +187,227 @@ func TestProductGroupingBatchesKeepEveryAIProductAndUsage(t *testing.T) {
 	}
 	if !sameProductNameSet(actual, names) {
 		t.Fatal("batch inputs missed or repeated source labels")
+	}
+}
+
+type repairingBatchedProductGroupingProvider struct {
+	productGroupingMockProvider
+	mu          sync.Mutex
+	calls       map[string]int
+	repairInput map[string]json.RawMessage
+	alwaysBad   bool
+	transport   error
+}
+
+func (p *repairingBatchedProductGroupingProvider) AnalyzeJSONSchema(_ context.Context, _, input string, _ map[string]interface{}) (ai.AIResponse, error) {
+	var request struct {
+		Names            []string `json:"product_names"`
+		PreviousResponse string   `json:"previous_response"`
+	}
+	if err := json.Unmarshal([]byte(input), &request); err != nil {
+		return ai.AIResponse{}, err
+	}
+	key := request.Names[0]
+	p.mu.Lock()
+	p.calls[key]++
+	call := p.calls[key]
+	if request.PreviousResponse != "" {
+		_ = json.Unmarshal([]byte(input), &p.repairInput)
+	}
+	p.mu.Unlock()
+	if strings.Contains(key, "FF818") && p.transport != nil {
+		return ai.AIResponse{}, p.transport
+	}
+	if strings.Contains(key, "FF818") && (call == 1 || p.alwaysBad) {
+		return ai.AIResponse{Content: `{"assignments":{"1":"FF818"}}`, Provider: "openai"}, nil
+	}
+	assignments := make(map[string]string, len(request.Names))
+	for _, name := range request.Names {
+		canonical := "E-24"
+		if strings.Contains(name, "FF818") {
+			canonical = "FF818"
+		}
+		assignments[name] = canonical
+	}
+	content, _ := json.Marshal(map[string]interface{}{"assignments": assignments})
+	return ai.AIResponse{Content: string(content), Provider: "openai", InputTokens: 3, OutputTokens: 2}, nil
+}
+
+func productGroupingBatchRepairNames() []string {
+	names := make([]string, 0, 9)
+	for i := 0; i < 8; i++ {
+		names = append(names, fmt.Sprintf("Mũ E-24 màu %d", i))
+	}
+	return append(names, "Mũ FF818")
+}
+
+func TestProductGroupingBatchesRepairOnlyInvalidBatch(t *testing.T) {
+	names := productGroupingBatchRepairNames()
+	provider := &repairingBatchedProductGroupingProvider{calls: make(map[string]int)}
+	var usages atomic.Int32
+	saves := 0
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, false, nil
+		},
+		saveCache: func(_ context.Context, _, _ string, groups []serviceQualityProductGroup) error {
+			saves++
+			if _, err := validateProductGroups(names, groups); err != nil {
+				t.Fatalf("repaired batches produced invalid cache: %v", err)
+			}
+			return nil
+		},
+		aiClient: func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage: func(context.Context, string, ai.AIResponse) { usages.Add(1) },
+	}
+	groups, err := resolveProductGroups(context.Background(), "tenant", names, deps)
+	if err != nil || len(groups) != 2 || saves != 1 || usages.Load() != 3 {
+		t.Fatalf("batch repair failed: groups=%#v err=%v saves=%d usages=%d", groups, err, saves, usages.Load())
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.calls[names[0]] != 1 || provider.calls[names[8]] != 2 {
+		t.Fatalf("successful batch was retried or invalid batch was not bounded: %#v", provider.calls)
+	}
+	if len(provider.repairInput) != 3 || provider.repairInput["previous_response"] == nil || provider.repairInput["correction"] == nil {
+		t.Fatalf("repair request must contain only batch labels and correction context: %#v", provider.repairInput)
+	}
+	var repairedNames []string
+	if json.Unmarshal(provider.repairInput["product_names"], &repairedNames) != nil || !reflect.DeepEqual(repairedNames, names[8:]) {
+		t.Fatalf("repair request escaped its failed batch: %#v", repairedNames)
+	}
+}
+
+func TestProductGroupingBatchesBoundInvalidRepairWithoutCaching(t *testing.T) {
+	names := productGroupingBatchRepairNames()
+	provider := &repairingBatchedProductGroupingProvider{calls: make(map[string]int), alwaysBad: true}
+	saves := 0
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, false, nil
+		},
+		saveCache: func(context.Context, string, string, []serviceQualityProductGroup) error { saves++; return nil },
+		aiClient:  func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage:  func(context.Context, string, ai.AIResponse) {},
+	}
+	if _, err := resolveProductGroups(context.Background(), "tenant", names, deps); !errors.Is(err, errInvalidProductGrouping) {
+		t.Fatalf("invalid batch repair error = %v, want invalid grouping", err)
+	}
+	if saves != 0 || provider.calls[names[0]] != 1 || provider.calls[names[8]] != 2 {
+		t.Fatalf("invalid batch was cached or retried beyond bound: saves=%d calls=%#v", saves, provider.calls)
+	}
+}
+
+func TestProductGroupingBatchesDoNotRepairTransportErrors(t *testing.T) {
+	names := productGroupingBatchRepairNames()
+	transportErr := errors.New("provider unavailable")
+	provider := &repairingBatchedProductGroupingProvider{calls: make(map[string]int), transport: transportErr}
+	saves := 0
+	deps := productGroupingDependencies{
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, false, nil
+		},
+		saveCache: func(context.Context, string, string, []serviceQualityProductGroup) error { saves++; return nil },
+		aiClient:  func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage:  func(context.Context, string, ai.AIResponse) {},
+	}
+	if _, err := resolveProductGroups(context.Background(), "tenant", names, deps); !errors.Is(err, transportErr) {
+		t.Fatalf("transport error = %v, want original provider error", err)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if saves != 0 || provider.calls[names[0]] != 1 || provider.calls[names[8]] != 1 || provider.repairInput != nil {
+		t.Fatalf("transport error was repaired or cached: saves=%d calls=%#v repair=%#v", saves, provider.calls, provider.repairInput)
+	}
+}
+
+func TestResolveProductGroupsForceBypassesAndReplacesCache(t *testing.T) {
+	names := []string{"E-24"}
+	provider := &productGroupingMockProvider{response: ai.AIResponse{Content: `{"groups":[{"name":"E24","members":["E-24"]}]}`}}
+	hash := productGroupingInputHash(names, ai.MessengerProductGroupingPrompt+"job")
+	cache := map[string][]serviceQualityProductGroup{hash: {{Name: "E-24", Members: names}}}
+	loads, starts, finishes := 0, 0, 0
+	var finishErr error
+	deps := productGroupingDependencies{
+		cacheScope: "job",
+		force:      true,
+		loadCache: func(_ context.Context, _, key string) ([]serviceQualityProductGroup, bool, error) {
+			loads++
+			groups, ok := cache[key]
+			return groups, ok, nil
+		},
+		saveCache: func(_ context.Context, _, key string, groups []serviceQualityProductGroup) error {
+			cache[key] = groups
+			return nil
+		},
+		aiClient:  func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage:  func(context.Context, string, ai.AIResponse) {},
+		startRun:  func(context.Context) error { starts++; return nil },
+		finishRun: func(err error) { finishes++; finishErr = err },
+	}
+	groups, err := resolveProductGroups(context.Background(), "tenant", names, deps)
+	if err != nil || loads != 0 || provider.calls != 1 || starts != 1 || finishes != 1 || finishErr != nil {
+		t.Fatalf("forced resolution did not bypass cache and complete a live run: groups=%#v err=%v loads=%d calls=%d starts=%d finishes=%d finishErr=%v", groups, err, loads, provider.calls, starts, finishes, finishErr)
+	}
+	if len(cache[hash]) != 1 || cache[hash][0].Name != "E24" {
+		t.Fatalf("forced resolution did not replace the current cache entry: %#v", cache[hash])
+	}
+}
+
+func TestResolveProductGroupsForceReportsCachePersistenceFailure(t *testing.T) {
+	provider := &productGroupingMockProvider{response: ai.AIResponse{Content: `{"groups":[{"name":"E-24","members":["E-24"]}]}`}}
+	var finishErr error
+	deps := productGroupingDependencies{
+		force: true,
+		loadCache: func(context.Context, string, string) ([]serviceQualityProductGroup, bool, error) {
+			return nil, true, nil
+		},
+		saveCache: func(context.Context, string, string, []serviceQualityProductGroup) error {
+			return errors.New("database password leaked internally")
+		},
+		aiClient:  func(context.Context, string) (ai.AIProvider, error) { return provider, nil },
+		logUsage:  func(context.Context, string, ai.AIResponse) {},
+		finishRun: func(err error) { finishErr = err },
+	}
+	groups, err := resolveProductGroups(context.Background(), "tenant", []string{"E-24"}, deps)
+	if groups != nil || !errors.Is(err, errProductGroupingCacheWrite) || !errors.Is(finishErr, errProductGroupingCacheWrite) {
+		t.Fatalf("forced cache failure reported success: groups=%#v err=%v finishErr=%v", groups, err, finishErr)
+	}
+}
+
+func TestProductGroupingRunErrorMessagesAreSafeAndActionable(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w: secret product response", errInvalidProductGrouping), "AI trả về kết quả gom nhóm không hợp lệ."},
+		{fmt.Errorf("provider: %w", context.DeadlineExceeded), "Hết thời gian chờ AI gom nhóm sản phẩm."},
+		{fmt.Errorf("provider: %w", context.Canceled), "Lượt gom nhóm sản phẩm đã bị hủy."},
+		{errors.New("OpenAI API key not configured: sk-secret"), "Cấu hình AI chưa hợp lệ hoặc chưa đầy đủ."},
+		{errors.New("provider response contained sk-secret and raw content"), "Nhà cung cấp AI không thể hoàn tất gom nhóm sản phẩm."},
+		{fmt.Errorf("%w: database password", errProductGroupingCacheWrite), "Không thể lưu kết quả tổng hợp; vui lòng thử lại."},
+	}
+	for _, test := range tests {
+		if got := productGroupingRunErrorMessage(test.err); got != test.want || strings.Contains(got, "secret") || strings.Contains(got, "password") {
+			t.Errorf("productGroupingRunErrorMessage(%v) = %q, want %q", test.err, got, test.want)
+		}
+	}
+}
+
+func TestForceProductGroupingRequiresJobWriteBeforeDatabaseAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("tenant_role", "member")
+		c.Set("tenant_permissions", `{"messages":"r"}`)
+	})
+	router.POST("/product-groups", GroupServiceQualityProducts)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/product-groups", strings.NewReader(`{"force":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "permission_denied") {
+		t.Fatalf("force request reached database without jobs:w: %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 

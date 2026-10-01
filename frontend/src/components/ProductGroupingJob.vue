@@ -247,7 +247,7 @@ async function run() {
   runError.value = ''
   runSucceeded.value = false
   try {
-    const { data } = await api.post(`/tenants/${tenant}/service-quality/product-groups`, { from: dateFrom.value, to: dateTo.value, channel_id: channelId.value, product_names: report.value.product_names })
+    const { data } = await api.post(`/tenants/${tenant}/service-quality/product-groups`, { from: dateFrom.value, to: dateTo.value, channel_id: channelId.value, product_names: report.value.product_names, force: true })
     if (disposed || tenant !== props.tenantId || jobId !== props.job.id) return
     if (!data.enabled) throw new Error('task_inactive')
     runSucceeded.value = true

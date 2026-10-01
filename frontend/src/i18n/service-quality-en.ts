@@ -22,7 +22,7 @@ export default {
   pg_latest_failed: 'Latest run failed',
   pg_unknown_run_error: 'This run failed without an error detail.',
   pg_running: 'AI is aggregating products…',
-  pg_run_success: 'Products aggregated. Matching existing results are reused.',
+  pg_run_success: 'AI rerun completed and product aggregation results updated.',
   pg_results: 'Evaluation results',
   pg_history: 'Run history',
   pg_from: 'From date',
