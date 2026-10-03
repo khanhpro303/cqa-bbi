@@ -6,6 +6,7 @@ import { createI18n } from 'vue-i18n'
 import ProductGroupingJob from '../components/ProductGroupingJob.vue'
 import JobList from '../views/Jobs/JobList.vue'
 import messages from '../i18n/vi'
+import { PRODUCT_GROUPING_REQUEST_TIMEOUT_MS } from '../utils/product-grouping-report'
 
 const mocks = vi.hoisted(() => ({ auth: { tenantPerms: { role: 'admin', permissions: { jobs: 'rwd' } }, canEdit: vi.fn(() => true), canView: vi.fn((_resource: string) => true) }, jobs: { jobs: [] as any[], fetchJobs: vi.fn(), deleteJob: vi.fn() }, get: vi.fn(), post: vi.fn(), put: vi.fn(), route: { params: { tenantId: 'tenant-a' } } }))
 vi.mock('../stores/auth', () => ({ useAuthStore: () => mocks.auth }))
@@ -145,7 +146,7 @@ describe('product aggregation monitoring and provenance', () => {
     expect(wrapper.text()).toContain('Chưa có kết quả tổng hợp cho bộ lọc này')
     await button(wrapper, 'Chạy ngay').trigger('click')
     await flushPromises()
-    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-a/service-quality/product-groups', expect.objectContaining({ product_names: results.product_names, force: true }))
+    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-a/service-quality/product-groups', expect.objectContaining({ product_names: results.product_names, force: true }), { timeout: PRODUCT_GROUPING_REQUEST_TIMEOUT_MS })
     expect(mocks.get.mock.calls.filter(([url]) => url.endsWith('product-grouping-results'))).toHaveLength(2)
   })
   it('requires applying changed date filters before running a loaded snapshot', async () => {

@@ -1,5 +1,9 @@
 import type { ProductInsight, LeadQualityInsight } from './service-quality'
 
+// Product grouping runs synchronously: backend run budget 270s, nginx proxy 300s.
+// The default 120s client timeout would abort large reports before the backend finishes.
+export const PRODUCT_GROUPING_REQUEST_TIMEOUT_MS = 280_000
+
 export interface ProductGroupingSource {
   insight_job_id?: string
   conversation_id: string

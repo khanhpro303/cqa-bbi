@@ -7,6 +7,7 @@ import ServiceQualityCharts from '../components/ServiceQualityCharts.vue'
 import viMessages from '../i18n/service-quality-vi'
 import enMessages from '../i18n/service-quality-en'
 import type { InsightRow } from '../utils/service-quality'
+import { PRODUCT_GROUPING_REQUEST_TIMEOUT_MS } from '../utils/product-grouping-report'
 
 const mocks = vi.hoisted(() => ({ post: vi.fn() }))
 vi.mock('../api', () => ({ default: { post: mocks.post } }))
@@ -44,7 +45,7 @@ describe('ServiceQuality AI chart carousel', () => {
     expect(wrapper.get('svg').attributes('aria-label')).toContain('Tiềm năng cao: 1 (50%)')
     expect(wrapper.get('svg').attributes('aria-label')).toContain('Tiềm năng vừa: 1 (50%)')
     expect(wrapper.text()).toContain('Không tính 1 hội thoại')
-    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-one/service-quality/product-groups', { ...scope, product_names: ['LS2 FF 818', 'Mũ E-24', 'Mũ bảo hiểm E-24'] }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-one/service-quality/product-groups', { ...scope, product_names: ['LS2 FF 818', 'Mũ E-24', 'Mũ bảo hiểm E-24'] }, expect.objectContaining({ signal: expect.any(AbortSignal), timeout: PRODUCT_GROUPING_REQUEST_TIMEOUT_MS }))
     await wrapper.get('button[aria-label="Biểu đồ tiếp theo"]').trigger('click')
     expect(wrapper.findAll('.treemap-tile').map(tile => tile.text())).toEqual(['E-24 1', 'FF818 1'])
     await wrapper.get('select').setValue('high')

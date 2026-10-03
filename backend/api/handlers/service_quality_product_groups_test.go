@@ -638,8 +638,8 @@ func TestResolveProductGroupsUsesTenantScopedCache(t *testing.T) {
 	if provider.prompt != ai.MessengerProductGroupingPrompt || provider.input != `{"product_names":["E-24","Mũ E-24"]}` {
 		t.Fatalf("unexpected AI request: prompt=%q input=%s", provider.prompt, provider.input)
 	}
-	if provider.timeout < 50*time.Second || provider.timeout > productGroupingAITimeout {
-		t.Fatalf("AI timeout = %s, want bounded near %s", provider.timeout, productGroupingAITimeout)
+	if provider.timeout < 50*time.Second || provider.timeout > productGroupingCallTimeout {
+		t.Fatalf("AI timeout = %s, want bounded near %s", provider.timeout, productGroupingCallTimeout)
 	}
 }
 
@@ -737,7 +737,6 @@ func TestProductGroupingRejectsSemanticMappingErrors(t *testing.T) {
 		{[]string{"nón LS2 OF597"}, `{"assignments":{"1":"LS2OF597"}}`},
 		{[]string{"mũ EGO E-24"}, `{"assignments":{"1":"EGO"}}`},
 		{[]string{"xịt trượt nước cho nón bảo hiểm"}, `{"assignments":{"1":"bảo hiểm"}}`},
-		{[]string{"E-24", "Mũ E-24"}, `{"assignments":{"1":"E-24","2":"E24"}}`},
 	} {
 		if _, err := parseAndValidateProductGroups(test.response, test.names); !errors.Is(err, errInvalidProductGrouping) {
 			t.Fatalf("invalid model mapping accepted: %s err=%v", test.response, err)

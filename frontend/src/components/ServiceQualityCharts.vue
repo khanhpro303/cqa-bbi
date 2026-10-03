@@ -63,6 +63,7 @@ import { useI18n } from 'vue-i18n'
 import { aggregateInsights, type InsightRow } from '../utils/service-quality'
 import { aggregateProductDemand, collectProductNames, layoutTreemap, potentialLevels, type AIProductGroup, type PotentialFilter } from '../utils/quality-charts'
 import api from '../api'
+import { PRODUCT_GROUPING_REQUEST_TIMEOUT_MS } from '../utils/product-grouping-report'
 
 const props = defineProps<{ rows: InsightRow[]; from: string; to: string; tenantId: string; reportVersion?: string; productGroupingEnabled?: boolean; productGroupingVersion?: string; scope: { from: string; to: string; channel_id: string } }>()
 const emit = defineEmits<{ 'refresh-report': [] }>()
@@ -172,7 +173,7 @@ async function loadGroups() {
   controller = new AbortController()
   grouping.value = true
   try {
-    const { data } = await api.post<{ enabled: boolean; groups: AIProductGroup[] }>(`/tenants/${props.tenantId}/service-quality/product-groups`, { ...props.scope, product_names: sourceNames.value }, { signal: controller.signal })
+    const { data } = await api.post<{ enabled: boolean; groups: AIProductGroup[] }>(`/tenants/${props.tenantId}/service-quality/product-groups`, { ...props.scope, product_names: sourceNames.value }, { signal: controller.signal, timeout: PRODUCT_GROUPING_REQUEST_TIMEOUT_MS })
     if (sequence !== requestSequence) return
     if (!data.enabled) {
       disabledByServer.value = true

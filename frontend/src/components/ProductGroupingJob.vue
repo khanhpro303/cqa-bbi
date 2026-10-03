@@ -130,7 +130,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '../stores/auth'
 import type { JobRun } from '../stores/jobs'
-import type { ProductGroupingReport } from '../utils/product-grouping-report'
+import { PRODUCT_GROUPING_REQUEST_TIMEOUT_MS, type ProductGroupingReport } from '../utils/product-grouping-report'
 import api from '../api'
 
 const props = defineProps<{ job: Record<string, any>; tenantId: string }>()
@@ -247,7 +247,7 @@ async function run() {
   runError.value = ''
   runSucceeded.value = false
   try {
-    const { data } = await api.post(`/tenants/${tenant}/service-quality/product-groups`, { from: dateFrom.value, to: dateTo.value, channel_id: channelId.value, product_names: report.value.product_names, force: true })
+    const { data } = await api.post(`/tenants/${tenant}/service-quality/product-groups`, { from: dateFrom.value, to: dateTo.value, channel_id: channelId.value, product_names: report.value.product_names, force: true }, { timeout: PRODUCT_GROUPING_REQUEST_TIMEOUT_MS })
     if (disposed || tenant !== props.tenantId || jobId !== props.job.id) return
     if (!data.enabled) throw new Error('task_inactive')
     runSucceeded.value = true
