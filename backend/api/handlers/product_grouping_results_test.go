@@ -102,3 +102,29 @@ func TestBuildProductGroupingResultGroupsCountsConversationOncePerGroup(t *testi
 		t.Fatalf("duplicate mentions changed conversation count: %#v", groups)
 	}
 }
+
+// A successful run can store labels the AI could not normalize under their own
+// verbatim name. The results page must show that stored result, not report
+// "AI đã xử lý nhưng chưa tải được kết quả tổng hợp" after every successful run.
+func TestCachedProductGroupingWithIsolatedLabelsIsReady(t *testing.T) {
+	from := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	report := &servicequality.Report{From: from, To: from.AddDate(0, 0, 1), GeneratedAt: from, Pages: []servicequality.Page{}, Rows: []servicequality.Row{}}
+	names := []string{"Mũ E-24", "Bulldog Doggo", "EGO E-24"}
+	isolated := mustEncodeProductGroupingCache(t, []serviceQualityProductGroup{
+		{Name: "E-24", Members: []string{"Mũ E-24", "EGO E-24"}},
+		{Name: "Bulldog Doggo", Members: []string{"Bulldog Doggo"}},
+	})
+	response := pendingProductGroupingResultsResponse(report, "", names)
+	if err := applyCachedProductGroupingResults(&response, report, isolated, nil); err != nil || !response.GroupingReady || response.Status != "ready" {
+		t.Fatalf("stored result with an isolated label was rejected: err=%v response=%#v", err, response)
+	}
+
+	discarded := mustEncodeProductGroupingCache(t, []serviceQualityProductGroup{
+		{Name: "", Members: []string{"Mũ E-24", "EGO E-24"}},
+		{Name: "Bulldog Doggo", Members: []string{"Bulldog Doggo"}},
+	})
+	response = pendingProductGroupingResultsResponse(report, "", names)
+	if err := applyCachedProductGroupingResults(&response, report, discarded, nil); err == nil || response.GroupingReady {
+		t.Fatal("stored result that discards a named product was accepted")
+	}
+}

@@ -159,7 +159,8 @@ func applyCachedProductGroupingResults(response *productGroupingResultsResponse,
 	if err != nil {
 		return err
 	}
-	groups, err = validateProductGroups(response.ProductNames, groups)
+	// Same rule as the job's own cache read: accept labels it isolated verbatim.
+	groups, err = validateStoredProductGroups(response.ProductNames, groups)
 	if err != nil {
 		return err
 	}
