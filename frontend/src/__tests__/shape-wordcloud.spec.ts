@@ -44,7 +44,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(280)
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
-    fillRect: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), moveTo: vi.fn(),
+    fillRect: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), ellipse: vi.fn(), moveTo: vi.fn(),
     lineTo: vi.fn(), closePath: vi.fn(), fill: vi.fn(),
   } as unknown as CanvasRenderingContext2D)
   vi.stubGlobal('ResizeObserver', Observer)
@@ -131,7 +131,8 @@ describe('ShapeWordcloud', () => {
   it('packs the selected shape and remeasures after resize', async () => {
     const wrapper = await render()
     expect((mocks.render.mock.calls.at(-1)![0] as HTMLCanvasElement[])[0]).toMatchObject({ width: 320, height: 280 })
-    expect(lastRender()[1]).toMatchObject({ clearCanvas: false, shape: 'circle', shrinkToFit: true, drawOutOfBound: false, ellipticity: 1 })
+    expect(lastRender()[1]).toMatchObject({ clearCanvas: false, shape: 'circle', shrinkToFit: true, drawOutOfBound: false })
+    expect(lastRender()[1].ellipticity).toBeCloseTo(134 / 154)
     expect(observers[0]!.observe).toHaveBeenCalledWith(wrapper.get('.wordcloud').element)
     for (const shape of ['star', 'diamond']) {
       await wrapper.get('select').setValue(shape)
@@ -161,6 +162,24 @@ describe('ShapeWordcloud', () => {
     expect(sizes[0]).toBeLessThan(sparseTop)
     expect(sizes[0]).toBeGreaterThan(sizes.at(-1)!)
     expect(Math.min(...sizes)).toBeGreaterThanOrEqual(11)
+  })
+
+  it('sizes words from canvas text metrics and stretches the shape to the host box', async () => {
+    width = 200
+    await render()
+    const estimatedTop = lastRender()[1].list![0]![1] as number
+    expect(lastRender()[1].ellipticity).toBeCloseTo(134 / 94)
+    const mask = (mocks.render.mock.calls.at(-1)![0] as HTMLCanvasElement[])[0]!
+    const ellipse = (mask.getContext('2d') as unknown as { ellipse: ReturnType<typeof vi.fn> }).ellipse
+    expect(ellipse).toHaveBeenCalledWith(100, 140, 94, 134, 0, 0, 2 * Math.PI)
+    const measureText = vi.fn((text: string) => ({ width: text.length * 40 }))
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue({
+      fillRect: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), ellipse: vi.fn(), moveTo: vi.fn(),
+      lineTo: vi.fn(), closePath: vi.fn(), fill: vi.fn(), measureText,
+    } as unknown as CanvasRenderingContext2D)
+    await render()
+    expect(measureText).toHaveBeenCalledWith('Áo xanh')
+    expect(lastRender()[1].list![0]![1]).toBeGreaterThan(estimatedTop)
   })
 
   it('preserves distinct source keys and true counts when duplicate labels shrink', async () => {

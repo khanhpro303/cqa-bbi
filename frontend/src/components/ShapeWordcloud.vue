@@ -46,9 +46,11 @@ let disposed = false
 let maskedRender = true
 
 const GRID_SIZE = 4
-// Estimated glyph box for a 600-weight UI font, in em.
-const TEXT_WIDTH_EM = .58
-const LINE_HEIGHT_EM = 1.05
+const FONT_WEIGHT = '600'
+// Fallback glyph width for a 600-weight UI font when canvas text metrics are unavailable.
+const FALLBACK_WIDTH_EM = .58
+// Vietnamese stacked diacritics make glyphs taller than one em.
+const LINE_HEIGHT_EM = 1.1
 // Share of the shape that packed words can cover; the spiral leaves gaps.
 const FILL_RATIO = .65
 const MIN_FONT = 11
@@ -56,25 +58,40 @@ const MAX_FONT = 96
 // Keep a visible size gap between frequent and rare keywords in crowded clouds;
 // shrinkToFit still reduces words that cannot be placed.
 const MIN_TOP_FONT = 18
+const MEASURE_FONT = 100
 
-interface SizedLabel { length: number; rank: number }
+interface SizedLabel { widthEm: number; rank: number }
+interface ShapeRadii { rx: number; ry: number }
 
-function shapeRadius(width: number, height: number) {
-  return Math.max(Math.min(width, height) / 2 - 6, 1)
+let measureContext: CanvasRenderingContext2D | null | undefined
+
+// Shapes stretch to the host box so the rendered area is used in both directions.
+function shapeRadii(width: number, height: number): ShapeRadii {
+  return { rx: Math.max(width / 2 - 6, 1), ry: Math.max(height / 2 - 6, 1) }
 }
 
-function shapeArea(radius: number) {
-  if (shape.value === 'circle') return Math.PI * radius ** 2
-  if (shape.value === 'diamond') return 2 * radius ** 2
+function shapeArea({ rx, ry }: ShapeRadii) {
+  if (shape.value === 'circle') return Math.PI * rx * ry
+  if (shape.value === 'diamond') return 2 * rx * ry
   // Five-point star whose inner radius is half of the outer radius.
-  return 5 * radius * (radius * .5) * Math.sin(Math.PI / 5)
+  return 5 * rx * (ry * .5) * Math.sin(Math.PI / 5)
 }
 
 // Widest horizontal run near the shape centre that one word can occupy.
-function shapeSpan(radius: number) {
-  if (shape.value === 'circle') return 1.8 * radius
-  if (shape.value === 'diamond') return 1.4 * radius
-  return radius
+function shapeSpan({ rx }: ShapeRadii) {
+  if (shape.value === 'circle') return 1.9 * rx
+  if (shape.value === 'diamond') return 1.5 * rx
+  return rx
+}
+
+function textWidthEm(label: string, fontFamily: string) {
+  if (measureContext === undefined) measureContext = document.createElement('canvas').getContext('2d')
+  if (typeof measureContext?.measureText === 'function') {
+    measureContext.font = `${FONT_WEIGHT} ${MEASURE_FONT}px ${fontFamily}`
+    const width = measureContext.measureText(label).width
+    if (width > 0) return width / MEASURE_FONT
+  }
+  return Math.max([...label.normalize('NFC')].length, 1) * FALLBACK_WIDTH_EM
 }
 
 function fontSize(top: number, label: SizedLabel) {
@@ -85,21 +102,21 @@ function fontSize(top: number, label: SizedLabel) {
  * Largest top font size whose estimated text area fits inside the shape. It
  * grows when there are few or short keywords and shrinks as the cloud fills.
  */
-function fitTopFont(labels: SizedLabel[], radius: number) {
-  const budget = FILL_RATIO * shapeArea(radius)
-  const span = shapeSpan(radius)
+function fitTopFont(labels: SizedLabel[], radii: ShapeRadii) {
+  const budget = FILL_RATIO * shapeArea(radii)
+  const span = shapeSpan(radii)
   const fits = (top: number) => {
     let area = 0
     for (const label of labels) {
       const size = fontSize(top, label)
-      const width = size * label.length * TEXT_WIDTH_EM
+      const width = size * label.widthEm
       if (width > span) return false
       area += (width + GRID_SIZE) * (size * LINE_HEIGHT_EM + GRID_SIZE)
     }
     return area <= budget
   }
   let low = MIN_FONT
-  let high = Math.max(MIN_FONT, Math.min(MAX_FONT, radius * .6))
+  let high = Math.max(MIN_FONT, Math.min(MAX_FONT, Math.min(radii.rx, radii.ry) * .6))
   if (fits(high)) return high
   for (let step = 0; step < 20; step++) {
     const middle = (low + high) / 2
@@ -120,14 +137,16 @@ function renderCloud(useMask: boolean | number = true) {
     renderError.value = true
     return
   }
+  const fontFamily = getComputedStyle(element).fontFamily
+  const radii = shapeRadii(element.clientWidth, element.clientHeight)
   const counts = props.items.map(item => item.count)
   const max = Math.max(...counts, 1)
   const min = Math.min(...counts, 1)
   const labels: SizedLabel[] = props.items.map(item => ({
-    length: Math.max([...item.label.normalize('NFC')].length, 1),
+    widthEm: textWidthEm(item.label, fontFamily),
     rank: max === min ? 1 : (Math.sqrt(item.count) - Math.sqrt(min)) / (Math.sqrt(max) - Math.sqrt(min)),
   }))
-  const top = fitTopFont(labels, shapeRadius(element.clientWidth, element.clientHeight))
+  const top = fitTopFont(labels, radii)
   // Layout weights can be mutated by shrinkToFit; keep source counts untouched.
   const list: WordCloud.ListEntry[] = props.items.map((item, index) => [
     item.label,
@@ -141,10 +160,11 @@ function renderCloud(useMask: boolean | number = true) {
     list,
     clearCanvas: !maskedRender,
     shape: shape.value,
-    ellipticity: 1,
+    // Spiral outward in the box's aspect ratio so words reach the stretched edges.
+    ellipticity: radii.ry / radii.rx,
     gridSize: GRID_SIZE,
-    fontFamily: getComputedStyle(element).fontFamily,
-    fontWeight: '600',
+    fontFamily,
+    fontWeight: FONT_WEIGHT,
     weightFactor: 1,
     minSize: 10,
     shrinkToFit: true,
@@ -187,18 +207,18 @@ function createShapeMask(width: number, height: number): HTMLCanvasElement | nul
   context.fillRect(0, 0, width, height)
   context.globalCompositeOperation = 'destination-out'
   context.beginPath()
-  const radius = shapeRadius(width, height)
+  const { rx, ry } = shapeRadii(width, height)
   const x = width / 2
   const y = height / 2
   if (shape.value === 'circle') {
-    context.arc(x, y, radius, 0, 2 * Math.PI)
+    context.ellipse(x, y, rx, ry, 0, 0, 2 * Math.PI)
   } else {
     const points = shape.value === 'star' ? 10 : 4
     for (let index = 0; index < points; index++) {
       const angle = -Math.PI / 2 + index * 2 * Math.PI / points
-      const distance = shape.value === 'star' && index % 2 ? radius * .5 : radius
-      const px = x + Math.cos(angle) * distance
-      const py = y + Math.sin(angle) * distance
+      const distance = shape.value === 'star' && index % 2 ? .5 : 1
+      const px = x + Math.cos(angle) * rx * distance
+      const py = y + Math.sin(angle) * ry * distance
       if (index === 0) context.moveTo(px, py)
       else context.lineTo(px, py)
     }
