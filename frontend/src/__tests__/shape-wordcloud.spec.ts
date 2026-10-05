@@ -148,6 +148,21 @@ describe('ShapeWordcloud', () => {
     expect(lastRender()[1].list![0]![1]).toBeLessThan(previousWeight)
   })
 
+  it('scales fonts to the shape area so sparse clouds grow and crowded clouds shrink', async () => {
+    const sparse = await render()
+    const sparseTop = lastRender()[1].list![0]![1] as number
+    expect(sparseTop).toBeGreaterThan(32)
+    const crowded = Array.from({ length: 40 }, (_, index) => ({
+      key: `k${index}`, label: `Keyword dài ${index}`, count: 40 - index, conversationIds: [String(index)],
+    }))
+    await sparse.setProps({ items: crowded })
+    await runFrames()
+    const sizes = lastRender()[1].list!.map(item => item[1] as number)
+    expect(sizes[0]).toBeLessThan(sparseTop)
+    expect(sizes[0]).toBeGreaterThan(sizes.at(-1)!)
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(11)
+  })
+
   it('preserves distinct source keys and true counts when duplicate labels shrink', async () => {
     const wrapper = await render()
     const [host, options] = lastRender()

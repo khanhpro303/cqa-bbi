@@ -45,6 +45,70 @@ let frame = 0
 let disposed = false
 let maskedRender = true
 
+const GRID_SIZE = 4
+// Estimated glyph box for a 600-weight UI font, in em.
+const TEXT_WIDTH_EM = .58
+const LINE_HEIGHT_EM = 1.05
+// Share of the shape that packed words can cover; the spiral leaves gaps.
+const FILL_RATIO = .65
+const MIN_FONT = 11
+const MAX_FONT = 96
+// Keep a visible size gap between frequent and rare keywords in crowded clouds;
+// shrinkToFit still reduces words that cannot be placed.
+const MIN_TOP_FONT = 18
+
+interface SizedLabel { length: number; rank: number }
+
+function shapeRadius(width: number, height: number) {
+  return Math.max(Math.min(width, height) / 2 - 6, 1)
+}
+
+function shapeArea(radius: number) {
+  if (shape.value === 'circle') return Math.PI * radius ** 2
+  if (shape.value === 'diamond') return 2 * radius ** 2
+  // Five-point star whose inner radius is half of the outer radius.
+  return 5 * radius * (radius * .5) * Math.sin(Math.PI / 5)
+}
+
+// Widest horizontal run near the shape centre that one word can occupy.
+function shapeSpan(radius: number) {
+  if (shape.value === 'circle') return 1.8 * radius
+  if (shape.value === 'diamond') return 1.4 * radius
+  return radius
+}
+
+function fontSize(top: number, label: SizedLabel) {
+  return MIN_FONT + (top - MIN_FONT) * label.rank
+}
+
+/**
+ * Largest top font size whose estimated text area fits inside the shape. It
+ * grows when there are few or short keywords and shrinks as the cloud fills.
+ */
+function fitTopFont(labels: SizedLabel[], radius: number) {
+  const budget = FILL_RATIO * shapeArea(radius)
+  const span = shapeSpan(radius)
+  const fits = (top: number) => {
+    let area = 0
+    for (const label of labels) {
+      const size = fontSize(top, label)
+      const width = size * label.length * TEXT_WIDTH_EM
+      if (width > span) return false
+      area += (width + GRID_SIZE) * (size * LINE_HEIGHT_EM + GRID_SIZE)
+    }
+    return area <= budget
+  }
+  let low = MIN_FONT
+  let high = Math.max(MIN_FONT, Math.min(MAX_FONT, radius * .6))
+  if (fits(high)) return high
+  for (let step = 0; step < 20; step++) {
+    const middle = (low + high) / 2
+    if (fits(middle)) low = middle
+    else high = middle
+  }
+  return Math.max(low, Math.min(MIN_TOP_FONT, high))
+}
+
 function renderCloud(useMask: boolean | number = true) {
   const element = host.value
   if (!element || disposed || !element.clientWidth) return
@@ -59,11 +123,15 @@ function renderCloud(useMask: boolean | number = true) {
   const counts = props.items.map(item => item.count)
   const max = Math.max(...counts, 1)
   const min = Math.min(...counts, 1)
-  const largestFont = Math.min(32, element.clientWidth / 8)
+  const labels: SizedLabel[] = props.items.map(item => ({
+    length: Math.max([...item.label.normalize('NFC')].length, 1),
+    rank: max === min ? 1 : (Math.sqrt(item.count) - Math.sqrt(min)) / (Math.sqrt(max) - Math.sqrt(min)),
+  }))
+  const top = fitTopFont(labels, shapeRadius(element.clientWidth, element.clientHeight))
   // Layout weights can be mutated by shrinkToFit; keep source counts untouched.
-  const list: WordCloud.ListEntry[] = props.items.map(item => [
+  const list: WordCloud.ListEntry[] = props.items.map((item, index) => [
     item.label,
-    max === min ? 22 : 12 + (largestFont - 12) * (Math.sqrt(item.count) - Math.sqrt(min)) / (Math.sqrt(max) - Math.sqrt(min)),
+    fontSize(top, labels[index]!),
     item.key,
   ])
   let colorIndex = 0
@@ -74,7 +142,7 @@ function renderCloud(useMask: boolean | number = true) {
     clearCanvas: !maskedRender,
     shape: shape.value,
     ellipticity: 1,
-    gridSize: 4,
+    gridSize: GRID_SIZE,
     fontFamily: getComputedStyle(element).fontFamily,
     fontWeight: '600',
     weightFactor: 1,
@@ -119,7 +187,7 @@ function createShapeMask(width: number, height: number): HTMLCanvasElement | nul
   context.fillRect(0, 0, width, height)
   context.globalCompositeOperation = 'destination-out'
   context.beginPath()
-  const radius = Math.min(width, height) / 2 - 6
+  const radius = shapeRadius(width, height)
   const x = width / 2
   const y = height / 2
   if (shape.value === 'circle') {
