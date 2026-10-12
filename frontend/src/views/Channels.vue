@@ -586,8 +586,11 @@ async function testConn(channelId: string) {
 }
 
 async function remove(channelId: string) {
-  if (confirm('Delete this channel?')) {
+  if (!confirm('Delete this channel?')) return
+  try {
     await channelStore.deleteChannel(tenantId.value, channelId)
+  } catch (err: any) {
+    showSnack(err.response?.data?.message || err.response?.data?.error || 'Delete failed', 'error')
   }
 }
 
