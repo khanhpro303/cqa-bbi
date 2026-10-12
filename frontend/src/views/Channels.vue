@@ -580,8 +580,8 @@ async function testConn(channelId: string) {
   try {
     await channelStore.testConnection(tenantId.value, channelId)
     showSnack(t('connection_ok'), 'success')
-  } catch {
-    showSnack(t('connection_failed'), 'error')
+  } catch (err: any) {
+    showSnack(err.response?.data?.error || t('connection_failed'), 'error')
   }
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/api/contracts"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/channels"
+	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -440,6 +441,11 @@ func TestChannelConnection(c *gin.Context) {
 		return
 	}
 
+	if channels.IsExternallyManagedImport(channel.ChannelType) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "connection_managed_externally"})
+		return
+	}
+
 	// Decrypt credentials
 	cfg, _ := config.Load()
 	credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey)
@@ -448,9 +454,39 @@ func TestChannelConnection(c *gin.Context) {
 		return
 	}
 
-	_ = credBytes // TODO: use with channel adapter HealthCheck
+	adapter, err := newChannelAdapterForHealthCheck(channel, credBytes, cfg.EncryptionKey)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Real API round-trip: an expired Zalo access token is rotated here exactly
+	// as during sync, so a dead refresh token fails the test instead of the sync.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), channelHealthCheckTimeout)
+	defer cancel()
+	if err := adapter.HealthCheck(ctx); err != nil {
+		log.Printf("[channels] health check failed for channel %s (%s): %v", channel.ID, channel.ChannelType, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("Kết nối thất bại: %v", err)})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "connection_successful"})
+}
+
+const channelHealthCheckTimeout = 30 * time.Second
+
+// newChannelAdapterForHealthCheck builds the adapter used by the connection
+// test. Zalo adapters go through the channel token store so a token rotation
+// triggered by the test is persisted like any other.
+func newChannelAdapterForHealthCheck(channel models.Channel, credBytes []byte, encryptionKey string) (channels.ChannelAdapter, error) {
+	if channel.ChannelType != "zalo_oa" {
+		return channels.NewAdapter(channel.ChannelType, credBytes)
+	}
+	var zaloCreds channels.ZaloOACredentials
+	if err := json.Unmarshal(credBytes, &zaloCreds); err != nil {
+		return nil, fmt.Errorf("invalid zalo_oa credentials: %w", err)
+	}
+	return zalotoken.NewAdapter(channel.ID, zaloCreds, encryptionKey), nil
 }
 
 // signOAuthState creates an HMAC-signed state parameter: "tenantId:channelId:hmac"
