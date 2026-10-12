@@ -19,7 +19,7 @@ func TestMySQLDeleteChannelCascadeRemovesReferencedChannel(t *testing.T) {
 	rows := []any{
 		&models.Channel{ID: "ch-bulldog", TenantID: "tenant-a", ChannelType: "zalo_oa", Name: "OA bulldog", ExternalID: "oa-1", CredentialsEncrypted: []byte("x"), Metadata: "{}", CreatedAt: now, UpdatedAt: now},
 		&models.Conversation{ID: "conv-1", TenantID: "tenant-a", ChannelID: "ch-bulldog", ExternalConversationID: "ext-1", Metadata: "{}", CreatedAt: now, UpdatedAt: now},
-		&models.Message{ID: "msg-1", TenantID: "tenant-a", ConversationID: "conv-1", ExternalMessageID: "m-1", SenderType: "customer", SentAt: now, CreatedAt: now},
+		&models.Message{ID: "msg-1", TenantID: "tenant-a", ConversationID: "conv-1", ExternalMessageID: "m-1", SenderType: "customer", Attachments: "[]", RawData: "{}", SentAt: now, CreatedAt: now},
 		&models.ZaloWhitelist{ID: "wl-1", TenantID: "tenant-a", ChannelID: "ch-bulldog", ZaloUserID: "u-1", Status: "active", CreatedAt: now, UpdatedAt: now},
 		&models.CRMGroup{ID: "grp-1", TenantID: "tenant-a", Name: "Nhóm A", ChannelID: "ch-bulldog", CreatedAt: now, UpdatedAt: now},
 		&models.CRMGroupEmployee{GroupID: "grp-1", ZaloWhitelistID: "wl-1"},
