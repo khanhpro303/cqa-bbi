@@ -27,6 +27,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
 )
 
 // Shared HTTP client with timeout for external API calls
@@ -353,23 +354,64 @@ func DeleteChannel(c *gin.Context) {
 		return
 	}
 
-	// Cascade: delete files → messages → conversations → channel
+	// Cascade inside one transaction and surface failures: a swallowed FK error
+	// used to return "deleted" while the channel row survived, so it came back
+	// on reload.
 	var convIDs []string
-	db.DB.Model(&models.Conversation{}).Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Pluck("id", &convIDs)
-	if len(convIDs) > 0 {
-		// Delete local attachment files
-		for _, convID := range convIDs {
-			dir := filepath.Join("/var/lib/cqa/files", tenantID, convID)
-			os.RemoveAll(dir)
-		}
-		db.DB.Where("conversation_id IN ? AND tenant_id = ?", convIDs, tenantID).Delete(&models.Message{})
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		convIDs, err = deleteChannelCascade(tx, tenantID, channelID)
+		return err
+	})
+	if err != nil {
+		log.Printf("[channels] delete channel %s failed: %v", channelID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "channel_delete_failed", "message": "Không xoá được kênh, vui lòng thử lại"})
+		return
 	}
-	db.DB.Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Delete(&models.Conversation{})
-	db.DB.Delete(&channel)
+	// Local attachment files go only after the DB commit succeeded.
+	for _, convID := range convIDs {
+		os.RemoveAll(filepath.Join("/var/lib/cqa/files", tenantID, convID))
+	}
 
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "channel.delete", "channel", channelID, "Deleted channel: "+channel.Name, "", c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// deleteChannelCascade removes a channel and every row that references it, in
+// FK-safe order. CRM groups survive with channel_id cleared; OA-bound employee
+// whitelist entries (zalo_user_id is per-OA) are removed with their group links.
+func deleteChannelCascade(tx *gorm.DB, tenantID, channelID string) ([]string, error) {
+	var convIDs []string
+	if err := tx.Model(&models.Conversation{}).Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Pluck("id", &convIDs).Error; err != nil {
+		return nil, fmt.Errorf("list conversations: %w", err)
+	}
+	if len(convIDs) > 0 {
+		if err := tx.Where("conversation_id IN ? AND tenant_id = ?", convIDs, tenantID).Delete(&models.Message{}).Error; err != nil {
+			return nil, fmt.Errorf("delete messages: %w", err)
+		}
+	}
+	if err := tx.Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Delete(&models.Conversation{}).Error; err != nil {
+		return nil, fmt.Errorf("delete conversations: %w", err)
+	}
+	if err := tx.Model(&models.CRMGroup{}).Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Update("channel_id", nil).Error; err != nil {
+		return nil, fmt.Errorf("detach crm groups: %w", err)
+	}
+	whitelistIDs := tx.Model(&models.ZaloWhitelist{}).Select("id").Where("channel_id = ? AND tenant_id = ?", channelID, tenantID)
+	if err := tx.Where("zalo_whitelist_id IN (?)", whitelistIDs).Delete(&models.CRMGroupEmployee{}).Error; err != nil {
+		return nil, fmt.Errorf("delete crm group employees: %w", err)
+	}
+	if err := tx.Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Delete(&models.ZaloWhitelist{}).Error; err != nil {
+		return nil, fmt.Errorf("delete zalo whitelist: %w", err)
+	}
+	res := tx.Where("id = ? AND tenant_id = ?", channelID, tenantID).Delete(&models.Channel{})
+	if res.Error != nil {
+		return nil, fmt.Errorf("delete channel: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return nil, fmt.Errorf("delete channel: no row deleted")
+	}
+	return convIDs, nil
 }
 
 // PurgeChannelConversations deletes all conversations, messages, and evaluation results
