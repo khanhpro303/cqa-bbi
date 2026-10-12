@@ -18,6 +18,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/channels"
+	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -119,21 +120,7 @@ func CreateCRMGroup(c *gin.Context) {
 		return
 	}
 
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		zaloCreds.AccessToken = newAccess
-		zaloCreds.RefreshToken = newRefresh
-		credsMap := map[string]interface{}{
-			"app_id":        zaloCreds.AppID,
-			"app_secret":    zaloCreds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         zaloCreds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-		db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-	})
+	adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 	// 2. Fetch or select GMF asset_id
 	assetID := req.AssetID
@@ -299,21 +286,7 @@ func DeleteCRMGroup(c *gin.Context) {
 			if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
 				var zaloCreds channels.ZaloOACredentials
 				if json.Unmarshal(credBytes, &zaloCreds) == nil {
-					adapter := channels.NewZaloOAAdapter(zaloCreds)
-					adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-						zaloCreds.AccessToken = newAccess
-						zaloCreds.RefreshToken = newRefresh
-						credsMap := map[string]interface{}{
-							"app_id":        zaloCreds.AppID,
-							"app_secret":    zaloCreds.AppSecret,
-							"access_token":  newAccess,
-							"refresh_token": newRefresh,
-							"oa_id":         zaloCreds.OAId,
-						}
-						newCredJSON, _ := json.Marshal(credsMap)
-						encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-						db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-					})
+					adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 					if deleteErr := adapter.DeleteGMFGroup(c.Request.Context(), group.ZaloGroupID); deleteErr != nil {
 						log.Printf("[crm] failed to dissolve Zalo GMF group %s (%s): %v", group.Name, group.ZaloGroupID, deleteErr)
@@ -469,21 +442,7 @@ func AddGroupMembers(c *gin.Context) {
 				if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
 					var zaloCreds channels.ZaloOACredentials
 					if err := json.Unmarshal(credBytes, &zaloCreds); err == nil {
-						adapter := channels.NewZaloOAAdapter(zaloCreds)
-						adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-							zaloCreds.AccessToken = newAccess
-							zaloCreds.RefreshToken = newRefresh
-							credsMap := map[string]interface{}{
-								"app_id":        zaloCreds.AppID,
-								"app_secret":    zaloCreds.AppSecret,
-								"access_token":  newAccess,
-								"refresh_token": newRefresh,
-								"oa_id":         zaloCreds.OAId,
-							}
-							newCredJSON, _ := json.Marshal(credsMap)
-							encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-							db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-						})
+						adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 						if inviteErr := adapter.InviteGMFGroupMembers(c.Request.Context(), group.ZaloGroupID, zaloUserIDs); inviteErr != nil {
 							log.Printf("[crm] failed to invite customers %v to Zalo GMF group %s (%s): %v", zaloUserIDs, group.Name, group.ZaloGroupID, inviteErr)
@@ -566,21 +525,7 @@ func RemoveGroupMembers(c *gin.Context) {
 			return
 		}
 
-		adapter := channels.NewZaloOAAdapter(zaloCreds)
-		adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-			zaloCreds.AccessToken = newAccess
-			zaloCreds.RefreshToken = newRefresh
-			credsMap := map[string]interface{}{
-				"app_id":        zaloCreds.AppID,
-				"app_secret":    zaloCreds.AppSecret,
-				"access_token":  newAccess,
-				"refresh_token": newRefresh,
-				"oa_id":         zaloCreds.OAId,
-			}
-			newCredJSON, _ := json.Marshal(credsMap)
-			encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-			db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-		})
+		adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 		if removeErr := adapter.RemoveGMFGroupMembers(c.Request.Context(), group.ZaloGroupID, zaloUserIDs); removeErr != nil {
 			log.Printf("[crm] failed to remove customers %v from Zalo GMF group %s (%s): %v", zaloUserIDs, group.Name, group.ZaloGroupID, removeErr)
@@ -663,21 +608,7 @@ func ListZaloCustomers(c *gin.Context) {
 		if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
 			var zaloCreds channels.ZaloOACredentials
 			if json.Unmarshal(credBytes, &zaloCreds) == nil {
-				adapter := channels.NewZaloOAAdapter(zaloCreds)
-				adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-					zaloCreds.AccessToken = newAccess
-					zaloCreds.RefreshToken = newRefresh
-					credsMap := map[string]interface{}{
-						"app_id":        zaloCreds.AppID,
-						"app_secret":    zaloCreds.AppSecret,
-						"access_token":  newAccess,
-						"refresh_token": newRefresh,
-						"oa_id":         zaloCreds.OAId,
-					}
-					newCredJSON, _ := json.Marshal(credsMap)
-					encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-					db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-				})
+				adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 				for i := range customers {
 					if customers[i].ZaloUserID != "" && (customers[i].Avatar == "" || customers[i].Name == "Marketing") {
@@ -820,21 +751,7 @@ func ApproveZaloCustomer(c *gin.Context) {
 					if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
 						var zaloCreds channels.ZaloOACredentials
 						if err := json.Unmarshal(credBytes, &zaloCreds); err == nil {
-							adapter := channels.NewZaloOAAdapter(zaloCreds)
-							adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-								zaloCreds.AccessToken = newAccess
-								zaloCreds.RefreshToken = newRefresh
-								credsMap := map[string]interface{}{
-									"app_id":        zaloCreds.AppID,
-									"app_secret":    zaloCreds.AppSecret,
-									"access_token":  newAccess,
-									"refresh_token": newRefresh,
-									"oa_id":         zaloCreds.OAId,
-								}
-								newCredJSON, _ := json.Marshal(credsMap)
-								encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-								db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-							})
+							adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 							if inviteErr := adapter.InviteGMFGroupMembers(c.Request.Context(), grp.ZaloGroupID, []string{customer.ZaloUserID}); inviteErr != nil {
 								log.Printf("[crm] failed to invite customer %s to Zalo GMF group %s (%s): %v", customer.ID, grp.Name, grp.ZaloGroupID, inviteErr)
@@ -1373,21 +1290,7 @@ func ListGMFPackages(c *gin.Context) {
 		return
 	}
 
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		zaloCreds.AccessToken = newAccess
-		zaloCreds.RefreshToken = newRefresh
-		credsMap := map[string]interface{}{
-			"app_id":        zaloCreds.AppID,
-			"app_secret":    zaloCreds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         zaloCreds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-		db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-	})
+	adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 	assets, err := adapter.GetGMFQuota(c.Request.Context())
 	if err != nil {
@@ -1469,21 +1372,7 @@ func InviteGMFGroupCustomer(c *gin.Context) {
 		return
 	}
 
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		zaloCreds.AccessToken = newAccess
-		zaloCreds.RefreshToken = newRefresh
-		credsMap := map[string]interface{}{
-			"app_id":        zaloCreds.AppID,
-			"app_secret":    zaloCreds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         zaloCreds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-		db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-	})
+	adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 	inviteMsg := fmt.Sprintf("Mời quý khách tham gia nhóm chat hỗ trợ: %s\nLiên kết tham gia: %s", group.Name, group.ZaloGroupLink)
 	if err := adapter.SendMessage(c.Request.Context(), customer.ZaloUserID, inviteMsg); err != nil {
@@ -1535,21 +1424,7 @@ func ListGroupMembers(c *gin.Context) {
 		return
 	}
 
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		zaloCreds.AccessToken = newAccess
-		zaloCreds.RefreshToken = newRefresh
-		credsMap := map[string]interface{}{
-			"app_id":        zaloCreds.AppID,
-			"app_secret":    zaloCreds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         zaloCreds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-		db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-	})
+	adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 	// Parse query params for pagination
 	offsetStr := c.DefaultQuery("offset", "0")
@@ -1687,21 +1562,7 @@ func ListGroupPendingInvites(c *gin.Context) {
 		return
 	}
 
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		zaloCreds.AccessToken = newAccess
-		zaloCreds.RefreshToken = newRefresh
-		credsMap := map[string]interface{}{
-			"app_id":        zaloCreds.AppID,
-			"app_secret":    zaloCreds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         zaloCreds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-		db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-	})
+	adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 	// Parse query params for pagination
 	offsetStr := c.DefaultQuery("offset", "0")
@@ -1771,21 +1632,7 @@ func AcceptGroupPendingInvite(c *gin.Context) {
 		return
 	}
 
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		zaloCreds.AccessToken = newAccess
-		zaloCreds.RefreshToken = newRefresh
-		credsMap := map[string]interface{}{
-			"app_id":        zaloCreds.AppID,
-			"app_secret":    zaloCreds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         zaloCreds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-		db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-	})
+	adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 	if err := adapter.AcceptGMFGroupPendingInvites(c.Request.Context(), group.ZaloGroupID, req.MemberUserIDs); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_accept_invite", "details": err.Error()})
@@ -1859,21 +1706,7 @@ func RejectGroupPendingInvite(c *gin.Context) {
 		return
 	}
 
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		zaloCreds.AccessToken = newAccess
-		zaloCreds.RefreshToken = newRefresh
-		credsMap := map[string]interface{}{
-			"app_id":        zaloCreds.AppID,
-			"app_secret":    zaloCreds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         zaloCreds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-		db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-	})
+	adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 	if err := adapter.RejectGMFGroupPendingInvites(c.Request.Context(), group.ZaloGroupID, req.MemberUserIDs); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_reject_invite", "details": err.Error()})

@@ -15,6 +15,7 @@ import (
 
 	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/channels"
+	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -380,22 +381,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		})
 
 		// Setup Zalo adapter for replies
-		adapter := channels.NewZaloOAAdapter(zaloCreds)
-		adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-			var ch models.Channel
-			if db.DB.First(&ch, "id = ?", matchedChannel.ID).Error == nil {
-				credsMap := map[string]interface{}{
-					"app_id":        zaloCreds.AppID,
-					"app_secret":    zaloCreds.AppSecret,
-					"access_token":  newAccess,
-					"refresh_token": newRefresh,
-					"oa_id":         zaloCreds.OAId,
-				}
-				newCredJSON, _ := json.Marshal(credsMap)
-				encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-				db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
-			}
-		})
+		adapter := zalotoken.NewAdapter(matchedChannel.ID, zaloCreds, cfg.EncryptionKey)
 
 		userText := strings.TrimSpace(payload.Message.Text)
 		attachmentText := parseAttachmentText(payload.Message.Attachments)
@@ -1522,22 +1508,7 @@ func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
 			return nil
 		}
 
-		adapter := channels.NewZaloOAAdapter(zaloCreds)
-		adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-			var channel models.Channel
-			if db.DB.First(&channel, "id = ?", ch.ID).Error == nil {
-				credsMap := map[string]interface{}{
-					"app_id":        zaloCreds.AppID,
-					"app_secret":    zaloCreds.AppSecret,
-					"access_token":  newAccess,
-					"refresh_token": newRefresh,
-					"oa_id":         zaloCreds.OAId,
-				}
-				newCredJSON, _ := json.Marshal(credsMap)
-				encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-				db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-			}
-		})
+		adapter := zalotoken.NewAdapter(ch.ID, zaloCreds, cfg.EncryptionKey)
 
 		timeoutMsg := payload.TimeoutMessage
 		if timeoutMsg == "" {

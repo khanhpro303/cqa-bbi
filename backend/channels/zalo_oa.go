@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -102,14 +103,34 @@ type ZaloOACredentials struct {
 	OAId         string `json:"oa_id"`
 }
 
-// OnTokenRefresh is called when tokens are refreshed — caller should persist new creds.
-type OnTokenRefresh func(newAccessToken, newRefreshToken string)
+// ErrZaloReauthRequired marks a refresh token Zalo rejected (expired, revoked
+// or already rotated). Only a fresh OAuth grant ("Kết nối lại") recovers it.
+var ErrZaloReauthRequired = errors.New("refresh token Zalo không còn hợp lệ — vào Kênh → Kết nối lại để cấp quyền OAuth mới")
+
+// ZaloTokenPair is one access/refresh token pair issued by Zalo OAuth.
+type ZaloTokenPair struct {
+	AccessToken  string
+	RefreshToken string
+}
+
+// ZaloRefreshExchange trades a refresh token for a new pair at Zalo OAuth.
+type ZaloRefreshExchange func(ctx context.Context, refreshToken string) (ZaloTokenPair, error)
+
+// ZaloTokenStore owns the persisted tokens of one OA channel. Zalo refresh
+// tokens are single-use, and many short-lived adapters (sync, webhook worker,
+// CRM/ERP handlers) share one channel, so rotation must go through the store:
+// it serializes rotation and, when another adapter already replaced
+// staleAccessToken, returns the persisted pair instead of spending the
+// (already consumed) refresh token again.
+type ZaloTokenStore interface {
+	Rotate(ctx context.Context, staleAccessToken string, exchange ZaloRefreshExchange) (ZaloTokenPair, error)
+}
 
 type ZaloOAAdapter struct {
-	creds          ZaloOACredentials
-	client         *http.Client
-	mu             sync.Mutex
-	onTokenRefresh OnTokenRefresh
+	creds      ZaloOACredentials
+	client     *http.Client
+	mu         sync.Mutex
+	tokenStore ZaloTokenStore
 }
 
 func NewZaloOAAdapter(creds ZaloOACredentials) *ZaloOAAdapter {
@@ -119,24 +140,52 @@ func NewZaloOAAdapter(creds ZaloOACredentials) *ZaloOAAdapter {
 	}
 }
 
-func (z *ZaloOAAdapter) SetTokenRefreshCallback(cb OnTokenRefresh) {
-	z.onTokenRefresh = cb
+// SetTokenStore routes token rotation through store so rotated tokens are
+// persisted and shared with every other adapter of the same channel.
+func (z *ZaloOAAdapter) SetTokenStore(store ZaloTokenStore) {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	z.tokenStore = store
 }
 
-// refreshToken performs Zalo token refresh (single-use rotation).
+// refreshToken rotates the adapter's tokens after Zalo rejected the current
+// access token, via the token store when one is attached.
 func (z *ZaloOAAdapter) refreshToken(ctx context.Context) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
 
+	var pair ZaloTokenPair
+	var err error
+	if z.tokenStore != nil {
+		pair, err = z.tokenStore.Rotate(ctx, z.creds.AccessToken, z.exchangeRefreshToken)
+	} else {
+		pair, err = z.exchangeRefreshToken(ctx, z.creds.RefreshToken)
+	}
+	if err != nil {
+		return err
+	}
+
+	z.creds.AccessToken = pair.AccessToken
+	z.creds.RefreshToken = pair.RefreshToken
+	return nil
+}
+
+// exchangeRefreshToken calls Zalo OAuth to swap refreshToken for a new pair.
+// It holds no adapter state, so a token store may call it while locked.
+func (z *ZaloOAAdapter) exchangeRefreshToken(ctx context.Context, refreshToken string) (ZaloTokenPair, error) {
+	if strings.TrimSpace(refreshToken) == "" {
+		return ZaloTokenPair{}, fmt.Errorf("zalo token refresh: empty refresh token: %w", ErrZaloReauthRequired)
+	}
+
 	form := url.Values{
-		"refresh_token": {z.creds.RefreshToken},
+		"refresh_token": {refreshToken},
 		"app_id":        {z.creds.AppID},
 		"grant_type":    {"refresh_token"},
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", zaloOAuthURL, nil)
 	if err != nil {
-		return fmt.Errorf("create zalo token refresh request: %w", err)
+		return ZaloTokenPair{}, fmt.Errorf("create zalo token refresh request: %w", err)
 	}
 	req.URL.RawQuery = form.Encode()
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -144,7 +193,7 @@ func (z *ZaloOAAdapter) refreshToken(ctx context.Context) error {
 
 	resp, err := z.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("zalo token refresh request failed: %w", err)
+		return ZaloTokenPair{}, fmt.Errorf("zalo token refresh request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -155,20 +204,16 @@ func (z *ZaloOAAdapter) refreshToken(ctx context.Context) error {
 		Message      string `json:"message"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("zalo token refresh decode failed: %w", err)
+		return ZaloTokenPair{}, fmt.Errorf("zalo token refresh decode failed: %w", err)
 	}
 	if result.Error != 0 {
-		return fmt.Errorf("zalo token refresh error %d: %s", result.Error, result.Message)
+		return ZaloTokenPair{}, fmt.Errorf("zalo token refresh error %d: %s: %w", result.Error, result.Message, ErrZaloReauthRequired)
+	}
+	if result.AccessToken == "" || result.RefreshToken == "" {
+		return ZaloTokenPair{}, fmt.Errorf("zalo token refresh returned an empty token pair")
 	}
 
-	z.creds.AccessToken = result.AccessToken
-	z.creds.RefreshToken = result.RefreshToken
-
-	if z.onTokenRefresh != nil {
-		z.onTokenRefresh(result.AccessToken, result.RefreshToken)
-	}
-
-	return nil
+	return ZaloTokenPair{AccessToken: result.AccessToken, RefreshToken: result.RefreshToken}, nil
 }
 
 // doRequest makes an authenticated Zalo API request with auto-retry on token expiry.

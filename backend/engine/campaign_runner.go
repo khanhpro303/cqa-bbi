@@ -15,6 +15,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/vietbui/chat-quality-agent/channels"
+	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -76,20 +77,7 @@ func prepareCampaignBroadcast(ctx context.Context, campaignID, tenantID string) 
 	if err := json.Unmarshal(credBytes, &zaloCreds); err != nil {
 		return nil, errors.New("failed_to_parse_channel_credentials")
 	}
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		credsMap := map[string]interface{}{
-			"app_id":        zaloCreds.AppID,
-			"app_secret":    zaloCreds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         zaloCreds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		if encrypted, e := pkg.Encrypt(newCredJSON, cfg.EncryptionKey); e == nil {
-			db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-		}
-	})
+	adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
 
 	return &campaignBroadcast{
 		campaign:        &campaign,

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vietbui/chat-quality-agent/channels"
+	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -42,8 +43,8 @@ func (z *ZaloNotifier) Send(ctx context.Context, subject string, body string) er
 func (z *ZaloNotifier) HealthCheck(_ context.Context) error { return nil }
 
 // BuildZaloGroupNotifier builds a ZaloNotifier for the given OA channel + CRM
-// group. It decrypts the channel credentials and wires the same token-refresh
-// persistence callback used across the codebase, then resolves the CRM group's
+// group. It decrypts the channel credentials, routes token rotation through the
+// shared channel token store, then resolves the CRM group's
 // Zalo group id. Returns an error (never a partial notifier) on any misconfig so
 // callers can log + skip safely.
 func BuildZaloGroupNotifier(tenantID, channelID, groupID string) (*ZaloNotifier, error) {
@@ -77,19 +78,6 @@ func BuildZaloGroupNotifier(tenantID, channelID, groupID string) (*ZaloNotifier,
 		return nil, fmt.Errorf("parse channel credentials: %w", err)
 	}
 
-	adapter := channels.NewZaloOAAdapter(creds)
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		credsMap := map[string]interface{}{
-			"app_id":        creds.AppID,
-			"app_secret":    creds.AppSecret,
-			"access_token":  newAccess,
-			"refresh_token": newRefresh,
-			"oa_id":         creds.OAId,
-		}
-		newCredJSON, _ := json.Marshal(credsMap)
-		if encrypted, e := pkg.Encrypt(newCredJSON, cfg.EncryptionKey); e == nil {
-			db.DB.Model(&channel).Update("credentials_encrypted", encrypted)
-		}
-	})
+	adapter := zalotoken.NewAdapter(channel.ID, creds, cfg.EncryptionKey)
 	return NewZaloNotifier(adapter, group.ZaloGroupID), nil
 }

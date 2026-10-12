@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vietbui/chat-quality-agent/channels"
+	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -52,36 +53,10 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 		return s.updateSyncStatus(channel.ID, "error", fmt.Sprintf("adapter init failed: %v", err))
 	}
 
-	// Set token refresh callback for Zalo — persist new tokens to DB after refresh
+	// Route Zalo token rotation through the channel token store so rotated
+	// tokens are persisted and shared with every other adapter of this channel.
 	if zaloAdapter, ok := adapter.(*channels.ZaloOAAdapter); ok {
-		chID := channel.ID
-		encKey := s.cfg.EncryptionKey
-		zaloAdapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-			var ch models.Channel
-			if db.DB.First(&ch, "id = ?", chID).Error != nil {
-				return
-			}
-			oldCreds, err := pkg.Decrypt(ch.CredentialsEncrypted, encKey)
-			if err != nil {
-				log.Printf("[sync] decrypt failed for token persist: %v", err)
-				return
-			}
-			var credsMap map[string]interface{}
-			if err := json.Unmarshal(oldCreds, &credsMap); err != nil {
-				log.Printf("[sync] unmarshal creds failed: %v", err)
-				return
-			}
-			credsMap["access_token"] = newAccess
-			credsMap["refresh_token"] = newRefresh
-			newCredJSON, _ := json.Marshal(credsMap)
-			encrypted, err := pkg.Encrypt(newCredJSON, encKey)
-			if err != nil {
-				log.Printf("[sync] encrypt failed for token persist: %v", err)
-				return
-			}
-			db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
-			log.Printf("[sync] persisted refreshed Zalo tokens for channel %s", chID)
-		})
+		zaloAdapter.SetTokenStore(zalotoken.ChannelStore{ChannelID: channel.ID, EncryptionKey: s.cfg.EncryptionKey})
 	}
 
 	// Determine since — use last_sync_at or default to 7 days ago

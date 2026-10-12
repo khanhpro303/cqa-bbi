@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/vietbui/chat-quality-agent/channels"
+	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -4195,8 +4196,8 @@ func storePendingDisambiguationOptions(ctx context.Context, tenantID string, per
 }
 
 // loadActiveZaloOAAdapter looks up the tenant's active Zalo OA channel,
-// decrypts its credentials, builds a ZaloOAAdapter, and wires a token-refresh
-// callback that re-encrypts and persists rotated tokens. Returns (nil, nil,
+// decrypts its credentials and builds a ZaloOAAdapter whose token rotation is
+// persisted through the shared channel token store. Returns (nil, nil,
 // err) when the tenant has no active OA channel or credentials cannot be
 // loaded. Used by both the rich-message and the debug-fallback push paths.
 func loadActiveZaloOAAdapter(tenantID string) (*channels.ZaloOAAdapter, *models.Channel, error) {
@@ -4220,23 +4221,7 @@ func loadActiveZaloOAAdapter(tenantID string) (*channels.ZaloOAAdapter, *models.
 		return nil, activeChannel, fmt.Errorf("invalid credentials json: %w", err)
 	}
 
-	adapter := channels.NewZaloOAAdapter(zaloCreds)
-	channelID := activeChannel.ID
-	adapter.SetTokenRefreshCallback(func(newAccess, newRefresh string) {
-		var ch models.Channel
-		if db.DB.First(&ch, "id = ?", channelID).Error == nil {
-			credsMap := map[string]interface{}{
-				"app_id":        zaloCreds.AppID,
-				"app_secret":    zaloCreds.AppSecret,
-				"access_token":  newAccess,
-				"refresh_token": newRefresh,
-				"oa_id":         zaloCreds.OAId,
-			}
-			newCredJSON, _ := json.Marshal(credsMap)
-			encrypted, _ := pkg.Encrypt(newCredJSON, cfg.EncryptionKey)
-			db.DB.Model(&ch).Update("credentials_encrypted", encrypted)
-		}
-	})
+	adapter := zalotoken.NewAdapter(activeChannel.ID, zaloCreds, cfg.EncryptionKey)
 
 	return adapter, activeChannel, nil
 }
