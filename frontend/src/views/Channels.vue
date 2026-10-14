@@ -28,7 +28,7 @@
             </div>
             <div class="text-right">
               <div class="text-h6 font-weight-bold">{{ ch.conversation_count || 0 }}</div>
-              <div class="text-caption text-grey">cuộc chat</div>
+              <div class="text-caption text-grey">{{ $t('conversations_unit') }}</div>
             </div>
           </div>
 
@@ -291,10 +291,10 @@
                 </template>
                 <template v-if="editChannelType === 'zalo_oa'">
                   <v-divider class="my-3" />
-                  <div class="text-body-2 font-weight-medium mb-1">Cảnh báo lỗi gửi chiến dịch</div>
+                  <div class="text-body-2 font-weight-medium mb-1">{{ $t('campaign_alert_settings_title') }}</div>
                   <v-switch
                     v-model="editForm.campaign_alerts_enabled"
-                    label="Gửi cảnh báo qua Zalo khi chiến dịch gửi lỗi"
+                    :label="$t('campaign_alert_enable_switch')"
                     density="compact"
                     color="primary"
                     class="mb-1"
@@ -304,10 +304,10 @@
                     v-model="editForm.campaign_alert_group_id"
                     :items="alertGroupOptions"
                     :loading="loadingAlertGroups"
-                    :no-data-text="loadingAlertGroups ? 'Đang tải…' : 'Chưa có nhóm GMF nào đã liên kết Zalo'"
-                    label="Nhóm GMF nhận cảnh báo"
+                    :no-data-text="loadingAlertGroups ? $t('loading') : $t('campaign_alert_no_groups')"
+                    :label="$t('campaign_alert_group_label')"
                     density="compact"
-                    hint="Một tin tổng hợp sẽ gửi vào nhóm này khi có lượt gửi lỗi"
+                    :hint="$t('campaign_alert_group_hint')"
                     persistent-hint
                   />
                   <CampaignAlertOutputs v-if="editForm.campaign_alerts_enabled" v-model="editForm.campaign_alert_outputs" />
@@ -586,11 +586,11 @@ async function testConn(channelId: string) {
 }
 
 async function remove(channelId: string) {
-  if (!confirm('Delete this channel?')) return
+  if (!confirm(t('delete_channel_confirm'))) return
   try {
     await channelStore.deleteChannel(tenantId.value, channelId)
   } catch (err: any) {
-    showSnack(err.response?.data?.message || err.response?.data?.error || 'Delete failed', 'error')
+    showSnack(err.response?.data?.message || err.response?.data?.error || t('delete_failed'), 'error')
   }
 }
 

@@ -8,13 +8,13 @@
       <template v-if="authStore.canEdit('channels')">
         <v-btn variant="outlined" prepend-icon="mdi-pencil" size="small" @click="editDialog = true">{{ $t('edit') }}</v-btn>
         <v-btn v-if="channel.channel_type !== 'personal_zalo_import'" color="primary" prepend-icon="mdi-sync" size="small" :loading="syncing" :disabled="!channel.is_active" @click="doSync">
-          {{ $t('sync_now') || 'Dong bo ngay' }}
+          {{ $t('sync_now') }}
         </v-btn>
         <v-btn v-if="channel.channel_type !== 'personal_zalo_import'" variant="outlined" prepend-icon="mdi-connection" size="small" :loading="testing" :disabled="!channel.is_active" @click="doTest">
-          Kiểm tra kết nối
+          {{ $t('test_connection') }}
         </v-btn>
         <v-btn color="warning" variant="outlined" prepend-icon="mdi-delete-sweep" size="small" @click="confirmPurge = true">
-          Xóa cuộc chat
+          {{ $t('purge_conversations') }}
         </v-btn>
         <v-btn color="error" variant="outlined" prepend-icon="mdi-delete" size="small" @click="confirmDelete = true">{{ $t('delete') }}</v-btn>
       </template>
@@ -29,63 +29,63 @@
     <v-card class="pa-4 mb-4">
       <div class="text-subtitle-1 font-weight-bold mb-3">
         <v-icon start size="small">mdi-information</v-icon>
-        Thông tin kênh
+        {{ $t('channel_info') }}
       </div>
       <v-row>
         <v-col cols="6" sm="3">
-          <div class="text-caption text-grey">Loại kênh</div>
+          <div class="text-caption text-grey">{{ $t('channel_type') }}</div>
           <v-chip size="small" :color="channelTypeColor(channel.channel_type)" variant="tonal">
             {{ channelTypeLabel(channel.channel_type) }}
           </v-chip>
         </v-col>
         <v-col cols="6" sm="3">
-          <div class="text-caption text-grey">Trạng thái</div>
+          <div class="text-caption text-grey">{{ $t('status') }}</div>
           <v-chip size="small" :color="channel.is_active ? 'success' : 'grey'" variant="tonal">
-            {{ channel.is_active ? 'Hoạt động' : 'Tạm dừng' }}
+            {{ channel.is_active ? $t('active') : $t('inactive') }}
           </v-chip>
         </v-col>
         <v-col cols="6" sm="3">
-          <div class="text-caption text-grey">Trạng thái đồng bộ</div>
+          <div class="text-caption text-grey">{{ $t('sync_status') }}</div>
           <v-chip size="small" :color="channel.last_sync_status === 'success' ? 'success' : channel.last_sync_status === 'error' ? 'error' : 'grey'" variant="tonal">
-            {{ channel.last_sync_status === 'success' ? 'Thành công' : channel.last_sync_status === 'error' ? 'Lỗi' : 'Chưa đồng bộ' }}
+            {{ channel.last_sync_status === 'success' ? $t('sync_success') : channel.last_sync_status === 'error' ? $t('sync_error') : $t('sync_never') }}
           </v-chip>
         </v-col>
         <v-col cols="6" sm="3">
-          <div class="text-caption text-grey">Đồng bộ lần cuối</div>
-          <div>{{ channel.last_sync_at ? formatDateTime(channel.last_sync_at) : 'Chưa đồng bộ' }}</div>
+          <div class="text-caption text-grey">{{ $t('last_sync') }}</div>
+          <div>{{ channel.last_sync_at ? formatDateTime(channel.last_sync_at) : $t('sync_never') }}</div>
         </v-col>
         <v-col cols="6" sm="3">
-          <div class="text-caption text-grey">Tổng cuộc chat</div>
+          <div class="text-caption text-grey">{{ $t('total_conversations') }}</div>
           <a href="#" class="text-primary font-weight-bold" @click.prevent="goToMessages">
             {{ channel.conversation_count || 0 }}
           </a>
         </v-col>
         <template v-if="channel.channel_type !== 'personal_zalo_import'">
           <v-col cols="6" sm="3">
-            <div class="text-caption text-grey">Chu kỳ đồng bộ</div>
+            <div class="text-caption text-grey">{{ $t('sync_interval') }}</div>
             <div>{{ formatSyncInterval(metadata.sync_interval) }}</div>
           </v-col>
           <v-col cols="6" sm="3">
-            <div class="text-caption text-grey">Lưu file/ảnh</div>
+            <div class="text-caption text-grey">{{ $t('sync_files') }}</div>
             <v-chip size="small" :color="metadata.sync_files ? 'success' : 'grey'" variant="tonal">
-              {{ metadata.sync_files ? 'Bật' : 'Tắt' }}
+              {{ metadata.sync_files ? $t('enabled') : $t('disabled') }}
             </v-chip>
           </v-col>
         </template>
         <template v-else>
           <v-col cols="6" sm="3">
-            <div class="text-caption text-grey">Phạm vi đồng bộ</div>
-            <div>{{ metadata.sync_scope === 'direct' ? 'Chỉ tin 1:1' : metadata.sync_scope === 'group' ? 'Chỉ tin nhóm' : 'Tất cả' }}</div>
+            <div class="text-caption text-grey">{{ $t('sync_scope') }}</div>
+            <div>{{ metadata.sync_scope === 'direct' ? $t('sync_scope_direct') : metadata.sync_scope === 'group' ? $t('sync_scope_group') : $t('sync_scope_all') }}</div>
           </v-col>
         </template>
         <v-col v-if="channel.channel_type === 'zalo_oa'" cols="6" sm="3">
-          <div class="text-caption text-grey">Cảnh báo lỗi chiến dịch</div>
+          <div class="text-caption text-grey">{{ $t('campaign_alerts') }}</div>
           <v-chip size="small" :color="metadata.campaign_alerts_enabled ? 'success' : 'grey'" variant="tonal">
-            {{ metadata.campaign_alerts_enabled ? 'Bật' : 'Tắt' }}
+            {{ metadata.campaign_alerts_enabled ? $t('enabled') : $t('disabled') }}
           </v-chip>
         </v-col>
         <v-col cols="6" sm="3">
-          <div class="text-caption text-grey">Ngày tạo</div>
+          <div class="text-caption text-grey">{{ $t('created_at') }}</div>
           <div>{{ formatDateTime(channel.created_at) }}</div>
         </v-col>
       </v-row>
@@ -96,10 +96,10 @@
         <div>
           <div class="text-subtitle-1 font-weight-bold">
             <v-icon start size="small">mdi-cellphone-link</v-icon>
-            Kết nối Zalo cá nhân
+            {{ $t('personal_zalo_connect_title') }}
           </div>
           <div class="text-body-2 text-medium-emphasis">
-            Làm theo từng bước ngay tại đây, không cần thao tác kỹ thuật phức tạp.
+            {{ $t('personal_zalo_connect_subtitle') }}
           </div>
         </div>
         <v-spacer />
@@ -107,7 +107,7 @@
           {{ gatewayStatusLabel }}
         </v-chip>
         <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="gatewayLoading" @click="loadGatewayState()">
-          Làm mới
+          {{ $t('refresh') }}
         </v-btn>
       </div>
 
@@ -122,27 +122,27 @@
       <v-row class="mb-2">
         <v-col cols="12" md="7">
           <v-sheet rounded="lg" border class="pa-4 h-100">
-            <div class="text-overline mb-2">Các bước kết nối</div>
+            <div class="text-overline mb-2">{{ $t('personal_zalo_steps_title') }}</div>
             <div class="d-flex flex-column ga-3">
               <div class="d-flex ga-3 align-start">
                 <v-avatar size="28" :color="gatewayState.account_exists ? 'success' : 'grey-lighten-1'" variant="tonal">1</v-avatar>
                 <div>
-                  <div class="font-weight-medium">Bắt đầu kết nối</div>
-                  <div class="text-body-2 text-medium-emphasis">Bấm nút để hệ thống tự chuẩn bị kết nối phía kỹ thuật.</div>
+                  <div class="font-weight-medium">{{ $t('personal_zalo_step1_title') }}</div>
+                  <div class="text-body-2 text-medium-emphasis">{{ $t('personal_zalo_step1_desc') }}</div>
                 </div>
               </div>
               <div class="d-flex ga-3 align-start">
                 <v-avatar size="28" :color="gatewayAccount?.status === 'connected' || gatewayAccount?.status === 'qr_pending' || gatewayAccount?.status === 'connecting' ? 'info' : 'grey-lighten-1'" variant="tonal">2</v-avatar>
                 <div>
-                  <div class="font-weight-medium">Quét QR bằng điện thoại</div>
-                  <div class="text-body-2 text-medium-emphasis">Lần đầu thì quét QR. Nếu đã kết nối trước đó, hệ thống sẽ tự thử vào lại.</div>
+                  <div class="font-weight-medium">{{ $t('personal_zalo_step2_title') }}</div>
+                  <div class="text-body-2 text-medium-emphasis">{{ $t('personal_zalo_step2_desc') }}</div>
                 </div>
               </div>
               <div class="d-flex ga-3 align-start">
                 <v-avatar size="28" :color="gatewayAccount?.status === 'connected' && (channel?.conversation_count || 0) > 0 ? 'success' : gatewayAccount?.status === 'connected' ? 'warning' : 'grey-lighten-1'" variant="tonal">3</v-avatar>
                 <div>
-                  <div class="font-weight-medium">Lấy tin nhắn mới và kiểm tra</div>
-                  <div class="text-body-2 text-medium-emphasis">Bấm lấy dữ liệu, rồi mở danh sách chat để kiểm tra kết quả.</div>
+                  <div class="font-weight-medium">{{ $t('personal_zalo_step3_title') }}</div>
+                  <div class="text-body-2 text-medium-emphasis">{{ $t('personal_zalo_step3_desc') }}</div>
                 </div>
               </div>
             </div>
@@ -157,10 +157,10 @@
               <div class="flex-grow-1">
                 <div class="font-weight-bold">{{ gatewayAccount.display_name || channel.name }}</div>
                 <div class="text-body-2 text-medium-emphasis">
-                  Mã tài khoản: {{ gatewayAccount.account_external_id || gatewayAccount.zalo_uid || 'Chưa có' }}
+                  {{ $t('personal_zalo_account_id') }}: {{ gatewayAccount.account_external_id || gatewayAccount.zalo_uid || $t('none') }}
                 </div>
                 <div class="text-caption text-medium-emphasis">
-                  {{ gatewayAccount.last_imported_at ? `Lần lấy dữ liệu gần nhất: ${formatDateTime(gatewayAccount.last_imported_at)}` : 'Chưa có lần lấy dữ liệu nào' }}
+                  {{ gatewayAccount.last_imported_at ? `${$t('personal_zalo_last_sync')}: ${formatDateTime(gatewayAccount.last_imported_at)}` : $t('personal_zalo_never_synced') }}
                 </div>
               </div>
             </div>
@@ -174,7 +174,7 @@
                 :disabled="!channel.is_active"
                 @click="startGatewayConnect"
               >
-                {{ gatewayState.account_exists ? 'Lấy mã QR mới' : 'Bắt đầu kết nối' }}
+                {{ gatewayState.account_exists ? $t('personal_zalo_get_new_qr') : $t('personal_zalo_start_connect') }}
               </v-btn>
               <v-btn
                 v-if="gatewayState.account_exists && gatewayState.next_action === 'reconnect'"
@@ -185,7 +185,7 @@
                 :disabled="!channel.is_active"
                 @click="reconnectGateway"
               >
-                Kết nối lại
+                {{ $t('personal_zalo_reconnect') }}
               </v-btn>
               <v-btn
                 v-if="gatewayAccount?.status === 'connected'"
@@ -195,7 +195,7 @@
                 :disabled="!channel.is_active"
                 @click="syncGateway"
               >
-                Lấy tin nhắn mới
+                {{ $t('personal_zalo_fetch_messages') }}
               </v-btn>
               <v-btn
                 v-if="channel?.conversation_count"
@@ -203,12 +203,12 @@
                 prepend-icon="mdi-forum"
                 @click="goToMessages"
               >
-                Mở danh sách chat
+                {{ $t('personal_zalo_open_chat_list') }}
               </v-btn>
             </div>
 
             <div v-if="gatewayAccount?.last_error" class="text-caption text-error mt-3">
-              Lỗi gần nhất: {{ gatewayAccount.last_error }}
+              {{ $t('personal_zalo_last_error') }}: {{ gatewayAccount.last_error }}
             </div>
           </v-sheet>
         </v-col>
@@ -216,15 +216,15 @@
         <v-col cols="12" md="5">
           <v-sheet rounded="lg" border class="pa-4 h-100 d-flex flex-column justify-center">
             <template v-if="gatewayAccount?.status === 'qr_pending' && gatewayQrImageSrc">
-              <div class="text-overline mb-2 text-center">Quét bằng Zalo trên điện thoại</div>
+              <div class="text-overline mb-2 text-center">{{ $t('personal_zalo_scan_qr_title') }}</div>
               <div class="d-flex justify-center mb-3">
                 <v-img :src="gatewayQrImageSrc" max-width="240" max-height="240" class="rounded-lg border" cover />
               </div>
               <div class="text-body-2 text-medium-emphasis text-center">
-                Mở Zalo, vào biểu tượng quét QR, quét mã này rồi xác nhận đăng nhập.
+                {{ $t('personal_zalo_scan_qr_desc') }}
               </div>
               <div class="text-caption text-medium-emphasis text-center mt-2">
-                {{ gatewayAccount.qr_generated_at ? `QR tạo lúc ${formatDateTime(gatewayAccount.qr_generated_at)}` : 'Hệ thống đang chờ bạn quét mã.' }}
+                {{ gatewayAccount.qr_generated_at ? $t('personal_zalo_qr_created_at', { time: formatDateTime(gatewayAccount.qr_generated_at) }) : $t('personal_zalo_waiting_for_qr_scan') }}
               </div>
             </template>
             <template v-else>
@@ -248,20 +248,20 @@
     <v-card v-if="channel.channel_type === 'personal_zalo_import'" class="pa-4 mb-4">
       <div class="text-subtitle-1 font-weight-bold mb-3">
         <v-icon start size="small">mdi-api</v-icon>
-        Thông tin kết nối (cho kỹ thuật)
+        {{ $t('channel_tech_info_title') }}
       </div>
       <v-alert type="info" variant="tonal" class="mb-4">
-        Đội kỹ thuật dùng các thông tin này để kết nối dịch vụ lấy dữ liệu Zalo cá nhân.
+        {{ $t('channel_tech_info_desc') }}
       </v-alert>
       <v-row>
         <v-col cols="12" md="8">
-          <v-text-field :model-value="channel.import_endpoint || ''" label="Địa chỉ nhận dữ liệu (URL)" readonly density="compact" />
+          <v-text-field :model-value="channel.import_endpoint || ''" :label="$t('channel_import_endpoint')" readonly density="compact" />
         </v-col>
         <v-col cols="12" md="4">
-          <v-text-field :model-value="channel.import_secret || channel.import_secret_masked || ''" label="Mã bảo mật kết nối" readonly density="compact" />
+          <v-text-field :model-value="channel.import_secret || channel.import_secret_masked || ''" :label="$t('channel_import_secret')" readonly density="compact" />
         </v-col>
         <v-col cols="12">
-          <v-text-field :model-value="channel.import_endpoint_internal || channel.import_endpoint || ''" label="Địa chỉ nội bộ (Docker)" readonly density="compact" hint="Nếu chạy bằng docker-compose, kỹ thuật sẽ dùng địa chỉ này." persistent-hint />
+          <v-text-field :model-value="channel.import_endpoint_internal || channel.import_endpoint || ''" :label="$t('channel_import_internal_endpoint')" readonly density="compact" :hint="$t('channel_import_internal_hint')" persistent-hint />
         </v-col>
       </v-row>
     </v-card>
@@ -270,23 +270,23 @@
       <div class="d-flex align-center mb-3">
         <div class="text-subtitle-1 font-weight-bold">
           <v-icon start size="small">mdi-account-switch</v-icon>
-          Giao tài khoản Zalo cho nhân sự phụ trách
+          {{ $t('channel_assign_owners_title') }}
         </div>
         <v-spacer />
         <v-btn size="small" variant="text" prepend-icon="mdi-plus" @click="addAccountOwner">
-          Thêm dòng phân công
+          {{ $t('channel_add_owner_row') }}
         </v-btn>
       </div>
       <v-alert type="info" variant="tonal" class="mb-4">
-        Nếu chưa biết mã tài khoản Zalo ở lần đầu, bạn có thể để trống một dòng và chọn nhân sự phụ trách trước.
+        {{ $t('channel_assign_owners_guide') }}
       </v-alert>
       <div v-for="(owner, index) in accountOwnerDrafts" :key="`owner-${index}`" class="mb-3">
         <v-row>
           <v-col cols="12" md="5">
-            <v-text-field v-model="owner.account_external_id" label="Mã tài khoản Zalo" density="compact" hint="Có thể để trống ở lần đồng bộ đầu tiên" persistent-hint />
+            <v-text-field v-model="owner.account_external_id" :label="$t('channel_zalo_account_id')" density="compact" :hint="$t('channel_zalo_account_id_hint')" persistent-hint />
           </v-col>
           <v-col cols="12" md="6">
-            <v-select v-model="owner.user_id" :items="tenantUserOptions" label="Nhân sự phụ trách" density="compact" />
+            <v-select v-model="owner.user_id" :items="tenantUserOptions" :label="$t('channel_assigned_user')" density="compact" />
           </v-col>
           <v-col cols="12" md="1" class="d-flex align-center justify-end">
             <v-btn icon="mdi-delete-outline" variant="text" color="error" @click="removeAccountOwner(index)" />
@@ -294,11 +294,11 @@
         </v-row>
       </div>
       <div v-if="!accountOwnerDrafts.length" class="text-body-2 text-grey mb-3">
-        Chưa có phân công nào.
+        {{ $t('channel_no_assignments') }}
       </div>
       <div class="d-flex justify-end">
         <v-btn color="primary" :loading="savingAccountOwners" @click="saveAccountOwners">
-          Lưu phân công
+          {{ $t('channel_save_assignments') }}
         </v-btn>
       </div>
     </v-card>
@@ -313,7 +313,7 @@
       <div class="d-flex align-center mb-3 flex-wrap ga-2">
         <div class="text-subtitle-1 font-weight-bold">
           <v-icon start size="small">mdi-history</v-icon>
-          Lịch sử đồng bộ
+          {{ $t('sync_history') }}
         </div>
         <v-spacer />
         <v-select
@@ -329,10 +329,10 @@
       <v-table density="compact" v-if="channelStore.syncHistory.length > 0">
         <thead>
           <tr>
-            <th>Thời gian</th>
-            <th>Trạng thái</th>
-            <th>Chi tiết</th>
-            <th>Lỗi</th>
+            <th>{{ $t('time') }}</th>
+            <th>{{ $t('status') }}</th>
+            <th>{{ $t('details') }}</th>
+            <th>{{ $t('error') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -340,7 +340,7 @@
             <td>{{ formatDateTime(log.created_at) }}</td>
             <td>
               <v-chip size="x-small" :color="(log.action === 'sync.completed' || log.action === 'import.personal_zalo') ? 'success' : 'error'" variant="tonal">
-                {{ (log.action === 'sync.completed' || log.action === 'import.personal_zalo') ? 'Thành công' : 'Lỗi' }}
+                {{ (log.action === 'sync.completed' || log.action === 'import.personal_zalo') ? $t('success') : $t('error') }}
               </v-chip>
             </td>
             <td class="text-caption">{{ log.detail?.substring(0, 120) }}</td>
@@ -348,7 +348,7 @@
           </tr>
         </tbody>
       </v-table>
-      <div v-else class="text-center text-grey pa-4">Chưa có lịch sử đồng bộ</div>
+      <div v-else class="text-center text-grey pa-4">{{ $t('no_sync_history') }}</div>
       <v-pagination
         v-if="syncTotalPages > 1"
         v-model="syncPage"
@@ -362,20 +362,20 @@
     <!-- Edit Dialog -->
     <v-dialog v-model="editDialog" max-width="500">
       <v-card>
-        <v-card-title>Sửa kênh chat</v-card-title>
+        <v-card-title>{{ $t('edit_channel') }}</v-card-title>
         <v-card-text class="pt-3">
-          <v-text-field v-model="editForm.name" label="Tên kênh" density="compact" class="mb-2" />
-          <v-switch v-model="editForm.is_active" label="Hoạt động" density="compact" color="primary" class="mb-2" />
+          <v-text-field v-model="editForm.name" :label="$t('channel_name')" density="compact" class="mb-2" />
+          <v-switch v-model="editForm.is_active" :label="$t('active')" density="compact" color="primary" class="mb-2" />
           <template v-if="channel.channel_type !== 'personal_zalo_import'">
-            <v-select v-model="editForm.sync_interval" :items="syncIntervalOptions" label="Chu kỳ đồng bộ" density="compact" class="mb-2" />
-            <v-switch v-model="editForm.sync_files" label="Lưu file/ảnh" density="compact" color="primary" />
+            <v-select v-model="editForm.sync_interval" :items="syncIntervalOptions" :label="$t('sync_interval')" density="compact" class="mb-2" />
+            <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" density="compact" color="primary" />
           </template>
           <template v-if="channel.channel_type === 'zalo_oa'">
             <v-divider class="my-3" />
-            <div class="text-body-2 font-weight-medium mb-1">Cảnh báo lỗi gửi chiến dịch</div>
+            <div class="text-body-2 font-weight-medium mb-1">{{ $t('campaign_alert_settings_title') }}</div>
             <v-switch
               v-model="editForm.campaign_alerts_enabled"
-              label="Gửi cảnh báo qua Zalo khi chiến dịch gửi lỗi"
+              :label="$t('campaign_alert_enable_switch')"
               density="compact"
               color="primary"
               class="mb-1"
@@ -385,10 +385,10 @@
               v-model="editForm.campaign_alert_group_id"
               :items="alertGroupOptions"
               :loading="loadingAlertGroups"
-              :no-data-text="loadingAlertGroups ? 'Đang tải…' : 'Chưa có nhóm GMF nào đã liên kết Zalo'"
-              label="Nhóm GMF nhận cảnh báo"
+              :no-data-text="loadingAlertGroups ? $t('loading') : $t('campaign_alert_no_groups')"
+              :label="$t('campaign_alert_group_label')"
               density="compact"
-              hint="Một tin tổng hợp sẽ gửi vào nhóm này khi có lượt gửi lỗi"
+              :hint="$t('campaign_alert_group_hint')"
               persistent-hint
             />
             <CampaignAlertOutputs v-if="editForm.campaign_alerts_enabled" v-model="editForm.campaign_alert_outputs" />
@@ -396,23 +396,19 @@
           <template v-else>
             <v-select
               v-model="editForm.sync_scope"
-              :items="[
-                { title: 'Tất cả (Cá nhân & Nhóm)', value: 'all' },
-                { title: 'Chỉ tin nhắn 1:1', value: 'direct' },
-                { title: 'Chỉ tin nhắn nhóm', value: 'group' },
-              ]"
-              label="Phạm vi đồng bộ"
+              :items="syncScopeOptions"
+              :label="$t('sync_scope')"
               density="compact"
               class="mb-2"
-              hint="Thay đổi loại tin nhắn lấy về từ Zalo cá nhân"
+              :hint="$t('sync_scope_hint')"
               persistent-hint
             />
           </template>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn @click="editDialog = false">Hủy</v-btn>
-          <v-btn color="primary" :loading="saving" @click="saveEdit">Lưu</v-btn>
+          <v-btn @click="editDialog = false">{{ $t('cancel') }}</v-btn>
+          <v-btn color="primary" :loading="saving" @click="saveEdit">{{ $t('save') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -420,15 +416,14 @@
     <!-- Purge Conversations Confirm -->
     <v-dialog v-model="confirmPurge" max-width="440">
       <v-card>
-        <v-card-title>Xóa cuộc chat</v-card-title>
+        <v-card-title>{{ $t('purge_conversations') }}</v-card-title>
         <v-card-text>
-          Xóa tất cả cuộc chat và tin nhắn của kênh <b>{{ channel.name }}</b>.
-          Dữ liệu đánh giá QC liên quan cũng sẽ bị xóa. Bạn có thể đồng bộ lại sau khi xóa.
+          {{ $t('purge_conversations_confirm_msg', { name: channel.name }) }}
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn @click="confirmPurge = false">Hủy</v-btn>
-          <v-btn color="warning" :loading="purging" @click="doPurge">Xóa cuộc chat</v-btn>
+          <v-btn @click="confirmPurge = false">{{ $t('cancel') }}</v-btn>
+          <v-btn color="warning" :loading="purging" @click="doPurge">{{ $t('purge_conversations') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -436,12 +431,12 @@
     <!-- Delete Confirm -->
     <v-dialog v-model="confirmDelete" max-width="400">
       <v-card>
-        <v-card-title>Xóa kênh chat</v-card-title>
-        <v-card-text>Xóa kênh <b>{{ channel.name }}</b> sẽ xóa tất cả cuộc chat và tin nhắn liên quan. Không thể hoàn tác.</v-card-text>
+        <v-card-title>{{ $t('delete_channel') }}</v-card-title>
+        <v-card-text>{{ $t('delete_channel_confirm_msg', { name: channel.name }) }}</v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn @click="confirmDelete = false">Hủy</v-btn>
-          <v-btn color="error" :loading="deleting" @click="doDelete">Xóa</v-btn>
+          <v-btn @click="confirmDelete = false">{{ $t('cancel') }}</v-btn>
+          <v-btn color="error" :loading="deleting" @click="doDelete">{{ $t('delete') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -454,6 +449,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useChannelStore } from '../../stores/channels'
 import type { PersonalZaloGatewayState } from '../../stores/channels'
 import { useAuthStore } from '../../stores/auth'
@@ -463,6 +459,7 @@ import CampaignAlertOutputs from '../../components/channels/CampaignAlertOutputs
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const channelStore = useChannelStore()
 const authStore = useAuthStore()
 const userStore = useUserStore()
@@ -490,11 +487,11 @@ const confirmPurge = ref(false)
 const syncResult = ref<{ type: 'success' | 'warning' | 'error' | 'info'; message: string } | null>(null)
 const syncPage = ref(1)
 const syncStatusFilter = ref('')
-const syncFilterOptions = [
-  { title: 'Tất cả', value: '' },
-  { title: 'Chỉ lỗi', value: 'error' },
-  { title: 'Thành công', value: 'success' },
-]
+const syncFilterOptions = computed(() => [
+  { title: t('all'), value: '' },
+  { title: t('filter_only_error'), value: 'error' },
+  { title: t('success'), value: 'success' },
+])
 
 function onSyncFilterChange() {
   syncPage.value = 1
@@ -534,16 +531,22 @@ async function loadAlertGroupOptions() {
   }
 }
 
-const syncIntervalOptions = [
-  { title: '1 phút', value: 1 },
-  { title: '5 phút', value: 5 },
-  { title: '10 phút', value: 10 },
-  { title: '15 phút', value: 15 },
-  { title: '30 phút', value: 30 },
-  { title: '1 giờ', value: 60 },
-  { title: '6 giờ', value: 360 },
-  { title: '1 ngày', value: 1440 },
-]
+const syncIntervalOptions = computed(() => [
+  { title: t('sync_1m'), value: 1 },
+  { title: t('sync_5m'), value: 5 },
+  { title: t('sync_10m'), value: 10 },
+  { title: t('sync_15m'), value: 15 },
+  { title: t('sync_30m'), value: 30 },
+  { title: t('sync_1h'), value: 60 },
+  { title: t('sync_6h'), value: 360 },
+  { title: t('sync_1d'), value: 1440 },
+])
+
+const syncScopeOptions = computed(() => [
+  { title: t('sync_scope_all'), value: 'all' },
+  { title: t('sync_scope_direct'), value: 'direct' },
+  { title: t('sync_scope_group'), value: 'group' },
+])
 
 function formatDateTime(d: string) {
   const dt = new Date(d)
@@ -555,16 +558,16 @@ function formatDateTime(d: string) {
 }
 
 function formatSyncInterval(mins: number) {
-  if (!mins) return '5 phút'
-  if (mins < 60) return `${mins} phút`
-  if (mins < 1440) return `${mins / 60} giờ`
-  return `${mins / 1440} ngày`
+  if (!mins) return t('minutes_unit', { count: 5 })
+  if (mins < 60) return t('minutes_unit', { count: mins })
+  if (mins < 1440) return t('hours_unit', { count: mins / 60 })
+  return t('days_unit', { count: mins / 1440 })
 }
 
 function channelTypeLabel(channelType: string) {
-  if (channelType === 'facebook') return 'Facebook'
-  if (channelType === 'personal_zalo_import') return 'Zalo cá nhân'
-  return 'Zalo OA'
+  if (channelType === 'facebook') return t('channel_facebook')
+  if (channelType === 'personal_zalo_import') return t('channel_personal_zalo')
+  return t('channel_zalo')
 }
 
 function channelTypeColor(channelType: string) {
@@ -588,48 +591,48 @@ const gatewayStatusIcon = computed(() => {
   return 'mdi-cellphone-link-off'
 })
 const gatewayStatusLabel = computed(() => {
-  if (!gatewayState.value.gateway_configured) return 'Chưa thiết lập'
-  if (!gatewayState.value.gateway_reachable) return 'Mất kết nối'
-  if (!gatewayState.value.account_exists) return 'Chưa kết nối'
-  if (gatewayAccount.value?.status === 'connected') return 'Đã kết nối'
-  if (gatewayAccount.value?.status === 'qr_pending') return 'Chờ quét QR'
-  if (gatewayAccount.value?.status === 'connecting') return 'Đang kết nối'
-  return 'Đã ngắt kết nối'
+  if (!gatewayState.value.gateway_configured) return t('gateway_status_unconfigured')
+  if (!gatewayState.value.gateway_reachable) return t('gateway_status_unreachable')
+  if (!gatewayState.value.account_exists) return t('gateway_status_disconnected')
+  if (gatewayAccount.value?.status === 'connected') return t('gateway_status_connected')
+  if (gatewayAccount.value?.status === 'qr_pending') return t('gateway_status_qr_pending')
+  if (gatewayAccount.value?.status === 'connecting') return t('gateway_status_connecting')
+  return t('gateway_status_interrupted')
 })
 const gatewayStatusHeadline = computed(() => {
-  if (!gatewayState.value.gateway_configured) return 'Chưa bật kết nối Zalo cá nhân'
-  if (!gatewayState.value.gateway_reachable) return 'Không kết nối được dịch vụ Zalo cá nhân'
-  if (!gatewayState.value.account_exists) return 'Sẵn sàng bắt đầu kết nối'
-  if (gatewayAccount.value?.status === 'connected') return 'Zalo cá nhân đã sẵn sàng'
-  if (gatewayAccount.value?.status === 'qr_pending') return 'Đang chờ bạn quét mã QR'
-  if (gatewayAccount.value?.status === 'connecting') return 'Đang thử kết nối lại'
-  return 'Kết nối tạm thời gián đoạn'
+  if (!gatewayState.value.gateway_configured) return t('gateway_headline_unconfigured')
+  if (!gatewayState.value.gateway_reachable) return t('gateway_headline_unreachable')
+  if (!gatewayState.value.account_exists) return t('gateway_headline_ready')
+  if (gatewayAccount.value?.status === 'connected') return t('gateway_headline_connected')
+  if (gatewayAccount.value?.status === 'qr_pending') return t('gateway_headline_qr_pending')
+  if (gatewayAccount.value?.status === 'connecting') return t('gateway_headline_reconnecting')
+  return t('gateway_headline_interrupted')
 })
 const gatewayStatusBody = computed(() => {
   if (gatewayState.value.message) return gatewayState.value.message
-  if (!gatewayState.value.account_exists) return 'Bấm "Bắt đầu kết nối", sau đó quét QR trên điện thoại để hoàn tất.'
-  if (gatewayAccount.value?.status === 'connected') return 'Bấm "Lấy tin nhắn mới" để đưa hội thoại vào hệ thống.'
-  if (gatewayAccount.value?.status === 'connecting') return 'Hệ thống đang thử khôi phục phiên cũ và sẽ tự làm mới màn hình.'
-  if (gatewayAccount.value?.status === 'qr_pending') return 'Quét QR rồi xác nhận đăng nhập trong Zalo, trạng thái sẽ tự cập nhật.'
-  return gatewayAccount.value?.last_error || 'Nếu chưa vào được, bấm "Kết nối lại" hoặc tạo mã QR mới.'
+  if (!gatewayState.value.account_exists) return t('gateway_body_ready')
+  if (gatewayAccount.value?.status === 'connected') return t('gateway_body_connected')
+  if (gatewayAccount.value?.status === 'connecting') return t('gateway_body_reconnecting')
+  if (gatewayAccount.value?.status === 'qr_pending') return t('gateway_body_qr_pending')
+  return gatewayAccount.value?.last_error || t('gateway_body_fallback')
 })
 const gatewayAlert = computed(() => {
   if (!gatewayState.value.gateway_configured) {
-    return { type: 'warning' as const, message: 'Kết nối Zalo cá nhân chưa được bật trên máy chủ. Vui lòng nhờ đội kỹ thuật kiểm tra cấu hình.' }
+    return { type: 'warning' as const, message: t('gateway_alert_unconfigured') }
   }
   if (!gatewayState.value.gateway_reachable) {
-    return { type: 'warning' as const, message: 'Hệ thống chưa gọi được dịch vụ Zalo cá nhân. Vui lòng kiểm tra dịch vụ đang chạy.' }
+    return { type: 'warning' as const, message: t('gateway_alert_unreachable') }
   }
   if (!gatewayState.value.account_exists) {
-    return { type: 'info' as const, message: 'Kênh đã tạo xong. Bấm "Bắt đầu kết nối" để tiếp tục.' }
+    return { type: 'info' as const, message: t('gateway_alert_ready') }
   }
   if (gatewayAccount.value?.status === 'connected') {
-    return { type: 'success' as const, message: 'Đã kết nối thành công. Bây giờ bạn chỉ cần bấm "Lấy tin nhắn mới".' }
+    return { type: 'success' as const, message: t('gateway_alert_connected') }
   }
   if (gatewayAccount.value?.status === 'qr_pending') {
-    return { type: 'info' as const, message: 'Đây là bước cần điện thoại: quét QR và xác nhận trên Zalo, hệ thống sẽ tự chuyển trạng thái.' }
+    return { type: 'info' as const, message: t('gateway_alert_qr_pending') }
   }
-  return { type: 'warning' as const, message: gatewayAccount.value?.last_error || 'Phiên đăng nhập hiện không dùng được. Hãy kết nối lại hoặc tạo mã QR mới.' }
+  return { type: 'warning' as const, message: gatewayAccount.value?.last_error || t('gateway_alert_fallback') }
 })
 const gatewayAvatarInitial = computed(() => (gatewayAccount.value?.display_name || channel.value?.name || 'Z').slice(0, 1).toUpperCase())
 const gatewayQrImageSrc = computed(() => normalizeGatewayQrImage(gatewayAccount.value?.qr_image))
@@ -675,7 +678,7 @@ async function loadGatewayState(showSpinner = true) {
       gateway_reachable: false,
       account_exists: false,
       next_action: 'fix_gateway',
-      message: err.response?.data?.details || err.response?.data?.error || 'Không lấy được trạng thái kết nối',
+      message: err.response?.data?.details || err.response?.data?.error || t('gateway_state_fetch_failed'),
     }
   } finally {
     if (showSpinner) gatewayLoading.value = false
@@ -687,10 +690,10 @@ async function startGatewayConnect() {
   gatewayActionLoading.value = 'connect'
   try {
     gatewayState.value = await channelStore.connectPersonalZaloGateway(tenantId.value, channelId.value)
-    syncResult.value = { type: 'success', message: gatewayState.value.account?.status === 'connected' ? 'Zalo cá nhân đã kết nối.' : 'Đã tạo phiên kết nối. Quét QR để hoàn tất.' }
+    syncResult.value = { type: 'success', message: gatewayState.value.account?.status === 'connected' ? t('personal_zalo_connected') : t('personal_zalo_qr_created') }
     await channelStore.fetchChannel(tenantId.value, channelId.value)
   } catch (err: any) {
-    syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.message || err.response?.data?.error || 'Không thể bắt đầu kết nối' }
+    syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.message || err.response?.data?.error || t('personal_zalo_connect_failed') }
   } finally {
     gatewayActionLoading.value = ''
     updateGatewayPolling()
@@ -701,9 +704,9 @@ async function reconnectGateway() {
   gatewayActionLoading.value = 'reconnect'
   try {
     gatewayState.value = await channelStore.reconnectPersonalZaloGateway(tenantId.value, channelId.value)
-    syncResult.value = { type: 'info', message: 'Đang thử kết nối lại tài khoản Zalo cá nhân.' }
+    syncResult.value = { type: 'info', message: t('personal_zalo_reconnecting') }
   } catch (err: any) {
-    syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.message || err.response?.data?.error || 'Reconnect thất bại' }
+    syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.message || err.response?.data?.error || t('personal_zalo_reconnect_failed') }
   } finally {
     gatewayActionLoading.value = ''
     updateGatewayPolling()
@@ -716,9 +719,9 @@ async function syncGateway() {
     gatewayState.value = await channelStore.syncPersonalZaloGateway(tenantId.value, channelId.value)
     await channelStore.fetchChannel(tenantId.value, channelId.value)
     await channelStore.fetchSyncHistory(tenantId.value, channelId.value, syncPage.value, syncStatusFilter.value)
-    syncResult.value = { type: 'success', message: 'Đã bắt đầu lấy dữ liệu. Tin nhắn mới sẽ xuất hiện sau ít phút.' }
+    syncResult.value = { type: 'success', message: t('personal_zalo_sync_started') }
   } catch (err: any) {
-    syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.message || err.response?.data?.error || 'Lấy dữ liệu thất bại' }
+    syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.message || err.response?.data?.error || t('personal_zalo_sync_failed') }
   } finally {
     gatewayActionLoading.value = ''
   }
@@ -739,19 +742,19 @@ async function doSync() {
       pollAttempts++
     }
     if (pollAttempts >= maxPollAttempts) {
-      syncResult.value = { type: 'error', message: 'Đồng bộ quá lâu, vui lòng kiểm tra lại sau' }
+      syncResult.value = { type: 'error', message: t('sync_timeout_check_later') }
       syncing.value = false
       return
     }
     await channelStore.fetchSyncHistory(tenantId.value, channelId.value, syncPage.value, syncStatusFilter.value)
     const ch = channelStore.currentChannel
     if (ch?.last_sync_status === 'success') {
-      syncResult.value = { type: 'success', message: 'Đồng bộ thành công' }
+      syncResult.value = { type: 'success', message: t('sync_success') }
     } else {
-      syncResult.value = { type: 'error', message: ch?.last_sync_error || 'Đồng bộ thất bại' }
+      syncResult.value = { type: 'error', message: ch?.last_sync_error || t('sync_failed') }
     }
   } catch (err: any) {
-    syncResult.value = { type: 'error', message: err.response?.data?.error || 'Đồng bộ thất bại' }
+    syncResult.value = { type: 'error', message: err.response?.data?.error || t('sync_failed') }
   } finally {
     syncing.value = false
   }
@@ -761,9 +764,9 @@ async function doTest() {
   testing.value = true
   try {
     const result = await channelStore.testConnection(tenantId.value, channelId.value)
-    syncResult.value = { type: 'success', message: result.message || 'Kết nối thành công' }
+    syncResult.value = { type: 'success', message: result.message || t('connection_success') }
   } catch (err: any) {
-    syncResult.value = { type: 'error', message: err.response?.data?.error || 'Kết nối thất bại' }
+    syncResult.value = { type: 'error', message: err.response?.data?.error || t('connection_failed') }
   } finally {
     testing.value = false
   }
@@ -823,9 +826,9 @@ async function saveAccountOwners() {
       .filter(owner => owner.user_id)
     await channelStore.updateAccountOwners(tenantId.value, channelId.value, payload)
     await loadAccountOwners()
-    syncResult.value = { type: 'success', message: 'Đã lưu phân công tài khoản cho nhân sự' }
+    syncResult.value = { type: 'success', message: t('save_assignments_success') }
   } catch (err: any) {
-    syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.error || 'Lưu phân công thất bại' }
+    syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.error || t('save_assignments_failed') }
   } finally {
     savingAccountOwners.value = false
   }
@@ -838,12 +841,12 @@ async function doPurge() {
     confirmPurge.value = false
     syncResult.value = {
       type: 'success',
-      message: `Đã xóa ${result.conversations_deleted} cuộc chat, ${result.messages_deleted} tin nhắn. Bạn có thể đồng bộ lại.`
+      message: t('purge_success', { conversations: result.conversations_deleted, messages: result.messages_deleted })
     }
     // Refresh channel data to reflect reset sync state
     await channelStore.fetchChannel(tenantId.value, channelId.value)
   } catch {
-    syncResult.value = { type: 'error', message: 'Xóa cuộc chat thất bại' }
+    syncResult.value = { type: 'error', message: t('purge_failed') }
   } finally {
     purging.value = false
   }
@@ -889,10 +892,10 @@ onMounted(async () => {
   // Handle OAuth callback redirect
   const params = new URLSearchParams(window.location.search)
   if (params.get('zalo_auth') === 'success' || params.get('fb_auth') === 'success') {
-    syncResult.value = { type: 'success', message: 'Xác thực thành công! Bấm "Đồng bộ ngay" để lấy tin nhắn.' }
+    syncResult.value = { type: 'success', message: t('auth_success_sync_now') }
     window.history.replaceState({}, '', window.location.pathname)
   } else if (params.get('zalo_auth') === 'error' || params.get('fb_auth') === 'error') {
-    syncResult.value = { type: 'error', message: params.get('message') || 'Xác thực thất bại. Vui lòng thử lại.' }
+    syncResult.value = { type: 'error', message: params.get('message') || t('auth_failed_try_again') }
     window.history.replaceState({}, '', window.location.pathname)
   }
 

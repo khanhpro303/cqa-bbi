@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="text-caption text-grey mt-2 mb-1">Gửi cảnh báo thêm qua (tùy chọn):</div>
+    <div class="text-caption text-grey mt-2 mb-1">{{ $t('campaign_alert_additional_outputs') }}</div>
     <v-card v-for="(o, idx) in model" :key="idx" variant="outlined" class="pa-3 mb-2">
       <div class="d-flex align-center mb-2">
         <v-chip size="x-small" :color="o.type === 'telegram' ? 'blue' : 'orange'" variant="tonal">
@@ -13,7 +13,7 @@
       <v-select
         v-model="o.type"
         :items="typeItems"
-        label="Loại"
+        :label="$t('type')"
         density="compact"
         class="mb-2"
         hide-details
@@ -22,7 +22,7 @@
       <template v-if="o.type === 'telegram'">
         <v-text-field v-model="o.bot_token" label="Bot Token" density="compact" class="mb-2" hide-details />
         <v-text-field v-model="o.chat_id" label="Group ID" density="compact" hide-details
-          hint="Số âm, ví dụ: -1001234567890" persistent-hint />
+          :hint="$t('campaign_alert_telegram_chat_id_hint')" persistent-hint />
       </template>
 
       <template v-else>
@@ -34,15 +34,15 @@
           <v-col cols="6"><v-text-field v-model="o.smtp_user" label="Username" density="compact" hide-details /></v-col>
           <v-col cols="6"><v-text-field v-model="o.smtp_pass" label="Password" type="password" density="compact" hide-details /></v-col>
         </v-row>
-        <v-text-field v-model="o.from" label="Email gửi" density="compact" class="mb-2 mt-2" hide-details />
-        <v-text-field v-model="o.to" label="Email nhận" density="compact" hide-details
-          hint="Nhiều email cách nhau bằng dấu phẩy" persistent-hint />
+        <v-text-field v-model="o.from" :label="$t('campaign_alert_email_sender')" density="compact" class="mb-2 mt-2" hide-details />
+        <v-text-field v-model="o.to" :label="$t('campaign_alert_email_recipient')" density="compact" hide-details
+          :hint="$t('campaign_alert_emails_comma_hint')" persistent-hint />
       </template>
     </v-card>
 
     <v-btn variant="text" size="small" color="primary" @click="add">
       <v-icon start>mdi-plus</v-icon>
-      Thêm kênh cảnh báo
+      {{ $t('campaign_alert_add_channel') }}
     </v-btn>
   </div>
 </template>
