@@ -94,8 +94,13 @@ function textWidthEm(label: string, fontFamily: string) {
   return Math.max([...label.normalize('NFC')].length, 1) * FALLBACK_WIDTH_EM
 }
 
-function fontSize(top: number, label: SizedLabel) {
-  return MIN_FONT + (top - MIN_FONT) * label.rank
+function fontSize(top: number, label: SizedLabel, span: number) {
+  // Fit long labels independently; one rare phrase must not flatten the size
+  // scale of every other keyword. shrinkToFit handles any remaining overflow.
+  return Math.max(MIN_FONT, Math.min(
+    MIN_FONT + (top - MIN_FONT) * label.rank,
+    span / label.widthEm,
+  ))
 }
 
 /**
@@ -108,22 +113,22 @@ function fitTopFont(labels: SizedLabel[], radii: ShapeRadii) {
   const fits = (top: number) => {
     let area = 0
     for (const label of labels) {
-      const size = fontSize(top, label)
+      const size = fontSize(top, label, span)
       const width = size * label.widthEm
-      if (width > span) return false
       area += (width + GRID_SIZE) * (size * LINE_HEIGHT_EM + GRID_SIZE)
     }
     return area <= budget
   }
   let low = MIN_FONT
-  let high = Math.max(MIN_FONT, Math.min(MAX_FONT, Math.min(radii.rx, radii.ry) * .6))
+  const ceiling = Math.max(MIN_FONT, Math.min(MAX_FONT, Math.min(radii.rx, radii.ry) * .6))
+  let high = ceiling
   if (fits(high)) return high
   for (let step = 0; step < 20; step++) {
     const middle = (low + high) / 2
     if (fits(middle)) low = middle
     else high = middle
   }
-  return Math.max(low, Math.min(MIN_TOP_FONT, high))
+  return Math.max(low, Math.min(MIN_TOP_FONT, ceiling))
 }
 
 function renderCloud(useMask: boolean | number = true) {
@@ -150,7 +155,7 @@ function renderCloud(useMask: boolean | number = true) {
   // Layout weights can be mutated by shrinkToFit; keep source counts untouched.
   const list: WordCloud.ListEntry[] = props.items.map((item, index) => [
     item.label,
-    fontSize(top, labels[index]!),
+    fontSize(top, labels[index]!, shapeSpan(radii)),
     item.key,
   ])
   let colorIndex = 0
