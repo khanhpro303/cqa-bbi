@@ -57,7 +57,7 @@ const MIN_FONT = 11
 const MAX_FONT = 96
 // Keep a visible size gap between frequent and rare keywords in crowded clouds;
 // shrinkToFit still reduces words that cannot be placed.
-const MIN_TOP_FONT = 18
+const MIN_TOP_FONT = 36
 const MEASURE_FONT = 100
 
 interface SizedLabel { widthEm: number; rank: number }
@@ -149,7 +149,9 @@ function renderCloud(useMask: boolean | number = true) {
   const min = Math.min(...counts, 1)
   const labels: SizedLabel[] = props.items.map(item => ({
     widthEm: textWidthEm(item.label, fontFamily),
-    rank: max === min ? 1 : (Math.sqrt(item.count) - Math.sqrt(min)) / (Math.sqrt(max) - Math.sqrt(min)),
+    // Preserve count differences instead of compressing dominant keywords
+    // toward the long tail with a square-root scale.
+    rank: max === min ? 1 : (item.count - min) / (max - min),
   }))
   const top = fitTopFont(labels, radii)
   // Layout weights can be mutated by shrinkToFit; keep source counts untouched.
@@ -174,7 +176,7 @@ function renderCloud(useMask: boolean | number = true) {
     minSize: 10,
     shrinkToFit: true,
     drawOutOfBound: false,
-    rotateRatio: .25,
+    rotateRatio: 0,
     minRotation: -Math.PI / 2,
     maxRotation: Math.PI / 2,
     rotationSteps: 2,

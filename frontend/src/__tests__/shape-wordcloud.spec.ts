@@ -204,6 +204,24 @@ describe('ShapeWordcloud', () => {
     expect(products.map(item => item.count)).toEqual([144, 121, 20, 1])
   })
 
+  it('makes dominant counts visibly larger in a crowded product cloud', async () => {
+    width = 250
+    const wrapper = await render()
+    await wrapper.setProps({ items: [
+      { key: 'e24', label: 'E-24', count: 144, conversationIds: [] },
+      { key: 'of618', label: 'OF618', count: 121, conversationIds: [] },
+      { key: 'ff901', label: 'FF901', count: 20, conversationIds: [] },
+      ...Array.from({ length: 37 }, (_, index) => ({
+        key: `rare${index}`, label: `Sản phẩm khác ${index}`, count: 1, conversationIds: [],
+      })),
+    ] })
+    await runFrames()
+    const sizes = lastRender()[1].list!.map(item => item[1] as number)
+    expect(sizes[0]).toBeGreaterThanOrEqual(36)
+    expect(sizes[1]).toBeGreaterThan(2 * sizes[2]!)
+    expect(sizes[2]).toBeGreaterThan(sizes[3]!)
+  })
+
   it('preserves distinct source keys and true counts when duplicate labels shrink', async () => {
     const wrapper = await render()
     const [host, options] = lastRender()
