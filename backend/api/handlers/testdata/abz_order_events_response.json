@@ -1,0 +1,19 @@
+{
+  "events": [
+    {
+      "source_event_id": "cqa_evt_example",
+      "order_id": "cqa_order_example",
+      "order_ref": "DH-01",
+      "page_id": "123456789",
+      "psid": "987654321",
+      "value_vnd": 450000,
+      "status": "confirmed",
+      "ordered_at": "2026-11-02T03:00:00Z",
+      "observed_at": "2026-11-02T03:05:00Z",
+      "evidence_message_ids": ["message-1", "message-2"],
+      "confidence": 0.96
+    }
+  ],
+  "next_cursor": "opaque-cursor",
+  "has_more": false
+}

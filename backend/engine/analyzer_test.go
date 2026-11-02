@@ -163,6 +163,112 @@ func TestBuildConversationInsightDetailIncludesSourceTimestamp(t *testing.T) {
 	}
 }
 
+func TestValidateOrderOutcomesRequiresExactCustomerConfirmation(t *testing.T) {
+	confirmedAt := time.Date(2026, 11, 2, 3, 4, 5, 0, time.UTC)
+	messages := []models.Message{
+		{ID: "customer-amount", SenderType: "customer", Content: "Tổng đơn của mình là 450.000đ đúng không?", SentAt: confirmedAt.Add(-time.Minute)},
+		{ID: "customer-confirm", SenderType: "customer", Content: "Dạ mình lấy COD nhé", SentAt: confirmedAt},
+	}
+	value := int64(450000)
+	proposals := []ai.OrderOutcomeInsight{
+		{Status: "confirmed", OrderRef: "DH-01", ValueVND: &value, ConfirmationMessageID: "customer-confirm", ConfirmationEvidence: "Dạ mình lấy COD nhé", AmountMessageID: "customer-amount", AmountEvidence: "Tổng đơn của mình là 450.000đ đúng không?", Confidence: .96},
+		{Status: "confirmed", ConfirmationMessageID: "customer-confirm", ConfirmationEvidence: "Fanpage tự nói đã chốt", Confidence: .9},
+		{Status: "confirmed", ConfirmationMessageID: "missing-message", ConfirmationEvidence: "Dạ mình lấy COD nhé", Confidence: .9},
+	}
+	got := validateOrderOutcomes("conv-1", proposals, messages, nil)
+	if len(got) != 1 {
+		t.Fatalf("agent-only confirmation must be rejected: %#v", got)
+	}
+	if got[0].Status != "confirmed" || got[0].ValueVND == nil || *got[0].ValueVND != value || got[0].OrderedAt != confirmedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("unexpected validated outcome: %#v", got[0])
+	}
+	if len(got[0].EvidenceMessageIDs) != 2 || got[0].EvidenceMessageIDs[0] != "customer-confirm" || got[0].EvidenceMessageIDs[1] != "customer-amount" {
+		t.Fatalf("evidence IDs must resolve to exact messages: %#v", got[0].EvidenceMessageIDs)
+	}
+}
+
+func TestValidateOrderOutcomesReviewsMissingAmountAndKeepsStableOrder(t *testing.T) {
+	messages := []models.Message{
+		{ID: "confirm", SenderType: "customer", Content: "Mình chốt đơn này", SentAt: time.Unix(10, 0)},
+		{ID: "cancel", SenderType: "customer", Content: "Mình hủy đơn nhé", SentAt: time.Unix(20, 0)},
+	}
+	confirmed := validateOrderOutcomes("conv-2", []ai.OrderOutcomeInsight{{Status: "confirmed", ConfirmationMessageID: "confirm", ConfirmationEvidence: "Mình chốt đơn này", Confidence: .8}}, messages, nil)
+	cancelled := validateOrderOutcomes("conv-2", []ai.OrderOutcomeInsight{{Status: "cancelled", ConfirmationMessageID: "cancel", ConfirmationEvidence: "Mình hủy đơn nhé", Confidence: .9}}, messages, confirmed)
+	if len(confirmed) != 1 || confirmed[0].Status != "review" || confirmed[0].ValueVND != nil {
+		t.Fatalf("confirmed order without amount must require review: %#v", confirmed)
+	}
+	if len(cancelled) != 1 || cancelled[0].Status != "cancelled" || confirmed[0].OrderID != cancelled[0].OrderID || confirmed[0].OrderRef != cancelled[0].OrderRef {
+		t.Fatalf("later cancellation must update the stable conversation order: confirmed=%#v cancelled=%#v", confirmed, cancelled)
+	}
+}
+
+func TestValidateOrderOutcomesRejectsInventedAmountAndLateQuote(t *testing.T) {
+	confirmedAt := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	messages := []models.Message{
+		{ID: "quote", SenderType: "agent", Content: "Tổng đơn 450.000đ", SentAt: confirmedAt.Add(-time.Hour)},
+		{ID: "confirm", SenderType: "customer", Content: "Dạ mình chốt COD", SentAt: confirmedAt},
+		{ID: "late", SenderType: "agent", Content: "Tổng đơn 999.999đ", SentAt: confirmedAt.Add(time.Minute)},
+	}
+	invented := int64(999999)
+	quoted := int64(450000)
+	accepted := validateOrderOutcomes("conv-amount", []ai.OrderOutcomeInsight{{Status: "confirmed", ValueVND: &quoted, ConfirmationMessageID: "confirm", ConfirmationEvidence: "Dạ mình chốt COD", AmountMessageID: "quote", AmountEvidence: "Tổng đơn 450.000đ", Confidence: .9}}, messages, nil)
+	if len(accepted) != 1 || accepted[0].Status != "confirmed" || accepted[0].ValueVND == nil || *accepted[0].ValueVND != quoted {
+		t.Fatalf("matching agent quote before customer acceptance should be accepted: %#v", accepted)
+	}
+	got := validateOrderOutcomes("conv-amount", []ai.OrderOutcomeInsight{{Status: "confirmed", ValueVND: &invented, ConfirmationMessageID: "confirm", ConfirmationEvidence: "Dạ mình chốt COD", AmountMessageID: "quote", AmountEvidence: "Tổng đơn 450.000đ", Confidence: .9}}, messages, nil)
+	if len(got) != 1 || got[0].Status != "review" || got[0].ValueVND != nil {
+		t.Fatalf("invented amount must be rejected: %#v", got)
+	}
+	got = validateOrderOutcomes("conv-amount", []ai.OrderOutcomeInsight{{Status: "confirmed", ValueVND: &quoted, ConfirmationMessageID: "confirm", ConfirmationEvidence: "Dạ mình chốt COD", AmountMessageID: "missing-message", AmountEvidence: "Tổng đơn 450.000đ", Confidence: .9}}, messages, nil)
+	if len(got) != 1 || got[0].Status != "review" || got[0].ValueVND != nil {
+		t.Fatalf("amount text without its exact message ID must be rejected: %#v", got)
+	}
+	got = validateOrderOutcomes("conv-amount", []ai.OrderOutcomeInsight{{Status: "confirmed", ValueVND: &invented, ConfirmationMessageID: "confirm", ConfirmationEvidence: "Dạ mình chốt COD", AmountMessageID: "late", AmountEvidence: "Tổng đơn 999.999đ", Confidence: .9}}, messages, nil)
+	if len(got) != 1 || got[0].ValueVND != nil {
+		t.Fatalf("quote after confirmation must be rejected: %#v", got)
+	}
+}
+
+func TestValidateOrderOutcomesUsesConfirmationMessageIdentityAndRetractsOmissionToReview(t *testing.T) {
+	messages := []models.Message{
+		{ID: "confirm-1", SenderType: "customer", Content: "Mình chốt đơn DH-01", SentAt: time.Unix(10, 0)},
+		{ID: "confirm-2", SenderType: "customer", Content: "Mình chốt thêm đơn DH-02", SentAt: time.Unix(20, 0)},
+	}
+	proposals := []ai.OrderOutcomeInsight{
+		{Status: "confirmed", OrderRef: "DH-01", ConfirmationMessageID: "confirm-1", ConfirmationEvidence: "Mình chốt đơn DH-01", Confidence: .9},
+		{Status: "confirmed", OrderRef: "DH-02", ConfirmationMessageID: "confirm-2", ConfirmationEvidence: "Mình chốt thêm đơn DH-02", Confidence: .9},
+	}
+	got := validateOrderOutcomes("conv-multi", proposals, messages, nil)
+	if len(got) != 2 || got[0].OrderID == got[1].OrderID || got[0].OrderRef != "DH-01" || got[1].OrderRef != "DH-02" {
+		t.Fatalf("separate confirmations need separate verified identities: %#v", got)
+	}
+	retracted := validateOrderOutcomes("conv-multi", nil, messages, got)
+	if len(retracted) != 2 || retracted[0].Status != "review" || retracted[1].Status != "review" || retracted[0].OrderID != got[0].OrderID {
+		t.Fatalf("omitted full-snapshot outcomes must emit review revisions: %#v", retracted)
+	}
+}
+
+func TestValidateOrderOutcomesRejectsHallucinatedRefAndPreservesVerifiedCancellationIdentity(t *testing.T) {
+	messages := []models.Message{
+		{ID: "confirm", SenderType: "customer", Content: "Mình chốt đơn DH-77", SentAt: time.Unix(10, 0)},
+		{ID: "cancel", SenderType: "customer", Content: "Mình hủy DH-77 nhé", SentAt: time.Unix(20, 0)},
+		{ID: "confirm-prefix", SenderType: "customer", Content: "Mình chốt đơn DH-10", SentAt: time.Unix(30, 0)},
+	}
+	confirmed := validateOrderOutcomes("conv-ref", []ai.OrderOutcomeInsight{{Status: "confirmed", OrderRef: "DH-77", ConfirmationMessageID: "confirm", ConfirmationEvidence: "Mình chốt đơn DH-77", Confidence: .9}}, messages, nil)
+	cancelled := validateOrderOutcomes("conv-ref", []ai.OrderOutcomeInsight{{Status: "cancelled", OrderRef: "DH-77", ConfirmationMessageID: "cancel", ConfirmationEvidence: "Mình hủy DH-77 nhé", Confidence: .9}}, messages, confirmed)
+	if len(cancelled) != 1 || cancelled[0].Status != "cancelled" || cancelled[0].OrderID != confirmed[0].OrderID || cancelled[0].OrderedAt != confirmed[0].OrderedAt {
+		t.Fatalf("verified cancellation must preserve purchase identity/date: confirmed=%#v cancelled=%#v", confirmed, cancelled)
+	}
+	hallucinated := validateOrderOutcomes("conv-ref", []ai.OrderOutcomeInsight{{Status: "confirmed", OrderRef: "MADE-UP", ConfirmationMessageID: "confirm", ConfirmationEvidence: "Mình chốt đơn DH-77", Confidence: .9}}, messages, nil)
+	if len(hallucinated) != 1 || hallucinated[0].OrderRef == "MADE-UP" {
+		t.Fatalf("order ref absent from evidence must not be trusted: %#v", hallucinated)
+	}
+	prefix := validateOrderOutcomes("conv-ref-prefix", []ai.OrderOutcomeInsight{{Status: "confirmed", OrderRef: "DH-1", ConfirmationMessageID: "confirm-prefix", ConfirmationEvidence: "Mình chốt đơn DH-10", Confidence: .9}}, messages, nil)
+	if len(prefix) != 1 || prefix[0].OrderRef == "DH-1" {
+		t.Fatalf("partial reference token must not verify against a longer reference: %#v", prefix)
+	}
+}
+
 func TestPendingInsightConversationIDsIncludesNeverAnalysedAndStale(t *testing.T) {
 	latest := time.Date(2026, 9, 16, 8, 30, 0, 0, time.UTC)
 	candidates := []staleInsightCandidate{

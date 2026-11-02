@@ -150,6 +150,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		internal.POST("/imports/personal-zalo", handlers.NewPersonalZaloImportHandler(engine.NewIngestService()))
 	}
 
+	abzInternal := r.Group("/api/internal/abz")
+	abzInternal.Use(middleware.ABZExportHMACAuth(cfg.ABZExportSecret, cfg.ABZExportTenantID, 5*time.Minute))
+	{
+		abzInternal.GET("/order-events", handlers.ListABZOrderEvents)
+	}
+
 	// Authenticated API
 	authed := api.Group("")
 	authed.Use(middleware.JWTAuth())

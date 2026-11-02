@@ -62,11 +62,25 @@ type LeadQualityInsight struct {
 	Reason   string `json:"reason"`
 }
 
+// OrderOutcomeInsight is an AI proposal. The engine must resolve the evidence
+// text to real customer message IDs before persisting or exporting an outcome.
+type OrderOutcomeInsight struct {
+	Status                string  `json:"status"`
+	OrderRef              string  `json:"order_ref"`
+	ValueVND              *int64  `json:"value_vnd"`
+	ConfirmationEvidence  string  `json:"confirmation_evidence"`
+	AmountEvidence        string  `json:"amount_evidence"`
+	ConfirmationMessageID string  `json:"confirmation_message_id"`
+	AmountMessageID       string  `json:"amount_message_id"`
+	Confidence            float64 `json:"confidence"`
+}
+
 type ConversationInsights struct {
-	Intents     []string           `json:"intents"`
-	Products    []ProductInsight   `json:"products"`
-	Feedback    []FeedbackInsight  `json:"feedback"`
-	LeadQuality LeadQualityInsight `json:"lead_quality"`
+	Intents       []string              `json:"intents"`
+	Products      []ProductInsight      `json:"products"`
+	Feedback      []FeedbackInsight     `json:"feedback"`
+	LeadQuality   LeadQualityInsight    `json:"lead_quality"`
+	OrderOutcomes []OrderOutcomeInsight `json:"order_outcomes,omitempty"`
 }
 
 type ClassificationResponse struct {
@@ -139,4 +153,28 @@ func normalizeConversationInsights(insights *ConversationInsights) {
 	if insights.LeadQuality.Level != "unknown" && insights.LeadQuality.Evidence == "" {
 		insights.LeadQuality.Level = "unknown"
 	}
+
+	validOrderStatuses := map[string]bool{"confirmed": true, "cancelled": true, "refunded": true, "review": true}
+	normalizedOutcomes := make([]OrderOutcomeInsight, 0, len(insights.OrderOutcomes))
+	for _, outcome := range insights.OrderOutcomes {
+		outcome.Status = strings.ToLower(strings.TrimSpace(outcome.Status))
+		outcome.OrderRef = strings.TrimSpace(outcome.OrderRef)
+		outcome.ConfirmationEvidence = strings.TrimSpace(outcome.ConfirmationEvidence)
+		outcome.AmountEvidence = strings.TrimSpace(outcome.AmountEvidence)
+		outcome.ConfirmationMessageID = strings.TrimSpace(outcome.ConfirmationMessageID)
+		outcome.AmountMessageID = strings.TrimSpace(outcome.AmountMessageID)
+		if !validOrderStatuses[outcome.Status] || outcome.ConfirmationEvidence == "" || outcome.ConfirmationMessageID == "" {
+			continue
+		}
+		if outcome.ValueVND != nil && *outcome.ValueVND <= 0 {
+			outcome.ValueVND = nil
+		}
+		if outcome.Confidence < 0 {
+			outcome.Confidence = 0
+		} else if outcome.Confidence > 1 {
+			outcome.Confidence = 1
+		}
+		normalizedOutcomes = append(normalizedOutcomes, outcome)
+	}
+	insights.OrderOutcomes = normalizedOutcomes
 }

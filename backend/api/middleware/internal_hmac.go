@@ -178,3 +178,52 @@ func InternalHMACAuth(resolveSecret InternalSecretResolver, maxSkew time.Duratio
 		c.Next()
 	}
 }
+
+// ABZExportHMACAuth protects the one read-only AdBazooka export route with a
+// dedicated secret and tenant. Its signature covers the HTTP method, path and
+// exact query string so a valid request cannot be replayed for another cursor.
+func ABZExportHMACAuth(secret, tenantID string, maxSkew time.Duration) gin.HandlerFunc {
+	guard := newReplayGuard()
+	return func(c *gin.Context) {
+		if secret == "" || tenantID == "" {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "abz_export_not_configured"})
+			return
+		}
+		requestID := c.GetHeader(internalRequestIDHeader)
+		timestampRaw := c.GetHeader(internalTimestampHeader)
+		signature := c.GetHeader(internalSignatureHeader)
+		if requestID == "" || timestampRaw == "" || signature == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "internal_auth_required"})
+			return
+		}
+		timestampUnix, err := strconv.ParseInt(timestampRaw, 10, 64)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid_internal_timestamp"})
+			return
+		}
+		now := time.Now().UTC()
+		delta := now.Sub(time.Unix(timestampUnix, 0).UTC())
+		if delta < 0 {
+			delta = -delta
+		}
+		if delta > maxSkew {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "stale_internal_request"})
+			return
+		}
+		canonical := timestampRaw + "\n" + requestID + "\n" + c.Request.Method + "\n" + c.Request.URL.EscapedPath() + "\n" + c.Request.URL.RawQuery
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(canonical))
+		expected := hex.EncodeToString(mac.Sum(nil))
+		if !hmac.Equal([]byte(expected), []byte(signature)) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid_internal_signature"})
+			return
+		}
+		if guard.Seen(tenantID+":"+requestID, now, maxSkew) {
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "replayed_internal_request"})
+			return
+		}
+		c.Set("tenant_id", tenantID)
+		c.Set("internal_request_id", requestID)
+		c.Next()
+	}
+}

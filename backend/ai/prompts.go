@@ -98,6 +98,8 @@ const mandatorySenderRoleHeading = "## Quy tắc vai trò bắt buộc"
 
 const mandatoryProductNormalizationHeading = "## Quy tắc chuẩn hóa sản phẩm bắt buộc"
 
+const mandatoryOrderOutcomeHeading = "## Quy tắc nhận diện đơn hàng bắt buộc"
+
 const mandatorySenderRoleInstructions = `
 
 ## Quy tắc vai trò bắt buộc
@@ -118,6 +120,20 @@ const mandatoryProductNormalizationInstructions = `
 - Không suy đoán model hoặc tự tạo SKU. Nếu SKU không được khách nói rõ thì để sku="".
 - evidence phải giữ nguyên trích dẫn chính xác lời khách hàng; không sửa nội dung evidence theo tên đã chuẩn hóa.`
 
+const mandatoryOrderOutcomeInstructions = `
+
+## Quy tắc nhận diện đơn hàng bắt buộc
+- Trường bắt buộc trong insights: "order_outcomes": [{"status":"confirmed|cancelled|refunded|review","order_ref":"","value_vnd":null,"confirmation_message_id":"ID sau message_id=","confirmation_evidence":"","amount_message_id":"ID sau message_id= hoặc rỗng","amount_evidence":"","confidence":0.0}]. Nếu không có bằng chứng hợp lệ, trả mảng rỗng.
+- Chỉ trả order_outcomes khi có một tin nhắn (customer) xác nhận rõ ràng việc mua/chốt hàng. Xác nhận mua COD vẫn là confirmed; không bắt buộc đã thanh toán.
+- Việc nhân viên gửi QR, báo giá, mã vận đơn, lời cảm ơn hoặc tự nói "đã chốt" KHÔNG chứng minh khách đã mua.
+- confirmation_evidence phải là TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn (customer), không cắt, ghép hoặc diễn giải.
+- confirmation_message_id phải đúng ID được ghi cạnh tin nhắn confirmation_evidence trong transcript.
+- value_vnd chỉ ghi khi tổng tiền của chính đơn được nói rõ trong transcript. Không suy giá trị từ QR, số điện thoại, mã đơn, mã vận đơn, giá niêm yết hay báo giá chưa được khách chấp nhận.
+- amount_evidence phải là TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn chứa tổng tiền; nếu thiếu thì để value_vnd=null, amount_evidence="" và status="review".
+- amount_message_id phải đúng ID được ghi cạnh amount_evidence; nếu không có amount_evidence thì để rỗng.
+- status chỉ là confirmed|cancelled|refunded|review. Khi khách hủy/hoàn đơn đã nói trước đó, trả cùng order_ref nếu có. Nếu thiếu order_ref, để rỗng; hệ thống sẽ giữ một mã ổn định theo cuộc hội thoại.
+- Không đưa tên, số điện thoại, địa chỉ hoặc nội dung nhạy cảm khác vào order_ref.`
+
 func appendMandatorySenderRoleInstructions(prompt string) string {
 	if strings.Contains(prompt, mandatorySenderRoleHeading) {
 		return prompt
@@ -127,10 +143,13 @@ func appendMandatorySenderRoleInstructions(prompt string) string {
 
 func appendMandatoryMessengerInsightsInstructions(prompt string) string {
 	prompt = appendMandatorySenderRoleInstructions(prompt)
-	if strings.Contains(prompt, mandatoryProductNormalizationHeading) {
-		return prompt
+	if !strings.Contains(prompt, mandatoryProductNormalizationHeading) {
+		prompt += mandatoryProductNormalizationInstructions
 	}
-	return prompt + mandatoryProductNormalizationInstructions
+	if !strings.Contains(prompt, mandatoryOrderOutcomeHeading) {
+		prompt += mandatoryOrderOutcomeInstructions
+	}
+	return prompt
 }
 
 // DefaultMessengerInsightsPrompt exposes the existing structured prompt as an
@@ -210,7 +229,8 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
     "intents": ["mục đích trao đổi cụ thể"],
     "products": [{"name":"tên sản phẩm","sku":"SKU nếu được nói rõ, nếu không để rỗng","evidence":"trích dẫn nguyên văn của khách"}],
     "feedback": [{"category":"sản phẩm|giá|giao hàng|CSKH|khác","sentiment":"positive|neutral|negative|mixed|unknown","evidence":"trích dẫn nguyên văn của khách"}],
-    "lead_quality": {"level":"high|medium|low|spam|unknown","evidence":"trích dẫn nguyên văn của khách hoặc để rỗng nếu thiếu dữ kiện","reason":"lý do ngắn gọn"}
+    "lead_quality": {"level":"high|medium|low|spam|unknown","evidence":"trích dẫn nguyên văn của khách hoặc để rỗng nếu thiếu dữ kiện","reason":"lý do ngắn gọn"},
+    "order_outcomes": [{"status":"confirmed|cancelled|refunded|review","order_ref":"mã đơn được nói rõ hoặc rỗng","value_vnd":null,"confirmation_message_id":"ID tin nhắn customer","confirmation_evidence":"toàn bộ tin nhắn customer xác nhận","amount_message_id":"ID tin nhắn tổng tiền hoặc rỗng","amount_evidence":"toàn bộ tin nhắn có tổng tiền hoặc rỗng","confidence":0.0}]
   }`
 		insightsInstructions = `
 - Luôn trả về trường "insights", kể cả khi các mảng rỗng.
@@ -283,13 +303,18 @@ func FormatChatTranscript(messages []ChatMessage) string {
 		} else if msg.SenderType != "" {
 			label = fmt.Sprintf("%s (%s)", label, msg.SenderType)
 		}
-		result += fmt.Sprintf("[%s] %s: %s\n", msg.SentAt, label, msg.Content)
+		messageID := ""
+		if msg.MessageID != "" {
+			messageID = " [message_id=" + msg.MessageID + "]"
+		}
+		result += fmt.Sprintf("[%s]%s %s: %s\n", msg.SentAt, messageID, label, msg.Content)
 	}
 	return result
 }
 
 // ChatMessage is a simplified message for transcript formatting.
 type ChatMessage struct {
+	MessageID  string
 	SenderType string
 	SenderName string
 	Content    string
