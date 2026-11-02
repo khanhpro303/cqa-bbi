@@ -66,6 +66,21 @@ func TestLoadFacebookAuthConfig(t *testing.T) {
 	}
 }
 
+func TestLoadABZExportConfig(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-jwt-secret-at-least-32-chars-long")
+	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
+	t.Setenv("DB_PASSWORD", "testpassword")
+	t.Setenv("CQA_ABZ_EXPORT_SECRET", "dedicated-abz-secret")
+	t.Setenv("CQA_ABZ_EXPORT_TENANT_ID", "tenant-a")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.ABZExportSecret != "dedicated-abz-secret" || cfg.ABZExportTenantID != "tenant-a" {
+		t.Fatalf("unexpected ABZ export config: secret=%q tenant=%q", cfg.ABZExportSecret, cfg.ABZExportTenantID)
+	}
+}
+
 func TestDSN(t *testing.T) {
 	cfg := &Config{
 		DBUser:     "testuser",

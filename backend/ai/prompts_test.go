@@ -48,7 +48,7 @@ func TestBuildClassificationPromptMessengerInsightsProfile(t *testing.T) {
 
 func TestFormatChatTranscript(t *testing.T) {
 	messages := []ChatMessage{
-		{SenderType: "customer", SenderName: "Nguyen Van A", Content: "Xin chào", SentAt: "2026-09-13T09:00:00+07:00"},
+		{MessageID: "msg-customer-1", SenderType: "customer", SenderName: "Nguyen Van A", Content: "Xin chào", SentAt: "2026-09-13T09:00:00+07:00"},
 		{SenderType: "agent", SenderName: "CSKH", Content: "Dạ, em chào anh", SentAt: "2026-09-13T09:01:00+07:00"},
 	}
 
@@ -65,6 +65,9 @@ func TestFormatChatTranscript(t *testing.T) {
 	}
 	if !strings.Contains(transcript, "2026-09-13T09:01:00+07:00") {
 		t.Error("Transcript should contain all timestamps")
+	}
+	if !strings.Contains(transcript, "[message_id=msg-customer-1]") {
+		t.Error("Transcript should expose exact message IDs when supplied")
 	}
 }
 

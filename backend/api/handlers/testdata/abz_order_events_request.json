@@ -1,0 +1,11 @@
+{
+  "method": "GET",
+  "path": "/api/internal/abz/order-events",
+  "raw_query": "page_ids=123456789,555001&after=opaque-cursor&limit=50",
+  "headers": {
+    "X-CQA-Timestamp": "1793592000",
+    "X-CQA-Request-Id": "request-uuid"
+  },
+  "signature_canonical_text": "1793592000\nrequest-uuid\nGET\n/api/internal/abz/order-events\npage_ids=123456789,555001&after=opaque-cursor&limit=50",
+  "signature": "lowercase hex HMAC-SHA256 of signature_canonical_text with CQA_ABZ_EXPORT_SECRET"
+}

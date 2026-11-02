@@ -103,3 +103,40 @@ func signInternalRequest(secret, timestamp, requestID, body string) string {
 	mac.Write([]byte(body))
 	return hex.EncodeToString(mac.Sum(nil))
 }
+
+func TestABZExportHMACAuthBindsMethodPathQueryAndTenant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(ABZExportHMACAuth("abz-secret", "tenant-a", time.Minute))
+	router.GET("/api/internal/abz/order-events", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"tenant_id": c.GetString("tenant_id")})
+	})
+	timestamp := strconv.FormatInt(time.Now().UTC().Unix(), 10)
+	requestID := "abz-req-1"
+	path := "/api/internal/abz/order-events"
+	query := "after=cursor-a&limit=25"
+	canonical := timestamp + "\n" + requestID + "\nGET\n" + path + "\n" + query
+	mac := hmac.New(sha256.New, []byte("abz-secret"))
+	mac.Write([]byte(canonical))
+	signature := hex.EncodeToString(mac.Sum(nil))
+
+	req := httptest.NewRequest(http.MethodGet, path+"?"+query, nil)
+	req.Header.Set(internalRequestIDHeader, requestID)
+	req.Header.Set(internalTimestampHeader, timestamp)
+	req.Header.Set(internalSignatureHeader, signature)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"tenant_id":"tenant-a"`) {
+		t.Fatalf("valid export signature failed: code=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	tampered := httptest.NewRequest(http.MethodGet, path+"?after=cursor-b&limit=25", nil)
+	tampered.Header.Set(internalRequestIDHeader, "abz-req-2")
+	tampered.Header.Set(internalTimestampHeader, timestamp)
+	tampered.Header.Set(internalSignatureHeader, signature)
+	tamperedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(tamperedRecorder, tampered)
+	if tamperedRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("query tampering must invalidate signature: %d", tamperedRecorder.Code)
+	}
+}

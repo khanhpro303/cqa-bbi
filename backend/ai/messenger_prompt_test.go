@@ -64,6 +64,25 @@ func TestMessengerPromptAlwaysIncludesMandatoryProductNormalizationRules(t *test
 	}
 }
 
+func TestMessengerPromptAlwaysIncludesStrictOrderOutcomeRules(t *testing.T) {
+	config := `{"profile":"messenger_insights","rules":[]}`
+	for _, override := range []string{"", "Prompt tùy chỉnh {{rules}}"} {
+		prompt := BuildClassificationPrompt(config, override)
+		for _, expected := range []string{
+			mandatoryOrderOutcomeHeading,
+			`"order_outcomes"`,
+			"mua COD vẫn là confirmed",
+			"gửi QR, báo giá, mã vận đơn",
+			"TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn (customer)",
+			`status="review"`,
+		} {
+			if !strings.Contains(prompt, expected) {
+				t.Errorf("prompt override %q missing strict order rule %q", override, expected)
+			}
+		}
+	}
+}
+
 func TestMessengerPromptDoesNotOverrideLegacyClassification(t *testing.T) {
 	config := `[{"name":"Hỏi giá","description":"Khách hỏi giá"}]`
 	if got, want := BuildClassificationPrompt(config, "Messenger override {{rules}}"), BuildClassificationPrompt(config); got != want {

@@ -82,3 +82,26 @@ func TestParseClassificationResponseRequiresEvidenceForLeadLevel(t *testing.T) {
 		t.Fatalf("lead quality without evidence must be unknown: %#v", response.Insights.LeadQuality)
 	}
 }
+
+func TestParseClassificationResponseNormalizesOrderOutcomes(t *testing.T) {
+	response, err := ParseClassificationResponse(`{
+		"tags":[],"summary":"Khách chốt COD.","insights":{
+			"intents":[],"products":[],"feedback":[],"lead_quality":{"level":"unknown"},
+			"order_outcomes":[
+				{"status":" CONFIRMED ","order_ref":" DH-01 ","value_vnd":450000,"confirmation_message_id":" msg-confirm ","confirmation_evidence":" mình lấy nhé ","amount_message_id":" msg-amount ","amount_evidence":"Tổng 450.000đ","confidence":1.4},
+				{"status":"made_up","confirmation_evidence":"x"},
+				{"status":"confirmed","confirmation_evidence":"   "}
+			]
+		}
+	}`)
+	if err != nil || response.Insights == nil {
+		t.Fatalf("parse order outcomes: response=%#v err=%v", response, err)
+	}
+	if len(response.Insights.OrderOutcomes) != 1 {
+		t.Fatalf("invalid outcomes were not removed: %#v", response.Insights.OrderOutcomes)
+	}
+	got := response.Insights.OrderOutcomes[0]
+	if got.Status != "confirmed" || got.OrderRef != "DH-01" || got.ConfirmationMessageID != "msg-confirm" || got.ConfirmationEvidence != "mình lấy nhé" || got.AmountMessageID != "msg-amount" || got.Confidence != 1 {
+		t.Fatalf("outcome not normalized: %#v", got)
+	}
+}

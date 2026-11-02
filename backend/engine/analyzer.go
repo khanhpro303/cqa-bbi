@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +53,22 @@ type analysisSnapshotMetadata struct {
 	AIProvider          string
 	AIModel             string
 }
+
+type persistedOrderOutcome struct {
+	OrderID            string   `json:"order_id"`
+	OrderRef           string   `json:"order_ref"`
+	ValueVND           *int64   `json:"value_vnd"`
+	Status             string   `json:"status"`
+	OrderedAt          string   `json:"ordered_at"`
+	EvidenceMessageIDs []string `json:"evidence_message_ids"`
+	Confidence         float64  `json:"confidence"`
+}
+
+var (
+	safeOrderRefPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+	orderRefTokenPattern = regexp.MustCompile(`[A-Za-z0-9._-]+`)
+	vndAmountPattern     = regexp.MustCompile(`(?i)([0-9][0-9.,\s]{0,20})\s*(?:₫|đ|vnd)(?:\s|$)`)
+)
 
 func pendingInsightConversationIDs(candidates []staleInsightCandidate, requiredJobID string, limit int) []string {
 	ids := make([]string, 0, len(candidates))
@@ -540,7 +558,12 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 			// Format transcript
 			chatMessages := make([]ai.ChatMessage, len(messages))
 			for i, m := range messages {
+				messageID := ""
+				if job.JobType == "classification" && ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+					messageID = m.ID
+				}
 				chatMessages[i] = ai.ChatMessage{
+					MessageID:  messageID,
 					SenderType: m.SenderType,
 					SenderName: m.SenderName,
 					Content:    m.Content,
@@ -765,7 +788,7 @@ func (a *Analyzer) getProvider(job models.Job) (ai.AIProvider, error) {
 	}
 }
 
-func buildConversationInsightDetail(classResult ai.ClassificationResponse, sourceLastMessageAt *time.Time) ([]byte, error) {
+func buildConversationInsightDetail(classResult ai.ClassificationResponse, sourceLastMessageAt *time.Time, orderOutcomes ...[]persistedOrderOutcome) ([]byte, error) {
 	detail := map[string]interface{}{
 		"summary":      classResult.Summary,
 		"intents":      classResult.Insights.Intents,
@@ -773,10 +796,170 @@ func buildConversationInsightDetail(classResult ai.ClassificationResponse, sourc
 		"feedback":     classResult.Insights.Feedback,
 		"lead_quality": classResult.Insights.LeadQuality,
 	}
+	if len(orderOutcomes) > 0 && len(orderOutcomes[0]) > 0 {
+		detail["order_outcomes"] = orderOutcomes[0]
+	}
 	if sourceLastMessageAt != nil && !sourceLastMessageAt.IsZero() {
 		detail["source_last_message_at"] = sourceLastMessageAt.UTC().Format(time.RFC3339Nano)
 	}
 	return json.Marshal(detail)
+}
+
+func stableOrderRef(conversationID, confirmationMessageID, explicitRef string) (string, string) {
+	ref := strings.TrimSpace(explicitRef)
+	seed := conversationID + "\x00" + confirmationMessageID
+	digest := sha256.Sum256([]byte(seed))
+	orderID := fmt.Sprintf("cqa_%x", digest[:16])
+	if ref == "" {
+		ref = orderID
+	}
+	return orderID, ref
+}
+
+func verifiedOrderRef(ref string, evidence ...*models.Message) string {
+	ref = strings.TrimSpace(ref)
+	if !safeOrderRefPattern.MatchString(ref) {
+		return ""
+	}
+	for _, message := range evidence {
+		if message == nil {
+			continue
+		}
+		for _, token := range orderRefTokenPattern.FindAllString(message.Content, -1) {
+			if strings.EqualFold(token, ref) {
+				return ref
+			}
+		}
+	}
+	return ""
+}
+
+func evidenceContainsVNDValue(content string, expected int64) bool {
+	for _, match := range vndAmountPattern.FindAllStringSubmatch(content, -1) {
+		digits := regexp.MustCompile(`\D`).ReplaceAllString(match[1], "")
+		value, err := strconv.ParseInt(digits, 10, 64)
+		if err == nil && value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func exactEvidenceMessage(messages []models.Message, messageID, evidence string, customerOnly bool) *models.Message {
+	messageID = strings.TrimSpace(messageID)
+	evidence = strings.TrimSpace(evidence)
+	if messageID == "" || evidence == "" {
+		return nil
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := &messages[index]
+		if customerOnly && message.SenderType != "customer" {
+			continue
+		}
+		if message.ID == messageID && strings.TrimSpace(message.Content) == evidence {
+			return message
+		}
+	}
+	return nil
+}
+
+func validateOrderOutcomes(conversationID string, proposals []ai.OrderOutcomeInsight, messages []models.Message, previous []persistedOrderOutcome) []persistedOrderOutcome {
+	validated := make([]persistedOrderOutcome, 0, len(proposals))
+	positions := make(map[string]int)
+	matchedPrevious := make(map[string]bool)
+	for _, proposal := range proposals {
+		confirmation := exactEvidenceMessage(messages, proposal.ConfirmationMessageID, proposal.ConfirmationEvidence, true)
+		if confirmation == nil {
+			continue
+		}
+		status := proposal.Status
+		value := proposal.ValueVND
+		evidenceIDs := []string{confirmation.ID}
+		var amount *models.Message
+		if value != nil {
+			amount = exactEvidenceMessage(messages, proposal.AmountMessageID, proposal.AmountEvidence, false)
+			if amount == nil || amount.SentAt.After(confirmation.SentAt) || confirmation.SentAt.Sub(amount.SentAt) > 24*time.Hour || !evidenceContainsVNDValue(amount.Content, *value) {
+				value = nil
+			} else if amount.ID != confirmation.ID {
+				evidenceIDs = append(evidenceIDs, amount.ID)
+			}
+		}
+		if status == "confirmed" && value == nil {
+			status = "review"
+		}
+		ref := verifiedOrderRef(proposal.OrderRef, confirmation, amount)
+		var prior *persistedOrderOutcome
+		if proposal.Status == "cancelled" || proposal.Status == "refunded" {
+			for index := range previous {
+				candidate := &previous[index]
+				if ref != "" && strings.EqualFold(candidate.OrderRef, ref) {
+					if prior != nil {
+						prior = nil
+						break
+					}
+					prior = candidate
+				}
+			}
+			if prior == nil && ref == "" {
+				for index := range previous {
+					candidate := &previous[index]
+					if matchedPrevious[candidate.OrderID] || (candidate.Status != "confirmed" && candidate.Status != "review") {
+						continue
+					}
+					if prior != nil {
+						prior = nil
+						break
+					}
+					prior = candidate
+				}
+			}
+		}
+		var orderID, orderRef, orderedAt string
+		if prior != nil {
+			orderID, orderRef, orderedAt = prior.OrderID, prior.OrderRef, prior.OrderedAt
+			if value == nil {
+				value = prior.ValueVND
+			}
+			matchedPrevious[prior.OrderID] = true
+		} else {
+			orderID, orderRef = stableOrderRef(conversationID, confirmation.ID, ref)
+			orderedAt = confirmation.SentAt.UTC().Format(time.RFC3339Nano)
+			for index := range previous {
+				if previous[index].OrderID == orderID {
+					matchedPrevious[orderID] = true
+					orderRef = previous[index].OrderRef
+					orderedAt = previous[index].OrderedAt
+					if value == nil {
+						value = previous[index].ValueVND
+					}
+					break
+				}
+			}
+			if proposal.Status == "cancelled" || proposal.Status == "refunded" {
+				status = "review"
+			}
+		}
+		outcome := persistedOrderOutcome{
+			OrderID: orderID, OrderRef: orderRef, ValueVND: value, Status: status,
+			OrderedAt:          orderedAt,
+			EvidenceMessageIDs: evidenceIDs, Confidence: proposal.Confidence,
+		}
+		if position, exists := positions[orderID]; exists {
+			validated[position] = outcome
+		} else {
+			positions[orderID] = len(validated)
+			validated = append(validated, outcome)
+		}
+	}
+	for _, prior := range previous {
+		if matchedPrevious[prior.OrderID] {
+			continue
+		}
+		prior.Status = "review"
+		prior.Confidence = 0
+		validated = append(validated, prior)
+	}
+	return validated
 }
 
 func buildQCEvaluationDetail(review string, score int, summary string, metadata analysisSnapshotMetadata) ([]byte, error) {
@@ -937,7 +1120,25 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 		// analytics can consume them without changing violation/tag counts.
 		// Legacy responses omit the insights field and do not create this row.
 		if classResult.Insights != nil {
-			insightDetail, err := buildConversationInsightDetail(classResult, metadata.SourceLastMessageAt)
+			var orderOutcomes []persistedOrderOutcome
+			var previousRow struct{ Detail string }
+			_ = db.DB.Table("job_results").Select("detail").
+				Where("tenant_id=? AND conversation_id=? AND result_type='conversation_insight'", tenantID, conversationID).
+				Order("created_at DESC,id DESC").Limit(1).Scan(&previousRow).Error
+			var previous struct {
+				OrderOutcomes []persistedOrderOutcome `json:"order_outcomes"`
+			}
+			if previousRow.Detail != "" {
+				_ = json.Unmarshal([]byte(previousRow.Detail), &previous)
+			}
+			if len(classResult.Insights.OrderOutcomes) > 0 || len(previous.OrderOutcomes) > 0 {
+				var messages []models.Message
+				if err := db.DB.Where("tenant_id = ? AND conversation_id = ?", tenantID, conversationID).Order("sent_at ASC").Find(&messages).Error; err != nil {
+					return count, false, fmt.Errorf("load order outcome evidence: %w", err)
+				}
+				orderOutcomes = validateOrderOutcomes(conversationID, classResult.Insights.OrderOutcomes, messages, previous.OrderOutcomes)
+			}
+			insightDetail, err := buildConversationInsightDetail(classResult, metadata.SourceLastMessageAt, orderOutcomes)
 			if err != nil {
 				return count, false, fmt.Errorf("failed to encode conversation insight: %w", err)
 			}
@@ -1083,7 +1284,12 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 		}
 		chatMessages := make([]ai.ChatMessage, len(messages))
 		for i, m := range messages {
+			messageID := ""
+			if job.JobType == "classification" && ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+				messageID = m.ID
+			}
 			chatMessages[i] = ai.ChatMessage{
+				MessageID:  messageID,
 				SenderType: m.SenderType,
 				SenderName: m.SenderName,
 				Content:    m.Content,

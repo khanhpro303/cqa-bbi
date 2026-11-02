@@ -24,6 +24,8 @@ type Config struct {
 	JWTSecret                 string
 	EncryptionKey             string // 32 bytes for AES-256-GCM
 	InternalImportSecret      string
+	ABZExportSecret           string
+	ABZExportTenantID         string
 	FacebookAppID             string
 	FacebookAppSecret         string
 	FacebookAPIVersion        string
@@ -106,6 +108,8 @@ func Load() (*Config, error) {
 		JWTSecret:                    getEnv("JWT_SECRET", ""),
 		EncryptionKey:                getEnv("ENCRYPTION_KEY", ""),
 		InternalImportSecret:         getEnv("INTERNAL_IMPORT_SECRET", ""),
+		ABZExportSecret:              getEnv("CQA_ABZ_EXPORT_SECRET", ""),
+		ABZExportTenantID:            getEnv("CQA_ABZ_EXPORT_TENANT_ID", ""),
 		FacebookAppID:                getEnv("FACEBOOK_APP_ID", ""),
 		FacebookAppSecret:            getEnv("FACEBOOK_APP_SECRET", ""),
 		FacebookAPIVersion:           getEnv("FACEBOOK_API_VERSION", "v26.0"),
