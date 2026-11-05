@@ -3,10 +3,13 @@ package db
 import (
 	"fmt"
 	"log"
+	"time"
 
+	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -66,6 +69,7 @@ func AutoMigrate() error {
 		&models.JobRun{},
 		&models.JobResult{},
 		&models.AppSetting{},
+		&models.DataMigration{},
 		&models.CachedProduct{},
 		&models.ERPRawProduct{},
 		&models.CachedCustomer{},
@@ -111,6 +115,10 @@ func AutoMigrate() error {
 		log.Printf("[db] failed to backfill notification_logs.source: %v", err)
 	}
 
+	if err := migrateMessengerOrderOutcomePrompts(); err != nil {
+		return fmt.Errorf("migrate Messenger Insights order-outcome prompts: %w", err)
+	}
+
 	// Clean up deprecated database schema from older versions
 	cleanupDeprecatedSchema()
 
@@ -122,6 +130,46 @@ func AutoMigrate() error {
 	addUniqueConstraints()
 
 	log.Println("Database migration completed")
+	return nil
+}
+
+const messengerOrderOutcomePromptMigrationKey = "migration_messenger_order_outcome_prompt_v1"
+
+// migrateMessengerOrderOutcomePrompts makes the new order-outcome section
+// visible and editable in existing tenant overrides. The global migration marker
+// makes this run exactly once across all app instances, so prompts created or
+// edited later are never silently rewritten on startup.
+func migrateMessengerOrderOutcomePrompts() error {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		claim := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.DataMigration{
+			Key: messengerOrderOutcomePromptMigrationKey,
+		})
+		if claim.Error != nil {
+			return claim.Error
+		}
+		if claim.RowsAffected == 0 {
+			return nil
+		}
+
+		var prompts []models.AppSetting
+		if err := tx.Where("setting_key = ?", ai.MessengerInsightsPromptSettingKey).Find(&prompts).Error; err != nil {
+			return err
+		}
+		for _, prompt := range prompts {
+			upgraded, changed := ai.UpgradeMessengerInsightsPromptWithOrderOutcomes(prompt.ValuePlain)
+			if !changed {
+				continue
+			}
+			if err := tx.Model(&models.AppSetting{}).
+				Where("id = ?", prompt.ID).
+				Updates(map[string]interface{}{"value_plain": upgraded, "updated_at": time.Now()}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -64,22 +64,47 @@ func TestMessengerPromptAlwaysIncludesMandatoryProductNormalizationRules(t *test
 	}
 }
 
-func TestMessengerPromptAlwaysIncludesStrictOrderOutcomeRules(t *testing.T) {
-	config := `{"profile":"messenger_insights","rules":[]}`
-	for _, override := range []string{"", "Prompt tùy chỉnh {{rules}}"} {
-		prompt := BuildClassificationPrompt(config, override)
-		for _, expected := range []string{
-			mandatoryOrderOutcomeHeading,
-			`"order_outcomes"`,
-			"mua COD vẫn là confirmed",
-			"gửi QR, báo giá, mã vận đơn",
-			"TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn (customer)",
-			`status="review"`,
-		} {
-			if !strings.Contains(prompt, expected) {
-				t.Errorf("prompt override %q missing strict order rule %q", override, expected)
-			}
+func TestMessengerPromptDefaultExposesEditableOrderOutcomeRules(t *testing.T) {
+	prompt := DefaultMessengerInsightsPrompt()
+	for _, expected := range []string{
+		"## Quy tắc nhận diện đơn hàng",
+		`"order_outcomes"`,
+		"mua COD vẫn là confirmed",
+		"gửi QR, báo giá, mã vận đơn",
+		"TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn (customer)",
+		`status="review"`,
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Errorf("editable default missing order rule %q", expected)
 		}
+	}
+}
+
+func TestMessengerPromptDoesNotInjectOrderOutcomeRulesIntoOverride(t *testing.T) {
+	config := `{"profile":"messenger_insights","rules":[]}`
+	override := "Prompt tùy chỉnh {{rules}}"
+	prompt := BuildClassificationPrompt(config, override)
+	for _, unexpected := range []string{"Quy tắc nhận diện đơn hàng", `"order_outcomes"`, "mua COD vẫn là confirmed"} {
+		if strings.Contains(prompt, unexpected) {
+			t.Errorf("runtime injected order rule %q into editable prompt: %s", unexpected, prompt)
+		}
+	}
+}
+
+func TestUpgradeMessengerInsightsPromptWithOrderOutcomes(t *testing.T) {
+	legacy := "Prompt tùy chỉnh {{rules}}\nCHỈ trả về JSON."
+	upgraded, changed := UpgradeMessengerInsightsPromptWithOrderOutcomes(legacy)
+	if !changed || !strings.Contains(upgraded, messengerOrderOutcomePromptHeading) || !strings.Contains(upgraded, "mua COD vẫn là confirmed") {
+		t.Fatalf("legacy prompt was not upgraded: %s", upgraded)
+	}
+	if strings.Index(upgraded, messengerOrderOutcomePromptHeading) > strings.Index(upgraded, "CHỈ trả về JSON") {
+		t.Fatalf("order rules must be inserted before the final output instruction: %s", upgraded)
+	}
+
+	customized := strings.Replace(upgraded, "mua COD vẫn là confirmed", "quy tắc do tenant chỉnh", 1)
+	unchanged, changed := UpgradeMessengerInsightsPromptWithOrderOutcomes(customized)
+	if changed || unchanged != customized {
+		t.Fatal("migration must not overwrite an existing editable order section")
 	}
 }
 

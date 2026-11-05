@@ -591,7 +591,7 @@ export default {
   messenger_insights_system_prompt: 'System Prompt — Phân tích cấu trúc CSKH Messenger',
   messenger_insights_system_prompt_placeholder: 'Nhấn để thiết lập prompt phân tích CSKH Messenger...',
   messenger_insights_system_prompt_hint: 'Phân tích ý định, sản phẩm, phản hồi và chất lượng lead từ hội thoại để tổng hợp phần Chất lượng CSKH Messenger.',
-  messenger_insights_system_prompt_note: "Giữ các khóa JSON tags, summary, insights và biến {'{{rules}}'} trong prompt. Biến {'{{rules}}'} được thay bằng quy tắc của tác vụ phân tích. Để trống sẽ dùng prompt mặc định; nhấn Xác nhận rồi Lưu để áp dụng.",
+  messenger_insights_system_prompt_note: "Chỉnh hướng dẫn nhận diện đơn hàng và insights.order_outcomes ngay trong prompt này. Giữ các khóa JSON tags, summary, insights và biến {'{{rules}}'}; biến này được thay bằng quy tắc của tác vụ phân tích. Để trống sẽ dùng prompt mặc định; nhấn Xác nhận rồi Lưu để áp dụng.",
   messenger_insights_restore_default: 'Khôi phục prompt mặc định',
   crm_system_prompt_crm_analysis_placeholder: 'VD: Bạn là chuyên gia phân tích hành vi khách hàng...',
   crm_system_prompt_crm_analysis_hint: 'Prompt dùng để định hướng AI phân tích lịch sử chat Zalo của khách hàng trong phần CRM.',

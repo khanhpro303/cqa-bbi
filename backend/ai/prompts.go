@@ -98,7 +98,7 @@ const mandatorySenderRoleHeading = "## Quy tắc vai trò bắt buộc"
 
 const mandatoryProductNormalizationHeading = "## Quy tắc chuẩn hóa sản phẩm bắt buộc"
 
-const mandatoryOrderOutcomeHeading = "## Quy tắc nhận diện đơn hàng bắt buộc"
+const messengerOrderOutcomePromptHeading = "## Quy tắc nhận diện đơn hàng"
 
 const mandatorySenderRoleInstructions = `
 
@@ -120,20 +120,6 @@ const mandatoryProductNormalizationInstructions = `
 - Không suy đoán model hoặc tự tạo SKU. Nếu SKU không được khách nói rõ thì để sku="".
 - evidence phải giữ nguyên trích dẫn chính xác lời khách hàng; không sửa nội dung evidence theo tên đã chuẩn hóa.`
 
-const mandatoryOrderOutcomeInstructions = `
-
-## Quy tắc nhận diện đơn hàng bắt buộc
-- Trường bắt buộc trong insights: "order_outcomes": [{"status":"confirmed|cancelled|refunded|review","order_ref":"","value_vnd":null,"confirmation_message_id":"ID sau message_id=","confirmation_evidence":"","amount_message_id":"ID sau message_id= hoặc rỗng","amount_evidence":"","confidence":0.0}]. Nếu không có bằng chứng hợp lệ, trả mảng rỗng.
-- Chỉ trả order_outcomes khi có một tin nhắn (customer) xác nhận rõ ràng việc mua/chốt hàng. Xác nhận mua COD vẫn là confirmed; không bắt buộc đã thanh toán.
-- Việc nhân viên gửi QR, báo giá, mã vận đơn, lời cảm ơn hoặc tự nói "đã chốt" KHÔNG chứng minh khách đã mua.
-- confirmation_evidence phải là TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn (customer), không cắt, ghép hoặc diễn giải.
-- confirmation_message_id phải đúng ID được ghi cạnh tin nhắn confirmation_evidence trong transcript.
-- value_vnd chỉ ghi khi tổng tiền của chính đơn được nói rõ trong transcript. Không suy giá trị từ QR, số điện thoại, mã đơn, mã vận đơn, giá niêm yết hay báo giá chưa được khách chấp nhận.
-- amount_evidence phải là TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn chứa tổng tiền; nếu thiếu thì để value_vnd=null, amount_evidence="" và status="review".
-- amount_message_id phải đúng ID được ghi cạnh amount_evidence; nếu không có amount_evidence thì để rỗng.
-- status chỉ là confirmed|cancelled|refunded|review. Khi khách hủy/hoàn đơn đã nói trước đó, trả cùng order_ref nếu có. Nếu thiếu order_ref, để rỗng; hệ thống sẽ giữ một mã ổn định theo cuộc hội thoại.
-- Không đưa tên, số điện thoại, địa chỉ hoặc nội dung nhạy cảm khác vào order_ref.`
-
 func appendMandatorySenderRoleInstructions(prompt string) string {
 	if strings.Contains(prompt, mandatorySenderRoleHeading) {
 		return prompt
@@ -146,9 +132,6 @@ func appendMandatoryMessengerInsightsInstructions(prompt string) string {
 	if !strings.Contains(prompt, mandatoryProductNormalizationHeading) {
 		prompt += mandatoryProductNormalizationInstructions
 	}
-	if !strings.Contains(prompt, mandatoryOrderOutcomeHeading) {
-		prompt += mandatoryOrderOutcomeInstructions
-	}
 	return prompt
 }
 
@@ -157,6 +140,33 @@ func appendMandatoryMessengerInsightsInstructions(prompt string) string {
 func DefaultMessengerInsightsPrompt() string {
 	prompt := BuildClassificationPrompt(`{"profile":"messenger_insights","rules":[]}`)
 	return strings.Replace(prompt, "## Các quy tắc phân loại:\n[]", "## Các quy tắc phân loại:\n{{rules}}", 1)
+}
+
+// UpgradeMessengerInsightsPromptWithOrderOutcomes performs the one-time data
+// migration for tenant-authored prompts created before order outcomes became an
+// editable part of the Messenger Insights prompt. Runtime prompt assembly must
+// not call this: after migration, the stored UI value is the only source.
+func UpgradeMessengerInsightsPromptWithOrderOutcomes(prompt string) (string, bool) {
+	if strings.TrimSpace(prompt) == "" || strings.Contains(prompt, messengerOrderOutcomePromptHeading) {
+		return prompt, false
+	}
+
+	defaultPrompt := DefaultMessengerInsightsPrompt()
+	sectionStart := strings.Index(defaultPrompt, messengerOrderOutcomePromptHeading)
+	if sectionStart < 0 {
+		return prompt, false
+	}
+	sectionEnd := strings.Index(defaultPrompt[sectionStart:], "\nCHỈ trả về JSON")
+	if sectionEnd < 0 {
+		return prompt, false
+	}
+	section := strings.TrimSpace(defaultPrompt[sectionStart : sectionStart+sectionEnd])
+
+	insertAt := strings.LastIndex(prompt, "\nCHỈ trả về JSON")
+	if insertAt < 0 {
+		return strings.TrimRight(prompt, "\n") + "\n\n" + section, true
+	}
+	return strings.TrimRight(prompt[:insertAt], "\n") + "\n\n" + section + prompt[insertAt:], true
 }
 
 // BuildQCPrompt creates the system prompt for QC analysis.
@@ -238,7 +248,19 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
 - "evidence" phải là trích dẫn chính xác lời khách hàng, không diễn giải và không dùng lời nhân viên làm bằng chứng về nhu cầu/feedback.
 - Khi không đủ dữ kiện về tiềm năng mua hàng, dùng lead_quality.level="unknown".
 - Khiếu nại hoặc cảm xúc tiêu cực không đồng nghĩa khách hàng chất lượng thấp. Đánh giá lead_quality theo mức độ nhu cầu và ý định mua.
-- Không suy đoán hoặc quy kết hội thoại cho một nhân viên cụ thể.`
+- Không suy đoán hoặc quy kết hội thoại cho một nhân viên cụ thể.
+
+## Quy tắc nhận diện đơn hàng
+- Trường bắt buộc trong insights: "order_outcomes": [{"status":"confirmed|cancelled|refunded|review","order_ref":"","value_vnd":null,"confirmation_message_id":"ID sau message_id=","confirmation_evidence":"","amount_message_id":"ID sau message_id= hoặc rỗng","amount_evidence":"","confidence":0.0}]. Nếu không có bằng chứng hợp lệ, trả mảng rỗng.
+- Chỉ trả order_outcomes khi có một tin nhắn (customer) xác nhận rõ ràng việc mua/chốt hàng. Xác nhận mua COD vẫn là confirmed; không bắt buộc đã thanh toán.
+- Việc nhân viên gửi QR, báo giá, mã vận đơn, lời cảm ơn hoặc tự nói "đã chốt" KHÔNG chứng minh khách đã mua.
+- confirmation_evidence phải là TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn (customer), không cắt, ghép hoặc diễn giải.
+- confirmation_message_id phải đúng ID được ghi cạnh tin nhắn confirmation_evidence trong transcript.
+- value_vnd chỉ ghi khi tổng tiền của chính đơn được nói rõ trong transcript. Không suy giá trị từ QR, số điện thoại, mã đơn, mã vận đơn, giá niêm yết hay báo giá chưa được khách chấp nhận.
+- amount_evidence phải là TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn chứa tổng tiền; nếu thiếu thì để value_vnd=null, amount_evidence="" và status="review".
+- amount_message_id phải đúng ID được ghi cạnh amount_evidence; nếu không có amount_evidence thì để rỗng.
+- status chỉ là confirmed|cancelled|refunded|review. Khi khách hủy/hoàn đơn đã nói trước đó, trả cùng order_ref nếu có. Nếu thiếu order_ref, để rỗng; hệ thống sẽ giữ một mã ổn định theo cuộc hội thoại.
+- Không đưa tên, số điện thoại, địa chỉ hoặc nội dung nhạy cảm khác vào order_ref.`
 	}
 
 	prompt := fmt.Sprintf(`Bạn là hệ thống phân loại nội dung hội thoại CSKH/Sales.

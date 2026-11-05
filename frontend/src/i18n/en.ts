@@ -592,7 +592,7 @@ export default {
   messenger_insights_system_prompt: 'System Prompt — Messenger Customer Service Structured Analysis',
   messenger_insights_system_prompt_placeholder: 'Click to configure the Messenger customer service analysis prompt...',
   messenger_insights_system_prompt_hint: 'Analyze intents, products, feedback, and lead quality from conversations for Messenger Customer Service Quality.',
-  messenger_insights_system_prompt_note: "Preserve the JSON keys tags, summary, insights and the {'{{rules}}'} variable in the prompt. The variable is replaced with the analysis job rules. Leave blank to use the default prompt; click Confirm, then Save to apply.",
+  messenger_insights_system_prompt_note: "Edit the order recognition instructions and insights.order_outcomes in this prompt. Preserve the JSON keys tags, summary, insights and the {'{{rules}}'} variable, which is replaced with the analysis job rules. Leave blank to use the default prompt; click Confirm, then Save to apply.",
   messenger_insights_restore_default: 'Restore default prompt',
   crm_system_prompt_crm_analysis_placeholder: 'e.g. You are a customer behavior analyst...',
   crm_system_prompt_crm_analysis_hint: 'The prompt used to direct the AI in analyzing customer Zalo chat history within the CRM.',
