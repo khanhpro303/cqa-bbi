@@ -189,6 +189,11 @@
 
           <v-divider />
 
+          <MessengerJourneyPanel
+            :tenant-id="tenantId"
+            :conversation-id="selectedConvId"
+          />
+
           <!-- Tabs: Messages | QC | Classification -->
           <v-tabs v-model="detailTab" density="compact" class="px-2" style="flex-shrink: 0;">
             <v-tab value="messages">
@@ -508,6 +513,7 @@ import {
 import api from '../api'
 import { channelTypeColor, channelTypeIcon, channelTypeLabel } from '../utils/channel'
 import { buildQcTimeline, type QcSnapshot } from '../utils/qc-evaluation'
+import MessengerJourneyPanel from '../components/MessengerJourneyPanel.vue'
 
 const route = useRoute()
 const router = useRouter()

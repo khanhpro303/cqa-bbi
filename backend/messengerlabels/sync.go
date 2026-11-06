@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -91,6 +92,12 @@ func Observe(ctx context.Context, reader Reader, convs []models.Conversation, pa
 				if err != nil {
 					snapshot.ErrorKind = ErrorKind(err)
 				} else {
+					sort.Slice(labels, func(i, j int) bool {
+						if labels[i].ID == labels[j].ID {
+							return labels[i].Name < labels[j].Name
+						}
+						return labels[i].ID < labels[j].ID
+					})
 					data, _ := json.Marshal(labels)
 					snapshot.Labels = string(data)
 					intakeLabels := string(data)

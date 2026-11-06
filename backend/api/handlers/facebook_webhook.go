@@ -33,6 +33,8 @@ var captureFacebookReferral = func(ctx context.Context, channel models.Channel, 
 	return messengerintake.CaptureReferral(db.DB.WithContext(ctx), channel, referral)
 }
 
+var facebookWebhookDatabaseAvailable = func() bool { return db.DB != nil }
+
 type facebookWebhookPayload struct {
 	Object string                 `json:"object"`
 	Entry  []facebookWebhookEntry `json:"entry"`
@@ -146,7 +148,7 @@ func FacebookWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 				if entry.ID != "" && entry.ID != pageID {
 					continue
 				}
-				if db.DB == nil {
+				if !facebookWebhookDatabaseAvailable() {
 					log.Printf("[facebook-webhook] database unavailable")
 					continue
 				}
@@ -159,15 +161,13 @@ func FacebookWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 				if err != nil {
 					continue
 				}
-				capturedAt := time.Now()
-				if event.Timestamp > 0 {
-					capturedAt = time.UnixMilli(event.Timestamp)
-				}
+				capturedAt := facebookReferralTime(event.Timestamp, time.Now())
 				for _, channel := range channels {
 					if err := captureFacebookReferral(c.Request.Context(), channel, messengerintake.Referral{
 						PageID: pageID, PSID: event.Sender.ID, AdID: referral.AdID, Ref: referral.Ref,
 						Source: referral.Source, ReferralType: referral.Type, MessageID: messageID,
 						RawJSON: string(rawReferral), CapturedAt: capturedAt,
+						RecordJourney: cfg.MessengerJourneyEnabled,
 					}); err != nil {
 						log.Printf("[facebook-webhook] store failed channel=%s page=%s psid=%s: %v", channel.ID, pageID, event.Sender.ID, err)
 						continue
@@ -179,4 +179,19 @@ func FacebookWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 		c.Header("X-CQA-Captured-Referrals", strconv.Itoa(captured))
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	}
+}
+
+// Meta may express the source instant in seconds or milliseconds.
+func facebookReferralTime(timestamp int64, receivedAt time.Time) time.Time {
+	if timestamp <= 0 {
+		return receivedAt.UTC()
+	}
+	source := time.UnixMilli(timestamp)
+	if timestamp < 1_000_000_000_000 {
+		source = time.Unix(timestamp, 0)
+	}
+	if source.Year() < 2000 || source.After(receivedAt.Add(5*time.Minute)) {
+		return receivedAt.UTC()
+	}
+	return source.UTC()
 }

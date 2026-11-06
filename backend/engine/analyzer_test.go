@@ -36,16 +36,20 @@ func TestNewAnalysisSnapshotMetadataCapturesExactInput(t *testing.T) {
 	older := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
 	latest := older.Add(15 * time.Minute)
 	messages := []models.Message{
-		{SentAt: latest},
-		{SentAt: older},
+		{ID: "message-b", SentAt: latest},
+		{ID: "message-a", SentAt: latest},
+		{ID: "message-c", SentAt: older},
 	}
 
 	metadata := newAnalysisSnapshotMetadata(messages, "full transcript", "quality prompt")
-	if metadata.SourceMessageCount != 2 {
+	if metadata.SourceMessageCount != 3 {
 		t.Fatalf("unexpected source message count: %d", metadata.SourceMessageCount)
 	}
 	if metadata.SourceLastMessageAt == nil || !metadata.SourceLastMessageAt.Equal(latest) {
 		t.Fatalf("unexpected source timestamp: %#v", metadata.SourceLastMessageAt)
+	}
+	if metadata.SourceLastMessageID != "message-b" {
+		t.Fatalf("equal timestamps must use the greatest stable message ID: %#v", metadata)
 	}
 	transcriptHash := fmt.Sprintf("%x", sha256.Sum256([]byte("full transcript")))
 	promptHash := fmt.Sprintf("%x", sha256.Sum256([]byte("quality prompt")))
@@ -58,6 +62,7 @@ func TestBuildQCEvaluationDetailIncludesSnapshotMetadata(t *testing.T) {
 	source := time.Date(2026, 9, 17, 8, 15, 0, 0, time.UTC)
 	detailJSON, err := buildQCEvaluationDetail("Cần cải thiện", 62, "Có ba vấn đề", analysisSnapshotMetadata{
 		SourceLastMessageAt: &source,
+		SourceLastMessageID: "message-24",
 		SourceMessageCount:  24,
 		TranscriptSHA256:    "transcript-hash",
 		PromptSHA256:        "prompt-hash",
@@ -76,6 +81,9 @@ func TestBuildQCEvaluationDetailIncludesSnapshotMetadata(t *testing.T) {
 	}
 	if detail["source_last_message_at"] != "2026-09-17T08:15:00Z" || detail["transcript_sha256"] != "transcript-hash" || detail["prompt_sha256"] != "prompt-hash" {
 		t.Fatalf("unexpected source metadata: %#v", detail)
+	}
+	if detail["source_last_message_id"] != "message-24" {
+		t.Fatalf("missing stable source cursor: %#v", detail)
 	}
 	if detail["ai_provider"] != "openai" || detail["ai_model"] != "gpt-5.6" {
 		t.Fatalf("unexpected AI metadata: %#v", detail)

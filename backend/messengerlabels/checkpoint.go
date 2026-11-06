@@ -64,12 +64,34 @@ func saveBatch(database *gorm.DB, channel models.Channel, token, cursor string, 
 				ids = append(ids, snapshot.ConversationID)
 			}
 			var existing []models.MessengerLabelSnapshot
-			if err := tx.Select("conversation_id,intake_labels,intake_labels_captured_at").Where("conversation_id IN ?", ids).Find(&existing).Error; err != nil {
+			if err := tx.Select("conversation_id,labels,checked_at,intake_labels,intake_labels_captured_at").Where("conversation_id IN ?", ids).Find(&existing).Error; err != nil {
 				return err
 			}
 			byConversation := make(map[string]models.MessengerLabelSnapshot, len(existing))
 			for _, snapshot := range existing {
 				byConversation[snapshot.ConversationID] = snapshot
+			}
+			// A failed Meta read is an observation of an error, not evidence that
+			// the customer now has no labels. Preserve the last successful value
+			// and timestamp while status/error_kind report the failed attempt.
+			for index := range snapshots {
+				if snapshots[index].Status != "error" {
+					continue
+				}
+				if previous, ok := byConversation[snapshots[index].ConversationID]; ok && previous.CheckedAt != nil {
+					snapshots[index].Labels = previous.Labels
+					snapshots[index].CheckedAt = previous.CheckedAt
+				}
+			}
+			for index := range snapshots {
+				var previous *models.MessengerLabelSnapshot
+				if value, ok := byConversation[snapshots[index].ConversationID]; ok {
+					copy := value
+					previous = &copy
+				}
+				if err := recordLabelJourney(tx, channel, state, snapshots[index], previous); err != nil {
+					return err
+				}
 			}
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "conversation_id"}}, DoUpdates: clause.AssignmentColumns([]string{"psid", "labels", "status", "error_kind", "checked_at", "attempted_at"})}).CreateInBatches(snapshots, syncBatchSize).Error; err != nil {
 				return err
@@ -90,9 +112,9 @@ func saveBatch(database *gorm.DB, channel models.Channel, token, cursor string, 
 				}
 				newIntakeSnapshots = append(newIntakeSnapshots, snapshot)
 			}
-			if err := pruneNewIntakeRules(tx, &state, newIntakeSnapshots); err != nil {
-				return err
-			}
+			// Intake snapshots are historical evidence only. Never remove a
+			// Page-wide classification rule because one conversation had that
+			// label during its first successful observation.
 		}
 		return tx.Model(&state).Updates(map[string]interface{}{"sync_cursor": cursor, "sync_failed": state.SyncFailed + failed, "lease_until": time.Now().Add(syncLeaseDuration)}).Error
 	})

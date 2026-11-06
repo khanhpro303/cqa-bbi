@@ -60,6 +60,9 @@ func intakeTestDatabase(t *testing.T) *gorm.DB {
 	if err := database.AutoMigrate(
 		&models.Tenant{}, &models.Channel{}, &models.Conversation{},
 		&models.MessengerLabelSnapshot{}, &models.MessengerIntakeAttribution{},
+		&models.MessengerJourneySequence{}, &models.MessengerJourneyReceipt{}, &models.MessengerJourneyEvent{},
+		&models.MessengerJourneyCustomer{}, &models.MessengerJourneyOrder{},
+		&models.MessengerJourneyCoverage{}, &models.MessengerJourneyErasure{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +84,7 @@ func TestMySQLReferralIsImmutableAndBindsToConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first := Referral{PageID: "page-1", PSID: "psid-1", AdID: "ad-first", Source: "ADS", RawJSON: `{"ad_id":"ad-first"}`, CapturedAt: now}
+	first := Referral{PageID: "page-1", PSID: "psid-1", AdID: "ad-first", Source: "ADS", RawJSON: `{"ad_id":"ad-first"}`, CapturedAt: now, RecordJourney: true}
 	if err := CaptureReferral(database, channel, first); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +102,20 @@ func TestMySQLReferralIsImmutableAndBindsToConversation(t *testing.T) {
 	}
 	if attribution.AdID != "ad-first" || !attribution.CapturedAt.Equal(now) || attribution.ConversationID != nil {
 		t.Fatalf("intake overwritten or prematurely bound: %+v", attribution)
+	}
+	var events []models.MessengerJourneyEvent
+	if err := database.Where("tenant_id = ? AND kind = ?", tenant.ID, "referral").Order("sequence ASC").Find(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Sequence >= events[1].Sequence {
+		t.Fatalf("referral history not appended: %+v", events)
+	}
+	var customer models.MessengerJourneyCustomer
+	if err := database.First(&customer, "tenant_id = ? AND page_id = ? AND psid = ?", tenant.ID, first.PageID, first.PSID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if customer.FirstReferral == nil || customer.LatestReferral == nil || !strings.Contains(*customer.FirstReferral, "ad-first") || !strings.Contains(*customer.LatestReferral, "ad-later") {
+		t.Fatalf("unexpected first/latest projection: %+v", customer)
 	}
 
 	conversation := models.Conversation{

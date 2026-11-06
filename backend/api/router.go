@@ -154,6 +154,17 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	abzInternal.Use(middleware.ABZExportHMACAuth(cfg.ABZExportSecret, cfg.ABZExportTenantID, 5*time.Minute))
 	{
 		abzInternal.GET("/order-events", handlers.ListABZOrderEvents)
+		if cfg.MessengerJourneyEnabled {
+			abzInternal.GET("/v2/events", handlers.ListMessengerJourneyEvents(cfg.ABZExportSecret))
+			abzInternal.GET("/v2/status", handlers.ListMessengerJourneyStatus)
+			abzInternal.GET("/v2/snapshot", handlers.ListMessengerJourneySnapshot(cfg.ABZExportSecret))
+		}
+	}
+
+	if cfg.MessengerJourneyEnabled {
+		relayInternal := r.Group("/api/internal/messenger")
+		relayInternal.Use(middleware.MessengerRelayHMACAuth(cfg.MessengerRelaySecret, cfg.ABZExportTenantID, 5*time.Minute))
+		relayInternal.POST("/referral-events", handlers.IngestMessengerReferralEvents)
 	}
 
 	// Authenticated API
@@ -211,6 +222,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.GET("/conversations/:conversationId/messages", middleware.RequirePermission("messages", "r"), handlers.GetConversationMessages)
 			tenant.GET("/conversations/:conversationId/evaluations", middleware.RequirePermission("messages", "r"), handlers.GetConversationEvaluations)
 			tenant.GET("/conversations/:conversationId/page", middleware.RequirePermission("messages", "r"), handlers.GetConversationPage)
+			if cfg.MessengerJourneyEnabled {
+				tenant.GET("/conversations/:conversationId/journey", middleware.RequirePermission("messages", "r"), handlers.GetConversationJourney(cfg.JWTSecret))
+			}
 
 			// Dashboard
 			tenant.GET("/service-quality", middleware.RequirePermission("messages", "r"), handlers.GetServiceQuality)

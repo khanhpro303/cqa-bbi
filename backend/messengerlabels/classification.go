@@ -55,22 +55,11 @@ func (p Policy) Validate(catalog []channels.FacebookLabel) error {
 	return nil
 }
 
-// ValidateTracking enforces the boundary between labels already present when a
-// conversation entered CQA and labels intentionally added later for workflow
-// tracking. Meta's label API does not expose assignment provenance.
+// ValidateTracking validates configured classification labels. Intake labels
+// are historical context; being present at first observation does not prove
+// that a label is acquisition-only.
 func (p Policy) ValidateTracking(catalog []channels.FacebookLabel, intakeLabelIDs map[string]bool) error {
-	if err := p.Validate(catalog); err != nil {
-		return err
-	}
-	if !p.Enabled {
-		return nil
-	}
-	for _, rule := range p.Rules {
-		if intakeLabelIDs[rule.LabelID] {
-			return ErrIntakeLabel
-		}
-	}
-	return nil
+	return p.Validate(catalog)
 }
 
 type Counts struct {
@@ -101,17 +90,14 @@ func (c *Counts) Add(classification string) {
 	}
 }
 
-// Classify requires evidence that the read completed recently. IDs observed at
-// intake are excluded even if a stale or malicious policy maps them.
+// Classify requires evidence that the read completed recently. It uses the
+// current label set; intake labels are retained separately as history.
 func Classify(labels []channels.FacebookLabel, intakeLabelIDs map[string]bool, status string, checkedAt *time.Time, rules []Rule, ready bool, now time.Time) string {
 	if !ready || status != "success" || checkedAt == nil || checkedAt.After(now) || now.Sub(*checkedAt) > FreshnessMinutes*time.Minute {
 		return "unknown"
 	}
 	categories := map[string]bool{}
 	for _, label := range labels {
-		if intakeLabelIDs[label.ID] {
-			continue
-		}
 		for _, rule := range rules {
 			if label.ID == rule.LabelID {
 				categories[rule.Category] = true
@@ -128,26 +114,7 @@ func Classify(labels []channels.FacebookLabel, intakeLabelIDs map[string]bool, s
 }
 
 func TrackingLabels(labels []channels.FacebookLabel, intakeLabelIDs map[string]bool) []channels.FacebookLabel {
-	tracking := make([]channels.FacebookLabel, 0, len(labels))
-	for _, label := range labels {
-		if !intakeLabelIDs[label.ID] {
-			tracking = append(tracking, label)
-		}
-	}
-	return tracking
-}
-
-func filterIntakeRules(rules []Rule, intakeLabelIDs map[string]bool) ([]Rule, bool) {
-	filtered := make([]Rule, 0, len(rules))
-	changed := false
-	for _, rule := range rules {
-		if intakeLabelIDs[rule.LabelID] {
-			changed = true
-			continue
-		}
-		filtered = append(filtered, rule)
-	}
-	return filtered, changed
+	return append([]channels.FacebookLabel(nil), labels...)
 }
 
 // Resolve participant identity from old sync metadata. The old Facebook adapter

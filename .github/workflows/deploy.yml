@@ -37,6 +37,7 @@ jobs:
         working-directory: backend
         env:
           MESSENGER_LABELS_TEST_DSN: root:cqa-ci-test@tcp(127.0.0.1:3306)/?parseTime=true
+          MESSENGER_JOURNEY_TEST_DSN: root:cqa-ci-test@tcp(127.0.0.1:3306)/?parseTime=true
         run: |
           go test ./...
           go test -race ./messengerlabels

@@ -39,18 +39,23 @@ func SavePolicy(database *gorm.DB, channel models.Channel, policy Policy) error 
 		if json.Unmarshal([]byte(state.Catalog), &catalog) != nil {
 			return ErrConfiguration
 		}
-		intakeLabelIDs, err := LoadIntakeLabelIDs(tx, channel)
-		if err != nil {
-			return err
-		}
-		if err = policy.ValidateTracking(catalog, intakeLabelIDs); err != nil {
+		if err = policy.Validate(catalog); err != nil {
 			return err
 		}
 		rules, _ := json.Marshal(policy.Rules)
 		if policy.Rules == nil {
 			rules = []byte("[]")
 		}
-		return tx.Model(&state).Updates(map[string]interface{}{"enabled": policy.Enabled, "rules": string(rules)}).Error
+		policyChanged := state.Enabled != policy.Enabled || state.Rules != string(rules)
+		if err := tx.Model(&state).Updates(map[string]interface{}{"enabled": policy.Enabled, "rules": string(rules)}).Error; err != nil {
+			return err
+		}
+		state.Enabled = policy.Enabled
+		state.Rules = string(rules)
+		if !policyChanged {
+			return nil
+		}
+		return recordPolicyJourney(tx, channel, state, time.Now())
 	})
 }
 
@@ -61,36 +66,6 @@ func lockMessengerLabelState(tx *gorm.DB, channel models.Channel) (models.Messen
 	var state models.MessengerLabelState
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("channel_id = ? AND tenant_id = ?", channel.ID, channel.TenantID).First(&state).Error
 	return state, err
-}
-
-func pruneNewIntakeRules(tx *gorm.DB, state *models.MessengerLabelState, snapshots []models.MessengerLabelSnapshot) error {
-	if len(snapshots) == 0 {
-		return nil
-	}
-	intakeLabelIDs, err := intakeLabelIDsFromSnapshots(snapshots)
-	if err != nil {
-		return err
-	}
-	if len(intakeLabelIDs) == 0 {
-		return nil
-	}
-	var rules []Rule
-	if json.Unmarshal([]byte(state.Rules), &rules) != nil {
-		return ErrConfiguration
-	}
-	filtered, changed := filterIntakeRules(rules, intakeLabelIDs)
-	if !changed {
-		return nil
-	}
-	data, err := json.Marshal(filtered)
-	if err != nil {
-		return err
-	}
-	if err := tx.Model(state).Update("rules", string(data)).Error; err != nil {
-		return err
-	}
-	state.Rules = string(data)
-	return nil
 }
 
 func SaveCatalog(database *gorm.DB, channel models.Channel, catalog []channels.FacebookLabel, now time.Time) error {

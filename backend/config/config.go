@@ -26,6 +26,8 @@ type Config struct {
 	InternalImportSecret      string
 	ABZExportSecret           string
 	ABZExportTenantID         string
+	MessengerRelaySecret      string
+	MessengerJourneyEnabled   bool
 	FacebookAppID             string
 	FacebookAppSecret         string
 	FacebookAPIVersion        string
@@ -110,6 +112,8 @@ func Load() (*Config, error) {
 		InternalImportSecret:         getEnv("INTERNAL_IMPORT_SECRET", ""),
 		ABZExportSecret:              getEnv("CQA_ABZ_EXPORT_SECRET", ""),
 		ABZExportTenantID:            getEnv("CQA_ABZ_EXPORT_TENANT_ID", ""),
+		MessengerRelaySecret:         getEnv("CQA_MESSENGER_RELAY_SECRET", ""),
+		MessengerJourneyEnabled:      strings.EqualFold(getEnv("CQA_MESSENGER_JOURNEY_ENABLED", "false"), "true"),
 		FacebookAppID:                getEnv("FACEBOOK_APP_ID", ""),
 		FacebookAppSecret:            getEnv("FACEBOOK_APP_SECRET", ""),
 		FacebookAPIVersion:           getEnv("FACEBOOK_API_VERSION", "v26.0"),
@@ -162,6 +166,14 @@ func Load() (*Config, error) {
 	if cfg.InternalImportSecret == "" {
 		// Phase 1 fallback to keep existing deployments bootable while allowing a narrower secret.
 		cfg.InternalImportSecret = cfg.JWTSecret
+	}
+	if cfg.MessengerJourneyEnabled {
+		if cfg.ABZExportTenantID == "" || cfg.ABZExportSecret == "" || cfg.MessengerRelaySecret == "" {
+			return nil, fmt.Errorf("CQA messenger journey requires CQA_ABZ_EXPORT_TENANT_ID, CQA_ABZ_EXPORT_SECRET, and CQA_MESSENGER_RELAY_SECRET")
+		}
+		if cfg.MessengerRelaySecret == cfg.ABZExportSecret {
+			return nil, fmt.Errorf("CQA_MESSENGER_RELAY_SECRET must differ from CQA_ABZ_EXPORT_SECRET")
+		}
 	}
 
 	return cfg, nil
