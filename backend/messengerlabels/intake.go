@@ -88,7 +88,7 @@ func saveIntakeLabelSnapshot(database *gorm.DB, snapshot models.MessengerLabelSn
 
 	channel := models.Channel{ID: snapshot.ChannelID, TenantID: snapshot.TenantID}
 	return database.Transaction(func(tx *gorm.DB) error {
-		state, err := lockMessengerLabelState(tx, channel)
+		_, err := lockMessengerLabelState(tx, channel)
 		if err != nil {
 			return err
 		}
@@ -119,10 +119,6 @@ func saveIntakeLabelSnapshot(database *gorm.DB, snapshot models.MessengerLabelSn
 		if result.Error != nil {
 			return result.Error
 		}
-		var stored models.MessengerLabelSnapshot
-		if err := tx.Select("conversation_id,intake_labels,intake_labels_captured_at").Where("conversation_id = ? AND tenant_id = ? AND channel_id = ?", snapshot.ConversationID, snapshot.TenantID, snapshot.ChannelID).First(&stored).Error; err != nil {
-			return err
-		}
-		return pruneNewIntakeRules(tx, &state, []models.MessengerLabelSnapshot{stored})
+		return nil
 	})
 }

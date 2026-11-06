@@ -117,6 +117,17 @@ func (s *Scheduler) Start() {
 		log.Printf("[scheduler] failed to create sync job: %v", err)
 	}
 
+	// Label changes do not necessarily add a message, so observe them on their
+	// own one-minute dispatcher; each Page becomes due every five minutes.
+	_, err = s.scheduler.NewJob(
+		gocron.DurationJob(time.Minute),
+		gocron.NewTask(s.syncMessengerLabelsTask),
+		gocron.WithName("sync-messenger-labels"),
+	)
+	if err != nil {
+		log.Printf("[scheduler] failed to create Messenger label sync job: %v", err)
+	}
+
 	// Cleanup old sync activity logs daily (keep success 90d, error 180d)
 	_, err = s.scheduler.NewJob(
 		gocron.DurationJob(24*time.Hour),

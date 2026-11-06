@@ -125,10 +125,13 @@ func TestFacebookWebhookHTTPVerificationAndSignature(t *testing.T) {
 func TestFacebookWebhookFansOutReferralAcrossTenantsDespiteOneCaptureFailure(t *testing.T) {
 	previousLoad := loadActiveFacebookChannels
 	previousCapture := captureFacebookReferral
+	previousDatabaseAvailable := facebookWebhookDatabaseAvailable
 	t.Cleanup(func() {
 		loadActiveFacebookChannels = previousLoad
 		captureFacebookReferral = previousCapture
+		facebookWebhookDatabaseAvailable = previousDatabaseAvailable
 	})
+	facebookWebhookDatabaseAvailable = func() bool { return true }
 
 	loadActiveFacebookChannels = func(_ context.Context, pageID string) ([]models.Channel, error) {
 		if pageID != "page-shared" {

@@ -37,6 +37,7 @@ jobs:
         working-directory: backend
         env:
           MESSENGER_LABELS_TEST_DSN: root:cqa-ci-test@tcp(127.0.0.1:3306)/?parseTime=true
+          MESSENGER_JOURNEY_TEST_DSN: root:cqa-ci-test@tcp(127.0.0.1:3306)/?parseTime=true
         run: |
           go test ./...
           go test -race ./messengerlabels
@@ -69,6 +70,31 @@ jobs:
             set -eu
             umask 077
             cd /home/karien/cqa-personal-zalo
+            # Journey rollout preflight: measured 2026-11-06, unchanged dependencies
+            # and warm build caches. Reserve includes build/image/backup/migration.
+            check_disk_reserve() {
+              target_path="$1"
+              set -- $(df -B1 "$target_path" | awk 'NR==2 {print $2, $4}')
+              disk_reserve=$(( $1 / 5 ))
+              if [ "$disk_reserve" -lt 5368709120 ]; then disk_reserve=5368709120; fi
+              disk_after_peak=$(( $2 - 8589934592 ))
+              if [ "$disk_after_peak" -lt "$disk_reserve" ]; then
+                echo "Capacity blocked: disk reserve would be below its floor."
+                exit 1
+              fi
+            }
+            check_disk_reserve /home/karien/cqa-personal-zalo
+            check_disk_reserve /var/lib/docker
+            check_disk_reserve /home/karien/cqa-backups
+            mem_total=$(awk '$1=="MemTotal:" {printf "%.0f", $2*1024}' /proc/meminfo)
+            mem_available=$(awk '$1=="MemAvailable:" {printf "%.0f", $2*1024}' /proc/meminfo)
+            mem_reserve=$(( mem_total / 4 ))
+            if [ "$mem_reserve" -lt 536870912 ]; then mem_reserve=536870912; fi
+            if [ $(( mem_available - 2684354560 )) -lt "$mem_reserve" ]; then
+              echo "Capacity blocked: RAM reserve would be below its floor."
+              exit 1
+            fi
+            echo "Capacity reserves passed before host changes."
             backup_dir="/home/karien/cqa-backups/${{ github.run_id }}"
             mkdir -p "$backup_dir"
             previous_image=$(docker inspect --format '{{.Image}}' cqa-app)
@@ -109,10 +135,10 @@ jobs:
               exit 1
             fi
             table_count=$(docker exec -i cqa-db sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --user=root --batch --skip-column-names "$MYSQL_DATABASE"' <<'SQL'
-            SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('service_resolutions','messenger_label_states','messenger_label_snapshots','messenger_intake_attributions');
+            SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('service_resolutions','messenger_label_states','messenger_label_snapshots','messenger_intake_attributions','messenger_journey_sequences','messenger_journey_events','messenger_journey_customers','messenger_journey_orders','messenger_journey_coverages','messenger_journey_erasures','messenger_journey_receipts');
             SQL
             )
-            if [ "$table_count" != '4' ]; then
+            if [ "$table_count" != '11' ]; then
               echo "Messenger migration verification failed."
               rollback_app
               exit 1

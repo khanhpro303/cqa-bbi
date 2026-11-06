@@ -47,6 +47,7 @@ type staleQCCandidate struct {
 
 type analysisSnapshotMetadata struct {
 	SourceLastMessageAt *time.Time
+	SourceLastMessageID string
 	SourceMessageCount  int
 	TranscriptSHA256    string
 	PromptSHA256        string
@@ -293,9 +294,11 @@ func transcriptSinceForJob(job models.Job, since time.Time) time.Time {
 func newAnalysisSnapshotMetadata(messages []models.Message, transcript, systemPrompt string) analysisSnapshotMetadata {
 	metadata := analysisSnapshotMetadata{SourceMessageCount: len(messages)}
 	for i := range messages {
-		if metadata.SourceLastMessageAt == nil || messages[i].SentAt.After(*metadata.SourceLastMessageAt) {
+		if metadata.SourceLastMessageAt == nil || messages[i].SentAt.After(*metadata.SourceLastMessageAt) ||
+			(messages[i].SentAt.Equal(*metadata.SourceLastMessageAt) && messages[i].ID > metadata.SourceLastMessageID) {
 			sentAt := messages[i].SentAt
 			metadata.SourceLastMessageAt = &sentAt
+			metadata.SourceLastMessageID = messages[i].ID
 		}
 	}
 	if transcript != "" {
@@ -975,6 +978,9 @@ func buildQCEvaluationDetail(review string, score int, summary string, metadata 
 	if metadata.SourceMessageCount > 0 {
 		detail["source_message_count"] = metadata.SourceMessageCount
 	}
+	if metadata.SourceLastMessageID != "" {
+		detail["source_last_message_id"] = metadata.SourceLastMessageID
+	}
 	if metadata.TranscriptSHA256 != "" {
 		detail["transcript_sha256"] = metadata.TranscriptSHA256
 	}
@@ -1131,6 +1137,15 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 			if previousRow.Detail != "" {
 				_ = json.Unmarshal([]byte(previousRow.Detail), &previous)
 			}
+			if a.cfg != nil && a.cfg.MessengerJourneyEnabled {
+				durable, err := loadDurableOrderOutcomes(db.DB, tenantID, conversationID)
+				if err != nil {
+					return count, false, fmt.Errorf("load durable order outcomes: %w", err)
+				}
+				if len(durable) > 0 {
+					previous.OrderOutcomes = durable
+				}
+			}
 			if len(classResult.Insights.OrderOutcomes) > 0 || len(previous.OrderOutcomes) > 0 {
 				var messages []models.Message
 				if err := db.DB.Where("tenant_id = ? AND conversation_id = ?", tenantID, conversationID).Order("sent_at ASC").Find(&messages).Error; err != nil {
@@ -1142,7 +1157,7 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 			if err != nil {
 				return count, false, fmt.Errorf("failed to encode conversation insight: %w", err)
 			}
-			if err := db.DB.Create(&models.JobResult{
+			insightResult := models.JobResult{
 				ID:             pkg.NewUUID(),
 				JobRunID:       runID,
 				TenantID:       tenantID,
@@ -1153,7 +1168,8 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 				AIRawResponse:  aiResponse,
 				Confidence:     1.0,
 				CreatedAt:      now,
-			}).Error; err != nil {
+			}
+			if err := saveConversationInsightWithJourney(db.DB, insightResult, orderOutcomes, metadata, a.cfg != nil && a.cfg.MessengerJourneyEnabled); err != nil {
 				return count, false, fmt.Errorf("failed to save conversation insight: %w", err)
 			}
 		}

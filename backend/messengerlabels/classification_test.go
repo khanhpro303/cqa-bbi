@@ -28,8 +28,8 @@ func TestClassifyRequiresCompleteFreshRead(t *testing.T) {
 	}{
 		{"empty fresh is unclassified", []channels.FacebookLabel{}, nil, "success", &fresh, true, "unclassified"},
 		{"irrelevant label is unclassified", []channels.FacebookLabel{{ID: "99", Name: "VIP"}}, nil, "success", &fresh, true, "unclassified"},
-		{"intake label is never tracking even if mapped", []channels.FacebookLabel{{ID: "11", Name: "Ad 123"}}, map[string]bool{"11": true}, "success", &fresh, true, "unclassified"},
-		{"manual label remains after intake labels are removed", []channels.FacebookLabel{{ID: "11", Name: "Ad 123"}, {ID: "12", Name: "Tiềm năng"}}, map[string]bool{"11": true}, "success", &fresh, true, "potential"},
+		{"intake label can classify when currently present", []channels.FacebookLabel{{ID: "11", Name: "Phù hợp"}}, map[string]bool{"11": true}, "success", &fresh, true, "qualified"},
+		{"all current mapped labels participate", []channels.FacebookLabel{{ID: "11", Name: "Phù hợp"}, {ID: "12", Name: "Tiềm năng"}}, map[string]bool{"11": true}, "success", &fresh, true, "conflict"},
 		{"qualified", []channels.FacebookLabel{{ID: "11", Name: "Renamed"}}, nil, "success", &fresh, true, "qualified"},
 		{"unqualified", []channels.FacebookLabel{{ID: "13", Name: "Không phù hợp"}}, nil, "success", &fresh, true, "unqualified"},
 		{"potential", []channels.FacebookLabel{{ID: "12", Name: "Tiềm năng"}}, nil, "success", &fresh, true, "potential"},
@@ -49,11 +49,11 @@ func TestClassifyRequiresCompleteFreshRead(t *testing.T) {
 	}
 }
 
-func TestPolicyRejectsIntakeLabelIDs(t *testing.T) {
+func TestPolicyAllowsIntakeLabelIDs(t *testing.T) {
 	catalog := []channels.FacebookLabel{{ID: "11", Name: "Ad 123"}, {ID: "12", Name: "Tiềm năng"}}
 	reserved := map[string]bool{"11": true}
-	if !errors.Is((Policy{Enabled: true, Rules: []Rule{{"11", "qualified"}}}).ValidateTracking(catalog, reserved), ErrIntakeLabel) {
-		t.Fatal("intake label must not be accepted as a tracking rule")
+	if err := (Policy{Enabled: true, Rules: []Rule{{"11", "qualified"}}}).ValidateTracking(catalog, reserved); err != nil {
+		t.Fatalf("current label mapping rejected because it appeared at intake: %v", err)
 	}
 	if err := (Policy{Enabled: true, Rules: []Rule{{"12", "potential"}}}).ValidateTracking(catalog, reserved); err != nil {
 		t.Fatalf("manual tracking label rejected: %v", err)
@@ -73,14 +73,6 @@ func TestIntakeLabelIDsAreCollectedAcrossPageSnapshots(t *testing.T) {
 	})
 	if err != nil || len(ids) != 2 || !ids["ad-1"] || !ids["campaign-2"] {
 		t.Fatalf("unexpected intake label IDs: %+v, %v", ids, err)
-	}
-}
-
-func TestNewIntakeBaselinePrunesPersistedTrackingRules(t *testing.T) {
-	rules := []Rule{{"11", "qualified"}, {"12", "potential"}}
-	filtered, changed := filterIntakeRules(rules, map[string]bool{"11": true})
-	if !changed || len(filtered) != 1 || filtered[0].LabelID != "12" {
-		t.Fatalf("unexpected filtered rules: %+v, changed=%v", filtered, changed)
 	}
 }
 
@@ -159,6 +151,17 @@ func TestObserveReadsOldConversationAndHandlesRemovedLabels(t *testing.T) {
 	}
 	if len(fake.calls) != 1 || fake.calls[0] != "200" {
 		t.Fatalf("must read PSID even without new messages: %+v", fake.calls)
+	}
+}
+
+func TestObserveCanonicalizesLabelOrder(t *testing.T) {
+	convs := []models.Conversation{{ID: "conv", TenantID: "tenant", ChannelID: "channel", Metadata: `{"participants":{"data":[{"id":"100"},{"id":"200"}]}}`}}
+	fake := &fakeReader{labels: map[string][]channels.FacebookLabel{"200": {{ID: "20", Name: "B"}, {ID: "10", Name: "Z"}, {ID: "10", Name: "A"}}}, errors: map[string]error{}}
+	var saved models.MessengerLabelSnapshot
+	good, bad, err := Observe(context.Background(), fake, convs, "100", func(s models.MessengerLabelSnapshot) error { saved = s; return nil })
+	want := `[{"id":"10","page_label_name":"A"},{"id":"10","page_label_name":"Z"},{"id":"20","page_label_name":"B"}]`
+	if err != nil || good != 1 || bad != 0 || saved.Labels != want {
+		t.Fatalf("got good=%d bad=%d err=%v labels=%s", good, bad, err, saved.Labels)
 	}
 }
 

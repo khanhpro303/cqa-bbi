@@ -62,7 +62,11 @@ func labelTestDatabase(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pool.Close() })
-	if err := database.AutoMigrate(&models.Tenant{}, &models.Channel{}, &models.Conversation{}, &models.MessengerLabelState{}, &models.MessengerLabelSnapshot{}); err != nil {
+	if err := database.AutoMigrate(
+		&models.Tenant{}, &models.Channel{}, &models.Conversation{}, &models.MessengerLabelState{}, &models.MessengerLabelSnapshot{},
+		&models.MessengerJourneySequence{}, &models.MessengerJourneyReceipt{}, &models.MessengerJourneyEvent{}, &models.MessengerJourneyCustomer{}, &models.MessengerJourneyOrder{},
+		&models.MessengerJourneyCoverage{}, &models.MessengerJourneyErasure{},
+	); err != nil {
 		t.Fatal(err)
 	}
 	return database
@@ -75,11 +79,12 @@ func (f integrationReader) FetchPageLabels(context.Context) ([]channels.Facebook
 }
 
 func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
+	t.Setenv("CQA_MESSENGER_JOURNEY_ENABLED", "true")
 	database := labelTestDatabase(t)
 	ctx := context.Background()
 	now := time.Now()
 	tenant := models.Tenant{ID: "tenant-a", Name: "Test", Slug: pkg.NewUUID(), Settings: "{}"}
-	channel := models.Channel{ID: "page-a", TenantID: tenant.ID, ChannelType: "facebook", Name: "Test Page", IsActive: true, CredentialsEncrypted: []byte{}, Metadata: "{}"}
+	channel := models.Channel{ID: "page-a", TenantID: tenant.ID, ChannelType: "facebook", ExternalID: "100", Name: "Test Page", IsActive: true, CredentialsEncrypted: []byte{}, Metadata: "{}"}
 	for _, value := range []interface{}{&tenant, &channel} {
 		if err := database.Create(value).Error; err != nil {
 			t.Fatal(err)
@@ -126,12 +131,12 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, err := LoadState(database, channel)
-	var prunedRules []Rule
+	var retainedRules []Rule
 	if err == nil {
-		err = json.Unmarshal([]byte(state.Rules), &prunedRules)
+		err = json.Unmarshal([]byte(state.Rules), &retainedRules)
 	}
-	if err != nil || len(prunedRules) != 1 || prunedRules[0] != (Rule{LabelID: "11", Category: "qualified"}) {
-		t.Fatalf("new intake baseline did not prune persisted policy: %s, %v", state.Rules, err)
+	if err != nil || len(retainedRules) != 2 {
+		t.Fatalf("intake baseline unexpectedly changed persisted policy: %s, %v", state.Rules, err)
 	}
 	report, err := BuildReport(ctx, database, tenant.ID, channel.ID, time.Now())
 	if err != nil || report.Counts.Unknown != 3 || report.Counts.Unclassified != 0 {
@@ -143,8 +148,13 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	if _, err := BuildReport(ctx, database, "other-tenant", channel.ID, time.Now()); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("tenant leaked: %v", err)
 	}
-	if err := SavePolicy(database, channel, Policy{true, []Rule{{"99", "qualified"}}}); !errors.Is(err, ErrIntakeLabel) {
-		t.Fatalf("intake label policy accepted: %v", err)
+	if err := SavePolicy(database, channel, Policy{true, []Rule{{"99", "qualified"}}}); err != nil {
+		t.Fatalf("current label policy rejected because it appeared at intake: %v", err)
+	}
+	// Restore a rule present in the reader's next catalog before resuming the
+	// interrupted sweep; the acceptance assertion above is the behavior under test.
+	if err := SavePolicy(database, channel, Policy{true, []Rule{{"11", "qualified"}}}); err != nil {
+		t.Fatal(err)
 	}
 	if err := database.Create(&models.MessengerLabelSnapshot{ConversationID: "c", TenantID: tenant.ID, ChannelID: channel.ID, PSID: "300", Labels: "[]", IntakeLabels: &intakeEmpty, Status: "never", IntakeLabelsCapturedAt: &now, AttemptedAt: now}).Error; err != nil {
 		t.Fatal(err)
@@ -205,7 +215,7 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	}()
 	close(start)
 	wg.Wait()
-	if captureErr != nil || policyErr != nil && !errors.Is(policyErr, ErrIntakeLabel) {
+	if captureErr != nil || policyErr != nil {
 		t.Fatalf("concurrent policy/capture failed: policy=%v capture=%v", policyErr, captureErr)
 	}
 	state, err = LoadState(database, channel)
@@ -216,10 +226,12 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("concurrent intake label remained in policy: %s, %v", state.Rules, err)
 	}
+	found77 := false
 	for _, rule := range concurrentRules {
-		if rule.LabelID == "77" {
-			t.Fatalf("concurrent intake label remained in policy: %s", state.Rules)
-		}
+		found77 = found77 || rule.LabelID == "77"
+	}
+	if !found77 {
+		t.Fatalf("intake capture removed an explicitly configured current label: %s", state.Rules)
 	}
 	var baselineBefore models.MessengerLabelSnapshot
 	if err := database.First(&baselineBefore, "conversation_id = ?", "d").Error; err != nil {
@@ -253,6 +265,28 @@ func TestMySQLSyncClaimsCheckpointsAndTenantIsolation(t *testing.T) {
 	}
 	if err := finishSync(database, channel, immutabilityToken, "success", ""); err != nil {
 		t.Fatal(err)
+	}
+	if err := SavePolicy(database, channel, Policy{true, []Rule{{"11", "unqualified"}}}); err != nil {
+		t.Fatal(err)
+	}
+	var reclassified models.MessengerJourneyEvent
+	if err := database.Where("tenant_id = ? AND kind = ? AND conversation_id = ?", tenant.ID, "classification", "d").Order("sequence DESC").First(&reclassified).Error; err != nil {
+		t.Fatal(err)
+	}
+	var reclassifiedPayload map[string]string
+	if err := json.Unmarshal([]byte(reclassified.Payload), &reclassifiedPayload); err != nil {
+		t.Fatal(err)
+	}
+	activityAt, err := time.Parse(time.RFC3339Nano, reclassifiedPayload["source_activity_at"])
+	if err != nil || immutable.CheckedAt == nil || !activityAt.Equal(immutable.CheckedAt.UTC()) {
+		t.Fatalf("policy change renewed source activity: payload=%s checked_at=%v error=%v", reclassified.Payload, immutable.CheckedAt, err)
+	}
+	var labelEvents, classificationEvents int64
+	if err := database.Model(&models.MessengerJourneyEvent{}).Where("tenant_id = ? AND kind = ?", tenant.ID, "labels").Count(&labelEvents).Error; err != nil || labelEvents < 2 {
+		t.Fatalf("changed label observations not journaled: %d %v", labelEvents, err)
+	}
+	if err := database.Model(&models.MessengerJourneyEvent{}).Where("tenant_id = ? AND kind = ?", tenant.ID, "classification").Count(&classificationEvents).Error; err != nil || classificationEvents < 2 {
+		t.Fatalf("classification versions not journaled: %d %v", classificationEvents, err)
 	}
 	if err := database.Delete(&models.Conversation{}, "id = ?", "a").Error; err != nil {
 		t.Fatal(err)

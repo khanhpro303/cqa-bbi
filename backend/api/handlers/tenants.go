@@ -12,6 +12,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
 )
 
 type CreateTenantRequest struct {
@@ -166,45 +167,52 @@ func UpdateTenant(c *gin.Context) {
 
 func DeleteTenant(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
-
-	// Full cascade delete: child → parent order
-
-	// 0. Delete all local attachment files for this tenant
-	os.RemoveAll(filepath.Join("/var/lib/cqa/files", tenantID))
-
-	// 1. Messages (via conversations)
 	var convIDs []string
-	db.DB.Model(&models.Conversation{}).Where("tenant_id = ?", tenantID).Pluck("id", &convIDs)
-	if len(convIDs) > 0 {
-		db.DB.Where("conversation_id IN ?", convIDs).Delete(&models.Message{})
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		channelIDs, err := tenantJourneyChannelIDs(tx, tenantID)
+		if err != nil {
+			return err
+		}
+		for _, channelID := range channelIDs {
+			if err := eraseChannelJourneySubjects(tx, tenantID, channelID, "cqa_tenant_delete"); err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("tenant_id = ?", tenantID).Delete(&models.MessengerIntakeAttribution{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Conversation{}).Where("tenant_id = ?", tenantID).Pluck("id", &convIDs).Error; err != nil {
+			return err
+		}
+		if len(convIDs) > 0 {
+			if err := tx.Where("conversation_id IN ?", convIDs).Delete(&models.Message{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("tenant_id = ?", tenantID).Delete(&models.Conversation{}).Error; err != nil {
+			return err
+		}
+		var runIDs []string
+		if err := tx.Model(&models.JobRun{}).Where("tenant_id = ?", tenantID).Pluck("id", &runIDs).Error; err != nil {
+			return err
+		}
+		if len(runIDs) > 0 {
+			if err := tx.Where("job_run_id IN ?", runIDs).Delete(&models.JobResult{}).Error; err != nil {
+				return err
+			}
+		}
+		for _, model := range []interface{}{&models.JobRun{}, &models.AIUsageLog{}, &models.NotificationLog{}, &models.ActivityLog{}, &models.Job{}, &models.AppSetting{}, &models.Channel{}, &models.UserTenant{}} {
+			if err := tx.Where("tenant_id = ?", tenantID).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Where("id = ?", tenantID).Delete(&models.Tenant{}).Error
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "tenant_delete_failed"})
+		return
 	}
-	// 2. Conversations
-	db.DB.Where("tenant_id = ?", tenantID).Delete(&models.Conversation{})
-
-	// 3. JobResults (via job_runs)
-	var runIDs []string
-	db.DB.Model(&models.JobRun{}).Where("tenant_id = ?", tenantID).Pluck("id", &runIDs)
-	if len(runIDs) > 0 {
-		db.DB.Where("job_run_id IN ?", runIDs).Delete(&models.JobResult{})
-	}
-	// 4. JobRuns
-	db.DB.Where("tenant_id = ?", tenantID).Delete(&models.JobRun{})
-	// 5. AIUsageLogs
-	db.DB.Where("tenant_id = ?", tenantID).Delete(&models.AIUsageLog{})
-	// 6. NotificationLogs
-	db.DB.Where("tenant_id = ?", tenantID).Delete(&models.NotificationLog{})
-	// 7. ActivityLogs
-	db.DB.Where("tenant_id = ?", tenantID).Delete(&models.ActivityLog{})
-	// 8. Jobs
-	db.DB.Where("tenant_id = ?", tenantID).Delete(&models.Job{})
-	// 9. AppSettings
-	db.DB.Where("tenant_id = ?", tenantID).Delete(&models.AppSetting{})
-	// 10. Channels
-	db.DB.Where("tenant_id = ?", tenantID).Delete(&models.Channel{})
-	// 11. UserTenants
-	db.DB.Where("tenant_id = ?", tenantID).Delete(&models.UserTenant{})
-	// 12. Tenant
-	db.DB.Where("id = ?", tenantID).Delete(&models.Tenant{})
+	_ = os.RemoveAll(filepath.Join("/var/lib/cqa/files", tenantID))
 
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }

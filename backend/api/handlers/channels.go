@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,8 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"github.com/vietbui/chat-quality-agent/messengerjourney"
+	"github.com/vietbui/chat-quality-agent/messengerlabels"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"gorm.io/gorm"
 )
@@ -382,6 +385,12 @@ func DeleteChannel(c *gin.Context) {
 // FK-safe order. CRM groups survive with channel_id cleared; OA-bound employee
 // whitelist entries (zalo_user_id is per-OA) are removed with their group links.
 func deleteChannelCascade(tx *gorm.DB, tenantID, channelID string) ([]string, error) {
+	if err := eraseChannelJourneySubjects(tx, tenantID, channelID, "cqa_channel_delete"); err != nil {
+		return nil, fmt.Errorf("erase Messenger journeys: %w", err)
+	}
+	if err := tx.Where("tenant_id = ? AND channel_id = ?", tenantID, channelID).Delete(&models.MessengerIntakeAttribution{}).Error; err != nil {
+		return nil, fmt.Errorf("delete Messenger intake attribution: %w", err)
+	}
 	var convIDs []string
 	if err := tx.Model(&models.Conversation{}).Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Pluck("id", &convIDs).Error; err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
@@ -414,6 +423,119 @@ func deleteChannelCascade(tx *gorm.DB, tenantID, channelID string) ([]string, er
 	return convIDs, nil
 }
 
+func eraseChannelJourneySubjects(tx *gorm.DB, tenantID, channelID, source string) error {
+	type journeySubject struct {
+		PageID string
+		PSID   string `gorm:"column:psid"`
+	}
+	subjects := make(map[string]journeySubject)
+	addSubject := func(pageID, psid string) {
+		pageID, psid = strings.TrimSpace(pageID), strings.TrimSpace(psid)
+		if pageID == "" || psid == "" {
+			return
+		}
+		subjects[pageID+"\x00"+psid] = journeySubject{PageID: pageID, PSID: psid}
+	}
+
+	var canonical []journeySubject
+	if err := tx.Model(&models.MessengerJourneyEvent{}).Select("subject_id,page_id,psid").
+		Where("tenant_id = ? AND channel_id = ? AND psid <> ''", tenantID, channelID).
+		Group("subject_id,page_id,psid").Scan(&canonical).Error; err != nil {
+		return err
+	}
+	for _, subject := range canonical {
+		addSubject(subject.PageID, subject.PSID)
+	}
+
+	// Legacy-only customers may never have reached the canonical journal. They
+	// still need a redacted tombstone so downstream replicas can erase them.
+	var intake []journeySubject
+	if err := tx.Model(&models.MessengerIntakeAttribution{}).Select("page_id,psid").
+		Where("tenant_id = ? AND channel_id = ? AND psid <> ''", tenantID, channelID).
+		Group("page_id,psid").Scan(&intake).Error; err != nil {
+		return err
+	}
+	for _, subject := range intake {
+		addSubject(subject.PageID, subject.PSID)
+	}
+
+	var channel models.Channel
+	channelErr := tx.Select("id,tenant_id,channel_type,external_id").Where("id = ? AND tenant_id = ?", channelID, tenantID).First(&channel).Error
+	if channelErr != nil && channelErr != gorm.ErrRecordNotFound {
+		return channelErr
+	}
+	if channelErr == nil && channel.ChannelType == "facebook" && strings.TrimSpace(channel.ExternalID) != "" {
+		var snapshots []models.MessengerLabelSnapshot
+		if err := tx.Select("psid").Where("tenant_id = ? AND channel_id = ? AND psid <> ''", tenantID, channelID).Find(&snapshots).Error; err != nil {
+			return err
+		}
+		for _, snapshot := range snapshots {
+			addSubject(channel.ExternalID, snapshot.PSID)
+		}
+		var conversations []models.Conversation
+		if err := tx.Select("id,tenant_id,channel_id,metadata").Where("tenant_id = ? AND channel_id = ?", tenantID, channelID).Find(&conversations).Error; err != nil {
+			return err
+		}
+		for _, conversation := range conversations {
+			addSubject(channel.ExternalID, messengerlabels.ParticipantPSID(conversation, channel.ExternalID))
+		}
+	}
+
+	now := time.Now().UTC()
+	subjectKeys := make([]string, 0, len(subjects))
+	for key := range subjects {
+		subjectKeys = append(subjectKeys, key)
+	}
+	sort.Strings(subjectKeys)
+	for _, key := range subjectKeys {
+		subject := subjects[key]
+		_, err := messengerjourney.EraseSubject(context.Background(), tx, messengerjourney.EraseInput{
+			EventID: "cqa_erase_" + pkg.NewUUID(), TenantID: tenantID, PageID: subject.PageID,
+			PSID: subject.PSID, Source: source, ObservedAt: now,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func tenantJourneyChannelIDs(tx *gorm.DB, tenantID string) ([]string, error) {
+	ids := make(map[string]struct{})
+	collect := func(model any, column string) error {
+		var values []string
+		if err := tx.Model(model).Where("tenant_id = ? AND "+column+" <> ''", tenantID).Distinct(column).Pluck(column, &values).Error; err != nil {
+			return err
+		}
+		for _, value := range values {
+			if value = strings.TrimSpace(value); value != "" {
+				ids[value] = struct{}{}
+			}
+		}
+		return nil
+	}
+	for _, source := range []struct {
+		model  any
+		column string
+	}{
+		{&models.Channel{}, "id"},
+		{&models.MessengerJourneyEvent{}, "channel_id"},
+		{&models.MessengerIntakeAttribution{}, "channel_id"},
+		{&models.MessengerLabelSnapshot{}, "channel_id"},
+		{&models.Conversation{}, "channel_id"},
+	} {
+		if err := collect(source.model, source.column); err != nil {
+			return nil, err
+		}
+	}
+	result := make([]string, 0, len(ids))
+	for id := range ids {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
 // PurgeChannelConversations deletes all conversations, messages, and evaluation results
 // for a channel while keeping the channel itself. Resets last_sync_at so next sync
 // fetches everything from scratch.
@@ -427,39 +549,48 @@ func PurgeChannelConversations(c *gin.Context) {
 		return
 	}
 
-	// Get all conversation IDs for this channel
 	var convIDs []string
-	db.DB.Model(&models.Conversation{}).Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Pluck("id", &convIDs)
-
 	var messagesDeleted, convsDeleted int64
-	if len(convIDs) > 0 {
-		// Delete evaluation results linked to these conversations
-		db.DB.Where("conversation_id IN ? AND tenant_id = ?", convIDs, tenantID).Delete(&models.JobResult{})
-
-		// Delete messages
-		result := db.DB.Where("conversation_id IN ? AND tenant_id = ?", convIDs, tenantID).Delete(&models.Message{})
-		messagesDeleted = result.RowsAffected
-
-		// Delete local attachment files for each conversation
-		for _, convID := range convIDs {
-			dir := filepath.Join("/var/lib/cqa/files", tenantID, convID)
-			if err := os.RemoveAll(dir); err != nil {
-				log.Printf("[sync] failed to remove files dir %s: %v", dir, err)
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := eraseChannelJourneySubjects(tx, tenantID, channelID, "cqa_channel_purge"); err != nil {
+			return err
+		}
+		if err := tx.Where("tenant_id = ? AND channel_id = ?", tenantID, channelID).Delete(&models.MessengerIntakeAttribution{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Conversation{}).Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Pluck("id", &convIDs).Error; err != nil {
+			return err
+		}
+		if len(convIDs) > 0 {
+			if err := tx.Where("conversation_id IN ? AND tenant_id = ?", convIDs, tenantID).Delete(&models.JobResult{}).Error; err != nil {
+				return err
 			}
+			result := tx.Where("conversation_id IN ? AND tenant_id = ?", convIDs, tenantID).Delete(&models.Message{})
+			if result.Error != nil {
+				return result.Error
+			}
+			messagesDeleted = result.RowsAffected
+		}
+		result := tx.Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Delete(&models.Conversation{})
+		if result.Error != nil {
+			return result.Error
+		}
+		convsDeleted = result.RowsAffected
+		return tx.Model(&channel).Updates(map[string]interface{}{
+			"last_sync_at": nil, "last_sync_status": nil, "last_sync_error": "", "updated_at": time.Now(),
+		}).Error
+	})
+	if err != nil {
+		log.Printf("[channels] purge channel %s failed: %v", channelID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "channel_purge_failed", "message": "Không xoá được dữ liệu kênh, vui lòng thử lại"})
+		return
+	}
+	for _, convID := range convIDs {
+		dir := filepath.Join("/var/lib/cqa/files", tenantID, convID)
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("[sync] failed to remove files dir %s: %v", dir, err)
 		}
 	}
-
-	// Delete conversations
-	result := db.DB.Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Delete(&models.Conversation{})
-	convsDeleted = result.RowsAffected
-
-	// Reset sync state so next sync fetches everything from scratch
-	db.DB.Model(&channel).Updates(map[string]interface{}{
-		"last_sync_at":     nil,
-		"last_sync_status": nil,
-		"last_sync_error":  "",
-		"updated_at":       time.Now(),
-	})
 
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c),
 		"channel.purge_conversations", "channel", channelID,
