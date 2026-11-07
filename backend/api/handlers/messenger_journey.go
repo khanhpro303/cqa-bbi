@@ -570,71 +570,18 @@ func labelDisplayNames(raw string) []string {
 	return values
 }
 
-type journeyMessageCursor struct {
-	ConversationID      string     `gorm:"column:conversation_id"`
-	SourceLastMessageAt *time.Time `gorm:"column:source_last_message_at"`
-	SourceLastMessageID string     `gorm:"column:source_last_message_id"`
-	SourceMessageCount  int64      `gorm:"column:source_message_count"`
-}
+type journeyMessageCursor = messengerjourney.MessageCursor
 
 func coverageSourceCursor(item models.MessengerJourneyCoverage) (journeyMessageCursor, bool) {
-	var payload struct {
-		SourceLastMessageAt *time.Time `json:"source_last_message_at"`
-		SourceLastMessageID string     `json:"source_last_message_id"`
-		SourceMessageCount  *int64     `json:"source_message_count"`
-	}
-	if json.Unmarshal([]byte(item.Payload), &payload) != nil || payload.SourceMessageCount == nil || *payload.SourceMessageCount < 0 {
-		return journeyMessageCursor{}, false
-	}
-	if *payload.SourceMessageCount > 0 && (payload.SourceLastMessageAt == nil || payload.SourceLastMessageID == "") {
-		return journeyMessageCursor{}, false
-	}
-	if payload.SourceLastMessageAt != nil {
-		value := payload.SourceLastMessageAt.UTC()
-		payload.SourceLastMessageAt = &value
-	}
-	return journeyMessageCursor{
-		ConversationID: item.ConversationID, SourceLastMessageAt: payload.SourceLastMessageAt,
-		SourceLastMessageID: payload.SourceLastMessageID, SourceMessageCount: *payload.SourceMessageCount,
-	}, true
+	return messengerjourney.CoverageCursor(item)
 }
 
 func coverageMatchesSource(coverage, current journeyMessageCursor) bool {
-	if coverage.SourceMessageCount != current.SourceMessageCount || coverage.SourceLastMessageID != current.SourceLastMessageID {
-		return false
-	}
-	if coverage.SourceLastMessageAt == nil || current.SourceLastMessageAt == nil {
-		return coverage.SourceLastMessageAt == nil && current.SourceLastMessageAt == nil
-	}
-	return coverage.SourceLastMessageAt.Equal(*current.SourceLastMessageAt)
+	return messengerjourney.CursorsMatch(coverage, current)
 }
 
 func loadJourneyMessageCursors(ctx context.Context, database *gorm.DB, tenantID string, conversationIDs []string) (map[string]journeyMessageCursor, error) {
-	result := make(map[string]journeyMessageCursor, len(conversationIDs))
-	for _, conversationID := range conversationIDs {
-		result[conversationID] = journeyMessageCursor{ConversationID: conversationID}
-	}
-	if len(conversationIDs) == 0 {
-		return result, nil
-	}
-	var cursors []journeyMessageCursor
-	err := database.WithContext(ctx).Raw(`
-		SELECT m.conversation_id,
-		       COUNT(*) AS source_message_count,
-		       MAX(m.sent_at) AS source_last_message_at,
-		       (SELECT m2.id FROM messages m2
-		        WHERE m2.tenant_id = ? AND m2.conversation_id = m.conversation_id
-		        ORDER BY m2.sent_at DESC, m2.id DESC LIMIT 1) AS source_last_message_id
-		FROM messages m
-		WHERE m.tenant_id = ? AND m.conversation_id IN ?
-		GROUP BY m.conversation_id`, tenantID, tenantID, conversationIDs).Scan(&cursors).Error
-	if err != nil {
-		return nil, err
-	}
-	for _, cursor := range cursors {
-		result[cursor.ConversationID] = cursor
-	}
-	return result, nil
+	return messengerjourney.LoadMessageCursors(ctx, database, tenantID, conversationIDs)
 }
 
 func ListMessengerJourneyStatus(c *gin.Context) {
@@ -723,22 +670,28 @@ func ListMessengerJourneyStatus(c *gin.Context) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "messenger_journey_unavailable"})
 			return
 		}
+		// Per-conversation coverage that matches the current stored messages is
+		// the proof of analysis. The job only has to exist and be healthy; tying
+		// readiness to "job ran after the latest sync" made every Page flip to
+		// incomplete between each 15-minute sync and the job run that follows it.
 		jobReady := false
 		for _, job := range jobs {
 			if isMessengerInsightJob(job, channel.ID) {
 				if job.LastRunStatus == "error" {
 					page.Analysis.Error = "analysis_failed"
 				}
-				if job.LastRunAt != nil && job.LastRunStatus == "success" && channel.LastSyncAt != nil && !job.LastRunAt.Before(*channel.LastSyncAt) {
+				if job.LastRunAt != nil && job.LastRunStatus != "error" {
 					jobReady = true
 				}
 			}
 		}
 		for _, conversation := range conversations {
-			item, exists := coverageByConversation[conversation.ID]
-			covered, validCoverage := coverageSourceCursor(item)
 			current := currentCursorByConversation[conversation.ID]
-			if !exists || item.Status != "complete" || !validCoverage || !coverageMatchesSource(covered, current) {
+			if current.SourceMessageCount == 0 {
+				continue // No stored message: there is nothing for the AI to analyze.
+			}
+			item, exists := coverageByConversation[conversation.ID]
+			if !messengerjourney.CoverageComplete(item, exists, current) {
 				page.Analysis.Pending++
 			}
 		}
