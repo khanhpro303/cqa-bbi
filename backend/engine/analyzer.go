@@ -197,7 +197,47 @@ func (a *Analyzer) runPendingMessengerInsights(ctx context.Context, job models.J
 		limit = MaxStaleReanalysisConversations
 	}
 	ids := pendingInsightConversationIDs(candidates, "", limit)
+	if a.cfg != nil && a.cfg.MessengerJourneyEnabled {
+		ids = a.reconcileMessengerCoverage(ctx, job, ids, limit)
+	}
 	return a.runJobInternalExt(ctx, job, 0, provider, true, "", "", nil, false, ids)
+}
+
+// reconcileMessengerCoverage reuses existing insights as journey coverage
+// before any AI call. Only conversations whose insight cannot prove it read
+// the current messages are added to the AI work list.
+func (a *Analyzer) reconcileMessengerCoverage(ctx context.Context, job models.Job, ids []string, limit int) []string {
+	var channelIDs []string
+	if err := json.Unmarshal([]byte(job.InputChannelIDs), &channelIDs); err != nil {
+		return ids
+	}
+	result, err := ReconcileInsightCoverage(ctx, db.DB, job.TenantID, channelIDs, 0, time.Now())
+	if err != nil {
+		log.Printf("[analyzer] job %s: messenger coverage reconcile failed: %v", job.Name, err)
+		return ids
+	}
+	if result.Written > 0 || len(result.NeedsAnalysis) > 0 {
+		log.Printf("[analyzer] job %s: messenger coverage reconciled=%d needs_analysis=%d", job.Name, result.Written, len(result.NeedsAnalysis))
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+	}
+	// Bound the extra AI work per run: these are rare edge cases (a message
+	// stored after its insight), and a surprise backlog must not become a
+	// surprise AI bill. The rest are picked up by the next after-sync runs.
+	added := 0
+	for _, id := range result.NeedsAnalysis {
+		if len(ids) >= limit || added >= maxCoverageAnalysisPerRun {
+			break
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+			added++
+		}
+	}
+	return ids
 }
 
 // runPendingQCEvaluations selects QC work per conversation, rather than using
