@@ -16,6 +16,10 @@ const (
 	KindOrder          = "order"
 	KindCoverage       = "coverage"
 	KindDeletion       = "deletion"
+	// KindInsight carries AI insight codes and counts (ABZ-MSG-BI-01). It is
+	// exported only to callers that ask for it, so older replicas keep their
+	// fixed kind enum.
+	KindInsight = "insight"
 
 	maxPayloadBytes = 64 << 10
 	maxPageSize     = 500

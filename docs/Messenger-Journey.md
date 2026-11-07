@@ -31,6 +31,27 @@ CQA does not automatically age out this new journal. AdBazooka's 180-day retenti
 
 Coverage used to be written only by insights created after journey writes were enabled, so older insights stayed "waiting" while the job saw them as done. Each Messenger insight run now reconciles first, without an AI call: if the latest insight names the newest message it read, that message is still the newest, and every current message was stored before the insight, CQA records coverage (`source=cqa_insight_reconcile`). Otherwise the conversation is added to the AI work list (at most 50 extra conversations per run). At most 1,000 coverage rows are written per run.
 
+## Insight events (ABZ-MSG-BI-01)
+
+Kind `insight` exports one AI insight of a customer as fixed codes and counts. It never carries quotes, reasons, summaries or message text.
+
+| Field | Values |
+|---|---|
+| `lead_level` | `high`, `medium`, `low`, `spam`, `unknown` |
+| `need` | `price`, `advice`, `stock`, `order`, `warranty`, `complaint`, `other`, `unknown` |
+| `need_source` | `ai` (field `need` in the insight prompt) or `keyword` (rules over old `intents`, version in `need_rules`) |
+| `products` | at most 5 normalized model names, each at most 60 characters |
+| `negative_feedback` | categories with negative or mixed feedback: `product`, `price`, `delivery`, `service`, `other` |
+| `messages`, `customer_messages` | counts of messages the insight read |
+| `first_reply_status` | `answered`, `waiting` or `no_request` for the first customer turn |
+| `first_response_seconds`, `replied_within_target` | working seconds of the first reply under the CSKH policy, and whether it met `target_minutes`; null when not answered |
+
+The `need` field is a mandatory prompt section, so tenant-edited prompts ask for it too. It adds no AI call. When it is missing or not a valid code, keyword rules decide (priority: complaint, warranty, order, price, stock, advice, other).
+
+New analyses write the event in the same transaction as the insight (`source=cqa_ai_analysis`). Each Messenger insight run also exports the latest existing insight of up to 500 conversations without one (`source=cqa_insight_backfill`, 0 AI calls). The event ID is derived from tenant, conversation and insight ID, so a retry never duplicates. Erasure blanks the payload like every other event.
+
+`/v2/events` and `/v2/snapshot` return `insight` only to a caller that asks with `?kinds=referral,labels,classification,order,deletion,insight`. Without `kinds`, the legacy five kinds are returned, so an older replica keeps working. `deletion` is always included.
+
 ## Labels are independent
 
 `page.complete` in `/v2/status` means messages are current and every conversation with messages has matching AI coverage. Labels sync on their own and stay visible in `page.labels`, but do not block a Page. Reading a customer's labels (`GET /{PSID}/custom_labels`) needs `pages_messaging` Advanced Access; under Standard Access Meta refuses it with Graph code #100 (`unsupported`) for people without an app role. A refused read is retried after 24 hours, or sooner when the conversation gets a new message, instead of on every 15-minute sync.

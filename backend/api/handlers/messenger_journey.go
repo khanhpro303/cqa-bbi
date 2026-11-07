@@ -395,17 +395,52 @@ func journeyEvent(row models.MessengerJourneyEvent) journeyEventResponse {
 	}
 }
 
-func exportableJourneyEvent(row models.MessengerJourneyEvent) bool {
-	// Coverage is exposed through /status, not the business-event feed. Keeping
-	// it out also preserves the canonical v2 kind enum consumed by AdBazooka.
-	return row.Kind != messengerjourney.KindCoverage && (row.Kind == messengerjourney.KindDeletion || row.PSID != "")
+// legacyJourneyKinds is the v2 kind enum served when a caller does not ask for
+// kinds. Coverage is exposed through /status, never the business-event feed.
+var legacyJourneyKinds = []string{messengerjourney.KindReferral, messengerjourney.KindLabels, messengerjourney.KindClassification, messengerjourney.KindOrder, messengerjourney.KindDeletion}
+
+// journeyKinds reads ?kinds=a,b. Without it the legacy enum is used, so a
+// replica that does not know "insight" keeps working. Deletion is always
+// included: a replica must never miss an erasure.
+func journeyKinds(c *gin.Context) ([]string, bool) {
+	raw := strings.TrimSpace(c.Query("kinds"))
+	if raw == "" {
+		return legacyJourneyKinds, true
+	}
+	allowed := map[string]bool{messengerjourney.KindInsight: true}
+	for _, kind := range legacyJourneyKinds {
+		allowed[kind] = true
+	}
+	seen := map[string]bool{messengerjourney.KindDeletion: true}
+	kinds := []string{messengerjourney.KindDeletion}
+	for _, part := range strings.Split(raw, ",") {
+		kind := strings.TrimSpace(part)
+		if !allowed[kind] || len(kinds) > len(allowed) {
+			return nil, false
+		}
+		if !seen[kind] {
+			seen[kind] = true
+			kinds = append(kinds, kind)
+		}
+	}
+	return kinds, true
+}
+
+func exportableJourneyEvent(row models.MessengerJourneyEvent, kinds []string) bool {
+	for _, kind := range kinds {
+		if row.Kind == kind {
+			return row.Kind == messengerjourney.KindDeletion || row.PSID != ""
+		}
+	}
+	return false
 }
 
 func ListMessengerJourneyEvents(cursorSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID, pageIDs, authErr := authorizedJourneyPages(c)
 		limit, limitOK := journeyLimit(c)
-		if errors.Is(authErr, errInvalidJourneyScope) || !limitOK {
+		kinds, kindsOK := journeyKinds(c)
+		if errors.Is(authErr, errInvalidJourneyScope) || !limitOK || !kindsOK {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_journey_scope"})
 			return
 		}
@@ -433,7 +468,7 @@ func ListMessengerJourneyEvents(cursorSecret string) gin.HandlerFunc {
 		}
 		events := make([]journeyEventResponse, 0, len(page.Events))
 		for _, event := range page.Events {
-			if exportableJourneyEvent(event) {
+			if exportableJourneyEvent(event, kinds) {
 				events = append(events, journeyEvent(event))
 			}
 		}
@@ -446,7 +481,8 @@ func ListMessengerJourneySnapshot(cursorSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID, pageIDs, authErr := authorizedJourneyPages(c)
 		limit, limitOK := journeyLimit(c)
-		if errors.Is(authErr, errInvalidJourneyScope) || !limitOK {
+		kinds, kindsOK := journeyKinds(c)
+		if errors.Is(authErr, errInvalidJourneyScope) || !limitOK || !kindsOK {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_journey_scope"})
 			return
 		}
@@ -471,7 +507,7 @@ func ListMessengerJourneySnapshot(cursorSecret string) gin.HandlerFunc {
 		var rows []models.MessengerJourneyEvent
 		query := db.DB.WithContext(c.Request.Context()).Where(
 			"tenant_id = ? AND sequence > ? AND sequence <= ? AND page_id IN ?", tenantID, cursor.Sequence, cursor.Watermark, pageIDs,
-		).Where("kind <> ?", messengerjourney.KindCoverage).
+		).Where("kind IN ?", kinds).
 			Where("kind = ? OR psid <> ''", messengerjourney.KindDeletion).Order("sequence ASC").Limit(limit + 1)
 		if err := query.Find(&rows).Error; err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "messenger_journey_unavailable"})
@@ -753,7 +789,7 @@ func GetConversationJourney(cursorSecret string) gin.HandlerFunc {
 		}
 		events := make([]journeyEventResponse, 0, len(page.Events))
 		for _, event := range page.Events {
-			if exportableJourneyEvent(event) {
+			if exportableJourneyEvent(event, legacyJourneyKinds) {
 				events = append(events, journeyEvent(event))
 			}
 		}
