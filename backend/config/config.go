@@ -21,13 +21,16 @@ type Config struct {
 	DBName     string
 
 	// Security
-	JWTSecret                 string
-	EncryptionKey             string // 32 bytes for AES-256-GCM
-	InternalImportSecret      string
-	ABZExportSecret           string
-	ABZExportTenantID         string
-	MessengerRelaySecret      string
-	MessengerJourneyEnabled   bool
+	JWTSecret               string
+	EncryptionKey           string // 32 bytes for AES-256-GCM
+	InternalImportSecret    string
+	ABZExportSecret         string
+	ABZExportTenantID       string
+	MessengerRelaySecret    string
+	MessengerJourneyEnabled bool
+	// Pancake realtime listener (headless websocket replacing Pancake webhooks).
+	PancakeSocketEnabled      bool
+	PancakeSocketURL          string
 	FacebookAppID             string
 	FacebookAppSecret         string
 	FacebookAPIVersion        string
@@ -114,6 +117,8 @@ func Load() (*Config, error) {
 		ABZExportTenantID:            getEnv("CQA_ABZ_EXPORT_TENANT_ID", ""),
 		MessengerRelaySecret:         getEnv("CQA_MESSENGER_RELAY_SECRET", ""),
 		MessengerJourneyEnabled:      strings.EqualFold(getEnv("CQA_MESSENGER_JOURNEY_ENABLED", "false"), "true"),
+		PancakeSocketEnabled:         strings.EqualFold(getEnv("CQA_PANCAKE_SOCKET_ENABLED", "false"), "true"),
+		PancakeSocketURL:             getEnv("CQA_PANCAKE_SOCKET_URL", ""),
 		FacebookAppID:                getEnv("FACEBOOK_APP_ID", ""),
 		FacebookAppSecret:            getEnv("FACEBOOK_APP_SECRET", ""),
 		FacebookAPIVersion:           getEnv("FACEBOOK_API_VERSION", "v26.0"),

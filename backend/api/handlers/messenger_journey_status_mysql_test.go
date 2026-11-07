@@ -18,7 +18,7 @@ import (
 func TestMySQLJourneyStatusCountsOnlyUncoveredMessages(t *testing.T) {
 	database := facebookOAuthTestDatabase(t)
 	if err := database.AutoMigrate(
-		&models.Conversation{}, &models.Message{}, &models.Job{}, &models.MessengerLabelState{}, &models.MessengerLabelSnapshot{},
+		&models.Conversation{}, &models.Message{}, &models.Job{}, &models.MessengerLabelState{}, &models.MessengerLabelSnapshot{}, &models.PancakeLabelState{}, &models.PancakeLabelSnapshot{},
 		&models.MessengerJourneySequence{}, &models.MessengerJourneyEvent{}, &models.MessengerJourneyCoverage{},
 		&models.MessengerJourneyCustomer{}, &models.MessengerJourneyOrder{},
 	); err != nil {

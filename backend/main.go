@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/vietbui/chat-quality-agent/api"
@@ -9,6 +10,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"github.com/vietbui/chat-quality-agent/pancakelabels"
 	"github.com/vietbui/chat-quality-agent/workers"
 )
 
@@ -58,6 +60,14 @@ func main() {
 	engine.SetDefaultScheduler(scheduler)
 	scheduler.Start()
 	defer scheduler.Stop()
+
+	// Pancake realtime tags: one headless websocket per tenant (opt-in).
+	if cfg.PancakeSocketEnabled {
+		listenerCtx, stopListener := context.WithCancel(context.Background())
+		defer stopListener()
+		go pancakelabels.NewListener(db.DB, cfg.EncryptionKey, cfg.PancakeSocketURL).Run(listenerCtx)
+		log.Println("[pancake-socket] realtime tag listener enabled")
+	}
 
 	// Start worker pool (Asynq server)
 	workerPool := workers.NewWorkerPool(cfg)
