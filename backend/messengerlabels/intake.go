@@ -34,6 +34,11 @@ func CaptureMissingIntakeLabels(ctx context.Context, database *gorm.DB, channel 
 	if len(conversations) > MaxConversations {
 		return 0, 0, ErrTooLarge
 	}
+	refused, err := recentlyRefusedConversationIDs(database, channel, time.Now())
+	if err != nil {
+		return 0, 0, err
+	}
+	conversations = withoutRefused(conversations, refused)
 	if len(conversations) == 0 {
 		return 0, 0, nil
 	}

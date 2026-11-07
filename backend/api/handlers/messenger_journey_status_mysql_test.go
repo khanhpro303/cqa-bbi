@@ -13,7 +13,8 @@ import (
 
 // The status must count only conversations with stored messages whose
 // coverage does not match them, and must not depend on the job having run after
-// the latest 15-minute message sync.
+// the latest 15-minute message sync. Labels are reported but do not block a
+// Page: this one has no label sync at all.
 func TestMySQLJourneyStatusCountsOnlyUncoveredMessages(t *testing.T) {
 	database := facebookOAuthTestDatabase(t)
 	if err := database.AutoMigrate(
@@ -57,7 +58,7 @@ func TestMySQLJourneyStatusCountsOnlyUncoveredMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	read := func() map[string]interface{} {
+	read := func() (map[string]interface{}, bool) {
 		router := gin.New()
 		router.Use(func(c *gin.Context) { c.Set("tenant_id", tenantID) })
 		router.GET("/status", ListMessengerJourneyStatus)
@@ -69,22 +70,26 @@ func TestMySQLJourneyStatusCountsOnlyUncoveredMessages(t *testing.T) {
 		var body struct {
 			Pages []struct {
 				Analysis map[string]interface{} `json:"analysis"`
+				Complete bool                   `json:"complete"`
 			} `json:"pages"`
 		}
 		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || len(body.Pages) != 1 {
 			t.Fatalf("bad body %s: %v", recorder.Body.String(), err)
 		}
-		return body.Pages[0].Analysis
+		return body.Pages[0].Analysis, body.Pages[0].Complete
 	}
-	analysis := read()
-	if analysis["pending"] != float64(1) || analysis["complete"] != false {
+	analysis, pageComplete := read()
+	if analysis["pending"] != float64(1) || analysis["complete"] != false || pageComplete {
 		t.Fatalf("want 1 pending conversation (empty one excluded), got %v", analysis)
 	}
 	if err := database.Where("conversation_id = ?", "uncovered").Delete(&models.Message{}).Error; err != nil {
 		t.Fatal(err)
 	}
-	analysis = read()
+	analysis, pageComplete = read()
 	if analysis["pending"] != float64(0) || analysis["complete"] != true {
 		t.Fatalf("job run before latest sync must not block complete coverage, got %v", analysis)
+	}
+	if !pageComplete {
+		t.Fatal("a Page without label sync must be complete once messages and analysis are complete")
 	}
 }

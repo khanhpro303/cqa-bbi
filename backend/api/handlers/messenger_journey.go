@@ -702,7 +702,11 @@ func ListMessengerJourneyStatus(c *gin.Context) {
 		} else if page.Analysis.Error != "" {
 			page.Analysis.Status = "error"
 		}
-		page.Complete = page.Messages.Complete && page.Labels.Complete && page.Analysis.Complete
+		// Labels sync independently of messages and AI (Meta only exposes a
+		// customer's labels to apps with Advanced Access). Their state stays in
+		// page.labels; a Page is ready for ad attribution once its messages are
+		// current and every conversation is covered by AI analysis.
+		page.Complete = page.Messages.Complete && page.Analysis.Complete
 		pages = append(pages, page)
 	}
 	for _, pageID := range pageIDs {

@@ -208,6 +208,10 @@ func RunClaimedSync(ctx context.Context, database *gorm.DB, channel models.Chann
 	if count > MaxConversations {
 		return ErrTooLarge
 	}
+	refused, err := recentlyRefusedConversationIDs(database, channel, time.Now())
+	if err != nil {
+		return err
+	}
 	cursor, failed := state.SyncCursor, state.SyncFailed
 	for {
 		var convs []models.Conversation
@@ -218,13 +222,18 @@ func RunClaimedSync(ctx context.Context, database *gorm.DB, channel models.Chann
 			break
 		}
 		snapshots := make([]models.MessengerLabelSnapshot, 0, len(convs))
-		_, batchFailed, observeErr := Observe(ctx, reader, convs, pageID, func(snapshot models.MessengerLabelSnapshot) error {
+		// A refused read is not repeated within FailedReadRetryAfter unless the
+		// conversation has a newer message; it still counts as not read.
+		observe := withoutRefused(convs, refused)
+		batchFailed := len(convs) - len(observe)
+		_, observeFailed, observeErr := Observe(ctx, reader, observe, pageID, func(snapshot models.MessengerLabelSnapshot) error {
 			snapshots = append(snapshots, snapshot)
 			return nil
 		})
 		if observeErr != nil {
 			return observeErr
 		}
+		batchFailed += observeFailed
 		cursor = convs[len(convs)-1].ID
 		if err = saveBatch(database, channel, token, cursor, snapshots, batchFailed); err != nil {
 			return err
