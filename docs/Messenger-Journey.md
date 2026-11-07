@@ -31,6 +31,10 @@ CQA does not automatically age out this new journal. AdBazooka's 180-day retenti
 
 Coverage used to be written only by insights created after journey writes were enabled, so older insights stayed "waiting" while the job saw them as done. Each Messenger insight run now reconciles first, without an AI call: if the latest insight names the newest message it read, that message is still the newest, and every current message was stored before the insight, CQA records coverage (`source=cqa_insight_reconcile`). Otherwise the conversation is added to the AI work list (at most 50 extra conversations per run). At most 1,000 coverage rows are written per run.
 
+## Message sync safety
+
+Facebook sync reads every conversation updated since the last successful sync (minus one hour); there is no 100-conversation cap. A sync where any conversation fails is recorded as `error` and keeps `last_sync_at`, so the next run re-reads the same window; already stored messages are deduplicated. The scheduler backs off by the channel interval after a failed attempt. `/v2/status` reports such a Page as messages incomplete until a sync succeeds.
+
 ## Resumable CQA backfill
 
 Deploy the additive schema and enable CQA journaling first. Run imports with the same server environment but **never** invoke a broad automatic schema migration from the importer. The command defaults to a read-only dry run:

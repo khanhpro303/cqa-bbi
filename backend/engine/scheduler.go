@@ -231,6 +231,11 @@ func (s *Scheduler) syncAllChannelsTask() {
 				continue
 			}
 		}
+		// A failed sync keeps last_sync_at so its window is retried; back off
+		// by the same interval from the failed attempt instead of every tick.
+		if ch.LastSyncStatus == "error" && now.Sub(ch.UpdatedAt) < time.Duration(interval)*time.Minute {
+			continue
+		}
 
 		if err := s.syncEngine.SyncChannel(ctx, ch); err != nil {
 			log.Printf("[scheduler] sync channel %s failed: %v", ch.Name, err)

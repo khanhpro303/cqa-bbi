@@ -66,8 +66,15 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 		since = channel.LastSyncAt.Add(-1 * time.Hour)
 	}
 
-	// Fetch recent conversations
-	conversations, err := adapter.FetchRecentConversations(ctx, since, 100)
+	// Fetch recent conversations. Facebook returns them newest first and the
+	// adapter stops at `since`, so every conversation updated in the window is
+	// read. A fixed cap silently dropped the oldest ones after a busy period,
+	// and the advanced last_sync_at then skipped them for good.
+	conversationLimit := 100
+	if channel.ChannelType == "facebook" {
+		conversationLimit = 0
+	}
+	conversations, err := adapter.FetchRecentConversations(ctx, since, conversationLimit)
 	if err != nil {
 		return s.updateSyncStatus(channel.ID, "error", fmt.Sprintf("fetch conversations failed: %v", err))
 	}
@@ -88,10 +95,12 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 
 	totalMessages := 0
 	totalInserted := 0
+	failedConversations := 0
 	for _, conv := range conversations {
 		convID, err := s.ingestor.EnsureConversation(channel.TenantID, channel.ID, conv)
 		if err != nil {
 			log.Printf("[sync] error upserting conversation %s: %v", conv.ExternalID, err)
+			failedConversations++
 			continue
 		}
 
@@ -99,6 +108,7 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 		messages, err := adapter.FetchMessages(ctx, conv.ExternalID, since)
 		if err != nil {
 			log.Printf("[sync] error fetching messages for %s: %v", conv.ExternalID, err)
+			failedConversations++
 			continue
 		}
 
@@ -111,10 +121,12 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 		ingestResult, err := s.ingestor.IngestMessages(channel.TenantID, convID, messages)
 		if err != nil {
 			log.Printf("[sync] error ingesting conversation %s: %v", conv.ExternalID, err)
+			failedConversations++
 			continue
 		}
 		if err := s.ingestor.RecountConversationMessages(convID); err != nil {
 			log.Printf("[sync] error recounting conversation %s: %v", conv.ExternalID, err)
+			failedConversations++
 			continue
 		}
 		totalMessages += ingestResult.MessagesProcessed
@@ -152,6 +164,13 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 		sched.TriggerAfterSyncJobs(channel.TenantID, channel.ID)
 	}
 
+	if failedConversations > 0 {
+		// Keep last_sync_at: the next run re-reads this window, so the failed
+		// conversations are retried instead of being skipped for good. Stored
+		// messages are idempotent, so re-reading the others is safe.
+		syncMessengerLabelsAfterMessages(ctx, channel, adapter, credBytes)
+		return s.updateSyncStatus(channel.ID, "error", fmt.Sprintf("%d/%d conversations failed to sync; will retry from the same point", failedConversations, len(conversations)))
+	}
 	if err := s.updateSyncStatus(channel.ID, "success", ""); err != nil {
 		return err
 	}
@@ -172,13 +191,19 @@ func (s *SyncEngine) SyncAllChannels(ctx context.Context, tenantID string) error
 	return nil
 }
 
+// updateSyncStatus records a sync result. Only a successful sync moves
+// last_sync_at, because the next run reads messages from last_sync_at minus a
+// one-hour buffer: moving it after a failure skipped the failed window for good.
+// updated_at always records the attempt, which the scheduler uses for backoff.
 func (s *SyncEngine) updateSyncStatus(channelID, status, errMsg string) error {
 	now := time.Now()
 	updates := map[string]interface{}{
-		"last_sync_at":     &now,
 		"last_sync_status": status,
 		"last_sync_error":  errMsg,
 		"updated_at":       now,
+	}
+	if status == "success" {
+		updates["last_sync_at"] = &now
 	}
 	db.DB.Model(&models.Channel{}).Where("id = ?", channelID).Updates(updates)
 	if errMsg != "" {
