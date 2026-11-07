@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/messengerjourney"
 	"github.com/vietbui/chat-quality-agent/messengerlabels"
+	"github.com/vietbui/chat-quality-agent/servicequality"
 	"gorm.io/gorm"
 )
 
@@ -154,6 +156,27 @@ func saveConversationInsightWithJourney(database *gorm.DB, result models.JobResu
 				return err
 			}
 		}
-		return recordMessengerInsightJourney(context.Background(), tx, subject, result.ID, sourceJobID, outcomes, metadata, result.CreatedAt)
+		if err := recordMessengerInsightJourney(context.Background(), tx, subject, result.ID, sourceJobID, outcomes, metadata, result.CreatedAt); err != nil {
+			return err
+		}
+		return recordNewInsightEvent(tx, subject, result)
 	})
+}
+
+// recordNewInsightEvent exports the insight just saved. An unreadable detail is
+// skipped so the insight and its coverage are still stored.
+func recordNewInsightEvent(tx *gorm.DB, subject messengerJourneySubject, result models.JobResult) error {
+	policy, err := servicequality.LoadPolicy(tx, result.TenantID)
+	if err != nil {
+		policy = servicequality.DefaultPolicy()
+	}
+	messages, err := loadConversationMessages(tx, result.TenantID, []string{result.ConversationID})
+	if err != nil {
+		return err
+	}
+	err = recordInsightEvent(context.Background(), tx, subject, result.ID, result.Detail, messages[result.ConversationID], policy, result.CreatedAt, result.CreatedAt, insightEventSourceAnalysis)
+	if errors.Is(err, errInsightDetail) {
+		return nil
+	}
+	return err
 }

@@ -41,7 +41,7 @@ func journeyEngineTestDatabase(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	if err := database.AutoMigrate(
-		&models.Tenant{}, &models.Channel{}, &models.Conversation{}, &models.MessengerLabelSnapshot{}, &models.MessengerIntakeAttribution{}, &models.Job{}, &models.JobRun{}, &models.JobResult{},
+		&models.Tenant{}, &models.Channel{}, &models.Conversation{}, &models.Message{}, &models.AppSetting{}, &models.MessengerLabelSnapshot{}, &models.MessengerIntakeAttribution{}, &models.Job{}, &models.JobRun{}, &models.JobResult{},
 		&models.MessengerJourneySequence{}, &models.MessengerJourneyReceipt{}, &models.MessengerJourneyEvent{}, &models.MessengerJourneyCustomer{}, &models.MessengerJourneyOrder{}, &models.MessengerJourneyCoverage{}, &models.MessengerJourneyErasure{},
 	); err != nil {
 		t.Fatal(err)

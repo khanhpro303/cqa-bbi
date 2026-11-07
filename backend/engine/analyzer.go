@@ -219,6 +219,12 @@ func (a *Analyzer) reconcileMessengerCoverage(ctx context.Context, job models.Jo
 	if result.Written > 0 || len(result.NeedsAnalysis) > 0 {
 		log.Printf("[analyzer] job %s: messenger coverage reconciled=%d needs_analysis=%d", job.Name, result.Written, len(result.NeedsAnalysis))
 	}
+	// Export existing insights as journey "insight" events (0đ, no AI call).
+	if backfilled, err := BackfillInsightEvents(ctx, db.DB, job.TenantID, channelIDs, 0, time.Now()); err != nil {
+		log.Printf("[analyzer] job %s: messenger insight backfill failed: %v", job.Name, err)
+	} else if backfilled > 0 {
+		log.Printf("[analyzer] job %s: messenger insight events backfilled=%d", job.Name, backfilled)
+	}
 	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		seen[id] = true
@@ -832,9 +838,12 @@ func (a *Analyzer) getProvider(job models.Job) (ai.AIProvider, error) {
 }
 
 func buildConversationInsightDetail(classResult ai.ClassificationResponse, sourceLastMessageAt *time.Time, orderOutcomes ...[]persistedOrderOutcome) ([]byte, error) {
+	need, needSource := ai.ResolveNeed(classResult.Insights.Need, classResult.Insights.Intents)
 	detail := map[string]interface{}{
 		"summary":      classResult.Summary,
 		"intents":      classResult.Insights.Intents,
+		"need":         need,
+		"need_source":  needSource,
 		"products":     classResult.Insights.Products,
 		"feedback":     classResult.Insights.Feedback,
 		"lead_quality": classResult.Insights.LeadQuality,
