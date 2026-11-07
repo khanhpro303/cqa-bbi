@@ -128,6 +128,18 @@ func (s *Scheduler) Start() {
 		log.Printf("[scheduler] failed to create Messenger label sync job: %v", err)
 	}
 
+	// Pancake tag reconcile: each enabled Page is scanned every six hours
+	// (full scan daily) to repair events the realtime socket missed.
+	_, err = s.scheduler.NewJob(
+		gocron.DurationJob(time.Minute),
+		gocron.NewTask(s.reconcilePancakeLabelsTask),
+		gocron.WithName("reconcile-pancake-labels"),
+		gocron.WithSingletonMode(gocron.LimitModeReschedule),
+	)
+	if err != nil {
+		log.Printf("[scheduler] failed to create Pancake label reconcile job: %v", err)
+	}
+
 	// Cleanup old sync activity logs daily (keep success 90d, error 180d)
 	_, err = s.scheduler.NewJob(
 		gocron.DurationJob(24*time.Hour),

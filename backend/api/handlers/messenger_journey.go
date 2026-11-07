@@ -23,6 +23,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/messengerintake"
 	"github.com/vietbui/chat-quality-agent/messengerjourney"
 	"github.com/vietbui/chat-quality-agent/messengerlabels"
+	"github.com/vietbui/chat-quality-agent/pancakelabels"
 	"gorm.io/gorm"
 )
 
@@ -507,6 +508,8 @@ type journeyMessageStatus struct {
 }
 
 type journeyLabelStatus struct {
+	// Source is "meta" or "pancake" (the Page's active label source).
+	Source    string     `json:"source"`
 	Complete  bool       `json:"complete"`
 	Status    string     `json:"status"`
 	CheckedAt *time.Time `json:"checked_at,omitempty"`
@@ -646,6 +649,31 @@ func ListMessengerJourneyStatus(c *gin.Context) {
 			page.Labels.Pending = 0
 		}
 		page.Labels.Complete = labelErr == nil && labelState.Enabled && labelState.SyncStatus == "success" && labelState.SyncFinishedAt != nil && now.Sub(labelState.SyncFinishedAt.UTC()) <= journeyFreshness && page.Labels.Pending == 0
+		page.Labels.Source = "meta"
+		if pancakeState, err := pancakelabels.LoadState(db.DB.WithContext(c.Request.Context()), channel); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "messenger_journey_unavailable"})
+			return
+		} else if pancakeState.Enabled {
+			var matched int64
+			if err := db.DB.WithContext(c.Request.Context()).Model(&models.PancakeLabelSnapshot{}).Where(
+				"tenant_id = ? AND channel_id = ? AND conversation_id IS NOT NULL", tenantID, channel.ID,
+			).Count(&matched).Error; err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "messenger_journey_unavailable"})
+				return
+			}
+			page.Labels = journeyLabelStatus{Source: "pancake", Status: pancakeState.SyncStatus, CheckedAt: pancakeState.ReconciledAt, Pending: int64(len(conversations)) - matched}
+			if page.Labels.Pending < 0 {
+				page.Labels.Pending = 0
+			}
+			if pancakeState.SyncStatus == "error" {
+				page.Labels.Error = "sync_failed"
+			} else if pancakeState.ReconciledAt == nil {
+				page.Labels.Error = "not_synced"
+			}
+			// Pushed data: ready while the last reconcile is recent. Customers
+			// without a Pancake inbox thread stay pending without blocking.
+			page.Labels.Complete = pancakelabels.Ready(channel, pancakeState, now)
+		}
 		var coverage []models.MessengerJourneyCoverage
 		if err := db.DB.WithContext(c.Request.Context()).Where("tenant_id = ? AND page_id = ?", tenantID, channel.ExternalID).Find(&coverage).Error; err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "messenger_journey_unavailable"})

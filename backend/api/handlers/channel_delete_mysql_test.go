@@ -16,7 +16,7 @@ func TestMySQLDeleteChannelCascadeRemovesReferencedChannel(t *testing.T) {
 	database := facebookOAuthTestDatabase(t)
 	if err := database.AutoMigrate(
 		&models.Conversation{}, &models.Message{}, &models.ZaloWhitelist{}, &models.CRMGroup{},
-		&models.MessengerIntakeAttribution{}, &models.MessengerLabelSnapshot{},
+		&models.MessengerIntakeAttribution{}, &models.MessengerLabelSnapshot{}, &models.PancakeLabelSnapshot{},
 		&models.MessengerJourneySequence{}, &models.MessengerJourneyReceipt{}, &models.MessengerJourneyEvent{}, &models.MessengerJourneyCustomer{},
 		&models.MessengerJourneyOrder{}, &models.MessengerJourneyCoverage{}, &models.MessengerJourneyErasure{},
 	); err != nil {
@@ -88,7 +88,7 @@ func TestMySQLDeleteChannelEmitsTombstonesForLegacyOnlySubjects(t *testing.T) {
 	database := facebookOAuthTestDatabase(t)
 	if err := database.AutoMigrate(
 		&models.Conversation{}, &models.Message{}, &models.ZaloWhitelist{}, &models.CRMGroup{},
-		&models.MessengerIntakeAttribution{}, &models.MessengerLabelSnapshot{},
+		&models.MessengerIntakeAttribution{}, &models.MessengerLabelSnapshot{}, &models.PancakeLabelSnapshot{},
 		&models.MessengerJourneySequence{}, &models.MessengerJourneyReceipt{}, &models.MessengerJourneyEvent{}, &models.MessengerJourneyCustomer{},
 		&models.MessengerJourneyOrder{}, &models.MessengerJourneyCoverage{}, &models.MessengerJourneyErasure{},
 	); err != nil {

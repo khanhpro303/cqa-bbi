@@ -15,6 +15,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/messengerlabels"
+	"github.com/vietbui/chat-quality-agent/pancakelabels"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"gorm.io/gorm"
 )
@@ -155,6 +156,16 @@ func SaveMessengerLabelPolicy(c *gin.Context) {
 	if policy.Enabled && !channel.IsActive {
 		c.JSON(http.StatusConflict, gin.H{"error": "Fanpage đang tạm dừng."})
 		return
+	}
+	// A Page classifies with one label source; Pancake may already own it.
+	if policy.Enabled {
+		if pancakeOn, err := pancakelabels.PancakeEnabled(db.DB.WithContext(c.Request.Context()), channel); err != nil {
+			messengerLabelError(c, err)
+			return
+		} else if pancakeOn {
+			c.JSON(http.StatusConflict, gin.H{"error": "Fanpage này đang phân loại theo nhãn Pancake. Tắt nhãn Pancake trước khi bật Meta: mỗi Fanpage chỉ dùng một nguồn nhãn."})
+			return
+		}
 	}
 	if err := messengerlabels.SavePolicy(db.DB.WithContext(c.Request.Context()), channel, policy); err != nil {
 		messengerLabelError(c, err)

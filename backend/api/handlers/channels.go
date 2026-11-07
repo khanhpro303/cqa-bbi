@@ -472,6 +472,13 @@ func eraseChannelJourneySubjects(tx *gorm.DB, tenantID, channelID, source string
 		for _, snapshot := range snapshots {
 			addSubject(channel.ExternalID, snapshot.PSID)
 		}
+		var pancakeSnapshots []models.PancakeLabelSnapshot
+		if err := tx.Select("psid").Where("tenant_id = ? AND channel_id = ? AND psid <> ''", tenantID, channelID).Find(&pancakeSnapshots).Error; err != nil {
+			return err
+		}
+		for _, snapshot := range pancakeSnapshots {
+			addSubject(channel.ExternalID, snapshot.PSID)
+		}
 		var conversations []models.Conversation
 		if err := tx.Select("id,tenant_id,channel_id,metadata").Where("tenant_id = ? AND channel_id = ?", tenantID, channelID).Find(&conversations).Error; err != nil {
 			return err
@@ -522,6 +529,7 @@ func tenantJourneyChannelIDs(tx *gorm.DB, tenantID string) ([]string, error) {
 		{&models.MessengerJourneyEvent{}, "channel_id"},
 		{&models.MessengerIntakeAttribution{}, "channel_id"},
 		{&models.MessengerLabelSnapshot{}, "channel_id"},
+		{&models.PancakeLabelSnapshot{}, "channel_id"},
 		{&models.Conversation{}, "channel_id"},
 	} {
 		if err := collect(source.model, source.column); err != nil {
