@@ -1,7 +1,7 @@
 <template>
   <section class="meta-labels-panel">
     <v-card variant="outlined" class="mb-4">
-      <v-card-title class="d-flex align-center flex-wrap ga-3">
+      <v-card-title class="label-panel-header">
         <div class="title-block">
           <div class="text-subtitle-1 font-weight-bold">
             <v-icon start color="primary">mdi-label-multiple-outline</v-icon>
@@ -12,43 +12,60 @@
           </div>
         </div>
         <v-spacer />
-        <v-btn-toggle
-          v-model="source"
-          class="source-toggle"
-          density="compact"
-          variant="outlined"
-          color="primary"
-          mandatory
-          divided
-          :aria-label="t('quality_label_source')"
-        >
-          <v-btn value="meta" size="small">Meta</v-btn>
-          <v-btn value="pancake" size="small">Pancake</v-btn>
-        </v-btn-toggle>
-        <v-btn
-          v-if="canEditSettings"
-          class="label-action"
-          size="small"
-          variant="outlined"
-          prepend-icon="mdi-tune-variant"
-          :disabled="!channelId"
-          @click="openSettings"
-        >
-          {{ st('quality_meta_settings') }}
-        </v-btn>
-        <v-btn
-          v-if="canSync"
-          class="label-action"
-          size="small"
-          color="primary"
-          variant="tonal"
-          prepend-icon="mdi-cloud-sync-outline"
-          :loading="syncing"
-          :disabled="!channelId || data?.sync.status === 'syncing'"
-          @click="startSync"
-        >
-          {{ st('quality_meta_sync') }}
-        </v-btn>
+        <div class="label-toolbar">
+          <v-btn-toggle
+            v-model="source"
+            class="source-toggle"
+            density="compact"
+            mandatory
+            :aria-label="t('quality_label_source')"
+          >
+            <v-btn
+              value="meta"
+              class="source-option source-option--meta"
+              :class="{ 'source-option--active': source === 'meta' }"
+              size="small"
+              :variant="source === 'meta' ? 'tonal' : 'text'"
+            >
+              <img class="source-logo" src="/assets/brand/meta-mark.svg" alt="" aria-hidden="true">
+              <span>Meta</span>
+            </v-btn>
+            <v-btn
+              value="pancake"
+              class="source-option source-option--pancake"
+              :class="{ 'source-option--active': source === 'pancake' }"
+              size="small"
+              :variant="source === 'pancake' ? 'tonal' : 'text'"
+            >
+              <img class="source-logo" src="/assets/brand/pancake-mark.svg" alt="" aria-hidden="true">
+              <span>Pancake</span>
+            </v-btn>
+          </v-btn-toggle>
+          <v-btn
+            v-if="canEditSettings"
+            class="label-action"
+            size="small"
+            variant="outlined"
+            prepend-icon="mdi-tune-variant"
+            :disabled="!channelId"
+            @click="openSettings"
+          >
+            {{ st('quality_meta_settings') }}
+          </v-btn>
+          <v-btn
+            v-if="canSync"
+            class="label-action"
+            size="small"
+            color="primary"
+            variant="tonal"
+            prepend-icon="mdi-cloud-sync-outline"
+            :loading="syncing"
+            :disabled="!channelId || data?.sync.status === 'syncing'"
+            @click="startSync"
+          >
+            {{ st('quality_meta_sync') }}
+          </v-btn>
+        </div>
       </v-card-title>
       <v-divider />
       <v-card-text>
@@ -73,6 +90,23 @@
             {{ st('quality_meta_updated', { date: formatDateTime(data.generated_at), seconds: refreshSeconds }) }}
           </span>
         </div>
+        <details
+          v-if="pancakeNotice"
+          class="source-notice"
+          :class="`source-notice--${pancakeNotice.type}`"
+        >
+          <summary class="source-notice-summary" :aria-label="pancakeNotice.text" :title="pancakeNotice.text">
+            <v-icon
+              :icon="pancakeNotice.type === 'warning' ? 'mdi-alert-outline' : 'mdi-information-outline'"
+              size="18"
+            />
+            <span class="source-notice-label">Pancake</span>
+            <v-icon class="source-notice-chevron" icon="mdi-chevron-down" size="18" />
+          </summary>
+          <div class="source-notice-content" role="status">
+            {{ pancakeNotice.text }}
+          </div>
+        </details>
       </v-card-text>
     </v-card>
 
@@ -82,10 +116,6 @@
 
     <v-alert v-if="!pages.length && !loading" type="info" variant="tonal" class="mb-4">
       {{ st('quality_meta_no_pages') }}
-    </v-alert>
-
-    <v-alert v-if="pancakeNotice" :type="pancakeNotice.type" variant="tonal" density="compact" class="mb-4 pancake-notice">
-      {{ pancakeNotice.text }}
     </v-alert>
 
     <template v-if="data">
@@ -886,6 +916,20 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.label-panel-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.label-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .panel-description {
   font-size: 13px;
   font-weight: 400;
@@ -896,7 +940,103 @@ onBeforeUnmount(() => {
 }
 
 .source-toggle {
-  height: 32px;
+  height: 38px;
+  padding: 3px;
+  gap: 4px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 10px;
+  background: rgb(var(--v-theme-surface));
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-on-surface), 0.02);
+}
+
+.source-option {
+  min-width: 96px;
+  height: 30px;
+  padding-inline: 12px;
+  border-radius: 7px !important;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: rgba(var(--v-theme-on-surface), 0.76);
+}
+
+.source-option--active {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.source-option--meta.source-option--active {
+  background: rgba(var(--v-theme-info), 0.14);
+}
+
+.source-option--pancake.source-option--active {
+  background: rgba(var(--v-theme-primary), 0.14);
+}
+
+.source-logo {
+  width: 19px;
+  height: 19px;
+  margin-inline-end: 7px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.source-notice {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 12px;
+  border: 1px solid rgba(var(--v-theme-info), 0.34);
+  border-radius: 9px;
+  color: rgb(var(--v-theme-info));
+  background: rgba(var(--v-theme-info), 0.08);
+}
+
+.source-notice--warning {
+  border-color: rgba(var(--v-theme-warning), 0.42);
+  color: rgb(var(--v-theme-warning));
+  background: rgba(var(--v-theme-warning), 0.1);
+}
+
+.source-notice-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.25;
+  user-select: none;
+}
+
+.source-notice-summary::-webkit-details-marker {
+  display: none;
+}
+
+.source-notice-summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.source-notice-chevron {
+  transition: transform 160ms ease;
+}
+
+.source-notice[open] .source-notice-chevron {
+  transform: rotate(180deg);
+}
+
+.source-notice-content {
+  max-width: 760px;
+  padding: 0 12px 10px 33px;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.45;
 }
 
 .token-save {
@@ -904,9 +1044,13 @@ onBeforeUnmount(() => {
 }
 
 .label-action {
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: normal;
+  min-height: 36px;
+  padding-inline: 13px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  text-transform: none;
 }
 
 .kpi-card {
@@ -932,6 +1076,18 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 600px) {
+  .label-toolbar {
+    width: 100%;
+  }
+
+  .source-toggle {
+    width: 100%;
+  }
+
+  .source-option {
+    flex: 1 1 50%;
+  }
+
   .meta-labels-panel :deep(.v-data-table__td),
   .meta-labels-panel :deep(.v-data-table__th) {
     white-space: nowrap;

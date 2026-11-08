@@ -34,35 +34,7 @@
       </div>
     </div>
 
-    <v-alert type="info" variant="tonal" class="mb-4" border="start">
-      <div class="font-weight-medium">{{ t('sq_data_scope') }}</div>
-      <div class="text-body-2 mt-1">
-        {{ t('sq_scope_description') }}
-      </div>
-    </v-alert>
-
-    <v-alert
-      v-if="report && (report.summary.waiting || report.summary.overdue)"
-      :type="report.summary.overdue ? 'error' : 'warning'"
-      variant="tonal"
-      class="mb-4"
-      border="start"
-      prominent
-    >
-      <div class="d-flex align-center justify-space-between flex-wrap ga-2">
-        <div>
-          <strong>{{ t('sq_overdue_count', { count: report.summary.overdue }) }}</strong>
-          <span class="mx-1">·</span>
-          {{ t('sq_waiting_count', { count: report.summary.waiting }) }}
-          <div class="text-caption mt-1">{{ t('sq_queue_current') }}</div>
-        </div>
-        <v-btn size="small" variant="outlined" aria-controls="conversation-queue" @click="viewQueue">
-          {{ t('sq_view_queue') }}
-        </v-btn>
-      </div>
-    </v-alert>
-
-    <v-card class="mb-4" variant="outlined">
+    <v-card class="dashboard-filter-card mb-4" variant="outlined">
       <v-card-text>
         <div class="d-flex flex-wrap align-end ga-3">
           <v-select
@@ -83,9 +55,61 @@
           </v-btn>
           <span v-if="!dateRangeValid" class="text-caption text-error">{{ t('sq_invalid_range') }}</span>
           <v-spacer />
-          <span v-if="report" class="text-caption text-medium-emphasis">
-            {{ t('sq_updated', { date: formatDateTime(report.generated_at), timezone: report.policy.timezone }) }}
-          </span>
+          <div class="dashboard-filter-meta">
+            <span v-if="report" class="text-caption text-medium-emphasis">
+              {{ t('sq_updated', { date: formatDateTime(report.generated_at), timezone: report.policy.timezone }) }}
+            </span>
+            <div class="dashboard-notice-actions">
+              <details class="dashboard-notice-disclosure">
+                <summary class="dashboard-notice-trigger" :aria-label="t('sq_data_scope')" :title="t('sq_data_scope')">
+                  <v-icon color="info" icon="mdi-information-outline" size="22" />
+                </summary>
+                <v-alert
+                  id="dashboard-scope-notice"
+                  type="info"
+                  variant="tonal"
+                  density="compact"
+                  class="dashboard-notice"
+                >
+                  <div class="font-weight-medium">{{ t('sq_data_scope') }}</div>
+                  <div class="text-body-2 mt-1">{{ t('sq_scope_description') }}</div>
+                </v-alert>
+              </details>
+              <details
+                v-if="report && (report.summary.waiting || report.summary.overdue)"
+                class="dashboard-notice-disclosure"
+              >
+                <summary class="dashboard-notice-trigger" :aria-label="t('sq_queue_current')" :title="t('sq_queue_current')">
+                  <v-badge dot :color="report.summary.overdue ? 'error' : 'warning'">
+                    <v-icon
+                      :color="report.summary.overdue ? 'error' : 'warning'"
+                      icon="mdi-message-alert-outline"
+                      size="22"
+                    />
+                  </v-badge>
+                </summary>
+                <v-alert
+                  id="dashboard-queue-notice"
+                  :type="report.summary.overdue ? 'error' : 'warning'"
+                  variant="tonal"
+                  density="compact"
+                  class="dashboard-notice"
+                >
+                  <div class="d-flex align-center justify-space-between flex-wrap ga-2">
+                    <div>
+                      <strong>{{ t('sq_overdue_count', { count: report.summary.overdue }) }}</strong>
+                      <span class="mx-1">·</span>
+                      {{ t('sq_waiting_count', { count: report.summary.waiting }) }}
+                      <div class="text-caption mt-1">{{ t('sq_queue_current') }}</div>
+                    </div>
+                    <v-btn size="small" variant="outlined" aria-controls="conversation-queue" @click="viewQueue">
+                      {{ t('sq_view_queue') }}
+                    </v-btn>
+                  </div>
+                </v-alert>
+              </details>
+            </div>
+          </div>
         </div>
       </v-card-text>
     </v-card>
@@ -967,6 +991,74 @@ onBeforeUnmount(() => {
 .service-quality-page {
   max-width: 1680px;
   margin: 0 auto;
+}
+
+.dashboard-filter-card {
+  background: rgb(var(--v-theme-surface));
+  overflow: visible;
+}
+
+.dashboard-filter-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dashboard-notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dashboard-notice-disclosure {
+  position: relative;
+}
+
+.dashboard-notice-trigger {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  list-style: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.dashboard-notice-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.dashboard-notice-trigger:hover,
+.dashboard-notice-trigger:focus-visible,
+.dashboard-notice-disclosure[open] > .dashboard-notice-trigger {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.dashboard-notice-trigger:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 2px;
+}
+
+.dashboard-notice {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(560px, calc(100vw - 48px));
+  background-color: rgb(var(--v-theme-surface));
+  border: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
+  box-shadow: 0 6px 20px rgba(var(--v-theme-on-surface), 0.14);
+}
+
+@media (max-width: 959px) {
+  .dashboard-filter-meta {
+    width: 100%;
+    justify-content: space-between;
+  }
 }
 
 .kpi-card {
