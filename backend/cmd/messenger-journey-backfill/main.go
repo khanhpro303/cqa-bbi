@@ -219,6 +219,10 @@ func (r *runner) row(ctx context.Context, id string) error {
 			r.skipped++
 			return nil
 		}
+		if v.CapturedAt.Before(messengerjourney.MinValidReferralTime) {
+			// An intake row from before the time guard (Unix seconds read as milliseconds).
+			v.CapturedAt = messengerjourney.RepairedReferralTime(v.CapturedAt, v.CreatedAt)
+		}
 		payload, _ := json.Marshal(map[string]any{"ad_id": v.AdID, "ref": v.Ref, "source": v.Source, "type": v.ReferralType, "message_id": v.MessageID, "referred_at": v.CapturedAt, "received_at": v.CreatedAt, "ads_context": legacyAdsContext(v.RawReferral), "backfill": true})
 		conv := ""
 		if v.ConversationID != nil {

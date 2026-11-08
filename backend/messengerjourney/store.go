@@ -112,6 +112,10 @@ func normalizedInput(in RecordInput) (RecordInput, error) {
 	if in.OccurredAt.IsZero() {
 		in.OccurredAt = in.ObservedAt
 	}
+	if in.Kind == KindReferral && in.OccurredAt.Before(MinValidReferralTime) {
+		// A Unix time read in the wrong unit must not become a 1970 referral.
+		in.OccurredAt = RepairedReferralTime(in.OccurredAt, in.ObservedAt)
+	}
 	in.ObservedAt, in.OccurredAt = in.ObservedAt.UTC(), in.OccurredAt.UTC()
 	if len(in.Payload) == 0 {
 		in.Payload = json.RawMessage(`{}`)

@@ -29,15 +29,23 @@ type Referral struct {
 	RecordJourney bool
 }
 
+// validCapturedAt keeps a referral time only when it is plausible. A zero time,
+// a time before year 2000 (Unix seconds read as milliseconds) or a time far in
+// the future becomes the time CQA received the referral.
+func validCapturedAt(capturedAt, now time.Time) time.Time {
+	if capturedAt.IsZero() || capturedAt.Before(messengerjourney.MinValidReferralTime) || capturedAt.After(now.Add(5*time.Minute)) {
+		return now
+	}
+	return capturedAt
+}
+
 // CaptureReferral persists only the first referral for a Page-scoped user.
 // Later messages or ads must never rewrite the intake source.
 func CaptureReferral(database *gorm.DB, channel models.Channel, referral Referral) error {
 	if database == nil || channel.ID == "" || channel.TenantID == "" || referral.PageID == "" || referral.PSID == "" || referral.RawJSON == "" {
 		return errors.New("invalid messenger intake referral")
 	}
-	if referral.CapturedAt.IsZero() {
-		referral.CapturedAt = time.Now()
-	}
+	referral.CapturedAt = validCapturedAt(referral.CapturedAt, time.Now())
 
 	now := time.Now()
 	return database.Transaction(func(tx *gorm.DB) error {
@@ -82,9 +90,7 @@ func CaptureFirstReferralInTransaction(tx *gorm.DB, channel models.Channel, refe
 	if tx == nil || channel.ID == "" || channel.TenantID == "" || referral.PageID == "" || referral.PSID == "" || referral.RawJSON == "" {
 		return errors.New("invalid messenger intake referral")
 	}
-	if referral.CapturedAt.IsZero() {
-		referral.CapturedAt = time.Now()
-	}
+	referral.CapturedAt = validCapturedAt(referral.CapturedAt, time.Now())
 	_, err := captureFirstReferralInTransaction(tx, channel, referral, time.Now())
 	return err
 }
