@@ -204,22 +204,35 @@ describe('ShapeWordcloud', () => {
     expect(products.map(item => item.count)).toEqual([144, 121, 20, 1])
   })
 
-  it('makes dominant counts visibly larger in a crowded product cloud', async () => {
-    width = 250
+  it.each([200, 250, 320])('keeps dominant counts prominent through every shape at %ipx', async (hostWidth) => {
+    width = hostWidth
     const wrapper = await render()
-    await wrapper.setProps({ items: [
+    const products = [
       { key: 'e24', label: 'E-24', count: 144, conversationIds: [] },
       { key: 'of618', label: 'OF618', count: 121, conversationIds: [] },
       { key: 'ff901', label: 'FF901', count: 20, conversationIds: [] },
       ...Array.from({ length: 37 }, (_, index) => ({
         key: `rare${index}`, label: `Sản phẩm khác ${index}`, count: 1, conversationIds: [],
       })),
-    ] })
-    await runFrames()
-    const sizes = lastRender()[1].list!.map(item => item[1] as number)
-    expect(sizes[0]).toBeGreaterThanOrEqual(36)
-    expect(sizes[1]).toBeGreaterThan(2 * sizes[2]!)
-    expect(sizes[2]).toBeGreaterThan(sizes[3]!)
+    ]
+    await wrapper.setProps({ items: products })
+    for (const shape of ['circle', 'diamond', 'star', 'diamond', 'circle']) {
+      await wrapper.get('select').setValue(shape)
+      await runFrames()
+      const options = lastRender()[1]
+      expect(options.shape).toBe(shape)
+      expect(options.rotateRatio).toBe(0)
+      const sizes = options.list!.map(item => item[1] as number)
+      expect(sizes[0]).toBeGreaterThanOrEqual(36)
+      expect(sizes[0]).toBeGreaterThan(sizes[1]!)
+      expect(sizes[1]).toBeGreaterThan(2 * sizes[2]!)
+      expect(sizes[2]).toBeGreaterThan(sizes[3]!)
+      const word = draw(lastRender()[0], options.list![0]!)
+      expect(word.title).toBe('E-24: 144 hội thoại')
+      word.click()
+    }
+    expect(wrapper.emitted('select')).toEqual(Array.from({ length: 5 }, () => ['e24']))
+    expect(products.slice(0, 3).map(item => item.count)).toEqual([144, 121, 20])
   })
 
   it('preserves distinct source keys and true counts when duplicate labels shrink', async () => {
