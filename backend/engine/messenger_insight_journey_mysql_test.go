@@ -72,7 +72,7 @@ func TestMySQLInsightEventsBackfillAndNewAnalysis(t *testing.T) {
 	insight(fast, `{"summary":"khách nói secret customer text","intents":["Hỏi giá mũ E-24"],"products":[{"name":"E-24","evidence":"secret"},{"name":"e-24","evidence":"x"},{"name":"FF818","evidence":"y"}],
 		"feedback":[{"category":"giao hàng","sentiment":"negative","evidence":"chậm quá"},{"category":"giá","sentiment":"positive","evidence":"rẻ"}],
 		"lead_quality":{"level":"HIGH","evidence":"lấy 2 cái","reason":"muốn mua"},"source_last_message_at":"`+readThrough+`"}`, base.Add(5*time.Minute))
-	// Unanswered customer and an unreadable old detail.
+	// Unanswered customer and an old detail with another lead_quality shape.
 	waiting := conversation("202", []line{{"customer", 0}})
 	insight(waiting, `{"intents":[],"lead_quality":{"level":"unknown"}}`, base.Add(time.Minute))
 	broken := conversation("203", []line{{"customer", 0}, {"agent", 20 * time.Minute}})
@@ -80,14 +80,14 @@ func TestMySQLInsightEventsBackfillAndNewAnalysis(t *testing.T) {
 
 	now := base.Add(2 * time.Hour)
 	written, err := BackfillInsightEvents(ctx, database, tenant.ID, []string{channel.ID}, 0, now)
-	if err != nil || written != 2 {
+	if err != nil || written != 3 {
 		t.Fatalf("backfill wrote %d err %v", written, err)
 	}
 	var events []models.MessengerJourneyEvent
 	if err := database.Where("tenant_id = ? AND kind = ?", tenant.ID, messengerjourney.KindInsight).Order("sequence").Find(&events).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 {
+	if len(events) != 3 {
 		t.Fatalf("insight events = %d", len(events))
 	}
 	bodies := map[string]insightEventBody{}
@@ -113,6 +113,12 @@ func TestMySQLInsightEventsBackfillAndNewAnalysis(t *testing.T) {
 	got = bodies["202"]
 	if got.Need != "unknown" || got.LeadLevel != "unknown" || got.FirstReplyStatus != "waiting" || got.FirstResponseSeconds != nil || got.RepliedWithinTarget != nil || len(got.Products) != 0 {
 		t.Fatalf("waiting payload = %+v", got)
+	}
+
+	// The old shape still exports the first reply; only the unreadable lead is lost.
+	got = bodies["203"]
+	if got.LeadLevel != "unknown" || got.FirstReplyStatus != "answered" || got.FirstResponseSeconds == nil || *got.FirstResponseSeconds != 1200 {
+		t.Fatalf("old shape payload = %+v", got)
 	}
 
 	// A second pass writes nothing: receipts prove each insight is exported.
@@ -154,5 +160,46 @@ func TestMySQLInsightEventsBackfillAndNewAnalysis(t *testing.T) {
 	}
 	if erased.PSID != "" || erased.Payload != "{}" {
 		t.Fatalf("erasure kept insight data: %+v", erased)
+	}
+}
+
+// Rows that can never be exported must not fill every bounded run: the next
+// run has to reach the remaining insights.
+func TestMySQLInsightBackfillSkipsUnexportableRows(t *testing.T) {
+	database := journeyEngineTestDatabase(t)
+	ctx := context.Background()
+	base := time.Date(2026, 11, 1, 3, 0, 0, 0, time.UTC)
+	tenant := models.Tenant{ID: pkg.NewUUID(), Name: "Test", Slug: pkg.NewUUID(), Settings: "{}"}
+	channel := models.Channel{ID: pkg.NewUUID(), TenantID: tenant.ID, ChannelType: "facebook", ExternalID: "100", Name: "Page", IsActive: true, CredentialsEncrypted: []byte{}, Metadata: "{}"}
+	job := models.Job{ID: pkg.NewUUID(), TenantID: tenant.ID, Name: "Insights", JobType: "classification", InputChannelIDs: `["` + channel.ID + `"]`, RulesConfig: "[]", Outputs: "[]", CreatedAt: base, UpdatedAt: base}
+	run := models.JobRun{ID: pkg.NewUUID(), JobID: job.ID, TenantID: tenant.ID, StartedAt: base, Summary: "{}", CreatedAt: base}
+	for _, row := range []interface{}{&tenant, &channel, &job, &run} {
+		if err := database.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func(psid, detail string, last time.Time) {
+		conv := models.Conversation{ID: pkg.NewUUID(), TenantID: tenant.ID, ChannelID: channel.ID, ExternalConversationID: "t_" + psid,
+			Metadata: `{"participants":{"data":[{"id":"100"},{"id":"` + psid + `"}]}}`, LastMessageAt: &last, CreatedAt: base, UpdatedAt: base}
+		if err := database.Create(&conv).Error; err != nil {
+			t.Fatal(err)
+		}
+		msg := models.Message{ID: pkg.NewUUID(), TenantID: tenant.ID, ConversationID: conv.ID, ExternalMessageID: pkg.NewUUID(), SenderType: "customer", Content: "x", SentAt: last, Attachments: "[]", RawData: "{}", CreatedAt: last}
+		result := models.JobResult{ID: pkg.NewUUID(), JobRunID: run.ID, TenantID: tenant.ID, ConversationID: conv.ID, ResultType: "conversation_insight", Detail: detail, CreatedAt: last}
+		for _, row := range []interface{}{&msg, &result} {
+			if err := database.Create(row).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// The newest chat holds an unreadable detail, so it is first in every run.
+	add("301", `["not an object"]`, base.Add(time.Hour))
+	add("302", `{"intents":["hỏi giá"]}`, base)
+	now := base.Add(2 * time.Hour)
+	if n, err := BackfillInsightEvents(ctx, database, tenant.ID, []string{channel.ID}, 1, now); err != nil || n != 0 {
+		t.Fatalf("first run wrote %d err %v", n, err)
+	}
+	if n, err := BackfillInsightEvents(ctx, database, tenant.ID, []string{channel.ID}, 1, now.Add(time.Minute)); err != nil || n != 1 {
+		t.Fatalf("second run wrote %d err %v, want the readable insight", n, err)
 	}
 }
