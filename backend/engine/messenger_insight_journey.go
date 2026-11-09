@@ -6,7 +6,10 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/vietbui/chat-quality-agent/ai"
@@ -22,9 +25,12 @@ import (
 // summaries and message text never leave CQA.
 
 const (
-	insightPayloadSchema       = 1
-	maxInsightProducts         = 5
-	maxInsightProductRunes     = 60
+	insightPayloadSchema   = 1
+	maxInsightProducts     = 5
+	maxInsightProductRunes = 60
+	// AdBazooka rejects a whole feed page when one insight is out of range, so
+	// every bound below matches its sanitizer (messenger-journey.ts).
+	maxInsightResponseSeconds  = 10_000_000
 	maxInsightBackfillPerRun   = 500
 	insightEventSourceAnalysis = "cqa_ai_analysis"
 	insightEventSourceBackfill = "cqa_insight_backfill"
@@ -38,12 +44,69 @@ var feedbackCategoryCodes = map[string]string{
 }
 
 type storedInsightDetail struct {
-	Intents             []string              `json:"intents"`
-	Need                string                `json:"need"`
-	Products            []ai.ProductInsight   `json:"products"`
-	Feedback            []ai.FeedbackInsight  `json:"feedback"`
-	LeadQuality         ai.LeadQualityInsight `json:"lead_quality"`
-	SourceLastMessageAt *time.Time            `json:"source_last_message_at"`
+	Intents             []string
+	Need                string
+	NeedSource          string
+	Products            []ai.ProductInsight
+	Feedback            []ai.FeedbackInsight
+	LeadQuality         ai.LeadQualityInsight
+	SourceLastMessageAt *time.Time
+}
+
+// decodeInsightField reads one field. A missing or malformed field gives the
+// zero value, so one old field shape cannot drop the whole insight.
+func decodeInsightField[T any](fields map[string]json.RawMessage, key string) T {
+	var value T
+	if raw, ok := fields[key]; ok && json.Unmarshal(raw, &value) != nil {
+		var zero T
+		return zero
+	}
+	return value
+}
+
+// decodeInsightList keeps the readable items of a list and drops the others.
+func decodeInsightList[T any](fields map[string]json.RawMessage, key string) []T {
+	items := decodeInsightField[[]json.RawMessage](fields, key)
+	out := make([]T, 0, len(items))
+	for _, raw := range items {
+		var item T
+		if json.Unmarshal(raw, &item) == nil {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// parseStoredInsightDetail reads a stored insight field by field. Insights
+// saved by older prompts can hold another shape (for example lead_quality as a
+// string). Those fields become empty; the rest, and the first response time
+// from the messages, are still exported. Only a detail that is not a JSON
+// object is unreadable.
+func parseStoredInsightDetail(detail string) (storedInsightDetail, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(detail), &fields); err != nil || fields == nil {
+		return storedInsightDetail{}, errInsightDetail
+	}
+	return storedInsightDetail{
+		Intents:             decodeInsightList[string](fields, "intents"),
+		Need:                decodeInsightField[string](fields, "need"),
+		NeedSource:          decodeInsightField[string](fields, "need_source"),
+		Products:            decodeInsightList[ai.ProductInsight](fields, "products"),
+		Feedback:            decodeInsightList[ai.FeedbackInsight](fields, "feedback"),
+		LeadQuality:         decodeInsightField[ai.LeadQualityInsight](fields, "lead_quality"),
+		SourceLastMessageAt: decodeInsightField[*time.Time](fields, "source_last_message_at"),
+	}, nil
+}
+
+// storedInsightNeed keeps the need and source the analyzer saved. The analyzer
+// stores a keyword-resolved need in the same "need" field, so resolving it
+// again would relabel a keyword result as "ai".
+func storedInsightNeed(stored storedInsightDetail) (string, string) {
+	need := ai.NormalizeNeed(stored.Need)
+	if need != "" && (stored.NeedSource == "ai" || stored.NeedSource == "keyword") {
+		return need, stored.NeedSource
+	}
+	return ai.ResolveNeed(stored.Need, stored.Intents)
 }
 
 func insightEventID(tenantID, conversationID, resultID string) string {
@@ -58,23 +121,35 @@ func insightLeadLevel(level string) string {
 	return "unknown"
 }
 
+// insightProductName trims a product name the way AdBazooka does (JavaScript
+// trim also removes U+FEFF) and returns "" when the name cannot be exported.
+// AdBazooka counts UTF-16 code units, so an emoji counts as two: a name that
+// passes a rune count can still fail there and stop the whole journey sync.
+func insightProductName(raw string) string {
+	name := strings.TrimFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' })
+	if name == "" || !utf8.ValidString(name) || len(utf16.Encode([]rune(name))) > maxInsightProductRunes {
+		return ""
+	}
+	return name
+}
+
 // messengerInsightPayload builds the exported facts from a stored insight and
 // the messages it read. Messages after the insight's source cursor are ignored,
 // and an unanswered first turn has no seconds, so the payload depends only on
 // what the insight saw (a retry produces the same event fingerprint).
 func messengerInsightPayload(detail string, messages []models.Message, policy servicequality.Policy) (json.RawMessage, error) {
-	var stored storedInsightDetail
-	if err := json.Unmarshal([]byte(detail), &stored); err != nil {
+	stored, err := parseStoredInsightDetail(detail)
+	if err != nil {
 		return nil, err
 	}
-	need, needSource := ai.ResolveNeed(stored.Need, stored.Intents)
+	need, needSource := storedInsightNeed(stored)
 
 	products := make([]string, 0, maxInsightProducts)
 	seenProducts := map[string]bool{}
 	for _, product := range stored.Products {
-		name := strings.TrimSpace(product.Name)
+		name := insightProductName(product.Name)
 		key := strings.ToLower(name)
-		if name == "" || seenProducts[key] || utf8.RuneCountInString(name) > maxInsightProductRunes {
+		if name == "" || seenProducts[key] {
 			continue
 		}
 		seenProducts[key] = true
@@ -129,6 +204,9 @@ func messengerInsightPayload(detail string, messages []models.Message, policy se
 			firstStatus = first.Status
 			if first.Status == "answered" {
 				seconds := int64(first.Seconds + 0.5)
+				if seconds > maxInsightResponseSeconds {
+					seconds = maxInsightResponseSeconds
+				}
 				ok := first.Seconds <= float64(policy.TargetMinutes*60)
 				firstSeconds, withinTarget = &seconds, &ok
 			} else {
@@ -151,6 +229,32 @@ func messengerInsightPayload(detail string, messages []models.Message, policy se
 // errInsightDetail marks an old insight whose stored JSON cannot be read. It
 // is skipped: the insight itself stays valid for CQA.
 var errInsightDetail = errors.New("unreadable Messenger insight detail")
+
+// errNoInsightSubject marks a conversation that has no Messenger customer to
+// attach an insight event to.
+var errNoInsightSubject = errors.New("Messenger conversation has no journey subject")
+
+// insightBackfillSkips holds insight event IDs that cannot be exported
+// (unreadable detail, erased customer, no subject, conflicting event). Without
+// it the same rows would fill every bounded run and the backfill would never
+// reach the rest. It lives for the process: a restart retries them once.
+var insightBackfillSkips = struct {
+	sync.Mutex
+	ids map[string]struct{}
+}{ids: map[string]struct{}{}}
+
+func insightBackfillSkipped(eventID string) bool {
+	insightBackfillSkips.Lock()
+	defer insightBackfillSkips.Unlock()
+	_, skipped := insightBackfillSkips.ids[eventID]
+	return skipped
+}
+
+func skipInsightBackfill(eventID string) {
+	insightBackfillSkips.Lock()
+	defer insightBackfillSkips.Unlock()
+	insightBackfillSkips.ids[eventID] = struct{}{}
+}
 
 func recordInsightEvent(ctx context.Context, tx *gorm.DB, subject messengerJourneySubject, resultID, detail string, messages []models.Message, policy servicequality.Policy, insightAt, observedAt time.Time, source string) error {
 	payload, err := messengerInsightPayload(detail, messages, policy)
@@ -238,7 +342,8 @@ func BackfillInsightEvents(ctx context.Context, database *gorm.DB, tenantID stri
 	}
 	missing := make([]insightCoverageCandidate, 0, limit)
 	for _, candidate := range candidates {
-		if !exported[insightEventID(tenantID, candidate.ConversationID, candidate.InsightID)] {
+		eventID := insightEventID(tenantID, candidate.ConversationID, candidate.InsightID)
+		if !exported[eventID] && !insightBackfillSkipped(eventID) {
 			missing = append(missing, candidate)
 			if len(missing) == limit {
 				break
@@ -267,8 +372,11 @@ func BackfillInsightEvents(ctx context.Context, database *gorm.DB, tenantID stri
 		}
 		err := database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			subject, ok, err := loadMessengerJourneySubject(tx, tenantID, candidate.ConversationID)
-			if err != nil || !ok {
+			if err != nil {
 				return err
+			}
+			if !ok {
+				return errNoInsightSubject
 			}
 			if err := recordInsightEvent(ctx, tx, subject, candidate.InsightID, candidate.Detail, messages[candidate.ConversationID], policy, candidate.InsightAt, now, insightEventSourceBackfill); err != nil {
 				return err
@@ -276,9 +384,14 @@ func BackfillInsightEvents(ctx context.Context, database *gorm.DB, tenantID stri
 			written++
 			return nil
 		})
-		// An erased customer, a malformed old insight or a concurrent writer of
-		// the same event must not stop the rest of the backfill.
-		if err != nil && !errors.Is(err, messengerjourney.ErrSubjectErased) && !errors.Is(err, messengerjourney.ErrEventConflict) && !errors.Is(err, errInsightDetail) {
+		// An erased customer, a malformed old insight, a chat without a customer
+		// or a concurrent writer of the same event must not stop the rest of the
+		// backfill, and must not be picked again by the next bounded run.
+		if errors.Is(err, messengerjourney.ErrSubjectErased) || errors.Is(err, messengerjourney.ErrEventConflict) || errors.Is(err, errInsightDetail) || errors.Is(err, errNoInsightSubject) {
+			skipInsightBackfill(insightEventID(tenantID, candidate.ConversationID, candidate.InsightID))
+			continue
+		}
+		if err != nil {
 			return written, err
 		}
 	}
