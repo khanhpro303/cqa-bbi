@@ -90,7 +90,7 @@ func referralNaturalKey(in RecordInput) *string {
 func normalizedInput(in RecordInput) (RecordInput, error) {
 	in.EventID, in.TenantID, in.PageID = strings.TrimSpace(in.EventID), strings.TrimSpace(in.TenantID), strings.TrimSpace(in.PageID)
 	in.PSID, in.Kind, in.Source = strings.TrimSpace(in.PSID), strings.TrimSpace(in.Kind), strings.TrimSpace(in.Source)
-	allowed := map[string]bool{KindReferral: true, KindLabels: true, KindClassification: true, KindOrder: true, KindCoverage: true, KindDeletion: true}
+	allowed := map[string]bool{KindReferral: true, KindLabels: true, KindClassification: true, KindOrder: true, KindCoverage: true, KindDeletion: true, KindInsight: true}
 	if in.EventID == "" || in.TenantID == "" || in.PageID == "" || !allowed[in.Kind] || in.Source == "" {
 		return in, ErrInvalidInput
 	}
