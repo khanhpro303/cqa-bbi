@@ -77,6 +77,7 @@ type OrderOutcomeInsight struct {
 
 type ConversationInsights struct {
 	Intents       []string              `json:"intents"`
+	Need          string                `json:"need,omitempty"`
 	Products      []ProductInsight      `json:"products"`
 	Feedback      []FeedbackInsight     `json:"feedback"`
 	LeadQuality   LeadQualityInsight    `json:"lead_quality"`
@@ -116,6 +117,8 @@ func normalizeConversationInsights(insights *ConversationInsights) {
 		}
 	}
 	insights.Intents = normalizedIntents
+	// An invalid code stays empty; ResolveNeed then falls back to keyword rules.
+	insights.Need = NormalizeNeed(insights.Need)
 
 	normalizedProducts := make([]ProductInsight, 0, len(insights.Products))
 	for _, product := range insights.Products {

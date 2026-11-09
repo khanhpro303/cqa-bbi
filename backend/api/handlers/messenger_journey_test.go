@@ -145,17 +145,49 @@ func TestJourneyEventCanonicalWireContract(t *testing.T) {
 	scrubbed := base
 	scrubbed.PSID = ""
 	scrubbed.Kind = messengerjourney.KindReferral
-	if exportableJourneyEvent(scrubbed) {
+	if exportableJourneyEvent(scrubbed, legacyJourneyKinds) {
 		t.Fatal("scrubbed pre-deletion event would block downstream ingestion")
 	}
 	scrubbed.Kind = messengerjourney.KindDeletion
-	if !exportableJourneyEvent(scrubbed) {
+	if !exportableJourneyEvent(scrubbed, legacyJourneyKinds) {
 		t.Fatal("privacy tombstone was suppressed")
 	}
 	coverage := base
 	coverage.Kind = messengerjourney.KindCoverage
-	if exportableJourneyEvent(coverage) {
+	if exportableJourneyEvent(coverage, legacyJourneyKinds) {
 		t.Fatal("coverage event escaped into the canonical business-event feed")
+	}
+	insight := base
+	insight.Kind = messengerjourney.KindInsight
+	if exportableJourneyEvent(insight, legacyJourneyKinds) {
+		t.Fatal("insight event reached a replica that did not ask for it")
+	}
+	if !exportableJourneyEvent(insight, []string{messengerjourney.KindDeletion, messengerjourney.KindInsight}) {
+		t.Fatal("insight event was hidden from a replica that asked for it")
+	}
+}
+
+func TestJourneyKindsQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	read := func(query string) ([]string, bool) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/events"+query, nil)
+		return journeyKinds(c)
+	}
+	if kinds, ok := read(""); !ok || strings.Join(kinds, ",") != "referral,labels,classification,order,deletion" {
+		t.Fatalf("default kinds = %v %v", kinds, ok)
+	}
+	if kinds, ok := read("?kinds=insight"); !ok || strings.Join(kinds, ",") != "deletion,insight" {
+		t.Fatalf("insight-only kinds must still carry deletions: %v %v", kinds, ok)
+	}
+	if kinds, ok := read("?kinds=referral,insight,referral"); !ok || strings.Join(kinds, ",") != "deletion,referral,insight" {
+		t.Fatalf("duplicate kinds = %v %v", kinds, ok)
+	}
+	for _, bad := range []string{"?kinds=coverage", "?kinds=insight,", "?kinds=chat"} {
+		if _, ok := read(bad); ok {
+			t.Fatalf("%s must be rejected", bad)
+		}
 	}
 }
 

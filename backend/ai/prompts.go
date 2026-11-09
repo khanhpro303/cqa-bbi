@@ -100,6 +100,8 @@ const mandatoryProductNormalizationHeading = "## Quy tắc chuẩn hóa sản ph
 
 const messengerOrderOutcomePromptHeading = "## Quy tắc nhận diện đơn hàng"
 
+const mandatoryNeedHeading = "## Quy tắc nhóm nhu cầu bắt buộc"
+
 const mandatorySenderRoleInstructions = `
 
 ## Quy tắc vai trò bắt buộc
@@ -120,6 +122,17 @@ const mandatoryProductNormalizationInstructions = `
 - Không suy đoán model hoặc tự tạo SKU. Nếu SKU không được khách nói rõ thì để sku="".
 - evidence phải giữ nguyên trích dẫn chính xác lời khách hàng; không sửa nội dung evidence theo tên đã chuẩn hóa.`
 
+// mandatoryNeedInstructions adds one fixed need code to every Messenger
+// insight, including tenant-edited prompts, without an extra AI call.
+const mandatoryNeedInstructions = `
+
+## Quy tắc nhóm nhu cầu bắt buộc
+- Trường bắt buộc trong insights: "need" là đúng một mã cho nhu cầu chính của khách hàng.
+- Mã hợp lệ: "price" (hỏi giá, khuyến mãi), "advice" (tư vấn mẫu, size, thông số), "stock" (hỏi còn hàng, còn màu, còn size), "order" (đặt hàng, thanh toán, giao hàng, theo dõi đơn), "warranty" (bảo hành, đổi trả, hàng lỗi), "complaint" (khiếu nại, phàn nàn về sản phẩm hoặc dịch vụ), "other" (nhu cầu khác), "unknown" (không có tin nhắn customer).
+- Chỉ dựa vào lời khách hàng (customer). Không dùng lời agent.
+- Khi khách có nhiều nhu cầu, chọn mã đứng trước theo thứ tự: complaint, warranty, order, price, stock, advice, other.
+- Chỉ trả mã, không trả câu mô tả.`
+
 func appendMandatorySenderRoleInstructions(prompt string) string {
 	if strings.Contains(prompt, mandatorySenderRoleHeading) {
 		return prompt
@@ -131,6 +144,9 @@ func appendMandatoryMessengerInsightsInstructions(prompt string) string {
 	prompt = appendMandatorySenderRoleInstructions(prompt)
 	if !strings.Contains(prompt, mandatoryProductNormalizationHeading) {
 		prompt += mandatoryProductNormalizationInstructions
+	}
+	if !strings.Contains(prompt, mandatoryNeedHeading) {
+		prompt += mandatoryNeedInstructions
 	}
 	return prompt
 }
@@ -237,6 +253,7 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
 		insightsOutput = `,
   "insights": {
     "intents": ["mục đích trao đổi cụ thể"],
+    "need": "price|advice|stock|order|warranty|complaint|other|unknown",
     "products": [{"name":"tên sản phẩm","sku":"SKU nếu được nói rõ, nếu không để rỗng","evidence":"trích dẫn nguyên văn của khách"}],
     "feedback": [{"category":"sản phẩm|giá|giao hàng|CSKH|khác","sentiment":"positive|neutral|negative|mixed|unknown","evidence":"trích dẫn nguyên văn của khách"}],
     "lead_quality": {"level":"high|medium|low|spam|unknown","evidence":"trích dẫn nguyên văn của khách hoặc để rỗng nếu thiếu dữ kiện","reason":"lý do ngắn gọn"},
