@@ -60,54 +60,55 @@
               {{ t('sq_updated', { date: formatDateTime(report.generated_at), timezone: report.policy.timezone }) }}
             </span>
             <div class="dashboard-notice-actions">
-              <details class="dashboard-notice-disclosure">
-                <summary class="dashboard-notice-trigger" :aria-label="t('sq_data_scope')" :title="t('sq_data_scope')">
-                  <v-icon color="info" icon="mdi-information-outline" size="22" />
-                </summary>
-                <v-alert
-                  id="dashboard-scope-notice"
-                  type="info"
-                  variant="tonal"
-                  density="compact"
-                  class="dashboard-notice"
-                >
-                  <div class="font-weight-medium">{{ t('sq_data_scope') }}</div>
-                  <div class="text-body-2 mt-1">{{ t('sq_scope_description') }}</div>
-                </v-alert>
-              </details>
-              <details
-                v-if="report && (report.summary.waiting || report.summary.overdue)"
-                class="dashboard-notice-disclosure"
-              >
-                <summary class="dashboard-notice-trigger" :aria-label="t('sq_queue_current')" :title="t('sq_queue_current')">
-                  <v-badge dot :color="report.summary.overdue ? 'error' : 'warning'">
-                    <v-icon
-                      :color="report.summary.overdue ? 'error' : 'warning'"
-                      icon="mdi-message-alert-outline"
-                      size="22"
-                    />
-                  </v-badge>
-                </summary>
-                <v-alert
-                  id="dashboard-queue-notice"
-                  :type="report.summary.overdue ? 'error' : 'warning'"
-                  variant="tonal"
-                  density="compact"
-                  class="dashboard-notice"
-                >
-                  <div class="d-flex align-center justify-space-between flex-wrap ga-2">
-                    <div>
-                      <strong>{{ t('sq_overdue_count', { count: report.summary.overdue }) }}</strong>
-                      <span class="mx-1">·</span>
-                      {{ t('sq_waiting_count', { count: report.summary.waiting }) }}
-                      <div class="text-caption mt-1">{{ t('sq_queue_current') }}</div>
+              <v-menu location="bottom end" :offset="8" :close-on-content-click="false">
+                <template #activator="{ props }">
+                  <v-btn v-bind="props" class="dashboard-notice-trigger" icon="mdi-information-outline" color="info" variant="text" size="small" :aria-label="t('sq_data_scope')" />
+                </template>
+                <v-card class="dashboard-notice" elevation="8">
+                  <v-alert
+                    id="dashboard-scope-notice"
+                    type="info"
+                    variant="tonal"
+                    density="compact"
+                  >
+                    <div class="font-weight-medium">{{ t('sq_data_scope') }}</div>
+                    <div class="text-body-2 mt-1">{{ t('sq_scope_description') }}</div>
+                  </v-alert>
+                </v-card>
+              </v-menu>
+              <v-menu v-if="report && (report.summary.waiting || report.summary.overdue)" location="bottom end" :offset="8">
+                <template #activator="{ props }">
+                  <v-btn v-bind="props" class="dashboard-notice-trigger" icon variant="text" size="small" :aria-label="t('sq_queue_current')">
+                    <v-badge dot :color="report.summary.overdue ? 'error' : 'warning'">
+                      <v-icon
+                        :color="report.summary.overdue ? 'error' : 'warning'"
+                        icon="mdi-message-alert-outline"
+                        size="22"
+                      />
+                    </v-badge>
+                  </v-btn>
+                </template>
+                <v-card class="dashboard-notice" elevation="8">
+                  <v-alert
+                    id="dashboard-queue-notice"
+                    :type="report.summary.overdue ? 'error' : 'warning'"
+                    variant="tonal"
+                    density="compact"
+                  >
+                    <div class="d-flex align-center justify-space-between flex-wrap ga-2">
+                      <div>
+                        <strong>{{ t('sq_overdue_count', { count: report.summary.overdue }) }}</strong>
+                        <span class="mx-1">·</span>
+                        {{ t('sq_waiting_count', { count: report.summary.waiting }) }}
+                        <div class="text-caption mt-1">{{ t('sq_queue_current') }}</div>
+                      </div>
+                      <v-btn size="small" variant="outlined" aria-controls="conversation-queue" @click="viewQueue">
+                        {{ t('sq_view_queue') }}
+                      </v-btn>
                     </div>
-                    <v-btn size="small" variant="outlined" aria-controls="conversation-queue" @click="viewQueue">
-                      {{ t('sq_view_queue') }}
-                    </v-btn>
-                  </div>
-                </v-alert>
-              </details>
+                  </v-alert>
+                </v-card>
+              </v-menu>
             </div>
           </div>
         </div>
@@ -1013,45 +1014,13 @@ onBeforeUnmount(() => {
   gap: 4px;
 }
 
-.dashboard-notice-disclosure {
-  position: relative;
-}
-
-.dashboard-notice-trigger {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  place-items: center;
-  list-style: none;
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.dashboard-notice-trigger::-webkit-details-marker {
-  display: none;
-}
-
-.dashboard-notice-trigger:hover,
-.dashboard-notice-trigger:focus-visible,
-.dashboard-notice-disclosure[open] > .dashboard-notice-trigger {
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-.dashboard-notice-trigger:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: 2px;
-}
-
 .dashboard-notice {
-  position: absolute;
-  z-index: 4;
-  top: calc(100% + 8px);
-  right: 0;
-  width: min(560px, calc(100vw - 48px));
-  background-color: rgb(var(--v-theme-surface));
-  border: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
-  box-shadow: 0 6px 20px rgba(var(--v-theme-on-surface), 0.14);
+  width: min(560px, calc(100vw - 32px));
+  background: rgb(var(--v-theme-surface));
+}
+
+.dashboard-notice :deep(.v-alert) {
+  white-space: normal;
 }
 
 @media (max-width: 959px) {

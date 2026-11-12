@@ -82,6 +82,24 @@
             :disabled="loading && !pages.length"
             style="min-width: 240px; max-width: 360px"
           />
+          <v-menu v-if="pancakeNotice" location="bottom start" :offset="8" :close-on-content-click="false">
+            <template #activator="{ props }">
+              <v-btn
+                v-bind="props"
+                class="source-notice-trigger"
+                :color="pancakeNotice.type"
+                icon="mdi-information-outline"
+                variant="text"
+                size="small"
+                :aria-label="pancakeNotice.text"
+              />
+            </template>
+            <v-card class="source-notice-content" elevation="8">
+              <v-alert :type="pancakeNotice.type" variant="tonal" density="compact">
+                {{ pancakeNotice.text }}
+              </v-alert>
+            </v-card>
+          </v-menu>
           <v-btn prepend-icon="mdi-refresh" variant="text" :loading="loading" @click="loadData(true)">
             {{ st('quality_meta_refresh') }}
           </v-btn>
@@ -90,23 +108,6 @@
             {{ st('quality_meta_updated', { date: formatDateTime(data.generated_at), seconds: refreshSeconds }) }}
           </span>
         </div>
-        <details
-          v-if="pancakeNotice"
-          class="source-notice"
-          :class="`source-notice--${pancakeNotice.type}`"
-        >
-          <summary class="source-notice-summary" :aria-label="pancakeNotice.text" :title="pancakeNotice.text">
-            <v-icon
-              :icon="pancakeNotice.type === 'warning' ? 'mdi-alert-outline' : 'mdi-information-outline'"
-              size="18"
-            />
-            <span class="source-notice-label">Pancake</span>
-            <v-icon class="source-notice-chevron" icon="mdi-chevron-down" size="18" />
-          </summary>
-          <div class="source-notice-content" role="status">
-            {{ pancakeNotice.text }}
-          </div>
-        </details>
       </v-card-text>
     </v-card>
 
@@ -982,61 +983,10 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
-.source-notice {
-  width: fit-content;
-  max-width: 100%;
-  margin-top: 12px;
-  border: 1px solid rgba(var(--v-theme-info), 0.34);
-  border-radius: 9px;
-  color: rgb(var(--v-theme-info));
-  background: rgba(var(--v-theme-info), 0.08);
-}
-
-.source-notice--warning {
-  border-color: rgba(var(--v-theme-warning), 0.42);
-  color: rgb(var(--v-theme-warning));
-  background: rgba(var(--v-theme-warning), 0.1);
-}
-
-.source-notice-summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 5px 9px;
-  border-radius: 8px;
-  cursor: pointer;
-  list-style: none;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 1.25;
-  user-select: none;
-}
-
-.source-notice-summary::-webkit-details-marker {
-  display: none;
-}
-
-.source-notice-summary:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 2px;
-}
-
-.source-notice-chevron {
-  transition: transform 160ms ease;
-}
-
-.source-notice[open] .source-notice-chevron {
-  transform: rotate(180deg);
-}
-
 .source-notice-content {
-  max-width: 760px;
-  padding: 0 12px 10px 33px;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: 0.8125rem;
-  font-weight: 400;
-  line-height: 1.45;
+  width: min(400px, calc(100vw - 32px));
+  background: rgb(var(--v-theme-surface));
+  white-space: normal;
 }
 
 .token-save {
