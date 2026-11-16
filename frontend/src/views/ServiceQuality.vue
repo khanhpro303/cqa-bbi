@@ -363,6 +363,21 @@
               </v-list-item>
             </v-list>
             <div v-else class="text-body-2 text-medium-emphasis mb-4">{{ t('sq_no_feedback') }}</div>
+            <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_orders') }}</div>
+            <div v-if="!selectedRow.insight.order_outcomes?.length" class="text-body-2 text-medium-emphasis mb-4">{{ t('sq_no_orders') }}</div>
+            <v-card v-for="(order, index) in selectedRow.insight.order_outcomes || []" :key="order.order_id || index" variant="outlined" class="pa-3 mb-3">
+              <div class="d-flex align-center flex-wrap ga-2 mb-2">
+                <v-chip size="small" variant="tonal">{{ t(`sq_order_${order.status}`) }}</v-chip>
+                <span v-if="order.order_ref" class="text-body-2">{{ t('sq_order_ref') }}: {{ order.order_ref }}</span>
+                <span v-if="order.confidence != null" class="text-caption text-medium-emphasis">{{ t('sq_order_confidence') }}: {{ Math.round(order.confidence * 100) }}%</span>
+              </div>
+              <div class="text-body-2 mb-2"><strong>{{ t('sq_order_total') }}:</strong> {{ order.value_vnd != null ? new Intl.NumberFormat('vi-VN').format(order.value_vnd) + ' ₫' : t('sq_order_total_unknown') }}</div>
+              <div class="text-body-2 order-evidence"><strong>{{ t('sq_order_confirmation_evidence') }}:</strong> {{ order.confirmation_evidence || t('sq_order_evidence_unavailable') }}</div>
+              <div v-if="order.confirmation_message_id" class="text-caption text-medium-emphasis">{{ t('sq_order_message_id') }}: {{ order.confirmation_message_id }}</div>
+              <div v-if="order.amount_evidence" class="text-body-2 mt-2 order-evidence"><strong>{{ t('sq_order_amount_evidence') }}:</strong> {{ order.amount_evidence }}</div>
+              <div v-if="order.amount_message_id" class="text-caption text-medium-emphasis">{{ t('sq_order_message_id') }}: {{ order.amount_message_id }}</div>
+              <div v-if="!order.confirmation_message_id && order.evidence_message_ids?.length" class="text-caption text-medium-emphasis">{{ t('sq_order_saved_ids') }}: {{ order.evidence_message_ids.join(', ') }}</div>
+            </v-card>
             <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_lead_quality') }}</div>
             <v-alert v-if="selectedRow.insight.lead_quality" :type="leadAlertType(selectedRow.insight.lead_quality.level)" variant="tonal" density="compact">
               <strong>{{ leadLabel(selectedRow.insight.lead_quality.level) }}</strong>
@@ -1153,4 +1168,8 @@ onBeforeUnmount(() => {
     grid-row: 1;
   }
 }
+</style>
+
+<style scoped>
+.order-evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>

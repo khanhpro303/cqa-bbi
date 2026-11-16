@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -56,13 +57,18 @@ type analysisSnapshotMetadata struct {
 }
 
 type persistedOrderOutcome struct {
-	OrderID            string   `json:"order_id"`
-	OrderRef           string   `json:"order_ref"`
-	ValueVND           *int64   `json:"value_vnd"`
-	Status             string   `json:"status"`
-	OrderedAt          string   `json:"ordered_at"`
-	EvidenceMessageIDs []string `json:"evidence_message_ids"`
-	Confidence         float64  `json:"confidence"`
+	OrderID                      string   `json:"order_id"`
+	OrderRef                     string   `json:"order_ref"`
+	ValueVND                     *int64   `json:"value_vnd"`
+	Status                       string   `json:"status"`
+	OrderedAt                    string   `json:"ordered_at"`
+	EvidenceMessageIDs           []string `json:"evidence_message_ids"`
+	Confidence                   float64  `json:"confidence"`
+	InitialConfirmationMessageID string   `json:"initial_confirmation_message_id,omitempty"`
+	ConfirmationMessageID        string   `json:"confirmation_message_id,omitempty"`
+	ConfirmationEvidence         string   `json:"confirmation_evidence,omitempty"`
+	AmountMessageID              string   `json:"amount_message_id,omitempty"`
+	AmountEvidence               string   `json:"amount_evidence,omitempty"`
 }
 
 var (
@@ -365,7 +371,7 @@ func messengerInsightsGuardResponse(job models.Job, messages []models.Message) (
 		return "", false
 	}
 	for _, message := range messages {
-		if message.SenderType == "customer" {
+		if message.SenderType == "customer" || (message.SenderType == "agent" && validOrderConfirmation(message, messages)) {
 			return "", false
 		}
 	}
@@ -840,13 +846,14 @@ func (a *Analyzer) getProvider(job models.Job) (ai.AIProvider, error) {
 func buildConversationInsightDetail(classResult ai.ClassificationResponse, sourceLastMessageAt *time.Time, orderOutcomes ...[]persistedOrderOutcome) ([]byte, error) {
 	need, needSource := ai.ResolveNeed(classResult.Insights.Need, classResult.Insights.Intents)
 	detail := map[string]interface{}{
-		"summary":      classResult.Summary,
-		"intents":      classResult.Insights.Intents,
-		"need":         need,
-		"need_source":  needSource,
-		"products":     classResult.Insights.Products,
-		"feedback":     classResult.Insights.Feedback,
-		"lead_quality": classResult.Insights.LeadQuality,
+		"summary":        classResult.Summary,
+		"intents":        classResult.Insights.Intents,
+		"need":           need,
+		"need_source":    needSource,
+		"products":       classResult.Insights.Products,
+		"feedback":       classResult.Insights.Feedback,
+		"lead_quality":   classResult.Insights.LeadQuality,
+		"order_outcomes": []persistedOrderOutcome{},
 	}
 	if len(orderOutcomes) > 0 && len(orderOutcomes[0]) > 0 {
 		detail["order_outcomes"] = orderOutcomes[0]
@@ -870,7 +877,7 @@ func stableOrderRef(conversationID, confirmationMessageID, explicitRef string) (
 
 func verifiedOrderRef(ref string, evidence ...*models.Message) string {
 	ref = strings.TrimSpace(ref)
-	if !safeOrderRefPattern.MatchString(ref) {
+	if !safeOrderRefPattern.MatchString(ref) || !strings.ContainsAny(ref, "0123456789") || regexp.MustCompile(`^(?:0[0-9]{9}|84[0-9]{9})$`).MatchString(ref) {
 		return ""
 	}
 	for _, message := range evidence {
@@ -919,54 +926,117 @@ func validateOrderOutcomes(conversationID string, proposals []ai.OrderOutcomeIns
 	validated := make([]persistedOrderOutcome, 0, len(proposals))
 	positions := make(map[string]int)
 	matchedPrevious := make(map[string]bool)
-	for _, proposal := range proposals {
-		confirmation := exactEvidenceMessage(messages, proposal.ConfirmationMessageID, proposal.ConfirmationEvidence, true)
-		if confirmation == nil {
+	ordered := append([]ai.OrderOutcomeInsight(nil), proposals...)
+	messageTimes := make(map[string]time.Time, len(messages))
+	for _, message := range messages {
+		messageTimes[message.ID] = message.SentAt
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return messageTimes[ordered[i].ConfirmationMessageID].Before(messageTimes[ordered[j].ConfirmationMessageID])
+	})
+	for _, proposal := range ordered {
+		confirmation := exactEvidenceMessage(messages, proposal.ConfirmationMessageID, proposal.ConfirmationEvidence, false)
+		if confirmation == nil || (confirmation.SenderType != "customer" && confirmation.SenderType != "agent") {
 			continue
 		}
 		status := proposal.Status
+		if status == "review" && !validOrderReview(*confirmation) {
+			continue
+		}
+		if status == "confirmed" && !validOrderConfirmation(*confirmation, messages) {
+			continue
+		}
+		if (status == "cancelled" || status == "refunded") && !validOrderTransition(status, *confirmation) {
+			continue
+		}
 		value := proposal.ValueVND
 		evidenceIDs := []string{confirmation.ID}
 		var amount *models.Message
+		amountValid := false
 		if value != nil {
 			amount = exactEvidenceMessage(messages, proposal.AmountMessageID, proposal.AmountEvidence, false)
-			if amount == nil || amount.SentAt.After(confirmation.SentAt) || confirmation.SentAt.Sub(amount.SentAt) > 24*time.Hour || !evidenceContainsVNDValue(amount.Content, *value) {
+			if amount == nil || (amount.SenderType != "customer" && amount.SenderType != "agent") || !validOrderAmount(*amount, *value, messages, *confirmation) {
 				value = nil
-			} else if amount.ID != confirmation.ID {
-				evidenceIDs = append(evidenceIDs, amount.ID)
-			}
-		}
-		if status == "confirmed" && value == nil {
-			status = "review"
-		}
-		ref := verifiedOrderRef(proposal.OrderRef, confirmation, amount)
-		var prior *persistedOrderOutcome
-		if proposal.Status == "cancelled" || proposal.Status == "refunded" {
-			for index := range previous {
-				candidate := &previous[index]
-				if ref != "" && strings.EqualFold(candidate.OrderRef, ref) {
-					if prior != nil {
-						prior = nil
-						break
-					}
-					prior = candidate
+			} else {
+				amountValid = true
+				if amount.ID != confirmation.ID {
+					evidenceIDs = append(evidenceIDs, amount.ID)
 				}
 			}
-			if prior == nil && ref == "" {
-				for index := range previous {
-					candidate := &previous[index]
-					if matchedPrevious[candidate.OrderID] || (candidate.Status != "confirmed" && candidate.Status != "review") {
+		}
+		var refAmount *models.Message
+		if amountValid {
+			refAmount = amount
+		}
+		ref := verifiedOrderRef(proposal.OrderRef, confirmation, refAmount)
+		var prior *persistedOrderOutcome
+		if proposal.Status == "cancelled" || proposal.Status == "refunded" {
+			// A transition must point to one unambiguous earlier confirmed order.
+			// Include confirmations in this same analysis as well as prior snapshots.
+			candidates := make(map[string]persistedOrderOutcome)
+			for _, candidate := range previous {
+				candidates[candidate.OrderID] = candidate
+			}
+			for _, candidate := range validated {
+				candidates[candidate.OrderID] = candidate
+			}
+			candidateCount := 0
+			for _, candidate := range candidates {
+				if candidate.Status != "confirmed" && !(candidate.Status == proposal.Status && candidate.ConfirmationMessageID == confirmation.ID) {
+					continue
+				}
+				initialID := candidate.InitialConfirmationMessageID
+				if initialID == "" && candidate.Status == "confirmed" {
+					initialID = candidate.ConfirmationMessageID
+					if initialID == "" && len(candidate.EvidenceMessageIDs) > 0 {
+						initialID = candidate.EvidenceMessageIDs[0]
+					}
+				}
+				verifiedInitial := false
+				for _, m := range messages {
+					if m.ID == initialID && validOrderConfirmation(m, messages) && !m.SentAt.After(confirmation.SentAt) {
+						verifiedInitial = true
+						break
+					}
+				}
+				if !verifiedInitial {
+					continue
+				}
+				orderedAt, err := time.Parse(time.RFC3339Nano, candidate.OrderedAt)
+				if err != nil || orderedAt.After(confirmation.SentAt) {
+					continue
+				}
+				if ref != "" && !strings.EqualFold(candidate.OrderRef, ref) {
+					continue
+				}
+				candidateCount++
+				if prior != nil {
+					prior = nil
+					break
+				}
+				copy := candidate
+				prior = &copy
+			}
+			if candidateCount == 0 {
+				// A first analysis may return only the final status. Recover a
+				// prior purchase only when the transcript contains exactly one
+				// unambiguous earlier confirmation.
+				for i := range messages {
+					m := &messages[i]
+					if !m.SentAt.Before(confirmation.SentAt) || !validOrderConfirmation(*m, messages) || (ref != "" && verifiedOrderRef(ref, m) == "") {
 						continue
 					}
 					if prior != nil {
 						prior = nil
 						break
 					}
-					prior = candidate
+					id, orderRef := stableOrderRef(conversationID, m.ID, ref)
+					prior = &persistedOrderOutcome{OrderID: id, OrderRef: orderRef, Status: "confirmed", OrderedAt: m.SentAt.UTC().Format(time.RFC3339Nano), InitialConfirmationMessageID: m.ID, ConfirmationMessageID: m.ID, ConfirmationEvidence: m.Content}
 				}
 			}
 		}
 		var orderID, orderRef, orderedAt string
+		amountSource := prior
 		if prior != nil {
 			orderID, orderRef, orderedAt = prior.OrderID, prior.OrderRef, prior.OrderedAt
 			if value == nil {
@@ -983,6 +1053,7 @@ func validateOrderOutcomes(conversationID string, proposals []ai.OrderOutcomeIns
 					orderedAt = previous[index].OrderedAt
 					if value == nil {
 						value = previous[index].ValueVND
+						amountSource = &previous[index]
 					}
 					break
 				}
@@ -995,6 +1066,26 @@ func validateOrderOutcomes(conversationID string, proposals []ai.OrderOutcomeIns
 			OrderID: orderID, OrderRef: orderRef, ValueVND: value, Status: status,
 			OrderedAt:          orderedAt,
 			EvidenceMessageIDs: evidenceIDs, Confidence: proposal.Confidence,
+			ConfirmationMessageID: confirmation.ID, ConfirmationEvidence: confirmation.Content,
+		}
+		if status == "confirmed" {
+			outcome.InitialConfirmationMessageID = confirmation.ID
+		} else if prior != nil {
+			outcome.InitialConfirmationMessageID = prior.InitialConfirmationMessageID
+			if outcome.InitialConfirmationMessageID == "" && prior.Status == "confirmed" {
+				outcome.InitialConfirmationMessageID = prior.ConfirmationMessageID
+				if outcome.InitialConfirmationMessageID == "" && len(prior.EvidenceMessageIDs) > 0 {
+					outcome.InitialConfirmationMessageID = prior.EvidenceMessageIDs[0]
+				}
+			}
+		}
+		if amountValid {
+			outcome.AmountMessageID, outcome.AmountEvidence = amount.ID, amount.Content
+		} else if amountSource != nil && value != nil {
+			outcome.AmountMessageID, outcome.AmountEvidence = amountSource.AmountMessageID, amountSource.AmountEvidence
+			if outcome.AmountMessageID != "" && outcome.AmountMessageID != confirmation.ID {
+				outcome.EvidenceMessageIDs = append(outcome.EvidenceMessageIDs, outcome.AmountMessageID)
+			}
 		}
 		if position, exists := positions[orderID]; exists {
 			validated[position] = outcome
@@ -1177,9 +1268,11 @@ func (a *Analyzer) saveResults(runID, tenantID, conversationID, jobType, aiRespo
 		if classResult.Insights != nil {
 			var orderOutcomes []persistedOrderOutcome
 			var previousRow struct{ Detail string }
-			_ = db.DB.Table("job_results").Select("detail").
+			if err := db.DB.Table("job_results").Select("detail").
 				Where("tenant_id=? AND conversation_id=? AND result_type='conversation_insight'", tenantID, conversationID).
-				Order("created_at DESC,id DESC").Limit(1).Scan(&previousRow).Error
+				Order("created_at DESC,id DESC").Limit(1).Find(&previousRow).Error; err != nil {
+				return count, false, fmt.Errorf("load previous order outcomes: %w", err)
+			}
 			var previous struct {
 				OrderOutcomes []persistedOrderOutcome `json:"order_outcomes"`
 			}

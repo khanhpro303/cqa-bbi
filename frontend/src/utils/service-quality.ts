@@ -18,12 +18,26 @@ export interface LeadQualityInsight {
   reason?: string
 }
 
+export interface OrderOutcome {
+  order_id?: string
+  status: 'confirmed' | 'cancelled' | 'refunded' | 'review'
+  order_ref?: string
+  value_vnd?: number | null
+  confirmation_message_id?: string
+  confirmation_evidence?: string
+  amount_message_id?: string
+  amount_evidence?: string
+  evidence_message_ids?: string[]
+  confidence?: number
+}
+
 export interface ConversationInsight {
   summary?: string
   intents?: string[]
   products?: ProductInsight[]
   feedback?: FeedbackInsight[]
   lead_quality?: LeadQualityInsight
+  order_outcomes?: OrderOutcome[]
 }
 
 export interface InsightRow {

@@ -82,7 +82,12 @@ func loadDurableOrderOutcomes(database *gorm.DB, tenantID, conversationID string
 
 func recordMessengerInsightJourney(ctx context.Context, tx *gorm.DB, subject messengerJourneySubject, resultID, sourceJobID string, outcomes []persistedOrderOutcome, metadata analysisSnapshotMetadata, observedAt time.Time) error {
 	for _, outcome := range outcomes {
-		semanticPayload, err := json.Marshal(outcome)
+		// Journey payloads are shared with downstream systems; keep message IDs
+		// but never export the customer or staff transcript itself.
+		exportable := outcome
+		exportable.ConfirmationEvidence = ""
+		exportable.AmountEvidence = ""
+		semanticPayload, err := json.Marshal(exportable)
 		if err != nil {
 			return err
 		}

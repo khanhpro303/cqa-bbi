@@ -257,7 +257,7 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
     "products": [{"name":"tên sản phẩm","sku":"SKU nếu được nói rõ, nếu không để rỗng","evidence":"trích dẫn nguyên văn của khách"}],
     "feedback": [{"category":"sản phẩm|giá|giao hàng|CSKH|khác","sentiment":"positive|neutral|negative|mixed|unknown","evidence":"trích dẫn nguyên văn của khách"}],
     "lead_quality": {"level":"high|medium|low|spam|unknown","evidence":"trích dẫn nguyên văn của khách hoặc để rỗng nếu thiếu dữ kiện","reason":"lý do ngắn gọn"},
-    "order_outcomes": [{"status":"confirmed|cancelled|refunded|review","order_ref":"mã đơn được nói rõ hoặc rỗng","value_vnd":null,"confirmation_message_id":"ID tin nhắn customer","confirmation_evidence":"toàn bộ tin nhắn customer xác nhận","amount_message_id":"ID tin nhắn tổng tiền hoặc rỗng","amount_evidence":"toàn bộ tin nhắn có tổng tiền hoặc rỗng","confidence":0.0}]
+    "order_outcomes": [{"status":"confirmed|cancelled|refunded|review","order_ref":"mã đơn được nói rõ hoặc rỗng","value_vnd":null,"confirmation_message_id":"ID tin nhắn customer hoặc agent","confirmation_evidence":"toàn bộ tin nhắn làm bằng chứng","amount_message_id":"ID tin nhắn tổng tiền hoặc rỗng","amount_evidence":"toàn bộ tin nhắn có tổng tiền hoặc rỗng","confidence":0.0}]
   }`
 		insightsInstructions = `
 - Luôn trả về trường "insights", kể cả khi các mảng rỗng.
@@ -269,13 +269,15 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
 
 ## Quy tắc nhận diện đơn hàng
 - Trường bắt buộc trong insights: "order_outcomes": [{"status":"confirmed|cancelled|refunded|review","order_ref":"","value_vnd":null,"confirmation_message_id":"ID sau message_id=","confirmation_evidence":"","amount_message_id":"ID sau message_id= hoặc rỗng","amount_evidence":"","confidence":0.0}]. Nếu không có bằng chứng hợp lệ, trả mảng rỗng.
-- Chỉ trả order_outcomes khi có một tin nhắn (customer) xác nhận rõ ràng việc mua/chốt hàng. Xác nhận mua COD vẫn là confirmed; không bắt buộc đã thanh toán.
-- Việc nhân viên gửi QR, báo giá, mã vận đơn, lời cảm ơn hoặc tự nói "đã chốt" KHÔNG chứng minh khách đã mua.
-- confirmation_evidence phải là TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn (customer), không cắt, ghép hoặc diễn giải.
-- confirmation_message_id phải đúng ID được ghi cạnh tin nhắn confirmation_evidence trong transcript.
+- Chỉ trả order_outcomes khi có bằng chứng hợp lệ cho thấy đơn hàng đã được tạo hoặc khách đã mua trực tiếp; bằng chứng có thể từ customer hoặc agent.
+- confirmed khi agent gửi mã vận đơn cụ thể hợp lệ; hoặc customer cung cấp SĐT và địa chỉ và agent xác nhận đã tạo đơn; hoặc customer xác nhận đã đến cửa hàng và mua/lấy sản phẩm.
+- Không xem gửi QR, báo giá, xin thông tin giao hàng, hứa lên đơn hoặc trả lời "dạ ok" là bằng chứng xác nhận đơn.
+- confirmation_evidence là TOÀN BỘ nội dung nguyên văn của một tin nhắn làm bằng chứng; confirmation_message_id là ID sau message_id= cạnh tin nhắn đó.
 - value_vnd chỉ ghi khi tổng tiền của chính đơn được nói rõ trong transcript. Không suy giá trị từ QR, số điện thoại, mã đơn, mã vận đơn, giá niêm yết hay báo giá chưa được khách chấp nhận.
-- amount_evidence phải là TOÀN BỘ nội dung nguyên văn của đúng một tin nhắn chứa tổng tiền; nếu thiếu thì để value_vnd=null, amount_evidence="" và status="review".
-- amount_message_id phải đúng ID được ghi cạnh amount_evidence; nếu không có amount_evidence thì để rỗng.
+- Nếu đã confirmed nhưng không có tổng tiền, giữ status="confirmed", value_vnd=null, amount_evidence="" và amount_message_id="".
+- amount_evidence là toàn bộ tin nhắn có tổng tiền; amount_message_id là ID sau message_id= cạnh tin nhắn đó, hoặc rỗng khi không có bằng chứng.
+- Chỉ dùng review khi có dấu hiệu đơn hàng nhưng chưa đủ bằng chứng xác định trạng thái. cancelled hoặc refunded chỉ dùng khi đơn đã confirmed trước đó và có bằng chứng hủy hoặc hoàn tiền.
+- Khi đơn đã hủy hoặc hoàn tiền, trả cả outcome confirmed trước đó và outcome cancelled/refunded, mỗi outcome dùng ID và nguyên văn bằng chứng riêng, theo thứ tự thời gian.
 - status chỉ là confirmed|cancelled|refunded|review. Khi khách hủy/hoàn đơn đã nói trước đó, trả cùng order_ref nếu có. Nếu thiếu order_ref, để rỗng; hệ thống sẽ giữ một mã ổn định theo cuộc hội thoại.
 - Không đưa tên, số điện thoại, địa chỉ hoặc nội dung nhạy cảm khác vào order_ref.`
 	}
