@@ -469,3 +469,39 @@ func TestBuildHistoryFilter(t *testing.T) {
 		}
 	})
 }
+
+func TestRunFlowWithCustomerUsageSendsERPAgentTokenWithPermissionToken(t *testing.T) {
+	transport := &captureRoundTripper{}
+	client := NewLangflowClient(&config.Config{})
+	client.client = &http.Client{Transport: transport}
+
+	if _, err := client.RunFlowWithCustomerUsage(
+		context.Background(), "session-1", "zalo-1", "FF901 còn không",
+		"http://langflow.local", "lf-key", "flow-1", "KH001",
+		"permission-token-1", "agent-token-private", "",
+	); err != nil {
+		t.Fatalf("RunFlowWithCustomerUsage returned error: %v", err)
+	}
+	if got := transport.headers.Get(langflowERPPermissionHeader); got != "permission-token-1" {
+		t.Fatalf("permission header = %q, want permission-token-1", got)
+	}
+	if got := transport.headers.Get(langflowERPAgentTokenHeader); got != "agent-token-private" {
+		t.Fatalf("agent token header = %q, want agent-token-private", got)
+	}
+}
+
+func TestRunFlowWithCustomerOmitsEmptyERPAgentToken(t *testing.T) {
+	transport := &captureRoundTripper{}
+	client := NewLangflowClient(&config.Config{})
+	client.client = &http.Client{Transport: transport}
+
+	if _, err := client.RunFlowWithCustomer(
+		context.Background(), "session-1", "zalo-1", "hi",
+		"http://langflow.local", "lf-key", "flow-1", "", "permission-token-1", "",
+	); err != nil {
+		t.Fatalf("RunFlowWithCustomer returned error: %v", err)
+	}
+	if _, ok := transport.headers[http.CanonicalHeaderKey(langflowERPAgentTokenHeader)]; ok {
+		t.Fatalf("agent token header must be absent when no token is configured")
+	}
+}

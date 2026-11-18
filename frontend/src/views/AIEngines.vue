@@ -597,6 +597,9 @@ const resourceLabels: Record<string, string> = {
   orders: '📋 Đơn hàng',
   customers: '👥 Khách hàng',
   debt: '💰 Công nợ',
+  order_create: '🛒 Tạo đơn (chatbot)',
+  order_update: '✏️ Sửa đơn (chatbot)',
+  order_cancel: '🚫 Huỷ đơn (chatbot)',
 }
 
 const scopeOptions = [
@@ -611,6 +614,10 @@ const privateEndpoints = ref<any[]>([
   { resource: 'orders', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
   { resource: 'customers', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
   { resource: 'debt', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
+  // Order writes are off until an admin turns them on.
+  { resource: 'order_create', is_enabled: false, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
+  { resource: 'order_update', is_enabled: false, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
+  { resource: 'order_cancel', is_enabled: false, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
 ])
 
 // Brand (nhãn hiệu) options — distinct brands from the local product cache,

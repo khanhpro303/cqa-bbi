@@ -938,10 +938,12 @@ func equalStringSlices(a, b []string) bool {
 
 func TestOrderStatusDisplayName(t *testing.T) {
 	cases := map[string]string{
-		"0":  "Hủy",
-		"1":  "Đang thực hiện",
-		"2":  "Hoàn thành",
-		"3":  "Đang giao",
+		"0":              "Chưa thực hiện",
+		"Chưa thực hiện": "Chưa thực hiện",
+		"1":              "Đang thực hiện",
+		"2":              "Hoàn thành",
+		"3":              "Hủy bỏ",
+		"4":              "Đang giao",
 		"":   "Không xác định",
 		"7":  "Khác (mã 7)",
 		"99": "Khác (mã 99)",
@@ -1046,7 +1048,7 @@ func TestBuildOrdersSummary(t *testing.T) {
 			},
 		},
 		{
-			name: "all four statuses ordered canonically (3,1,2,0)",
+			name: "all statuses ordered canonically (4,1,0,2,3)",
 			items: []map[string]interface{}{
 				{"trang_thai": "0", "total": 50000.0, "don_dat_hang_chi_tiet": []interface{}{
 					map[string]interface{}{"SO_LUONG": 1.0},
@@ -1057,7 +1059,7 @@ func TestBuildOrdersSummary(t *testing.T) {
 				{"trang_thai": "2", "total": 300000.0, "don_dat_hang_chi_tiet": []interface{}{
 					map[string]interface{}{"SO_LUONG": 3.0},
 				}},
-				{"trang_thai": "3", "total": 400000.0, "don_dat_hang_chi_tiet": []interface{}{
+				{"trang_thai": "4", "total": 400000.0, "don_dat_hang_chi_tiet": []interface{}{
 					map[string]interface{}{"SO_LUONG": 4.0},
 				}},
 				{"trang_thai": "1", "total": 150000.0, "don_dat_hang_chi_tiet": []interface{}{
@@ -1068,10 +1070,10 @@ func TestBuildOrdersSummary(t *testing.T) {
 			wantTotalValue:    1100000.0,
 			wantTotalQuantity: 11.5,
 			wantBuckets: []OrdersStatusBucket{
-				{Status: "3", StatusName: "Đang giao", Count: 1, Quantity: 4.0, Value: 400000.0},
+				{Status: "4", StatusName: "Đang giao", Count: 1, Quantity: 4.0, Value: 400000.0},
 				{Status: "1", StatusName: "Đang thực hiện", Count: 2, Quantity: 3.5, Value: 350000.0},
+				{Status: "0", StatusName: "Chưa thực hiện", Count: 1, Quantity: 1.0, Value: 50000.0},
 				{Status: "2", StatusName: "Hoàn thành", Count: 1, Quantity: 3.0, Value: 300000.0},
-				{Status: "0", StatusName: "Hủy", Count: 1, Quantity: 1.0, Value: 50000.0},
 			},
 		},
 		{

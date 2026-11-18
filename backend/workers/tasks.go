@@ -245,6 +245,24 @@ func loadTenantSettings(tenantID string, keys ...string) map[string]models.AppSe
 	return out
 }
 
+// erpAgentTokenFor returns the tenant's ERP agent token for the given bot type
+// ("public" or "private"). The private bot falls back to the legacy single
+// token, which the ERP gateway also treats as private. Empty when unset.
+func erpAgentTokenFor(tenantID, agentType string) string {
+	key := "ai_agent_erp_token_" + agentType
+	keys := []string{key}
+	if agentType == "private" {
+		keys = append(keys, "ai_agent_erp_token")
+	}
+	settings := loadTenantSettings(tenantID, keys...)
+	for _, k := range keys {
+		if v := strings.TrimSpace(settings[k].ValuePlain); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // HandleZaloWebhookTask processes the webhook task
 func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowClient) asynq.HandlerFunc {
 	var asynqClient *asynq.Client
@@ -816,6 +834,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				log.Printf("[worker] failed to save user message to Astra DB: %v", err)
 			}
 		}()
+
+		// A pending order draft waits for this sender's "1"/"2". Settle it here,
+		// before the intent classifier, which would read "ok" as small talk.
+		if handled, err := handleOrderDraftReply(ctx, cfg, adapter, matchedChannel.TenantID, workKey, payload.Sender.ID, matchedGroup.ZaloGroupID, userText); handled {
+			return err
+		}
 
 		// Real-time intent classification for active sessions. Skip it when the
 		// previous turn was a backend-pushed prompt awaiting this reply: the
@@ -1484,8 +1508,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// is judged only on what the ERP handler did during THIS Langflow call.
 		engine.ClearPromptDelivery(ctx, workKey)
 
+		// The ERP MCP server authenticates the bot with the agent token that
+		// matches this flow (public vs private) and scopes data with the signed
+		// permission token; both reach Langflow as request-scoped global variables.
+		erpAgentToken := erpAgentTokenFor(matchedChannel.TenantID, agentType)
+
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
-		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
+		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
 		// Self-heal: a per-channel Langflow override that Langflow rejects (bad
 		// key / deleted flow) must not take the whole bot down while the AI
 		// Engine settings are fine. Retry once with the tenant config.
@@ -1494,7 +1523,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] WARNING channel %s Langflow override rejected (%v); falling back to AI Engine config flow=%s (source=%s). Clear the Langflow fields on this channel to silence this.",
 				matchedChannel.ID, err, fallbackFlow, fallbackSource)
 			if fallbackFlow != "" && lfTenantCfg.APIURL != "" {
-				lfRes, err = langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, lfTenantCfg.APIURL, lfTenantCfg.APIKey, fallbackFlow, customerCode, permissionToken, systemPromptToUse)
+				lfRes, err = langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, lfTenantCfg.APIURL, lfTenantCfg.APIKey, fallbackFlow, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
 				flowIDToUse, flowSource = fallbackFlow, fallbackSource
 				lfCfg = lfTenantCfg
 			}

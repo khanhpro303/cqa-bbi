@@ -13,7 +13,9 @@ import (
 )
 
 // Available ERP resources for validation
-var erpAvailableResources = []string{"products", "inventory", "orders", "customers", "debt"}
+// order_create / order_update / order_cancel let the chatbot draft order
+// changes (see erp_order_drafts.go). They default to off everywhere.
+var erpAvailableResources = []string{"products", "inventory", "orders", "customers", "debt", "order_create", "order_update", "order_cancel"}
 
 // resourceRequiresProductGroups reports whether enabling a resource requires a
 // non-empty VTHH product-group filter. Only product/inventory reads are scoped

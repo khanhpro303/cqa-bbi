@@ -312,7 +312,7 @@ interface WatchData {
   events: WatchEvent[]
 }
 
-const statusNames: Record<string, string> = { '0': 'Hủy', '1': 'Đang thực hiện', '2': 'Hoàn thành', '3': 'Đang giao' }
+const statusNames: Record<string, string> = { '0': 'Chưa thực hiện', '1': 'Đang thực hiện', '2': 'Hoàn thành', '3': 'Hủy bỏ', '4': 'Đang giao' }
 const kindItems = [
   { title: 'Đơn mới', value: 'created' },
   { title: 'Đổi trạng thái', value: 'status_changed' },

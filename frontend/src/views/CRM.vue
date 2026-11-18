@@ -1986,6 +1986,9 @@ const resourceLabels: Record<string, string> = {
   orders: '📋 Đơn hàng',
   customers: '👥 Khách hàng',
   debt: '💰 Công nợ',
+  order_create: '🛒 Tạo đơn (chatbot)',
+  order_update: '✏️ Sửa đơn (chatbot)',
+  order_cancel: '🚫 Huỷ đơn (chatbot)',
 }
 
 function resourceLabel(r: string): string {

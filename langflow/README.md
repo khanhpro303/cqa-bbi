@@ -41,12 +41,33 @@ to one native **MCP Tools** component. Register the server in Langflow with:
 }
 ```
 
-`CQA_ERP_AGENT_TOKEN` is a Langflow credential global variable. CQA sends the
-request-specific `ERP_PERMISSION_TOKEN` to the Langflow `/run` endpoint in the
-`X-Langflow-Global-Var-ERP_PERMISSION_TOKEN` HTTP header. Do not expose either
-value as a Tool Mode input, prompt variable, or model-selected tool argument.
+CQA sends both header values with every `/run` request as request-scoped
+Langflow global variables:
 
-Leave the MCP Tools `Tool` field empty and enable Tool Mode. The Agent then sees
+| MCP header | Variable name in the node | Sent by CQA as |
+| --- | --- | --- |
+| `X-Agent-Token` | `CQA_ERP_AGENT_TOKEN` | `X-Langflow-Global-Var-CQA_ERP_AGENT_TOKEN` (public or private agent token, matching the flow) |
+| `X-Permission-Token` | `ERP_PERMISSION_TOKEN` | `X-Langflow-Global-Var-ERP_PERMISSION_TOKEN` (signed, per user, 5 min) |
+
+Both must come from the request. Once a `/run` carries any
+`X-Langflow-Global-Var-*` header, Langflow (lfx 1.10) resolves MCP header
+variables only from the request and no longer loads stored global variables,
+so a header that points at a stored variable (for example
+`BBI_SECURE_PUBLIC_CQA_TOKEN`) is sent as its literal name and the server
+answers 401. Do not expose either value as a Tool Mode input, prompt variable,
+or model-selected tool argument.
+
+Keep `use_cache` **off** on the MCP Tools node. Langflow keys its MCP sessions
+by the resolved headers, so each user's permission token gets its own session,
+but the tool-list cache key ignores the resolved headers and would be shared
+across users if caching were on.
+
+Point the server URL at the app over the internal Docker network or the HTTPS
+domain, not at the VPS public IP over plain HTTP: both tokens travel in the
+headers.
+
+Leave the MCP Tools `Tool` field empty, enable Tool Mode, and connect its
+`Toolset` output to the Agent's `Tools` input in both flows. The Agent then sees
 the typed tools exported by CQA and chooses between them from their schemas:
 
 - `search_products` for product-line discovery, price intent, and web-name

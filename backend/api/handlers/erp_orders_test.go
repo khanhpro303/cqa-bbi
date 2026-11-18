@@ -142,7 +142,7 @@ func TestComputeOrderTotal(t *testing.T) {
 func TestBuildOrdersSummaryRealShape(t *testing.T) {
 	records := []map[string]interface{}{
 		{
-			"status": "3",
+			"status": "4",
 			"total":  float64(230000),
 			"don_dat_hang_chi_tiet": []interface{}{
 				map[string]interface{}{"SO_LUONG": float64(3)},
@@ -170,9 +170,9 @@ func TestBuildOrdersSummaryRealShape(t *testing.T) {
 	if len(summary.ByStatus) != 2 {
 		t.Fatalf("ByStatus len = %d; want 2", len(summary.ByStatus))
 	}
-	// Canonical order: "3" (Đang giao) before "2" (Hoàn thành).
-	if summary.ByStatus[0].Status != "3" || summary.ByStatus[0].StatusName != "Đang giao" {
-		t.Errorf("ByStatus[0] = %+v; want status 3 Đang giao", summary.ByStatus[0])
+	// Canonical order: "4" (Đang giao) before "2" (Hoàn thành).
+	if summary.ByStatus[0].Status != "4" || summary.ByStatus[0].StatusName != "Đang giao" {
+		t.Errorf("ByStatus[0] = %+v; want status 4 Đang giao", summary.ByStatus[0])
 	}
 	if summary.ByStatus[1].Status != "2" || summary.ByStatus[1].StatusName != "Hoàn thành" {
 		t.Errorf("ByStatus[1] = %+v; want status 2 Hoàn thành", summary.ByStatus[1])
@@ -249,7 +249,7 @@ func TestNormalizeOrderRecord(t *testing.T) {
 	item := map[string]interface{}{
 		"SO_DON_HANG":   "ĐH000016",
 		"MA_KHACH_HANG": []interface{}{float64(2273), "S052 - Phượt 4P"},
-		"TRANG_THAI":    "3",
+		"TRANG_THAI":    "4",
 		"DON_DAT_HANG_CHI_TIET": []interface{}{
 			map[string]interface{}{"SO_LUONG": float64(2), "DON_GIA": float64(100000)},
 		},

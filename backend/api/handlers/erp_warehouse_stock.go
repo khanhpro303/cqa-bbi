@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -11,16 +12,47 @@ import (
 	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
-func respondWithWarehouseStock(c *gin.Context, client *pkg.CloudifyClient, permissions *engine.GroupPermissionContext, scope string, groups []string, term string, byLine bool) {
+// warehouseStockMode selects which SKUs respondWithWarehouseStock sums.
+type warehouseStockMode int
+
+const (
+	// warehouseBySKU reads one exact SKU.
+	warehouseBySKU warehouseStockMode = iota
+	// warehouseByLine sums every SKU under the parent codes of a web line name.
+	warehouseByLine
+	// warehouseByParent sums every SKU under one parent code (ma_cha).
+	warehouseByParent
+)
+
+// isParentProductCode reports whether code is the parent (ma_cha) of more
+// than one cached SKU. Cloudify often reuses the first variant's SKU as the
+// parent code (LS2 FF818: ma_cha SP462693 is also the SKU of P.White M), so an
+// exact-SKU match alone must not decide that the agent asked for one variant.
+func isParentProductCode(ctx context.Context, tenantID, code string) bool {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return false
+	}
+	var count int64
+	db.DB.WithContext(ctx).Model(&models.CachedProduct{}).
+		Where("tenant_id = ? AND ma_cha = ?", tenantID, code).Count(&count)
+	return count > 1
+}
+
+func respondWithWarehouseStock(c *gin.Context, client *pkg.CloudifyClient, permissions *engine.GroupPermissionContext, scope string, groups []string, term string, mode warehouseStockMode) {
 	ctx := c.Request.Context()
 	tenantID := permissions.TenantID
 	term = strings.TrimSpace(term)
+	byLine := mode != warehouseBySKU
 	query := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).Where("tenant_id = ?", tenantID)
-	if byLine {
+	switch mode {
+	case warehouseByLine:
 		parents := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).
 			Where("tenant_id = ? AND ten_dong_bo_web = ? AND ma_cha <> ''", tenantID, term).Distinct("ma_cha")
 		query = query.Where("ma_cha IN (?)", parents)
-	} else {
+	case warehouseByParent:
+		query = query.Where("ma_cha = ?", term)
+	default:
 		query = query.Where("ma = ?", term)
 	}
 	var catalog []models.CachedProduct
@@ -58,6 +90,12 @@ func respondWithWarehouseStock(c *gin.Context, client *pkg.CloudifyClient, permi
 	if byLine {
 		item["line_name"] = term
 		item["sku_count"] = len(seen)
+		if mode == warehouseByParent {
+			item["parent_code"] = term
+			if web := getMapString(products[0], "TEN_DONG_BO_WEB", "ten_dong_bo_web"); web != "" {
+				item["name"], item["line_name"] = web, web
+			}
+		}
 	} else {
 		item["ma"] = getMapString(products[0], "MA", "ma")
 		item["ten"] = getMapString(products[0], "TEN", "ten")

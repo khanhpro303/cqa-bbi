@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"github.com/vietbui/chat-quality-agent/cloudifyorders"
 	"regexp"
 	"sort"
 	"strings"
@@ -143,21 +144,26 @@ type OrdersSummary struct {
 
 // orderStatusName maps BBI ERP TRANG_THAI codes to the Vietnamese label
 // surfaced to customers.
+// Keep in sync with cloudifyorders.statusNames (confirmed by the user on
+// 2026-11-18: 0 chưa thực hiện, 1 đang thực hiện, 2 hoàn thành, 3 huỷ bỏ,
+// 4 đang giao).
 var orderStatusName = map[string]string{
-	"0": "Hủy",
+	"0": "Chưa thực hiện",
 	"1": "Đang thực hiện",
 	"2": "Hoàn thành",
-	"3": "Đang giao",
+	"3": "Hủy bỏ",
+	"4": "Đang giao",
 }
 
 // orderStatusReportOrder is the canonical order ByStatus is emitted in:
-// in-flight first, finished, cancelled last. Customer-friendly framing.
-var orderStatusReportOrder = []string{"3", "1", "2", "0"}
+// in-flight first, then not started, finished, cancelled last.
+var orderStatusReportOrder = []string{"4", "1", "0", "2", "3"}
 
 // orderStatusDisplayName resolves a TRANG_THAI code to its display label,
 // falling back to "Không xác định" for empty and "Khác (mã X)" for any
 // code outside the canonical set.
 func orderStatusDisplayName(code string) string {
+	code = cloudifyorders.NormalizeStatus(code)
 	if name, ok := orderStatusName[code]; ok {
 		return name
 	}
@@ -272,7 +278,7 @@ func buildOrdersSummary(items []map[string]interface{}) OrdersSummary {
 	summary := OrdersSummary{}
 	buckets := map[string]*OrdersStatusBucket{}
 	for _, item := range items {
-		status := strings.TrimSpace(getMapString(item, "trang_thai", "TRANG_THAI", "status"))
+		status := cloudifyorders.NormalizeStatus(getMapString(item, "trang_thai", "TRANG_THAI", "status"))
 		value := getMapFloat(item, "total", "TONG_TIEN", "tong_tien")
 		qty := sumOrderLineQuantity(item)
 

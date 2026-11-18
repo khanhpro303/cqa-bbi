@@ -73,7 +73,7 @@ func parsed(t *testing.T, row map[string]any) Order {
 
 func TestDiffKinds(t *testing.T) {
 	same := parsed(t, sampleRow(1, "ĐH1", "1"))
-	status := parsed(t, sampleRow(2, "ĐH2", "3"))
+	status := parsed(t, sampleRow(2, "ĐH2", "4"))
 	edited := parsed(t, sampleRow(3, "ĐH3", "1"))
 	edited.Fingerprint = "changed"
 	fresh := parsed(t, sampleRow(4, "ĐH4", "1"))
@@ -151,7 +151,7 @@ func TestParseSettingsDefaultsAndLimits(t *testing.T) {
 }
 
 func TestRender(t *testing.T) {
-	event := models.CloudifyOrderEvent{OrderCode: "ĐH000016", CustomerName: "Shop A", Status: "3", PrevStatus: "1", Total: 2900000, OrderDate: "2026-11-18"}
+	event := models.CloudifyOrderEvent{OrderCode: "ĐH000016", CustomerName: "Shop A", Status: "4", PrevStatus: "1", Total: 2900000, OrderDate: "2026-11-18"}
 	got := Render("{ma_don}|{khach_hang}|{trang_thai_cu}->{trang_thai}|{tong_tien}|{ngay}", event)
 	want := "ĐH000016|Shop A|Đang thực hiện->Đang giao|2.900.000đ|18/11/2026"
 	if got != want {
