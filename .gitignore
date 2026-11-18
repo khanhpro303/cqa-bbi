@@ -61,3 +61,6 @@ local-dev/
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# Raw Langflow dumps (may contain secrets); commit only via scripts/export_langflow_flows.py
+.langflow-export/

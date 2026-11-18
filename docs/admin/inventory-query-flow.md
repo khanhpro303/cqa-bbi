@@ -360,7 +360,7 @@ Bước 3 — đọc tồn live của đúng SKU đó
 > tồn:** khách bấm "🔍 xem theo mã SKU cụ thể" (nút nằm dưới luồng tồn kho) rồi nhập "nardo grey
 > size XL". Agent chạy `products` → `product_variants` → resolve đúng `ma=SP458493`, đọc `price`
 > rồi **DỪNG**, báo giá — bỏ Bước 3 `inventory`. Hai nguyên nhân cộng dồn: (a) hint của tool
-> `product_variants` (`ERPGatewayCaller.component.py` `_format_variant_response`) hard-code "chốt
+> `product_variants` (`langflow/components/ERPGatewayCaller.py` `_format_variant_response`) hard-code "chốt
 > giá cụ thể", không nhắc bước inventory; (b) tin nhắn màu/size không có chữ "tồn"/"còn" nên Agent
 > đọc nhầm thành nhánh C (giá) dù history rõ là STOCK. **Đã siết hai tầng:** (a) **tool** — hint
 > đổi thành intent-aware: "BƯỚC GIỮA, nếu intent là tồn → BẮT BUỘC gọi tiếp `inventory(search=<ma>)`,
@@ -407,7 +407,7 @@ Bước 3 — đọc tồn live của đúng SKU đó
 > `resolveVariantStockDirect`, helper trích chung với Branch-0) khi các variant về **một dòng** duy nhất
 > (`distinctMaChaCount==1`) — tránh LIKE rộng dính dòng anh em; lọc 0 / spanning nhiều dòng / không
 > màu+size → giữ picker như cũ (no-op, luồng "FF901 trần" bất biến). (b) **prompt** (`system-prompt.md` +
-> `…-internal.md`) + **tool** (`ERPGatewayCaller.component.py`) — ép Agent chạy nhánh B khi đã có màu+size,
+> `…-internal.md`) + **tool** (`langflow/components/ERPGatewayCaller.py`) — ép Agent chạy nhánh B khi đã có màu+size,
 > và nếu vẫn gọi `inventory` với mã dòng thì BẮT BUỘC kèm `color`+`size` để backend pin SKU. Test:
 > `TestGenericStockGuard_DistinctMaCha` + `TestExactWebStockContinuation_SkipsRedundantPicker`
 > (`api/handlers/erp_variants_test.go`).

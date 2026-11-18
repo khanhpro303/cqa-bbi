@@ -10,8 +10,8 @@ import (
 	"strings"
 )
 
-// DefaultEmbeddingModel must match the model configured on the Langflow
-// EmbeddingModel-OnvoJ node in BBI_RAG_Bot_Ext.json so vectors produced by Go
+// DefaultEmbeddingModel must match the model wired into the Langflow history
+// nodes (the Embedding Model node in langflow/flows/*.json) so vectors produced by Go
 // land in the same space as vectors produced by the Langflow flow.
 const DefaultEmbeddingModel = "text-embedding-ada-002"
 

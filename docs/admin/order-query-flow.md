@@ -471,7 +471,7 @@ Anh không có đơn hàng nào trong 7 ngày gần đây.
 | Mock (dev) | `backend/api/handlers/erp.go:2655` (`respondWithMockDataV2`); prompt mơ hồ tự gửi ở `:2731` | cùng định tuyến: `days<=0` → tự gửi prompt; `days>0` → lọc theo ngày |
 | **Private: flow theo khách** | `backend/api/handlers/erp_orders_private.go` | `isPrivateOrdersCustomerQuery` / `resolveOrdersCustomerCodes` / `scopeApprovedOrdersCodes` / `tokenizeOrdersCustomerQuery` / `isAllCustomersReply` / `codesContain` / prompt + store helpers |
 | **Private: pick prompt liệt kê mã** | `backend/api/handlers/erp_orders_private.go` | `sendOrdersCustomerPickPrompt` (dùng chung `debtCustomerCandidates`/`renderDebtCustomerPickText`; `exactCustomerCodePick` chống loop mã cha) |
-| **Private: count==0 → summary sạch** | `ERPGatewayCaller.component.py` | nhánh `res=="orders"` + `orders_summary` (render tóm tắt, kể cả 0 đơn) trước nhánh count==0 chung |
+| **Private: count==0 → summary sạch** | `langflow/components/ERPGatewayCaller.py` | nhánh `res=="orders"` + `orders_summary` (render tóm tắt, kể cả 0 đơn) trước nhánh count==0 chung |
 | **Private: pre-routing trong case orders** | `backend/api/handlers/erp.go` (trong `case "orders"`, ngay sau khối `allowedCodes`) | take state → pick/timerange; nêu khách → resolve+scope; gán `targetCodes` |
 | **Private: state qua lượt** | `backend/engine/session_options.go` | `OrderCustomerState{Stage,Codes}` · `StoreOrderCustomerState` / `TakeOrderCustomerState` · key `:awaiting_order_customer` |
 | **Private: lọc membership** | `backend/api/handlers/erp.go` (nhánh `days > 0`) | `len(targetCodes)>0` → `codesContain(targetCodes, …)`; ngược lại `isOrderAuthorized` |

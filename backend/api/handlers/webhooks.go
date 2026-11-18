@@ -2,10 +2,13 @@ package handlers
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
@@ -57,8 +60,35 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 			log.Printf("[zalo-webhook] failed to build task for Zalo user %s: %v", payload.Sender.ID, err)
 			return
 		}
-		if _, err := asynqClient.Enqueue(task, asynq.MaxRetry(3)); err != nil {
+		if _, err := asynqClient.Enqueue(task, zaloTaskOptions(payload)...); err != nil {
+			if errors.Is(err, asynq.ErrTaskIDConflict) {
+				log.Printf("[zalo-drop] reason=duplicate_webhook sender=%s msg_id=%s", payload.Sender.ID, payload.Message.MsgID)
+				return
+			}
 			log.Printf("[zalo-webhook] failed to enqueue %s from Zalo user %s: %v", payload.EventName, payload.Sender.ID, err)
 		}
 	}
+}
+
+// zaloWebhookDedupeWindow is how long a processed Zalo message id is remembered
+// so a redelivered webhook for the same message is dropped instead of answered
+// twice. Zalo redelivers when it misses our 200 (slow network, restart), and a
+// duplicate turn re-runs the whole Langflow agent: double reply, double AI
+// spend — and, once the bot can write orders, a double write.
+const zaloWebhookDedupeWindow = 2 * time.Hour
+
+// zaloTaskOptions returns the enqueue options for one Zalo message. When the
+// payload carries a msg_id the task gets a deterministic TaskID (scoped by OA)
+// and is retained after completion, so asynq rejects a second enqueue of the
+// same message with ErrTaskIDConflict for zaloWebhookDedupeWindow. Payloads
+// without a msg_id keep the old behaviour (no dedupe).
+func zaloTaskOptions(payload workers.ZaloWebhookPayload) []asynq.Option {
+	opts := []asynq.Option{asynq.MaxRetry(3)}
+	if msgID := strings.TrimSpace(payload.Message.MsgID); msgID != "" {
+		opts = append(opts,
+			asynq.TaskID("zalo:"+payload.OAID+":"+msgID),
+			asynq.Retention(zaloWebhookDedupeWindow),
+		)
+	}
+	return opts
 }
