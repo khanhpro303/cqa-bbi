@@ -29,8 +29,11 @@ type Config struct {
 	MessengerRelaySecret    string
 	MessengerJourneyEnabled bool
 	// Pancake realtime listener (headless websocket replacing Pancake webhooks).
-	PancakeSocketEnabled      bool
-	PancakeSocketURL          string
+	PancakeSocketEnabled bool
+	PancakeSocketURL     string
+	// Cloudify order watcher (polls saorders/search and diffs snapshots; each
+	// tenant still opts in via the cloudify_order_watch_enabled setting).
+	CloudifyOrderWatchEnabled bool
 	FacebookAppID             string
 	FacebookAppSecret         string
 	FacebookAPIVersion        string
@@ -119,6 +122,7 @@ func Load() (*Config, error) {
 		MessengerJourneyEnabled:      strings.EqualFold(getEnv("CQA_MESSENGER_JOURNEY_ENABLED", "false"), "true"),
 		PancakeSocketEnabled:         strings.EqualFold(getEnv("CQA_PANCAKE_SOCKET_ENABLED", "false"), "true"),
 		PancakeSocketURL:             getEnv("CQA_PANCAKE_SOCKET_URL", ""),
+		CloudifyOrderWatchEnabled:    strings.EqualFold(getEnv("CQA_CLOUDIFY_ORDER_WATCH_ENABLED", "true"), "true"),
 		FacebookAppID:                getEnv("FACEBOOK_APP_ID", ""),
 		FacebookAppSecret:            getEnv("FACEBOOK_APP_SECRET", ""),
 		FacebookAPIVersion:           getEnv("FACEBOOK_API_VERSION", "v26.0"),

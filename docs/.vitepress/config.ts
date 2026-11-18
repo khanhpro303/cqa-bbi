@@ -51,6 +51,7 @@ export default defineConfig({
         items: [
           { text: 'Người dùng & phân quyền', link: '/admin/users' },
           { text: 'Loại trừ mã KH khỏi cache', link: '/admin/customer-cache-exclusion' },
+          { text: 'Báo đơn hàng Cloudify qua Zalo', link: '/admin/cloudify-order-notify' },
           { text: 'Quản lý đa công ty', link: '/admin/multi-tenant' },
           { text: 'Kết nối MCP', link: '/admin/mcp' },
           { text: 'Dữ liệu demo', link: '/admin/demo-data' },
