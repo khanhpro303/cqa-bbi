@@ -602,9 +602,26 @@ func ERPQuery(c *gin.Context) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "erp_credentials_missing"})
 			return
 		}
-		if tool == "inventory_by_line" || (tool == "inventory_by_sku" && req.ExactSKU) {
-			respondWithWarehouseStock(c, client, permCtx, scopeType, productGroups, req.Search, tool == "inventory_by_line")
+		if tool == "inventory_by_line" {
+			respondWithWarehouseStock(c, client, permCtx, scopeType, productGroups, req.Search, warehouseByLine)
 			return
+		}
+		if tool == "inventory_by_sku" {
+			// A parent code (often identical to its first variant's SKU) asks for
+			// the whole line, not one variant: sum every SKU under it unless the
+			// agent also named a color/size/brand.
+			code := strings.TrimSpace(req.Search)
+			if code == "" {
+				code = strings.TrimSpace(req.ParentCode)
+			}
+			if !hasVariantAttribute(req.Color, req.Size, req.Brand) && isParentProductCode(c.Request.Context(), tenantID, code) {
+				respondWithWarehouseStock(c, client, permCtx, scopeType, productGroups, code, warehouseByParent)
+				return
+			}
+			if req.ExactSKU {
+				respondWithWarehouseStock(c, client, permCtx, scopeType, productGroups, req.Search, warehouseBySKU)
+				return
+			}
 		}
 	}
 

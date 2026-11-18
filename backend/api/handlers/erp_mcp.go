@@ -38,10 +38,10 @@ func newERPMCPTool(name, description, resource string, required []string, fields
 }
 
 var erpMCPTools = []erpMCPTool{
-	newERPMCPTool("search_products", "Tìm dòng sản phẩm, giá, hoặc các dòng trùng tên. search là tên hoặc mã người dùng hỏi. intent là price hoặc stock.", "products", []string{"search"}, "search", "limit", "intent", "exact_web_name", "color", "size", "brand", "parent_code"),
+	newERPMCPTool("search_products", "Tìm dòng sản phẩm, giá, hoặc các dòng trùng tên. search là tên hoặc mã người dùng hỏi. intent là price hoặc stock. Tool này không trả tồn kho: hỏi tồn của cả dòng thì gọi tiếp inventory_by_line với line_name là web_name tìm được, không lấy parent_codes để gọi inventory_by_sku.", "products", []string{"search"}, "search", "limit", "intent", "exact_web_name", "color", "size", "brand", "parent_code"),
 	newERPMCPTool("search_product_variants", "Tra màu, size hoặc giá biến thể của mã cha đã xác định. include_stock đính kèm tồn 1.KHO-TONG.", "product_variants", []string{"parent_code"}, "search", "parent_code", "limit", "color", "size", "brand", "include_stock"),
-	newERPMCPTool("inventory_by_sku", "Tra tồn 1.KHO-TONG của một SKU chính xác. Khi chỉ có tên dòng và thuộc tính màu/size, dùng search cùng color/size/brand để phân giải SKU.", "inventory", nil, "sku", "search", "limit", "parent_code", "exact_web_name", "color", "size", "brand"),
-	newERPMCPTool("inventory_by_line", "Cộng tồn 1.KHO-TONG của toàn bộ SKU thuộc các mã cha của tên dòng đã xác nhận. Nếu tên còn mơ hồ, dùng search_products trước.", "inventory", []string{"line_name"}, "line_name"),
+	newERPMCPTool("inventory_by_sku", "Tra tồn 1.KHO-TONG của MỘT biến thể (SKU có màu/size cụ thể). Khi chỉ có tên dòng và thuộc tính màu/size, dùng search cùng color/size/brand để phân giải SKU. Hỏi tồn của cả dòng thì dùng inventory_by_line; nếu lỡ truyền mã cha, hệ thống trả tổng cả dòng.", "inventory", nil, "sku", "search", "limit", "parent_code", "exact_web_name", "color", "size", "brand"),
+	newERPMCPTool("inventory_by_line", "Cộng tồn 1.KHO-TONG của toàn bộ SKU thuộc các mã cha của tên dòng đã xác nhận (line_name là web_name chính xác, ví dụ LS2 FF818). Dùng cho mọi câu hỏi tồn của cả dòng. Nếu tên còn mơ hồ, dùng search_products trước.", "inventory", []string{"line_name"}, "line_name"),
 	newERPMCPTool("find_customer", "Tra thông tin khách hàng theo tên hoặc mã trong phạm vi được phép.", "customers", nil, "search", "limit", "partner_id"),
 	newERPMCPTool("lookup_order", "Tra đơn hàng theo mã đơn hoặc khoảng thời gian trong phạm vi được phép.", "orders", nil, "search", "limit", "partner_id"),
 	newERPMCPTool("lookup_debt", "Tra công nợ theo kỳ và khách hàng trong phạm vi được phép.", "debt", nil, "search", "limit", "partner_id"),
@@ -107,7 +107,8 @@ func ERPMCP(c *gin.Context) {
 	case "ping":
 		reply(gin.H{})
 	case "tools/list":
-		reply(gin.H{"tools": erpMCPTools})
+		tools := append(append([]erpMCPTool{}, erpMCPTools...), erpMCPOrderTools...)
+		reply(gin.H{"tools": tools})
 	case "tools/call":
 		var params struct {
 			Name      string                     `json:"name"`
@@ -115,6 +116,10 @@ func ERPMCP(c *gin.Context) {
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			fail(-32602, "Invalid tool parameters")
+			return
+		}
+		if tool, ok := findOrderTool(params.Name); ok {
+			reply(handleOrderDraftTool(c.Request.Context(), tenantID, resolveAgentType(tenantID, token), c.GetHeader("X-Permission-Token"), tool, params.Arguments))
 			return
 		}
 		for _, tool := range erpMCPTools {

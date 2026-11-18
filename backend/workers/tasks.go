@@ -832,6 +832,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}()
 
+		// A pending order draft waits for this sender's "1"/"2". Settle it here,
+		// before the intent classifier, which would read "ok" as small talk.
+		if handled, err := handleOrderDraftReply(ctx, cfg, adapter, matchedChannel.TenantID, workKey, payload.Sender.ID, matchedGroup.ZaloGroupID, userText); handled {
+			return err
+		}
+
 		// Real-time intent classification for active sessions. Skip it when the
 		// previous turn was a backend-pushed prompt awaiting this reply: the
 		// answer ("tháng này", "quý 2", "3 ngày", a tapped option) is ordinary

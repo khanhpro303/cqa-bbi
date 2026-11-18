@@ -62,8 +62,16 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *int) {
 				*result = products
 			case len(vars) == 2 && vars[0] == stockFixtureTenant && vars[1] == "SP457996":
 				*result = products[:1]
+			case strings.Contains(sql, "ma_cha =") && len(vars) == 2 && vars[0] == stockFixtureTenant && vars[1] == "SP457204":
+				*result = products[:2]
 			default:
 				t.Errorf("unexpected catalog query: %s %v", sql, vars)
+			}
+		case *int64:
+			// isParentProductCode: SP457204 is the parent of two SKUs.
+			if vars := q.Statement.Vars; strings.Contains(q.Statement.SQL.String(), "ma_cha =") && len(vars) == 2 && vars[1] == "SP457204" {
+				*result = 2
+				q.RowsAffected = 1 // gorm's Count keeps the scanned value only when one row came back
 			}
 		case *models.AppSetting:
 			key := ""
@@ -143,6 +151,9 @@ func TestERPMCPWarehouseAndPermission(t *testing.T) {
 	}
 	const sku = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inventory_by_sku","arguments":{"sku":"SP457996"}}}`
 	const line = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inventory_by_line","arguments":{"line_name":"Bulldog DOGO"}}}`
+	// A parent code passed to inventory_by_sku sums the whole line (FF818 bug:
+	// the agent passed parent_codes[0] and got one variant's stock).
+	const parent = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inventory_by_sku","arguments":{"search":"SP457204"}}}`
 	for _, tc := range []struct {
 		permission string
 		input      string
@@ -154,6 +165,7 @@ func TestERPMCPWarehouseAndPermission(t *testing.T) {
 		{signed(stockFixtureTenant, false), sku, "forbidden_scope", true},
 		{signed(stockFixtureTenant, true), sku, `"ton_kho":32`, false},
 		{signed(stockFixtureTenant, true), line, `"ton_kho":37`, false},
+		{signed(stockFixtureTenant, true), parent, `"ton_kho":36`, false},
 	} {
 		res := request(tc.permission, tc.input)
 		var data struct {
@@ -167,8 +179,8 @@ func TestERPMCPWarehouseAndPermission(t *testing.T) {
 			t.Errorf("expected result %q (error=%t), got %d %s", tc.want, tc.fails, res.Code, res.Body.String())
 		}
 	}
-	if *calls != 2 {
-		t.Errorf("report requests = %d, want 2", *calls)
+	if *calls != 3 {
+		t.Errorf("report requests = %d, want 3", *calls)
 	}
 	discovery := request("", `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	if discovery.Code != http.StatusOK || !strings.Contains(discovery.Body.String(), "inventory_by_line") ||
