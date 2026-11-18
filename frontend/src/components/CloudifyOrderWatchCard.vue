@@ -22,7 +22,7 @@
         variant="text"
         color="primary"
         title="Cấu hình chi tiết"
-        @click="panelOpen = true"
+        @click="panelOpen = !panelOpen"
       />
     </div>
 
@@ -127,7 +127,7 @@
         variant="text"
         color="primary"
         append-icon="mdi-arrow-right"
-        @click="panelOpen = true"
+        @click="panelOpen = !panelOpen"
       >
         Cấu hình chi tiết
       </v-btn>
@@ -137,18 +137,20 @@
     <v-navigation-drawer
       v-model="panelOpen"
       location="right"
-      :width="520"
+      :width="540"
       temporary
+      :scrim="false"
+      elevation="6"
+      class="border-s"
       style="z-index: 1200;"
     >
-      <div class="d-flex align-center pa-4 pb-2">
+      <div class="d-flex align-center pa-4 pb-2 border-b">
         <v-icon start color="primary" class="mr-2">mdi-package-variant-closed</v-icon>
         <div class="text-subtitle-1 font-weight-bold flex-grow-1">Cấu hình báo đơn hàng Cloudify</div>
         <v-btn icon="mdi-close" variant="text" size="small" @click="panelOpen = false" />
       </div>
-      <v-divider />
 
-      <div class="pa-4 overflow-y-auto" style="max-height: calc(100vh - 65px);">
+      <div class="pa-4 overflow-y-auto" style="max-height: calc(100vh - 120px);">
         <!-- Basic info alert -->
         <v-alert color="info" variant="tonal" density="compact" class="mb-4 text-caption">
           Cloudify không có webhook, nên CQA quét đơn trong vài ngày gần đây theo chu kỳ để phát hiện đơn mới
@@ -278,13 +280,23 @@
           </tbody>
         </v-table>
         <div v-else class="text-caption text-grey">Chưa có thay đổi nào.</div>
+
+        <!-- Footer actions inside panel -->
+        <div class="d-flex justify-end ga-2 mt-6 pt-3 border-t">
+          <v-btn variant="tonal" color="grey" @click="panelOpen = false">
+            Đóng
+          </v-btn>
+          <v-btn color="primary" :loading="saving" @click="save">
+            Lưu cấu hình
+          </v-btn>
+        </div>
       </div>
     </v-navigation-drawer>
   </v-card>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import api from '../api'
 
 const props = defineProps<{ tenantId: string }>()
@@ -426,7 +438,21 @@ function copy() {
   if (webhookUrl.value) navigator.clipboard?.writeText(webhookUrl.value)
 }
 
-onMounted(load)
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && panelOpen.value) {
+    panelOpen.value = false
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
+  load()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+})
+
 defineExpose({ load })
 </script>
 
