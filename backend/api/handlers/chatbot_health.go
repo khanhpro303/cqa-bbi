@@ -29,7 +29,7 @@ type HealthCheck struct {
 }
 
 // ChannelLangflowReport shows the EFFECTIVE Langflow config a channel uses at
-// runtime (after channel override → AI Engine → .env) and where each value
+// runtime (after AI Engine → legacy channel value → .env) and where each value
 // came from — the exact thing the worker will call.
 type ChannelLangflowReport struct {
 	ChannelID   string                `json:"channel_id"`
@@ -136,9 +136,9 @@ func GetChatbotHealth(c *gin.Context) {
 			add(h)
 		}
 		if !ov.IsEmpty() {
-			add(HealthCheck{Key: "channel_override", Channel: ch.Name, Label: "Ghi đè Langflow trên kênh", Status: "warn",
-				Detail: "Kênh đang ghi đè cấu hình AI Engine. Giá trị cũ ở đây là nguyên nhân hay gặp khiến bot im lặng.",
-				Fix:    "Trừ khi kênh này thật sự cần flow riêng, xoá trống các ô Langflow trong cài đặt kênh để dùng AI Engine."})
+			add(HealthCheck{Key: "channel_override", Channel: ch.Name, Label: "Cấu hình Langflow cũ trên kênh", Status: "warn",
+				Detail: "Kênh còn lưu Langflow riêng (kiểu cũ). Giá trị này chỉ được dùng khi AI Engine để trống.",
+				Fix:    "Mở cài đặt kênh và bấm Lưu để xoá cấu hình cũ; chỉ cấu hình Langflow ở trang AI Engine."})
 		}
 	}
 
@@ -180,7 +180,7 @@ func langflowFixHint(r engine.FlowCheck, eff engine.LangflowConfig, flowSrc stri
 	where := func(src string) string {
 		switch src {
 		case engine.LangflowSourceChannel:
-			return "ô Langflow trong cài đặt kênh (hoặc xoá trống để dùng AI Engine)"
+			return "trang AI Engine (giá trị hiện lấy từ cấu hình cũ của kênh; mở kênh và bấm Lưu để xoá)"
 		case engine.LangflowSourceEnv:
 			return "trang AI Engine (giá trị hiện lấy từ .env)"
 		default:

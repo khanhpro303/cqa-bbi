@@ -19,9 +19,14 @@ func TestResolveLangflowConfigPrecedence(t *testing.T) {
 		"ai_engine_langflow_token":          {ValuePlain: "tenant-key"},
 	}
 
-	got := ResolveLangflowConfig(LangflowOverrides{FlowID: "chan-flow"}, settings, cfg)
-	if got.FlowID != "chan-flow" || got.FlowIDSource != LangflowSourceChannel {
-		t.Errorf("flow = %q/%s; want channel override", got.FlowID, got.FlowIDSource)
+	// A stale channel value must NOT shadow the AI Engine setting...
+	got := ResolveLangflowConfig(LangflowOverrides{FlowID: "stale-chan-flow", APIKey: "stale-key", APIURL: "http://chan"}, settings, cfg)
+	if got.FlowID != "tenant-flow" || got.FlowIDSource != LangflowSourceTenant {
+		t.Errorf("flow = %q/%s; want AI Engine value over stale channel value", got.FlowID, got.FlowIDSource)
+	}
+	// ...but fills a field AI Engine leaves empty (URL here) before .env.
+	if got.APIURL != "http://chan" || got.APIURLSource != LangflowSourceChannel {
+		t.Errorf("url = %q/%s; want legacy channel value when AI Engine is empty", got.APIURL, got.APIURLSource)
 	}
 	if got.PublicFlowID != "tenant-pub" || got.PublicFlowIDSource != LangflowSourceTenant {
 		t.Errorf("public flow = %q/%s; want tenant", got.PublicFlowID, got.PublicFlowIDSource)
@@ -29,11 +34,12 @@ func TestResolveLangflowConfigPrecedence(t *testing.T) {
 	if got.APIKey != "tenant-key" || got.APIKeySource != LangflowSourceTenant {
 		t.Errorf("key = %q/%s; want tenant", got.APIKey, got.APIKeySource)
 	}
-	if got.APIURL != "http://env" || got.APIURLSource != LangflowSourceEnv {
-		t.Errorf("url = %q/%s; want env without trailing slash", got.APIURL, got.APIURLSource)
-	}
 	if !got.UsesChannelOverride() {
-		t.Error("UsesChannelOverride should be true")
+		t.Error("UsesChannelOverride should be true (URL came from the channel)")
+	}
+	envOnly := ResolveLangflowConfig(LangflowOverrides{}, settings, cfg)
+	if envOnly.APIURL != "http://env" || envOnly.APIURLSource != LangflowSourceEnv {
+		t.Errorf("url = %q/%s; want env without trailing slash", envOnly.APIURL, envOnly.APIURLSource)
 	}
 
 	tenant := ResolveTenantLangflowConfig(settings, cfg)
@@ -41,10 +47,7 @@ func TestResolveLangflowConfigPrecedence(t *testing.T) {
 		t.Errorf("tenant config = %+v; want tenant-flow without override", tenant)
 	}
 	if got.Equivalent(tenant, "private") {
-		t.Error("channel override and tenant config target different private flows")
-	}
-	if !got.Equivalent(tenant, "public") {
-		t.Error("public flow is identical, configs should be equivalent")
+		t.Error("configs hit different Langflow URLs; should not be equivalent")
 	}
 }
 

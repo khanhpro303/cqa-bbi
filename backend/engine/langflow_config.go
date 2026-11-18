@@ -15,10 +15,12 @@ import (
 	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
-// Langflow config sources, in precedence order.
+// Langflow config sources, in precedence order: AI Engine settings are the
+// single place to configure Langflow; a legacy per-channel value is only used
+// when AI Engine leaves that field empty; .env is the last resort.
 const (
-	LangflowSourceChannel = "channel_metadata" // per-channel override (Kênh → Langflow)
-	LangflowSourceTenant  = "tenant_setting"   // AI Engine settings (recommended)
+	LangflowSourceTenant  = "tenant_setting"   // AI Engine settings (the one place to configure)
+	LangflowSourceChannel = "channel_metadata" // legacy per-channel value (UI no longer edits it)
 	LangflowSourceEnv     = "env"              // .env fallback
 	LangflowSourceNone    = "none"
 )
@@ -38,8 +40,8 @@ type LangflowConfig struct {
 	PublicFlowIDSource string `json:"public_flow_id_source"`
 }
 
-// LangflowOverrides is the optional per-channel override stored in
-// channels.metadata. Empty fields mean "use the AI Engine settings".
+// LangflowOverrides holds the legacy per-channel Langflow values stored in
+// channels.metadata. They only fill fields AI Engine leaves empty.
 type LangflowOverrides struct {
 	APIURL       string
 	APIKey       string
@@ -83,8 +85,10 @@ func ResolveTenantLangflowConfig(settings map[string]models.AppSetting, cfg *con
 	return ResolveLangflowConfig(LangflowOverrides{}, settings, cfg)
 }
 
-// ResolveLangflowConfig applies the precedence channel override → AI Engine
-// settings → .env for every field independently and records each source.
+// ResolveLangflowConfig applies the precedence AI Engine settings → legacy
+// channel value → .env for every field independently and records each source.
+// A stale per-channel key/flow can therefore never shadow a configured AI
+// Engine value (the cause of the 2026-11-18 outage).
 func ResolveLangflowConfig(ov LangflowOverrides, settings map[string]models.AppSetting, cfg *config.Config) LangflowConfig {
 	var out LangflowConfig
 	plain := func(key string) string {
@@ -114,11 +118,11 @@ func ResolveLangflowConfig(ov LangflowOverrides, settings map[string]models.AppS
 }
 
 func pick(channel, tenant, env string) (string, string) {
-	if v := strings.TrimSpace(channel); v != "" {
-		return v, LangflowSourceChannel
-	}
 	if tenant != "" {
 		return tenant, LangflowSourceTenant
+	}
+	if v := strings.TrimSpace(channel); v != "" {
+		return v, LangflowSourceChannel
 	}
 	if v := strings.TrimSpace(env); v != "" {
 		return v, LangflowSourceEnv
