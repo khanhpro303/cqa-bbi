@@ -197,21 +197,6 @@ func isLastAttempt(ctx context.Context) bool {
 	return retried >= maxRetry
 }
 
-// isLangflowConfigError reports a Langflow error that no retry can fix: an
-// invalid/missing API key (401/403) or a flow ID that does not exist (404).
-func isLangflowConfigError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	for _, code := range []string{"(status 401)", "(status 403)", "(status 404)"} {
-		if strings.Contains(msg, code) {
-			return true
-		}
-	}
-	return false
-}
-
 func truncateForLog(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
@@ -293,47 +278,21 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			oaID = payload.OAID
 		}
 
-		// First pass: try to match by exact OA ID using ExternalID field in DB
-		if matchedChannel == nil && oaID != "" {
-			for i, ch := range allChannels {
-				if ch.ExternalID != "" && ch.ExternalID == oaID {
-					credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
-					if err != nil {
-						continue
-					}
-					var creds channels.ZaloOACredentials
-					if err := json.Unmarshal(credBytes, &creds); err != nil {
-						continue
-					}
-					matchedChannel = &allChannels[i]
-					zaloCreds = creds
-					break
-				}
-			}
-		}
-
-		// Second pass: fallback to decrypted OA ID match (if ExternalID in DB was empty)
-		if matchedChannel == nil && oaID != "" {
-			for i, ch := range allChannels {
-				credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
-				if err != nil {
-					continue
-				}
-				var creds channels.ZaloOACredentials
-				if err := json.Unmarshal(credBytes, &creds); err != nil {
-					continue
-				}
-				if creds.OAId != "" && creds.OAId == oaID {
-					matchedChannel = &allChannels[i]
-					zaloCreds = creds
-					break
-				}
-			}
-		}
-
-		// Third pass: last-resort fallback to AppID if no exact OA ID matches
+		// Single pass over the active channels, decrypting each credential blob
+		// at most once (was up to three decrypt passes per message). Priority:
+		// ExternalID == OA ID, then decrypted OAId == OA ID, then AppID.
 		if matchedChannel == nil {
+			const (
+				byExternalID = iota + 1
+				byOAID
+				byAppID
+			)
+			bestRank := 0
 			for i, ch := range allChannels {
+				rank := 0
+				if oaID != "" && ch.ExternalID != "" && ch.ExternalID == oaID {
+					rank = byExternalID
+				}
 				credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
 				if err != nil {
 					continue
@@ -342,10 +301,21 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				if err := json.Unmarshal(credBytes, &creds); err != nil {
 					continue
 				}
-				if creds.AppID != "" && creds.AppID == payload.AppID {
+				if rank == 0 {
+					switch {
+					case oaID != "" && creds.OAId != "" && creds.OAId == oaID:
+						rank = byOAID
+					case creds.AppID != "" && creds.AppID == payload.AppID:
+						rank = byAppID
+					}
+				}
+				if rank != 0 && (bestRank == 0 || rank < bestRank) {
+					bestRank = rank
 					matchedChannel = &allChannels[i]
 					zaloCreds = creds
-					break
+					if rank == byExternalID {
+						break
+					}
 				}
 			}
 		}
@@ -514,42 +484,18 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if meta.SessionTimeoutMessage == "" {
 			meta.SessionTimeoutMessage = cfg.ChatbotSessionTimeoutMessage
 		}
-		// Remember where the Langflow key/flow came from: a stale per-channel
-		// override silently beats the AI Engine settings, which is hard to spot.
-		langflowKeySource, langflowFlowSource := "channel_metadata", "channel_metadata"
-		if meta.LangflowAPIURL == "" {
-			if setting, ok := tenantSettings["ai_engine_langflow_url"]; ok && setting.ValuePlain != "" {
-				meta.LangflowAPIURL = setting.ValuePlain
-			} else {
-				meta.LangflowAPIURL = cfg.LangflowAPIURL
-			}
-		}
-		if meta.LangflowAPIKey == "" {
-			if setting, ok := tenantSettings["ai_engine_langflow_token"]; ok && len(setting.ValueEncrypted) > 0 {
-				decrypted, _ := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
-				meta.LangflowAPIKey = string(decrypted)
-				langflowKeySource = "tenant_setting"
-			} else {
-				meta.LangflowAPIKey = cfg.LangflowAPIKey
-				langflowKeySource = "env"
-			}
-		}
-		if meta.LangflowFlowID == "" {
-			if setting, ok := tenantSettings["ai_engine_langflow_flow_id"]; ok && setting.ValuePlain != "" {
-				meta.LangflowFlowID = setting.ValuePlain
-				langflowFlowSource = "tenant_setting"
-			} else {
-				meta.LangflowFlowID = cfg.LangflowFlowID
-				langflowFlowSource = "env"
-			}
-		}
-		if meta.LangflowPublicFlowID == "" {
-			if setting, ok := tenantSettings["ai_engine_langflow_public_flow_id"]; ok && setting.ValuePlain != "" {
-				meta.LangflowPublicFlowID = setting.ValuePlain
-			} else {
-				meta.LangflowPublicFlowID = cfg.LangflowPublicFlowID
-			}
-		}
+		// Langflow connection: channel override → AI Engine settings → .env,
+		// resolved per field with its source (see engine.ResolveLangflowConfig).
+		// lfTenantCfg is the override-free config used to self-heal when a stale
+		// channel override is rejected by Langflow.
+		lfCfg := engine.ResolveLangflowConfig(engine.LangflowOverrides{
+			APIURL:       meta.LangflowAPIURL,
+			APIKey:       meta.LangflowAPIKey,
+			FlowID:       meta.LangflowFlowID,
+			PublicFlowID: meta.LangflowPublicFlowID,
+		}, tenantSettings, cfg)
+		lfTenantCfg := engine.ResolveTenantLangflowConfig(tenantSettings, cfg)
+
 		// System prompt is optional and per-tenant only — an empty value means
 		// "use the SYSTEM_PROMPT global variable configured inside Langflow",
 		// so there is no env/global fallback here.
@@ -889,18 +835,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
-		// Determine which Flow ID to use
-		flowIDToUse := meta.LangflowPublicFlowID
-		// Only route to the private flow if the user is whitelisted AND we are NOT in a GMF group chat context
+		// Determine which flow to run: private (internal staff) only for a
+		// whitelisted sender in a 1:1 chat; public/group flow otherwise.
+		flowAgentType := "public"
 		if isWhitelisted && matchedGroup.ZaloGroupID == "" {
-			flowIDToUse = meta.LangflowFlowID
-			log.Printf("[worker] Routing whitelisted internal staff %s to RAG Agent Flow (%s)", payload.Sender.ID, flowIDToUse)
-		} else {
-			if flowIDToUse == "" {
-				flowIDToUse = meta.LangflowFlowID
-			}
-			log.Printf("[worker] Routing user/customer %s (code: %s) to Public/Group Flow (%s)", payload.Sender.ID, customerCode, flowIDToUse)
+			flowAgentType = "private"
 		}
+		flowIDToUse, flowSource := lfCfg.FlowFor(flowAgentType)
+		log.Printf("[worker] routing sender=%s agent=%s code=%s flow=%s (flow_source=%s key_source=%s)",
+			payload.Sender.ID, flowAgentType, customerCode, flowIDToUse, flowSource, lfCfg.APIKeySource)
 
 		// Resolve permission context and sign JWT token
 		agentType := "public"
@@ -1476,14 +1419,26 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		engine.ClearPromptDelivery(ctx, workKey)
 
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
-		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
+		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
+		// Self-heal: a per-channel Langflow override that Langflow rejects (bad
+		// key / deleted flow) must not take the whole bot down while the AI
+		// Engine settings are fine. Retry once with the tenant config.
+		if err != nil && engine.IsLangflowConfigError(err) && lfCfg.UsesChannelOverride() && !lfCfg.Equivalent(lfTenantCfg, flowAgentType) {
+			fallbackFlow, fallbackSource := lfTenantCfg.FlowFor(flowAgentType)
+			log.Printf("[worker] WARNING channel %s Langflow override rejected (%v); falling back to AI Engine config flow=%s (source=%s). Clear the Langflow fields on this channel to silence this.",
+				matchedChannel.ID, err, fallbackFlow, fallbackSource)
+			if fallbackFlow != "" && lfTenantCfg.APIURL != "" {
+				lfRes, err = langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, lfTenantCfg.APIURL, lfTenantCfg.APIKey, fallbackFlow, customerCode, permissionToken, systemPromptToUse)
+				flowIDToUse, flowSource = fallbackFlow, fallbackSource
+			}
+		}
 		if err != nil {
 			// Retry transient failures, but never leave the customer in silence:
 			// on the last attempt tell them the bot could not answer.
 			// 401/403/404 are config errors (bad key, deleted flow): retrying
 			// cannot help, so answer the customer now instead of after N retries.
-			if isLastAttempt(ctx) || isLangflowConfigError(err) {
-				log.Printf("[zalo-drop] reason=langflow_error sender=%s flow=%s flow_source=%s key_source=%s err=%v (channel_metadata overrides AI Engine settings)", payload.Sender.ID, flowIDToUse, langflowFlowSource, langflowKeySource, err)
+			if isLastAttempt(ctx) || engine.IsLangflowConfigError(err) {
+				log.Printf("[zalo-drop] reason=langflow_error sender=%s flow=%s flow_source=%s key_source=%s err=%v", payload.Sender.ID, flowIDToUse, flowSource, lfCfg.APIKeySource, err)
 				if sendErr := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botUnavailableMessage); sendErr != nil {
 					log.Printf("[worker] failed to send langflow-error fallback: %v", sendErr)
 				}

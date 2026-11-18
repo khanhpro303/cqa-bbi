@@ -323,6 +323,15 @@
                 <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
                 <v-divider class="my-4" />
                 <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
+                <v-alert type="info" variant="tonal" density="compact" class="mb-3 text-caption">
+                  Không bắt buộc. Để trống để kênh dùng cấu hình ở trang AI Engine (khuyên dùng).
+                  Chỉ nhập khi kênh này cần flow riêng. Giá trị cũ ở đây sẽ ghi đè AI Engine và có thể làm bot im lặng.
+                  <v-btn v-if="editForm.langflow_api_url || editForm.langflow_api_key || editForm.langflow_flow_id"
+                    size="x-small" variant="text" color="primary" class="ml-1"
+                    @click="editForm.langflow_api_url = ''; editForm.langflow_api_key = ''; editForm.langflow_flow_id = ''">
+                    Xoá ghi đè
+                  </v-btn>
+                </v-alert>
                 <v-text-field v-model="editForm.langflow_api_url" label="Langflow API URL" density="compact" class="mb-3" />
                 <v-text-field v-model="editForm.langflow_api_key" label="Langflow API Key" type="password" density="compact" class="mb-3" />
                 <v-text-field v-model="editForm.langflow_flow_id" label="Langflow Flow ID" density="compact" class="mb-3" />
