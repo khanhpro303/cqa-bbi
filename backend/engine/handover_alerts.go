@@ -195,7 +195,7 @@ func BuildSessionIssueAlertMessage(a SessionIssueAlert, at time.Time) string {
 		fmt.Fprintf(&b, "Tóm tắt: %s\n", truncateRunes(s, 400))
 	}
 	for _, is := range a.Issues {
-		fmt.Fprintf(&b, "• [%s] %s", strings.TrimSpace(is.Type), truncateRunes(strings.TrimSpace(is.Detail), 300))
+		fmt.Fprintf(&b, "• [%s] %s", issueTypeLabel(is.Type), truncateRunes(strings.TrimSpace(is.Detail), 300))
 		if ev := strings.TrimSpace(is.Evidence); ev != "" {
 			fmt.Fprintf(&b, " (khách: \"%s\")", truncateRunes(ev, 200))
 		}
@@ -203,6 +203,28 @@ func BuildSessionIssueAlertMessage(a SessionIssueAlert, at time.Time) string {
 	}
 	fmt.Fprintf(&b, "Thời điểm: %s", at.Format("15:04 02/01/2006"))
 	return b.String()
+}
+
+// issueTypeLabel shows an issue type from the summarizer in Vietnamese.
+func issueTypeLabel(t string) string {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "complaint":
+		return "Khiếu nại"
+	case "delivery":
+		return "Giao hàng"
+	case "product_defect":
+		return "Hàng lỗi"
+	case "price":
+		return "Giá"
+	case "payment":
+		return "Thanh toán, công nợ"
+	case "bot_failure":
+		return "Bot trả lời sai"
+	case "staff_request":
+		return "Khách cần nhân viên"
+	default:
+		return "Khác"
+	}
 }
 
 // NotifySessionIssues sends a session's serious issues to the channel's
