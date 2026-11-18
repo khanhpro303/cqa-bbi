@@ -83,6 +83,25 @@ func TestParseClassificationResponseRequiresEvidenceForLeadLevel(t *testing.T) {
 	}
 }
 
+func TestParseClassificationResponsePreservesConvertedLeadQuality(t *testing.T) {
+	response, err := ParseClassificationResponse(`{
+		"tags":[],
+		"summary":"Đơn đã tạo thành công.",
+		"insights":{
+			"intents":["Mua hàng"],
+			"products":[{"name":"Mũ E-24","evidence":"lấy chiếc này"}],
+			"feedback":[],
+			"lead_quality":{"level":" CONVERTED ","evidence":"Mã vận đơn VN123456","reason":"Staff đã gửi mã vận đơn"}
+		}
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if response.Insights.LeadQuality.Level != "converted" {
+		t.Fatalf("converted lead level should be preserved: %#v", response.Insights.LeadQuality)
+	}
+}
+
 func TestParseClassificationResponseNormalizesOrderOutcomes(t *testing.T) {
 	response, err := ParseClassificationResponse(`{
 		"tags":[],"summary":"Khách chốt COD.","insights":{

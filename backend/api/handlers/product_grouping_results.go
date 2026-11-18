@@ -200,7 +200,7 @@ func buildProductGroupingResultGroups(report *servicequality.Report, groups []se
 		}
 		insight.LeadQuality.Level = strings.ToLower(strings.TrimSpace(insight.LeadQuality.Level))
 		switch insight.LeadQuality.Level {
-		case "high", "medium", "low":
+		case "converted", "high", "medium", "low":
 		default:
 			continue
 		}

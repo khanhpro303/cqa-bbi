@@ -807,6 +807,7 @@ async function testConnection() {
     const { data } = await api.post(`/tenants/${tenantId.value}/settings/ai-engines/test`, {
       langflow_base_url: langflow.baseUrl,
       langflow_flow_id: langflow.flowId,
+      langflow_public_flow_id: langflow.publicFlowId,
       langflow_token: langflow.token,
     })
     showSnack(data.message || 'Kết nối thành công', 'success')

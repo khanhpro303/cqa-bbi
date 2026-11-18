@@ -79,6 +79,10 @@ func GetChatbotHealth(c *gin.Context) {
 	// 3. Langflow per active Zalo OA channel, as the worker will resolve it.
 	settings := engine.LoadLangflowTenantSettings(tenantID)
 	tenantCfg := engine.ResolveTenantLangflowConfig(settings, cfg)
+	if tenantCfg.APIKeyWarning != "" {
+		add(HealthCheck{Key: "langflow_api_key", Label: "Langflow API key", Status: "warn",
+			Detail: "Không giải mã được API key đã lưu.", Fix: tenantCfg.APIKeyWarning})
+	}
 
 	var channels []models.Channel
 	db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&channels)

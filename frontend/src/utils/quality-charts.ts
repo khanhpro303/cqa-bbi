@@ -1,8 +1,8 @@
 import { aggregateInsights, type AggregateItem, type InsightRow } from './service-quality'
 
-export type PotentialLevel = 'high' | 'medium' | 'low'
+export type PotentialLevel = 'converted' | 'high' | 'medium' | 'low'
 export type PotentialFilter = PotentialLevel | 'all'
-export const potentialLevels: PotentialLevel[] = ['high', 'medium', 'low']
+export const potentialLevels: PotentialLevel[] = ['converted', 'high', 'medium', 'low']
 
 export interface AIProductGroup {
   name: string

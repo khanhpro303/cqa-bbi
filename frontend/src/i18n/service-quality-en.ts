@@ -180,6 +180,7 @@ export default {
   "sq_working_time": "Working time",
   "sq_all_pages": "All Pages",
   "sq_lead_low": "Low potential",
+  "sq_lead_converted": "Converted",
   "sq_resolve_reason": "Resolution reason *",
   "sq_work_end": "Working hours end",
   "sq_main_intents": "Main customer needs",

@@ -168,7 +168,7 @@ const sourcePage = ref(1)
 const sourcePageSize = 10
 const expanded = ref<string | null>(null)
 const errorsOnly = ref(false)
-const levels = ['high', 'medium', 'low'] as const
+const levels = ['converted', 'high', 'medium', 'low'] as const
 const channelOptions = computed(() => [{ title: t('sq_all_pages'), value: '' }, ...(report.value?.report.pages || []).map(item => ({ title: item.name, value: item.id }))])
 const namedGroups = computed(() => (report.value?.groups || []).filter(group => group.name))
 const conversationCount = computed(() => new Set(namedGroups.value.flatMap(group => group.sources.map(source => source.conversation_id))).size)
@@ -202,7 +202,7 @@ function formatScopeDate(value: string) { const [year, month, day] = value.split
 function isFailure(status: string) { return ['error', 'failed', 'partial_error'].includes(status) }
 function statusColor(status: string) { return status === 'success' ? 'success' : isFailure(status) ? 'error' : status === 'running' ? 'info' : 'grey' }
 function statusLabel(status: string) { return t(status === 'success' ? 'pg_status_success' : isFailure(status) ? 'pg_status_error' : status === 'running' ? 'pg_status_running' : status === 'cancelled' ? 'pg_status_cancelled' : 'pg_status_unknown') }
-function leadColor(level?: string) { return level === 'high' ? 'success' : level === 'medium' ? 'info' : level === 'low' ? 'warning' : 'grey' }
+function leadColor(level?: string) { return level === 'converted' ? 'primary' : level === 'high' ? 'success' : level === 'medium' ? 'info' : level === 'low' ? 'warning' : 'grey' }
 function leadLabel(level?: string) { return levels.includes(level as typeof levels[number]) ? t(`sq_lead_${level}`) : t('pg_status_unknown') }
 function verdictLabel(verdict: string) { return t(verdict === 'PASS' ? 'pg_pass' : verdict === 'FAIL' ? 'pg_fail' : 'pg_skip') }
 function runDuration(item: JobRun) {

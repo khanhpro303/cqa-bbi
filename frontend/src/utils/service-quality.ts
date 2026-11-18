@@ -13,7 +13,7 @@ export interface FeedbackInsight {
 }
 
 export interface LeadQualityInsight {
-  level: 'high' | 'medium' | 'low' | 'spam' | 'unknown'
+  level: 'converted' | 'high' | 'medium' | 'low' | 'spam' | 'unknown'
   evidence?: string
   reason?: string
 }

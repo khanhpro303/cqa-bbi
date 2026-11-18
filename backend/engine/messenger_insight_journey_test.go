@@ -59,6 +59,13 @@ func insightPayloadFields(t *testing.T, detail string) map[string]any {
 	return payload
 }
 
+func TestInsightPayloadExportsConvertedWithinAdBazookaSchema(t *testing.T) {
+	payload := insightPayloadFields(t, `{"lead_quality":{"level":"converted"}}`)
+	if payload["lead_level"] != "high" {
+		t.Fatalf("lead_level = %v, want high", payload["lead_level"])
+	}
+}
+
 // The analyzer saves a keyword-resolved need in "need" with need_source
 // "keyword". The export must keep that source, not relabel it as AI.
 func TestInsightPayloadKeepsStoredNeedSource(t *testing.T) {

@@ -180,6 +180,7 @@ export default {
   "sq_working_time": "Thời gian trực",
   "sq_all_pages": "Tất cả Fanpage",
   "sq_lead_low": "Tiềm năng thấp",
+  "sq_lead_converted": "Đã chuyển đổi",
   "sq_resolve_reason": "Lý do xử lý *",
   "sq_work_end": "Kết thúc trực",
   "sq_main_intents": "Nhu cầu chính",

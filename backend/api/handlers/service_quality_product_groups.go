@@ -194,7 +194,7 @@ func productNamesForGrouping(report *servicequality.Report) []string {
 			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(insight.LeadQuality.Level)) {
-		case "high", "medium", "low":
+		case "converted", "high", "medium", "low":
 		default:
 			continue
 		}

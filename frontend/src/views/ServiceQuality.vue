@@ -278,10 +278,29 @@
           </template>
           <template #item.last_message_at="{ item }">{{ item.last_message_at ? formatDateTime(item.last_message_at) : '—' }}</template>
           <template #item.insight="{ item }">
-            <v-chip v-if="item.insight" :color="item.insight_stale ? 'warning' : 'success'" size="x-small" variant="tonal">
-              {{ item.insight_stale ? t('sq_reanalyse') : t('sq_analysed') }}
-            </v-chip>
-            <span v-else class="text-medium-emphasis">{{ t('sq_none') }}</span>
+            <div class="d-flex align-center flex-wrap ga-1">
+              <v-chip v-if="item.insight" :color="item.insight_stale ? 'warning' : 'success'" size="x-small" variant="tonal">
+                {{ item.insight_stale ? t('sq_reanalyse') : t('sq_analysed') }}
+              </v-chip>
+              <span v-else class="text-medium-emphasis">{{ t('sq_none') }}</span>
+              <v-chip
+                v-if="item.insight?.lead_quality?.level === 'converted'"
+                color="primary"
+                size="x-small"
+                variant="flat"
+              >
+                {{ t('sq_lead_converted') }}
+              </v-chip>
+              <v-chip
+                v-else-if="item.insight?.order_outcomes?.some(order => order.status === 'confirmed')"
+                color="teal"
+                size="x-small"
+                variant="tonal"
+                prepend-icon="mdi-cart-check"
+              >
+                {{ t('sq_order_confirmed') }}
+              </v-chip>
+            </div>
           </template>
           <template #item.quality_analysis="{ item }">
             <div class="quality-analysis-status-cell">
@@ -380,7 +399,10 @@
             </v-card>
             <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_lead_quality') }}</div>
             <v-alert v-if="selectedRow.insight.lead_quality" :type="leadAlertType(selectedRow.insight.lead_quality.level)" variant="tonal" density="compact">
-              <strong>{{ leadLabel(selectedRow.insight.lead_quality.level) }}</strong>
+              <div class="d-flex align-center ga-1">
+                <v-icon v-if="selectedRow.insight.lead_quality.level === 'converted'" size="small" color="primary">mdi-check-decagram</v-icon>
+                <strong>{{ leadLabel(selectedRow.insight.lead_quality.level) }}</strong>
+              </div>
               <div>{{ selectedRow.insight.lead_quality.reason || selectedRow.insight.lead_quality.evidence || t('sq_no_reason') }}</div>
               <div v-if="selectedRow.insight.lead_quality.reason && selectedRow.insight.lead_quality.evidence" class="text-caption mt-1">{{ selectedRow.insight.lead_quality.evidence }}</div>
             </v-alert>
@@ -934,11 +956,11 @@ function sentimentLabel(sentiment: string) {
 }
 
 function leadLabel(level: string) {
-  return ({ high: t('sq_lead_high'), medium: t('sq_lead_medium'), low: t('sq_lead_low'), spam: t('sq_spam'), unknown: t('sq_unknown_label') } as Record<string, string>)[level] || level
+  return ({ converted: t('sq_lead_converted'), high: t('sq_lead_high'), medium: t('sq_lead_medium'), low: t('sq_lead_low'), spam: t('sq_spam'), unknown: t('sq_unknown_label') } as Record<string, string>)[level] || level
 }
 
 function leadAlertType(level: string): 'success' | 'info' | 'warning' | 'error' {
-  return ({ high: 'success', medium: 'info', low: 'warning', spam: 'error', unknown: 'info' } as Record<string, any>)[level] || 'info'
+  return ({ converted: 'success', high: 'success', medium: 'info', low: 'warning', spam: 'error', unknown: 'info' } as Record<string, any>)[level] || 'info'
 }
 
 function displayAggregateLabel(kind: string, label: string) {

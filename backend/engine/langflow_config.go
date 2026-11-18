@@ -29,10 +29,11 @@ const (
 // the source of every field so a stale value can be traced in logs and in the
 // chatbot health check.
 type LangflowConfig struct {
-	APIURL       string `json:"api_url"`
-	APIKey       string `json:"-"`
-	FlowID       string `json:"flow_id"`        // private/internal staff flow
-	PublicFlowID string `json:"public_flow_id"` // public/customer/group flow
+	APIURL        string `json:"api_url"`
+	APIKey        string `json:"-"`
+	APIKeyWarning string `json:"api_key_warning,omitempty"`
+	FlowID        string `json:"flow_id"`        // private/internal staff flow
+	PublicFlowID  string `json:"public_flow_id"` // public/customer/group flow
 
 	APIURLSource       string `json:"api_url_source"`
 	APIKeySource       string `json:"api_key_source"`
@@ -105,9 +106,14 @@ func ResolveLangflowConfig(ov LangflowOverrides, settings map[string]models.AppS
 
 	tenantKey := ""
 	if s, ok := settings["ai_engine_langflow_token"]; ok {
-		if len(s.ValueEncrypted) > 0 && cfg.EncryptionKey != "" {
+		if len(s.ValueEncrypted) > 0 {
 			if dec, err := pkg.Decrypt(s.ValueEncrypted, cfg.EncryptionKey); err == nil {
 				tenantKey = strings.TrimSpace(string(dec))
+			} else {
+				out.APIKeyWarning = "Không giải mã được Langflow API key đã lưu. Hãy nhập lại API key ở trang AI Engine."
+				if cfg.EncryptionKey == "" {
+					tenantKey = strings.TrimSpace(s.ValuePlain)
+				}
 			}
 		} else {
 			tenantKey = strings.TrimSpace(s.ValuePlain)
@@ -157,21 +163,6 @@ func (c LangflowConfig) Equivalent(o LangflowConfig, agentType string) bool {
 	return c.APIURL == o.APIURL && c.APIKey == o.APIKey && f1 == f2
 }
 
-// IsLangflowConfigError reports a Langflow error no retry can fix: an invalid or
-// missing API key (401/403) or a flow that does not exist (404).
-func IsLangflowConfigError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	for _, code := range []string{"(status 401)", "(status 403)", "(status 404)"} {
-		if strings.Contains(msg, code) {
-			return true
-		}
-	}
-	return false
-}
-
 // FlowCheck is the outcome of probing one Langflow flow.
 type FlowCheck struct {
 	OK      bool   `json:"ok"`
@@ -202,10 +193,14 @@ func CheckLangflowFlow(ctx context.Context, apiURL, apiKey, flowID string) FlowC
 		return FlowCheck{Problem: "unreachable", Detail: err.Error()}
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	switch {
 	case resp.StatusCode == http.StatusOK:
-		return FlowCheck{OK: true, Status: resp.StatusCode, Name: extractFlowName(body)}
+		name, valid := extractFlowName(body)
+		if readErr != nil || !valid {
+			return FlowCheck{Status: resp.StatusCode, Problem: "error", Detail: "Langflow trả về dữ liệu flow không hợp lệ"}
+		}
+		return FlowCheck{OK: true, Status: resp.StatusCode, Name: name}
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return FlowCheck{Status: resp.StatusCode, Problem: "bad_key", Detail: "Langflow từ chối API key"}
 	case resp.StatusCode == http.StatusNotFound:
@@ -215,14 +210,15 @@ func CheckLangflowFlow(ctx context.Context, apiURL, apiKey, flowID string) FlowC
 	}
 }
 
-func extractFlowName(body []byte) string {
-	var f struct {
+func extractFlowName(body []byte) (string, bool) {
+	var f *struct {
 		Name string `json:"name"`
+		ID   string `json:"id"`
 	}
-	if json.Unmarshal(body, &f) != nil {
-		return ""
+	if json.Unmarshal(body, &f) != nil || f == nil || (strings.TrimSpace(f.Name) == "" && strings.TrimSpace(f.ID) == "") {
+		return "", false
 	}
-	return f.Name
+	return f.Name, true
 }
 
 func truncate(s string, n int) string {

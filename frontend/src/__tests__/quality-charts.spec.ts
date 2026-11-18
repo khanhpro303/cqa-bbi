@@ -5,7 +5,7 @@ import { aggregateInsights, type InsightRow } from '../utils/service-quality'
 const from = '2026-09-01T00:00:00Z'
 const to = '2026-10-01T00:00:00Z'
 const groups: AIProductGroup[] = [{ name: 'E-24', members: ['Mũ bảo hiểm E-24', 'EGO E-24', 'Mũ E-24'] }, { name: 'FF818', members: ['LS2 FF 818', 'LS2 FF818', 'FF818'] }, { name: 'FF800', members: ['FF800'] }]
-function row(id: string, level: 'high' | 'medium' | 'low' | 'unknown' | 'spam', names: string[], extra: Partial<InsightRow> = {}): InsightRow {
+function row(id: string, level: 'converted' | 'high' | 'medium' | 'low' | 'unknown' | 'spam', names: string[], extra: Partial<InsightRow> = {}): InsightRow {
   return { conversation_id: id, insight_at: '2026-09-15T00:00:00Z', insight: { lead_quality: { level }, products: names.map(name => ({ name })) }, ...extra }
 }
 
@@ -19,11 +19,11 @@ describe('CSKH chart data', () => {
   })
 
   it('groups historical names, counts each conversation once, and filters each potential level', () => {
-    const rows = [row('a', 'high', ['Mũ bảo hiểm E-24', 'EGO E-24']), row('b', 'medium', ['Mũ E-24', 'LS2 FF 818']), row('c', 'low', ['FF818'])]
+    const rows = [row('conv-converted', 'converted', ['FF800']), row('a', 'high', ['Mũ bảo hiểm E-24', 'EGO E-24']), row('b', 'medium', ['Mũ E-24', 'LS2 FF 818']), row('c', 'low', ['FF818'])]
     const all = aggregateProductDemand(rows, from, to, 'all', groups)
-    expect(all.map(item => [item.label, item.count])).toEqual([['E-24', 2], ['FF818', 2]])
+    expect(all.map(item => [item.label, item.count])).toEqual([['E-24', 2], ['FF818', 2], ['FF800', 1]])
     expect(aggregateProductDemand([...rows, rows[0]!], from, to, 'all', groups)).toEqual(all)
-    for (const [level, label] of [['high', 'E-24'], ['medium', 'E-24'], ['low', 'FF818']] as const) {
+    for (const [level, label] of [['converted', 'FF800'], ['high', 'E-24'], ['medium', 'E-24'], ['low', 'FF818']] as const) {
       expect(aggregateProductDemand(rows, from, to, level, groups)[0]?.label).toBe(label)
       expect(aggregateProductDemand(rows, from, to, level, groups)[0]?.count).toBe(1)
     }

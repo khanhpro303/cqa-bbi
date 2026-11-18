@@ -484,7 +484,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if meta.SessionTimeoutMessage == "" {
 			meta.SessionTimeoutMessage = cfg.ChatbotSessionTimeoutMessage
 		}
-		// Langflow connection: channel override → AI Engine settings → .env,
+		// Langflow connection: AI Engine settings → legacy channel metadata → .env,
 		// resolved per field with its source (see engine.ResolveLangflowConfig).
 		// lfTenantCfg is the override-free config used to self-heal when a stale
 		// channel override is rejected by Langflow.
@@ -1430,19 +1430,19 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if fallbackFlow != "" && lfTenantCfg.APIURL != "" {
 				lfRes, err = langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, lfTenantCfg.APIURL, lfTenantCfg.APIKey, fallbackFlow, customerCode, permissionToken, systemPromptToUse)
 				flowIDToUse, flowSource = fallbackFlow, fallbackSource
+				lfCfg = lfTenantCfg
 			}
 		}
 		if err != nil {
 			// Retry transient failures, but never leave the customer in silence:
 			// on the last attempt tell them the bot could not answer.
-			// 401/403/404 are config errors (bad key, deleted flow): retrying
-			// cannot help, so answer the customer now instead of after N retries.
-			if isLastAttempt(ctx) || engine.IsLangflowConfigError(err) {
+			// Permanent failures get the fallback immediately.
+			if isLastAttempt(ctx) || engine.IsPermanentLangflowError(err) {
 				log.Printf("[zalo-drop] reason=langflow_error sender=%s flow=%s flow_source=%s key_source=%s err=%v", payload.Sender.ID, flowIDToUse, flowSource, lfCfg.APIKeySource, err)
 				if sendErr := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botUnavailableMessage); sendErr != nil {
 					log.Printf("[worker] failed to send langflow-error fallback: %v", sendErr)
 				}
-				return fmt.Errorf("langflow error: %v: %w", err, asynq.SkipRetry)
+				return fmt.Errorf("langflow error: %w: %w", err, asynq.SkipRetry)
 			}
 			log.Printf("[worker] langflow error (will retry) sender=%s flow=%s: %v", payload.Sender.ID, flowIDToUse, err)
 			return fmt.Errorf("langflow error: %w", err)

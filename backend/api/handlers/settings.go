@@ -394,75 +394,128 @@ func SaveAIEnginesSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})
 }
 
-// TestLangflowConnection pings Langflow to check if configuration works
+// TestLangflowConnection checks access to both flows without running either flow.
 func TestLangflowConnection(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
-	cfg, _ := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid_server_config", "message": "Không thể đọc cấu hình máy chủ."})
+		return
+	}
 
 	var req struct {
-		LangflowBaseURL string `json:"langflow_base_url"`
-		LangflowFlowID  string `json:"langflow_flow_id"`
-		LangflowToken   string `json:"langflow_token"`
+		LangflowBaseURL      string  `json:"langflow_base_url"`
+		LangflowFlowID       string  `json:"langflow_flow_id"`
+		LangflowPublicFlowID *string `json:"langflow_public_flow_id"`
+		LangflowToken        string  `json:"langflow_token"`
 	}
-	body, _ := io.ReadAll(c.Request.Body)
-	if len(strings.TrimSpace(string(body))) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
-			return
-		}
-	}
-
-	// Resolve params (fallback to DB, then .env if not provided)
-	baseURL := req.LangflowBaseURL
-	if baseURL == "" {
-		var setting models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_url").First(&setting).Error; err == nil {
-			baseURL = setting.ValuePlain
-		} else {
-			baseURL = cfg.LangflowAPIURL
-		}
-	}
-	flowID := req.LangflowFlowID
-	if flowID == "" {
-		var setting models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_flow_id").First(&setting).Error; err == nil {
-			flowID = setting.ValuePlain
-		} else {
-			flowID = cfg.LangflowFlowID
-		}
-	}
-	token := ""
-	if req.LangflowToken != "" && !isMaskedSecret(req.LangflowToken) {
-		token = req.LangflowToken
-	} else {
-		var setting models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_token").First(&setting).Error; err == nil {
-			if len(setting.ValueEncrypted) > 0 {
-				decrypted, _ := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
-				token = string(decrypted)
-			} else {
-				token = setting.ValuePlain
-			}
-		} else {
-			token = cfg.LangflowAPIKey
-		}
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10))
+	if err != nil || (strings.TrimSpace(string(body)) != "" && json.Unmarshal(body, &req) != nil) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+		return
 	}
 
-	if baseURL == "" || flowID == "" {
+	settings := engine.LoadLangflowTenantSettings(tenantID)
+	if req.LangflowPublicFlowID != nil && strings.TrimSpace(*req.LangflowPublicFlowID) == "" {
+		// Saving an empty field removes the tenant override and restores fallback.
+		delete(settings, "ai_engine_langflow_public_flow_id")
+	}
+	effective := engine.ResolveTenantLangflowConfig(settings, cfg)
+	if value := strings.TrimRight(strings.TrimSpace(req.LangflowBaseURL), "/"); value != "" {
+		effective.APIURL, effective.APIURLSource = value, "form"
+	}
+	if value := strings.TrimSpace(req.LangflowFlowID); value != "" {
+		effective.FlowID, effective.FlowIDSource = value, "form"
+	}
+	if req.LangflowPublicFlowID != nil {
+		if value := strings.TrimSpace(*req.LangflowPublicFlowID); value != "" {
+			effective.PublicFlowID, effective.PublicFlowIDSource = value, "form"
+		}
+	}
+	if value := strings.TrimSpace(req.LangflowToken); value != "" && !isMaskedSecret(value) {
+		effective.APIKey, effective.APIKeySource = value, "form"
+		effective.APIKeyWarning = ""
+	}
+	if effective.APIURL == "" || effective.FlowID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing_config", "message": "Vui lòng cung cấp URL và Flow ID"})
 		return
 	}
 
-	// Try calling run flow with a ping using the actual LangflowClient logic
-	lfClient := engine.NewLangflowClient(cfg)
-
-	_, err := lfClient.RunFlowWithOverrides(c.Request.Context(), "ping_test_session", "", "ping", baseURL, token, flowID, "")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	publicFlow, publicSource := effective.FlowFor("public")
+	checks := []struct {
+		Role   string `json:"role"`
+		FlowID string `json:"flow_id"`
+		Source string `json:"source"`
+		OK     bool   `json:"ok"`
+		Error  string `json:"error,omitempty"`
+	}{
+		{Role: "private", FlowID: effective.FlowID, Source: effective.FlowIDSource},
+		{Role: "public", FlowID: publicFlow, Source: publicSource},
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	probed := make(map[string]engine.FlowCheck, len(checks))
+	var failures []string
+	for i := range checks {
+		check := &checks[i]
+		probe, ok := probed[check.FlowID]
+		if !ok {
+			probe = engine.CheckLangflowFlow(ctx, effective.APIURL, effective.APIKey, check.FlowID)
+			probed[check.FlowID] = probe
+		}
+		check.OK = probe.OK
+		if check.OK {
+			continue
+		}
+		switch probe.Problem {
+		case "bad_key":
+			check.Error = "Langflow từ chối API key. Kiểm tra lại API key ở AI Engine."
+		case "flow_missing":
+			check.Error = "Flow ID không tồn tại trên Langflow. Kiểm tra lại Flow ID."
+		case "unreachable":
+			check.Error = "Không kết nối được đến Langflow. Kiểm tra URL và kết nối mạng."
+		default:
+			check.Error = "Langflow trả về phản hồi không hợp lệ. Kiểm tra URL và trạng thái máy chủ."
+		}
+		role := "Nội bộ"
+		if check.Role == "public" {
+			role = "Khách hàng / nhóm"
+		}
+		failures = append(failures, role+": "+check.Error)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "Kết nối thành công"})
+	warnings := langflowTestChannelWarnings(tenantID)
+	if effective.APIKeyWarning != "" {
+		warnings = append(warnings, effective.APIKeyWarning)
+	}
+	response := gin.H{"checks": checks, "api_url_source": effective.APIURLSource, "api_key_source": effective.APIKeySource, "warnings": warnings}
+	if len(failures) > 0 {
+		response["error"] = "langflow_check_failed"
+		response["message"] = strings.Join(append(failures, warnings...), " ")
+		c.JSON(http.StatusBadRequest, response)
+		return
+	}
+	response["status"] = "ok"
+	response["message"] = strings.Join(append([]string{"Kết nối thành công cho flow nội bộ và flow khách hàng / nhóm."}, warnings...), " ")
+	c.JSON(http.StatusOK, response)
+}
+
+func langflowTestChannelWarnings(tenantID string) []string {
+	if db.DB == nil {
+		return nil
+	}
+	var channels []models.Channel
+	if err := db.DB.Select("metadata").Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&channels).Error; err != nil {
+		return nil
+	}
+	for _, channel := range channels {
+		var meta channelLangflowMeta
+		if json.Unmarshal([]byte(channel.Metadata), &meta) == nil &&
+			(meta.LangflowAPIURL != "" || meta.LangflowAPIKey != "" || meta.LangflowFlowID != "" || meta.LangflowPublicFlowID != "") {
+			return []string{"Có kênh Zalo OA còn lưu cấu hình Langflow cũ. Xem kiểm tra sức khỏe để kiểm tra cấu hình đang dùng của từng kênh."}
+		}
+	}
+	return nil
 }
 
 // TestAIKey tests the AI API key by making a simple request

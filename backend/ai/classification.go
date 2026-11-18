@@ -149,7 +149,7 @@ func normalizeConversationInsights(insights *ConversationInsights) {
 	insights.LeadQuality.Level = strings.ToLower(strings.TrimSpace(insights.LeadQuality.Level))
 	insights.LeadQuality.Evidence = strings.TrimSpace(insights.LeadQuality.Evidence)
 	insights.LeadQuality.Reason = strings.TrimSpace(insights.LeadQuality.Reason)
-	validLeadLevels := map[string]bool{"high": true, "medium": true, "low": true, "spam": true, "unknown": true}
+	validLeadLevels := map[string]bool{"converted": true, "high": true, "medium": true, "low": true, "spam": true, "unknown": true}
 	if !validLeadLevels[insights.LeadQuality.Level] {
 		insights.LeadQuality.Level = "unknown"
 	}

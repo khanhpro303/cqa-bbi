@@ -71,7 +71,7 @@ const { t, locale } = useI18n()
 const slide = ref(0)
 const filter = ref<PotentialFilter>('all')
 const titles = computed(() => [t('sq_chart_potential'), t('sq_chart_products')])
-const colors = { high: '#047857', medium: '#0369a1', low: '#b45309' }
+const colors: Record<string, string> = { converted: '#7c3aed', high: '#047857', medium: '#0369a1', low: '#b45309' }
 const tileColors = ['#0369a1', '#047857', '#6d28d9', '#b45309', '#0e7490', '#be123c']
 const aggregates = computed(() => aggregateInsights(props.rows, props.from, props.to))
 const leads = computed(() => potentialLevels.map(level => ({ level, count: aggregates.value.leadQuality.find(item => item.key === level)?.count || 0 })))

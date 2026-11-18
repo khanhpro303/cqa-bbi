@@ -256,15 +256,31 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
     "need": "price|advice|stock|order|warranty|complaint|other|unknown",
     "products": [{"name":"tên sản phẩm","sku":"SKU nếu được nói rõ, nếu không để rỗng","evidence":"trích dẫn nguyên văn của khách"}],
     "feedback": [{"category":"sản phẩm|giá|giao hàng|CSKH|khác","sentiment":"positive|neutral|negative|mixed|unknown","evidence":"trích dẫn nguyên văn của khách"}],
-    "lead_quality": {"level":"high|medium|low|spam|unknown","evidence":"trích dẫn nguyên văn của khách hoặc để rỗng nếu thiếu dữ kiện","reason":"lý do ngắn gọn"},
-    "order_outcomes": [{"status":"confirmed|cancelled|refunded|review","order_ref":"mã đơn được nói rõ hoặc rỗng","value_vnd":null,"confirmation_message_id":"ID tin nhắn customer hoặc agent","confirmation_evidence":"toàn bộ tin nhắn làm bằng chứng","amount_message_id":"ID tin nhắn tổng tiền hoặc rỗng","amount_evidence":"toàn bộ tin nhắn có tổng tiền hoặc rỗng","confidence":0.0}]
+    "lead_quality": {
+      "level": "converted|high|medium|low|spam|unknown",
+      "evidence": "Trích dẫn nguyên văn tin nhắn Customer hoặc Staff làm căn cứ phân loại",
+      "reason": "Lý do ngắn gọn"
+    },
+    "order_outcomes": [
+      {
+        "status": "confirmed|cancelled|refunded|review",
+        "order_ref": "",
+        "value_vnd": null,
+        "confirmation_message_id": "",
+        "confirmation_evidence": "",
+        "amount_message_id": "",
+        "amount_evidence": "",
+        "confidence": 0.0
+      }
+    ]
   }`
 		insightsInstructions = `
 - Luôn trả về trường "insights", kể cả khi các mảng rỗng.
 - Chỉ trích xuất sản phẩm và SKU khi khách hàng thực sự đề cập; TUYỆT ĐỐI không suy đoán hoặc tự tạo SKU.
-- "evidence" phải là trích dẫn chính xác lời khách hàng, không diễn giải và không dùng lời nhân viên làm bằng chứng về nhu cầu/feedback.
+- Evidence về nhu cầu và feedback của khách phải trích nguyên văn lời Customer. Riêng order_outcomes, evidence có thể là tin nhắn Customer hoặc Staff tùy theo điều kiện xác nhận đơn.
+- Không diễn giải hoặc ghép nội dung từ nhiều tin nhắn thành một evidence.
 - Khi không đủ dữ kiện về tiềm năng mua hàng, dùng lead_quality.level="unknown".
-- Khiếu nại hoặc cảm xúc tiêu cực không đồng nghĩa khách hàng chất lượng thấp. Đánh giá lead_quality theo mức độ nhu cầu và ý định mua.
+- Khiếu nại hoặc cảm xúc tiêu cực không đồng nghĩa khách hàng chất lượng thấp. Đánh giá lead_quality theo mức độ nhu cầu và ý định mua. Nếu khách chỉ hỏi giá hoặc bắt đầu tin nhắn nhưng sau khi được phản hồi lại không nói gì tiếp thì không vội đánh giá là lead chất lượng.
 - Không suy đoán hoặc quy kết hội thoại cho một nhân viên cụ thể.
 
 ## Quy tắc nhận diện đơn hàng
@@ -279,7 +295,47 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
 - Chỉ dùng review khi có dấu hiệu đơn hàng nhưng chưa đủ bằng chứng xác định trạng thái. cancelled hoặc refunded chỉ dùng khi đơn đã confirmed trước đó và có bằng chứng hủy hoặc hoàn tiền.
 - Khi đơn đã hủy hoặc hoàn tiền, trả cả outcome confirmed trước đó và outcome cancelled/refunded, mỗi outcome dùng ID và nguyên văn bằng chứng riêng, theo thứ tự thời gian.
 - status chỉ là confirmed|cancelled|refunded|review. Khi khách hủy/hoàn đơn đã nói trước đó, trả cùng order_ref nếu có. Nếu thiếu order_ref, để rỗng; hệ thống sẽ giữ một mã ổn định theo cuộc hội thoại.
-- Không đưa tên, số điện thoại, địa chỉ hoặc nội dung nhạy cảm khác vào order_ref.`
+- Không đưa tên, số điện thoại, địa chỉ hoặc nội dung nhạy cảm khác vào order_ref.
+
+## Các quy tắc phân loại lead quality:
+
+### CONVERTED — Đã chuyển đổi
+* Staff gửi mã vận đơn cụ thể của đơn hàng khách.
+* Customer cung cấp đầy đủ SĐT AND địa chỉ giao hàng AND Staff xác nhận rõ đã tạo/lên đơn.
+* Customer xác nhận đã ghé shop và mua/lấy sản phẩm trực tiếp.
+* Bao gồm đơn COD, không yêu cầu khách đã thanh toán.
+* Nếu đơn đã được tạo nhưng sau đó bị hủy/hoàn, vẫn giữ lead_quality="converted"; trạng thái hiện tại thể hiện trong order_outcomes.
+
+### HIGH — Ý định mua mạnh, chưa chuyển đổi
+* Muốn mua/chốt sản phẩm cụ thể nhưng chưa có bằng chứng đơn được tạo.
+* Thể hiện rõ muốn mua/chốt SP cụ thể.
+* Chọn mẫu + size/màu để mua.
+* Hỏi tồn kho/chi nhánh/đợt restock của SP cụ thể với mục đích mua.
+* Để lại thông tin giao hàng / hẹn đến xem, thử hoặc lấy hàng.
+* Khách cũ muốn mua thêm SP mới.
+* Hỏi phí ship gắn với SP và đồng thời có tín hiệu mua rõ ràng.
+
+### MEDIUM — quan tâm nhưng intent chưa mạnh
+* Hỏi giá hoặc thông tin của SP cụ thể/đã xác định được.
+* Hỏi màu, size, tính năng, phụ kiện... để tham khảo.
+* Hỏi phí ship gắn với SP nhưng chưa có tín hiệu chốt/mua.
+* Có ≥3 câu hỏi riêng biệt sau tin nhắn tự động.
+* Yêu cầu được tư vấn về sản phẩm.
+
+### LOW — rõ ràng không có nhu cầu mua mới
+* Khách chỉ có nhu cầu bảo hành/sửa chữa/khiếu nại, không thể hiện ý định mua sản phẩm mới.
+* Khách xác nhận không mua/không có nhu cầu mua.
+
+### SPAM
+Quảng cáo, bot hoặc nội dung không liên quan đến CSKH/Sales.
+
+### UNKNOWN — thiếu dữ kiện
+* Tin nhắn quá ngắn hoặc không thể hiện nhu cầu rõ ràng.
+* Chỉ hỏi địa chỉ/giờ mở cửa.
+* Hỏi chi nhánh nhưng không gắn với SP, tồn kho hoặc nhu cầu mua.
+* Hỏi giá chung chung, không xác định SP.
+* Hỏi phí ship nhưng không rõ SP hoặc nhu cầu mua.
+* Không phản hồi tiếp nhưng không có bằng chứng rõ ràng về việc không quan tâm.`
 	}
 
 	prompt := fmt.Sprintf(`Bạn là hệ thống phân loại nội dung hội thoại CSKH/Sales.

@@ -73,6 +73,7 @@ func TestMessengerPromptDefaultExposesEditableOrderOutcomeRules(t *testing.T) {
 		"Không xem gửi QR, báo giá",
 		"customer hoặc agent",
 		`status="confirmed"`,
+		"CONVERTED — Đã chuyển đổi",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Errorf("editable default missing order rule %q", expected)

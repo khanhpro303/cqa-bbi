@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -58,15 +59,50 @@ func TestFlowForPublicFallsBackToPrivate(t *testing.T) {
 	}
 }
 
-func TestIsLangflowConfigError(t *testing.T) {
-	if !IsLangflowConfigError(errors.New(`langflow api error (status 403): {"detail":"Invalid or missing API key"}`)) {
-		t.Error("403 should be a config error")
+func TestLangflowHTTPErrorClassification(t *testing.T) {
+	for _, tc := range []struct {
+		status            int
+		config, permanent bool
+	}{
+		{http.StatusBadRequest, false, true},
+		{http.StatusUnauthorized, true, true},
+		{http.StatusForbidden, true, true},
+		{http.StatusNotFound, true, true},
+		{http.StatusUnprocessableEntity, false, true},
+		{http.StatusTooManyRequests, false, false},
+		{http.StatusBadGateway, false, false},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte("upstream replied (status 403)"))
+			}))
+			defer srv.Close()
+			client := NewLangflowClient(&config.Config{})
+			_, err := client.RunFlowWithCustomerUsage(context.Background(), "session", "", "test", srv.URL, "", "flow", "", "", "")
+			err = fmt.Errorf("wrapped: %w", err)
+			var apiErr *LangflowAPIError
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != tc.status {
+				t.Fatalf("expected typed HTTP %d, got %v", tc.status, err)
+			}
+			if got := IsLangflowConfigError(err); got != tc.config {
+				t.Errorf("config error = %t, want %t", got, tc.config)
+			}
+			if got := IsPermanentLangflowError(err); got != tc.permanent {
+				t.Errorf("permanent error = %t, want %t", got, tc.permanent)
+			}
+		})
 	}
-	if IsLangflowConfigError(errors.New("langflow api error (status 502): bad gateway")) {
-		t.Error("502 should be retryable")
+}
+
+func TestResolveLangflowConfigWarnsWhenStoredKeyCannotBeDecrypted(t *testing.T) {
+	cfg := &config.Config{LangflowAPIKey: "env-key", EncryptionKey: "0123456789abcdef"}
+	settings := map[string]models.AppSetting{
+		"ai_engine_langflow_token": {ValueEncrypted: []byte("invalid")},
 	}
-	if IsLangflowConfigError(nil) {
-		t.Error("nil is not an error")
+	got := ResolveTenantLangflowConfig(settings, cfg)
+	if got.APIKeyWarning == "" || got.APIKey != "env-key" || got.APIKeySource != LangflowSourceEnv {
+		t.Fatal("expected an API key warning with the environment fallback")
 	}
 }
 
@@ -74,6 +110,10 @@ func TestCheckLangflowFlow(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("x-api-key") != "good" {
 			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if r.URL.Path == "/api/v1/flows/login" {
+			_, _ = w.Write([]byte("<html>Sign in</html>"))
 			return
 		}
 		if r.URL.Path != "/api/v1/flows/f1" {
@@ -93,6 +133,9 @@ func TestCheckLangflowFlow(t *testing.T) {
 	}
 	if r := CheckLangflowFlow(ctx, srv.URL, "good", "missing"); r.Problem != "flow_missing" {
 		t.Errorf("missing flow: %+v", r)
+	}
+	if r := CheckLangflowFlow(ctx, srv.URL, "good", "login"); r.OK || r.Problem != "error" {
+		t.Errorf("invalid response: %+v", r)
 	}
 	if r := CheckLangflowFlow(ctx, "", "good", "f1"); r.Problem != "not_configured" {
 		t.Errorf("not configured: %+v", r)

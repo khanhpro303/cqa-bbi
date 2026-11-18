@@ -115,6 +115,9 @@ func insightEventID(tenantID, conversationID, resultID string) string {
 
 func insightLeadLevel(level string) string {
 	switch level = strings.ToLower(strings.TrimSpace(level)); level {
+	case "converted":
+		// The existing AdBazooka export schema does not include converted.
+		return "high"
 	case "high", "medium", "low", "spam":
 		return level
 	}
