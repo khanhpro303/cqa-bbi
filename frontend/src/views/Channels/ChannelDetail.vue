@@ -392,6 +392,19 @@
               persistent-hint
             />
             <CampaignAlertOutputs v-if="editForm.campaign_alerts_enabled" v-model="editForm.campaign_alert_outputs" />
+            <v-divider class="my-3" />
+            <div class="text-body-2 font-weight-medium mb-1">{{ $t('handover_alert_settings_title') }}</div>
+            <v-select
+              v-model="editForm.handover_alert_group_id"
+              :items="alertGroupOptions"
+              :loading="loadingAlertGroups"
+              :no-data-text="loadingAlertGroups ? $t('loading') : $t('campaign_alert_no_groups')"
+              :label="$t('handover_alert_group_label')"
+              density="compact"
+              clearable
+              :hint="$t('handover_alert_group_hint')"
+              persistent-hint
+            />
           </template>
           <template v-else>
             <v-select
@@ -511,7 +524,7 @@ const gatewayLoading = ref(false)
 const gatewayActionLoading = ref<'connect' | 'reconnect' | 'sync' | ''>('')
 let gatewayPollTimer: number | null = null
 
-const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[] })
+const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[], handover_alert_group_id: '' })
 
 // Alert recipient options: this channel's GMF groups that have a linked Zalo group.
 const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
@@ -788,6 +801,7 @@ async function saveEdit() {
         campaign_alerts_enabled: editForm.value.campaign_alerts_enabled,
         campaign_alert_group_id: editForm.value.campaign_alerts_enabled ? editForm.value.campaign_alert_group_id : '',
         campaign_alert_outputs: editForm.value.campaign_alerts_enabled ? editForm.value.campaign_alert_outputs : [],
+        handover_alert_group_id: editForm.value.handover_alert_group_id || '',
       })
     } else {
       payload.metadata = JSON.stringify({ sync_interval: editForm.value.sync_interval, sync_files: editForm.value.sync_files })
@@ -873,6 +887,7 @@ watch(editDialog, (v) => {
       campaign_alerts_enabled: metadata.value.campaign_alerts_enabled || false,
       campaign_alert_group_id: metadata.value.campaign_alert_group_id || '',
       campaign_alert_outputs: Array.isArray(metadata.value.campaign_alert_outputs) ? metadata.value.campaign_alert_outputs : [],
+      handover_alert_group_id: metadata.value.handover_alert_group_id || '',
     }
     if (channel.value.channel_type === 'zalo_oa') {
       loadAlertGroupOptions()

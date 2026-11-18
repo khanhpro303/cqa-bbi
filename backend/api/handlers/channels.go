@@ -283,6 +283,12 @@ func UpdateChannel(c *gin.Context) {
 					return
 				}
 			}
+			if gid, _ := merged["handover_alert_group_id"].(string); strings.TrimSpace(gid) != "" {
+				if err := validateAlertGroup(tenantID, strings.TrimSpace(gid)); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_handover_alert_group", "details": err.Error()})
+					return
+				}
+			}
 			out, _ := json.Marshal(merged)
 			metadata = string(out)
 		}

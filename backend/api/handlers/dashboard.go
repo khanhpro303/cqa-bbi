@@ -240,14 +240,15 @@ func ListNotificationLogs(c *gin.Context) {
 		perPage = 100
 	}
 
-	// Optional origin filter: "job" (AI task outputs) or "campaign" (CRM campaign
-	// failure alerts). Any other value is ignored so the list stays unfiltered.
+	// Optional origin filter: "job" (AI task outputs), "campaign" (CRM campaign
+	// failure alerts) or "handover" (chatbot handover-to-staff alerts). Any other
+	// value is ignored so the list stays unfiltered.
 	// scope is applied to a fresh builder for both the count and page queries so
 	// GORM never carries statement state between them.
 	source := c.Query("source")
 	scope := func(q *gorm.DB) *gorm.DB {
 		q = q.Where("tenant_id = ?", tenantID)
-		if source == "job" || source == "campaign" {
+		if source == "job" || source == "campaign" || source == "handover" {
 			q = q.Where("source = ?", source)
 		}
 		return q

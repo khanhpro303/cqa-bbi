@@ -178,6 +178,9 @@ const (
 	botOutOfScopeMessage  = "Dạ em chưa thể hỗ trợ câu hỏi này. Anh/chị có thể hỏi em câu khác nhé."
 	botCasualWarning      = "Dạ em chỉ hỗ trợ các câu hỏi về sản phẩm và nghiệp vụ nên em không được phép tán gẫu. Anh/chị thông cảm giúp em nhé."
 	botCasualSessionEnded = "Dạ em xin kết thúc phiên hỗ trợ tại đây. Khi cần hỗ trợ, anh/chị có thể mở lại phiên nhé."
+
+	handoverStaffNotifiedMessage = "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Em đã báo các bạn nhân viên admin liên hệ trực tiếp hỗ trợ mình ngay nhé ạ!"
+	handoverNoStaffMessage       = "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Anh/chị vui lòng nhắn trực tiếp cho nhân viên phụ trách để được hỗ trợ ngay giúp em nhé ạ!"
 )
 
 const langflowUnansweredInstruction = `Nếu câu hỏi ngoài phạm vi hỗ trợ hoặc dữ liệu được phép tra cứu không đủ để trả lời, hãy nói ngắn gọn rằng em chưa thể trả lời câu hỏi này và mời người dùng hỏi tiếp. Chỉ nói em không được phép trả lời khi công cụ báo từ chối quyền rõ ràng. Khi kết quả tra cứu rỗng, không suy đoán nguyên nhân và không lấy dữ liệu từ nguồn khác để vượt phạm vi quyền. Giữ cuộc trò chuyện mở để người dùng hỏi tiếp.`
@@ -835,7 +838,24 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if intent == "HANDOVER" {
 			log.Printf("[worker] message classified as HANDOVER. Closing session and sending handover message.")
 			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
-			handoverMsg := "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Em sẽ báo các bạn nhân viên admin liên hệ trực tiếp hỗ trợ mình ngay nhé ạ!"
+			// Tell staff before promising the customer that staff will call.
+			// Without a configured alert group nobody would be told, so the
+			// customer gets an honest reply instead of an empty promise.
+			alert := engine.HandoverAlert{
+				TenantID:   matchedChannel.TenantID,
+				Channel:    *matchedChannel,
+				ZaloUserID: payload.Sender.ID,
+				ChatGroup:  matchedGroup.Name,
+				Message:    userText,
+			}
+			if isCustomer {
+				alert.CustomerName = customerRec.Name
+				alert.CustomerCode = customerCode
+			}
+			handoverMsg := handoverNoStaffMessage
+			if engine.NotifyHandover(ctx, adapter, alert) {
+				handoverMsg = handoverStaffNotifiedMessage
+			}
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, handoverMsg)

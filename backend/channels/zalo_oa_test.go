@@ -178,3 +178,30 @@ func TestChunkMessageTextHardSplitsOverlongLine(t *testing.T) {
 		t.Fatalf("hard-split lost content")
 	}
 }
+
+func TestPageReachedSince(t *testing.T) {
+	since := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	at := func(m int) time.Time { return since.Add(time.Duration(m) * time.Minute) }
+
+	tests := []struct {
+		name  string
+		times []time.Time
+		since time.Time
+		want  bool
+	}{
+		{"zero since never stops", []time.Time{at(-60), at(-90)}, time.Time{}, false},
+		{"empty page", nil, since, false},
+		{"newest first, all new", []time.Time{at(30), at(10)}, since, false},
+		{"newest first, crosses since", []time.Time{at(30), at(-10)}, since, true},
+		{"newest first, all old", []time.Time{at(-5), at(-50)}, since, true},
+		{"oldest first is not trusted", []time.Time{at(-50), at(30)}, since, false},
+		{"missing timestamp keeps paging", []time.Time{at(30), {}}, since, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pageReachedSince(tt.times, tt.since); got != tt.want {
+				t.Errorf("pageReachedSince() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
