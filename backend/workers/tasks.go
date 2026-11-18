@@ -409,39 +409,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if meta.SessionTimeoutMessage == "" {
 			meta.SessionTimeoutMessage = cfg.ChatbotSessionTimeoutMessage
 		}
-		if meta.LangflowAPIURL == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_url").First(&setting).Error; err == nil && setting.ValuePlain != "" {
-				meta.LangflowAPIURL = setting.ValuePlain
-			} else {
-				meta.LangflowAPIURL = cfg.LangflowAPIURL
-			}
-		}
-		if meta.LangflowAPIKey == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_token").First(&setting).Error; err == nil && len(setting.ValueEncrypted) > 0 {
-				decrypted, _ := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
-				meta.LangflowAPIKey = string(decrypted)
-			} else {
-				meta.LangflowAPIKey = cfg.LangflowAPIKey
-			}
-		}
-		if meta.LangflowFlowID == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_flow_id").First(&setting).Error; err == nil && setting.ValuePlain != "" {
-				meta.LangflowFlowID = setting.ValuePlain
-			} else {
-				meta.LangflowFlowID = cfg.LangflowFlowID
-			}
-		}
-		if meta.LangflowPublicFlowID == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_public_flow_id").First(&setting).Error; err == nil && setting.ValuePlain != "" {
-				meta.LangflowPublicFlowID = setting.ValuePlain
-			} else {
-				meta.LangflowPublicFlowID = cfg.LangflowPublicFlowID
-			}
-		}
+		// Langflow connection: ONE precedence (tenant AI Engine settings →
+		// legacy channel metadata → .env), shared with the admin "Test" button so
+		// what the admin tests is exactly what the worker runs.
+		lfCfg := resolveChannelLangflowConfig(matchedChannel.TenantID, matchedChannel.ID, meta, cfg)
+		meta.LangflowAPIURL = lfCfg.APIURL
+		meta.LangflowAPIKey = lfCfg.APIKey
+		meta.LangflowFlowID = lfCfg.PrivateFlowID
+		meta.LangflowPublicFlowID = lfCfg.PublicFlowID
 		// System prompt is optional and per-tenant only — an empty value means
 		// "use the SYSTEM_PROMPT global variable configured inside Langflow",
 		// so there is no env/global fallback here.
@@ -1371,7 +1346,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
 		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
 		if err != nil {
-			return fmt.Errorf("langflow error: %w", err)
+			return handleLangflowFailure(ctx, err, langflowFailureTarget{
+				adapter:  adapter,
+				groupID:  matchedGroup.ZaloGroupID,
+				userID:   payload.Sender.ID,
+				flowID:   flowIDToUse,
+				config:   lfCfg,
+				tenantID: matchedChannel.TenantID,
+			})
 		}
 		replyText := lfRes.Text
 

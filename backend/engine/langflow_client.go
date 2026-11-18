@@ -143,7 +143,7 @@ func (l *LangflowClient) fetchAgentNodeIDs(ctx context.Context, apiURL, apiKey, 
 		return nil, fmt.Errorf("read flow response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("flow api error (status %d): %s", resp.StatusCode, string(body))
+		return nil, newFlowAPIError(resp.StatusCode, body)
 	}
 
 	return extractAgentNodeIDs(body)
@@ -298,7 +298,7 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("langflow api error (status %d): %s", resp.StatusCode, string(respBody))
+		return "", newRunAPIError(resp.StatusCode, respBody)
 	}
 
 	var result map[string]interface{}
@@ -485,7 +485,7 @@ func (l *LangflowClient) sendAndParse(ctx context.Context, url, apiKey string, p
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return LangflowResult{}, fmt.Errorf("langflow api error (status %d): %s", resp.StatusCode, string(respBody))
+		return LangflowResult{}, newRunAPIError(resp.StatusCode, respBody)
 	}
 
 	return parseLangflowResult(respBody)

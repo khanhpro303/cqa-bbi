@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +16,6 @@ import (
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
-	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm/clause"
@@ -392,77 +390,6 @@ func SaveAIEnginesSettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})
-}
-
-// TestLangflowConnection pings Langflow to check if configuration works
-func TestLangflowConnection(c *gin.Context) {
-	tenantID := middleware.GetTenantID(c)
-	cfg, _ := config.Load()
-
-	var req struct {
-		LangflowBaseURL string `json:"langflow_base_url"`
-		LangflowFlowID  string `json:"langflow_flow_id"`
-		LangflowToken   string `json:"langflow_token"`
-	}
-	body, _ := io.ReadAll(c.Request.Body)
-	if len(strings.TrimSpace(string(body))) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
-			return
-		}
-	}
-
-	// Resolve params (fallback to DB, then .env if not provided)
-	baseURL := req.LangflowBaseURL
-	if baseURL == "" {
-		var setting models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_url").First(&setting).Error; err == nil {
-			baseURL = setting.ValuePlain
-		} else {
-			baseURL = cfg.LangflowAPIURL
-		}
-	}
-	flowID := req.LangflowFlowID
-	if flowID == "" {
-		var setting models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_flow_id").First(&setting).Error; err == nil {
-			flowID = setting.ValuePlain
-		} else {
-			flowID = cfg.LangflowFlowID
-		}
-	}
-	token := ""
-	if req.LangflowToken != "" && !isMaskedSecret(req.LangflowToken) {
-		token = req.LangflowToken
-	} else {
-		var setting models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_token").First(&setting).Error; err == nil {
-			if len(setting.ValueEncrypted) > 0 {
-				decrypted, _ := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
-				token = string(decrypted)
-			} else {
-				token = setting.ValuePlain
-			}
-		} else {
-			token = cfg.LangflowAPIKey
-		}
-	}
-
-	if baseURL == "" || flowID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing_config", "message": "Vui lòng cung cấp URL và Flow ID"})
-		return
-	}
-
-	// Try calling run flow with a ping using the actual LangflowClient logic
-	lfClient := engine.NewLangflowClient(cfg)
-
-	_, err := lfClient.RunFlowWithOverrides(c.Request.Context(), "ping_test_session", "", "ping", baseURL, token, flowID, "")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "Kết nối thành công"})
 }
 
 // TestAIKey tests the AI API key by making a simple request

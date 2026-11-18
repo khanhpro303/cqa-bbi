@@ -323,9 +323,12 @@
                 <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
                 <v-divider class="my-4" />
                 <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
-                <v-text-field v-model="editForm.langflow_api_url" label="Langflow API URL" density="compact" class="mb-3" />
-                <v-text-field v-model="editForm.langflow_api_key" label="Langflow API Key" type="password" density="compact" class="mb-3" />
-                <v-text-field v-model="editForm.langflow_flow_id" label="Langflow Flow ID" density="compact" class="mb-3" />
+                <v-alert type="info" variant="tonal" density="compact" class="mb-3">
+                  {{ $t('langflow_managed_in_ai_engines') }}
+                </v-alert>
+                <v-alert v-if="hasLegacyLangflowOverride" type="warning" variant="tonal" density="compact" class="mb-3">
+                  {{ $t('langflow_legacy_override_notice') }}
+                </v-alert>
               </v-window-item>
             </v-window>
           </div>
@@ -635,12 +638,17 @@ const editChannelType = ref('')
 const editForm = reactive({
   name: '', is_active: true, sync_files: false, sync_interval: 15,
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
-  langflow_api_url: '', langflow_api_key: '', langflow_flow_id: '',
   campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[]
 })
 // Original parsed metadata of the channel being edited — spread back on save so
 // keys this dialog doesn't manage (e.g. set in ChannelDetail) are never wiped.
 const editOriginalMeta = ref<Record<string, unknown>>({})
+// Per-channel Langflow overrides are legacy: the backend now always prefers the
+// AI Engines config, and saving this dialog strips them.
+const LEGACY_LANGFLOW_META_KEYS = ['langflow_api_url', 'langflow_api_key', 'langflow_flow_id', 'langflow_public_flow_id']
+const hasLegacyLangflowOverride = computed(() =>
+  LEGACY_LANGFLOW_META_KEYS.some((key) => Boolean(editOriginalMeta.value[key])),
+)
 const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
 const loadingAlertGroups = ref(false)
 
@@ -684,9 +692,6 @@ function openEdit(ch: any) {
     editForm.session_welcome_message = meta.session_welcome_message || ''
     editForm.session_goodbye_message = meta.session_goodbye_message || ''
     editForm.session_timeout_minutes = meta.session_timeout_minutes || 0
-    editForm.langflow_api_url = meta.langflow_api_url || ''
-    editForm.langflow_api_key = meta.langflow_api_key || ''
-    editForm.langflow_flow_id = meta.langflow_flow_id || ''
     editForm.campaign_alerts_enabled = meta.campaign_alerts_enabled || false
     editForm.campaign_alert_group_id = meta.campaign_alert_group_id || ''
     editForm.campaign_alert_outputs = Array.isArray(meta.campaign_alert_outputs) ? meta.campaign_alert_outputs : []
@@ -699,9 +704,6 @@ function openEdit(ch: any) {
     editForm.session_welcome_message = ''
     editForm.session_goodbye_message = ''
     editForm.session_timeout_minutes = 0
-    editForm.langflow_api_url = ''
-    editForm.langflow_api_key = ''
-    editForm.langflow_flow_id = ''
     editForm.campaign_alerts_enabled = false
     editForm.campaign_alert_group_id = ''
     editForm.campaign_alert_outputs = []
@@ -731,9 +733,9 @@ async function saveEdit() {
         metaToSave.session_welcome_message = editForm.session_welcome_message
         metaToSave.session_goodbye_message = editForm.session_goodbye_message
         metaToSave.session_timeout_minutes = editForm.session_timeout_minutes
-        metaToSave.langflow_api_url = editForm.langflow_api_url
-        metaToSave.langflow_api_key = editForm.langflow_api_key
-        metaToSave.langflow_flow_id = editForm.langflow_flow_id
+        // Langflow is configured only in AI Engines; drop legacy per-channel
+        // overrides so a stale key/flow can never shadow the tenant config.
+        for (const key of LEGACY_LANGFLOW_META_KEYS) delete metaToSave[key]
         metaToSave.campaign_alerts_enabled = editForm.campaign_alerts_enabled
         metaToSave.campaign_alert_group_id = editForm.campaign_alerts_enabled ? editForm.campaign_alert_group_id : ''
         metaToSave.campaign_alert_outputs = editForm.campaign_alerts_enabled ? editForm.campaign_alert_outputs : []
