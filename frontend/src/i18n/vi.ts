@@ -697,6 +697,7 @@ export default {
   users_reset_password_title: 'Đặt lại mật khẩu — {name}',
   users_reset_password_field: 'Mật khẩu mới',
   users_reset_password_btn: 'Đặt lại',
+  users_whitelist_toast_linked_live: 'Nhân viên đã xác thực Zalo thành công',
   users_whitelist_toast_load_err: 'Không thể tải whitelist Zalo',
   users_whitelist_toast_add_direct_success: 'Đã thêm nhân viên trực tiếp vào Whitelist',
   users_whitelist_confirm_delete: 'Xóa nhân viên này khỏi whitelist Zalo?',
