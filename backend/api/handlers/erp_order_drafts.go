@@ -139,6 +139,10 @@ type orderLine struct {
 	Unit     string  `json:"DVT"`
 	Quantity float64 `json:"SO_LUONG"`
 	Price    float64 `json:"DON_GIA"`
+	// Note is the line note. Cloudify drops the order-level GHI_CHU on
+	// create, so the draft tag and the customer's note live on the first line.
+	Note     string  `json:"GHI_CHU,omitempty"`
+	Discount float64 `json:"CHIET_KHAU,omitempty"`
 }
 
 // orderDraftDeps are the outside calls a draft needs, swappable in tests.
@@ -306,6 +310,11 @@ func orderToolLabel(resource string) string {
 // draftTag marks the order note so staff can trace an order to its draft.
 func draftTag(id string) string { return "[CQA:" + id[:8] + "]" }
 
+// draftOrderCode is the MA_HOA_DON a chatbot order is created with.
+func draftOrderCode(id string) string {
+	return "CQA-" + time.Now().In(time.FixedZone("ICT", 7*3600)).Format("060102") + "-" + strings.ToUpper(id[:6])
+}
+
 func buildCreateDraft(permissions *engine.GroupPermissionContext, scope string, args orderDraftArgs, action *models.OrderAction) (map[string]any, error) {
 	code, name, err := resolveDraftCustomer(permissions, scope, args.CustomerCode)
 	if err != nil {
@@ -317,9 +326,14 @@ func buildCreateDraft(permissions *engine.GroupPermissionContext, scope string, 
 	}
 	action.CustomerCode, action.CustomerName = code, name
 	note := strings.TrimSpace(draftTag(action.ID) + " " + strings.TrimSpace(args.Note))
+	lines[0].Note = note
+	// Cloudify keeps MA_HOA_DON exactly as sent, so give each draft its own
+	// code: it is the order number staff see, and it lets anyone find the
+	// order when a create timed out with an unknown outcome.
+	action.OrderCode = draftOrderCode(action.ID)
 	body := map[string]any{
 		"TINH_TRANG":            orderactions.OrderStatusInProgress,
-		"MA_HOA_DON":            "CQA",
+		"MA_HOA_DON":            action.OrderCode,
 		"MA_KHACH_HANG":         code,
 		"TEN_KHACH_HANG":        name,
 		"GHI_CHU":               note,
@@ -565,6 +579,8 @@ func orderBodyFromRow(row map[string]any) (map[string]any, []orderLine) {
 				Unit:     many2oneLabel(m["DVT"]),
 				Quantity: getMapFloat(m, "SO_LUONG"),
 				Price:    getMapFloat(m, "DON_GIA"),
+				Note:     getMapString(m, "GHI_CHU"),
+				Discount: getMapFloat(m, "CHIET_KHAU"),
 			})
 		}
 	}

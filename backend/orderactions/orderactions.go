@@ -308,7 +308,11 @@ func failedText(action models.OrderAction) string {
 }
 
 func unknownText(action models.OrderAction) string {
-	return fmt.Sprintf("⚠️ Hệ thống ERP phản hồi chậm nên chưa chắc đã %s xong. Bạn đừng gửi lại nhé, nhân viên sẽ kiểm tra và báo lại.", kindLabel(action.Kind))
+	ref := ""
+	if action.OrderCode != "" {
+		ref = " (mã " + action.OrderCode + ")"
+	}
+	return fmt.Sprintf("⚠️ Hệ thống ERP phản hồi chậm nên chưa chắc đã %s%s xong. Bạn đừng gửi lại nhé, nhân viên sẽ kiểm tra và báo lại.", kindLabel(action.Kind), ref)
 }
 
 func customerLabel(action models.OrderAction) string {

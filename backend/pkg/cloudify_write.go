@@ -120,6 +120,14 @@ func cloudifyBodyError(raw []byte) (string, bool) {
 		}
 		return preview(raw, 300)
 	}
+	// Cloudify's envelope: {"code":200,"message":"Success","data":{...}} or
+	// {"code":400,"name":"Bad Request","description":"<p>...</p>"}.
+	if code, ok := body["code"].(float64); ok && code >= 400 {
+		if d, ok := body["description"].(string); ok && d != "" {
+			return stripTags(d), true
+		}
+		return message(), true
+	}
 	if s, ok := body["status"].(string); ok && strings.EqualFold(s, "error") {
 		return message(), true
 	}
@@ -138,4 +146,20 @@ func preview(raw []byte, n int) string {
 		return s[:n]
 	}
 	return s
+}
+
+func stripTags(s string) string {
+	var b strings.Builder
+	inTag := false
+	for _, r := range s {
+		switch {
+		case r == '<':
+			inTag = true
+		case r == '>':
+			inTag = false
+		case !inTag:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }

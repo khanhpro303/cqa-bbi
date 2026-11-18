@@ -13,6 +13,8 @@ func TestCloudifyBodyError(t *testing.T) {
 		{`{"jsonrpc":"2.0","error":{"code":200,"data":{"message":"ValidationError"}}}`, true},
 		{`{"error":null,"data":{}}`, false},
 		{`[1,2]`, false},
+		{`{"code":400,"name":"Bad Request","description":"<p>Mặt hàng có số lượng vượt quá</p>"}`, true},
+		{`{"code":200,"message":"Success","data":{"id":25458}}`, false},
 	}
 	for _, tc := range cases {
 		if _, failed := cloudifyBodyError([]byte(tc.body)); failed != tc.failed {
