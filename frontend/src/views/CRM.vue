@@ -55,64 +55,90 @@
       <!-- TAB 1: CRM GROUPS (GMF) -->
       <v-window-item value="groups" class="pt-2">
         <v-card :loading="loadingGroups">
-          <v-table density="comfortable">
-            <thead>
-              <tr>
-                <th>Tên nhóm</th>
-                <th>Mô tả</th>
-                <th>Thành viên</th>
-                <th>Ngày tạo</th>
-                <th>Hành động</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="g in groups" :key="g.id">
-                <td class="py-3">
-                  <div class="font-weight-bold text-primary">{{ g.name }}</div>
-                  <div class="d-flex align-center mt-1 flex-wrap ga-1">
-                    <v-chip v-if="g.zalo_group_id" size="x-small" color="success" class="font-weight-bold" variant="flat">
-                      <v-icon start size="10">mdi-message-text-outline</v-icon>
-                      Đã liên kết Zalo GMF
-                    </v-chip>
-                    <v-chip v-if="g.channel" size="x-small" color="blue-grey" class="font-weight-bold" variant="outlined">
-                      OA: {{ g.channel.name }}
-                    </v-chip>
-                    <v-chip v-for="code in groupCodes(g)" :key="code" size="x-small" color="indigo" class="font-weight-bold" variant="flat">
-                      Mã KH: {{ code }}
-                    </v-chip>
-                  </div>
-                </td>
-                <td class="text-body-2 text-grey-darken-1 py-3">{{ g.description || '—' }}</td>
-                <td class="py-3">
-                  <div class="d-flex flex-wrap ga-1 align-center">
-                    <v-chip size="small" color="blue" variant="tonal">
-                      <v-icon start size="14">mdi-badge-account-outline</v-icon>
-                      {{ g.employees ? g.employees.length : 0 }} Nhân viên
-                    </v-chip>
-                    <v-chip size="small" color="teal" variant="tonal">
-                      <v-icon start size="14">mdi-account-star-outline</v-icon>
-                      {{ g.customers ? g.customers.length : 0 }} Khách hàng
-                    </v-chip>
-                  </div>
-                </td>
-                <td class="text-caption py-3">{{ new Date(g.created_at).toLocaleDateString() }}</td>
-                <td class="py-3">
-                  <v-btn v-if="g.zalo_group_link" icon="mdi-qrcode" size="small" variant="text" color="success" @click="showGroupQR(g)" title="QR / Link nhóm Zalo" />
-                  <v-btn icon="mdi-account-cog" size="small" variant="text" color="teal" @click="openManageMembersDialog(g)" title="Quản lý thành viên" />
-                  <v-btn icon="mdi-shield-lock-outline" size="small" variant="text" color="indigo" @click="openGroupPermissionsDialog(g)" title="Phân quyền Endpoint & Sơ đồ live" />
-                  <v-btn icon="mdi-pencil" size="small" variant="text" color="blue" @click="openEditGroupDialog(g)" title="Sửa nhóm" />
-                  <v-btn v-if="isOwner && g.zalo_group_id" icon="mdi-broom" size="small" variant="text" color="orange-darken-2" :loading="clearingSessionId === g.id" @click="clearGroupSession(g)" title="Xoá sạch cache phiên chat của nhóm GMF" />
-                  <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="deleteGroup(g.id)" title="Xóa nhóm" />
-                </td>
-              </tr>
-              <tr v-if="groups.length === 0 && !loadingGroups">
-                <td colspan="5" class="text-center py-8 text-grey text-body-2">
-                  <v-icon size="40" color="grey-lighten-1" class="mb-2">mdi-account-group-outline</v-icon>
-                  <div>Chưa có nhóm CRM nào được tạo.</div>
-                </td>
-              </tr>
-            </tbody>
-          </v-table>
+          <div class="crm-groups-table-container">
+            <v-table density="comfortable" class="crm-groups-table">
+              <thead>
+                <tr>
+                  <th scope="col" class="crm-col-name">Tên nhóm</th>
+                  <th scope="col" class="crm-col-desc">Mô tả</th>
+                  <th scope="col" class="crm-col-members">Thành viên</th>
+                  <th scope="col" class="crm-col-date">Ngày tạo</th>
+                  <th scope="col" class="crm-col-actions text-right">Hành động</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="g in groups" :key="g.id">
+                  <td class="crm-col-name py-2">
+                    <div class="crm-group-title-row">
+                      <span class="font-weight-bold text-primary crm-group-name">{{ g.name }}</span>
+                      <v-chip v-if="g.zalo_group_id" size="x-small" color="success" class="font-weight-bold crm-group-badge" variant="flat">
+                        <v-icon start size="10">mdi-message-text-outline</v-icon>
+                        Đã liên kết Zalo GMF
+                      </v-chip>
+                      <v-chip v-if="g.channel" size="x-small" color="blue-grey" class="font-weight-bold crm-group-badge" variant="outlined">
+                        OA: {{ g.channel.name }}
+                      </v-chip>
+                      <v-chip v-for="code in groupCodes(g)" :key="code" size="x-small" color="indigo" class="font-weight-bold crm-group-badge" variant="flat">
+                        Mã KH: {{ code }}
+                      </v-chip>
+                    </div>
+                  </td>
+                  <td class="crm-col-desc text-body-2 text-grey-darken-1 py-2">
+                    <div class="crm-desc-text" :title="g.description || undefined">
+                      {{ g.description || '—' }}
+                    </div>
+                  </td>
+                  <td class="crm-col-members py-2">
+                    <div class="d-flex flex-nowrap ga-1 align-center">
+                      <v-chip
+                        size="small"
+                        color="blue"
+                        variant="tonal"
+                        class="crm-member-chip"
+                        :title="`${g.employees ? g.employees.length : 0} Nhân viên`"
+                        :aria-label="`${g.employees ? g.employees.length : 0} Nhân viên`"
+                      >
+                        <v-icon start size="14">mdi-badge-account-outline</v-icon>
+                        <span>{{ g.employees ? g.employees.length : 0 }}&nbsp;</span>
+                        <span class="crm-member-label-full">Nhân viên</span>
+                        <span class="crm-member-label-short">NV</span>
+                      </v-chip>
+                      <v-chip
+                        size="small"
+                        color="teal"
+                        variant="tonal"
+                        class="crm-member-chip"
+                        :title="`${g.customers ? g.customers.length : 0} Khách hàng`"
+                        :aria-label="`${g.customers ? g.customers.length : 0} Khách hàng`"
+                      >
+                        <v-icon start size="14">mdi-account-star-outline</v-icon>
+                        <span>{{ g.customers ? g.customers.length : 0 }}&nbsp;</span>
+                        <span class="crm-member-label-full">Khách hàng</span>
+                        <span class="crm-member-label-short">KH</span>
+                      </v-chip>
+                    </div>
+                  </td>
+                  <td class="crm-col-date text-caption py-2">{{ new Date(g.created_at).toLocaleDateString() }}</td>
+                  <td class="crm-col-actions py-2">
+                    <div class="crm-group-actions d-flex align-center justify-end flex-nowrap ga-1">
+                      <v-btn v-if="g.zalo_group_link" icon="mdi-qrcode" size="small" density="comfortable" variant="text" color="success" @click="showGroupQR(g)" title="QR / Link nhóm Zalo" />
+                      <v-btn icon="mdi-account-cog" size="small" density="comfortable" variant="text" color="teal" @click="openManageMembersDialog(g)" title="Quản lý thành viên" />
+                      <v-btn icon="mdi-shield-lock-outline" size="small" density="comfortable" variant="text" color="indigo" @click="openGroupPermissionsDialog(g)" title="Phân quyền Endpoint & Sơ đồ live" />
+                      <v-btn icon="mdi-pencil" size="small" density="comfortable" variant="text" color="blue" @click="openEditGroupDialog(g)" title="Sửa nhóm" />
+                      <v-btn v-if="isOwner && g.zalo_group_id" icon="mdi-broom" size="small" density="comfortable" variant="text" color="orange-darken-2" :loading="clearingSessionId === g.id" @click="clearGroupSession(g)" title="Xoá sạch cache phiên chat của nhóm GMF" />
+                      <v-btn icon="mdi-delete" size="small" density="comfortable" variant="text" color="error" @click="deleteGroup(g.id)" title="Xóa nhóm" />
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="groups.length === 0 && !loadingGroups">
+                  <td colspan="5" class="text-center py-8 text-grey text-body-2">
+                    <v-icon size="40" color="grey-lighten-1" class="mb-2">mdi-account-group-outline</v-icon>
+                    <div>Chưa có nhóm CRM nào được tạo.</div>
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+          </div>
         </v-card>
       </v-window-item>
 
@@ -2098,6 +2124,93 @@ function getGroupBrands(resource: string): string {
 <style scoped>
 .v-table {
   border-radius: 4px;
+}
+
+.crm-groups-table-container {
+  container-type: inline-size;
+  container-name: crm-groups;
+}
+
+.crm-groups-table :deep(thead th) {
+  white-space: nowrap;
+}
+
+.crm-groups-table :deep(th),
+.crm-groups-table :deep(td) {
+  padding-inline: 12px;
+}
+
+.crm-groups-table :deep(th:first-child),
+.crm-groups-table :deep(td:first-child) {
+  padding-inline-start: 16px;
+}
+
+.crm-groups-table :deep(th:last-child),
+.crm-groups-table :deep(td:last-child) {
+  padding-inline-end: 16px;
+}
+
+.crm-col-name {
+  min-width: 240px;
+}
+
+.crm-group-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.crm-group-name {
+  line-height: 1.35;
+}
+
+.crm-group-badge {
+  max-width: 100%;
+}
+
+.crm-col-desc {
+  width: 22%;
+  min-width: 170px;
+  max-width: 300px;
+}
+
+.crm-desc-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.crm-col-members,
+.crm-col-date,
+.crm-col-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.crm-member-chip {
+  flex-shrink: 0;
+}
+
+.crm-member-label-full {
+  display: none;
+}
+
+.crm-member-label-short {
+  display: inline;
+}
+
+@container crm-groups (min-width: 1120px) {
+  .crm-member-label-full {
+    display: inline;
+  }
+
+  .crm-member-label-short {
+    display: none;
+  }
 }
 .v-list-item {
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
