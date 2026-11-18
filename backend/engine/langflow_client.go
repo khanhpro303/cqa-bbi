@@ -42,6 +42,15 @@ const (
 	// argument chosen or observed by the model.
 	langflowERPPermissionHeader = "X-Langflow-Global-Var-ERP_PERMISSION_TOKEN"
 
+	// langflowERPAgentTokenHeader exposes the tenant's ERP agent token (public or
+	// private, matching the flow) as the Langflow global variable
+	// CQA_ERP_AGENT_TOKEN, which the MCP Tools server maps to X-Agent-Token.
+	// It must travel with the permission token: once a /run request carries ANY
+	// X-Langflow-Global-Var-* header, Langflow resolves MCP header variables only
+	// from the request and stops loading stored global variables, so a header
+	// pointing at a stored variable would be sent as its literal name (401).
+	langflowERPAgentTokenHeader = "X-Langflow-Global-Var-CQA_ERP_AGENT_TOKEN"
+
 	// agentNodeCacheTTL is how long a successful node-ID discovery is cached
 	// per flow. Flow structure changes rarely, so this keeps the extra
 	// GET /flows/{id} call to roughly once per flow per interval.
@@ -388,7 +397,7 @@ type LangflowResult struct {
 // RunFlowWithCustomer keeps the original string-only contract for callers that
 // don't need usage telemetry; it delegates to RunFlowWithCustomerUsage.
 func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, systemPrompt string) (string, error) {
-	res, err := l.RunFlowWithCustomerUsage(ctx, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, systemPrompt)
+	res, err := l.RunFlowWithCustomerUsage(ctx, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, "", systemPrompt)
 	return res.Text, err
 }
 
@@ -396,7 +405,11 @@ func (l *LangflowClient) RunFlowWithCustomer(ctx context.Context, sessionID, zal
 // systemPrompt, when non-empty, overrides the agent's SYSTEM_PROMPT global
 // variable for this request via a tweak; empty means "use the Langflow default".
 // It additionally parses token usage from the Langflow response when present.
-func (l *LangflowClient) RunFlowWithCustomerUsage(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, systemPrompt string) (LangflowResult, error) {
+//
+// agentToken is the tenant's ERP agent token for this flow's bot type; it is
+// sent alongside permissionToken as a request-scoped Langflow global variable
+// for the ERP MCP server (see langflowERPAgentTokenHeader). Empty skips it.
+func (l *LangflowClient) RunFlowWithCustomerUsage(ctx context.Context, sessionID, zaloUserID, message, apiURL, apiKey, flowID, customerCode, permissionToken, agentToken, systemPrompt string) (LangflowResult, error) {
 	if apiURL == "" || flowID == "" {
 		return LangflowResult{}, fmt.Errorf("langflow integration is not configured")
 	}
@@ -461,6 +474,9 @@ func (l *LangflowClient) RunFlowWithCustomerUsage(ctx context.Context, sessionID
 	extraHeaders := make(http.Header)
 	if permissionToken != "" {
 		extraHeaders.Set(langflowERPPermissionHeader, permissionToken)
+	}
+	if agentToken != "" {
+		extraHeaders.Set(langflowERPAgentTokenHeader, agentToken)
 	}
 
 	return l.sendAndParseWithHeaders(ctx, url, apiKey, payload, extraHeaders)

@@ -79,7 +79,7 @@ func TestLangflowHTTPErrorClassification(t *testing.T) {
 			}))
 			defer srv.Close()
 			client := NewLangflowClient(&config.Config{})
-			_, err := client.RunFlowWithCustomerUsage(context.Background(), "session", "", "test", srv.URL, "", "flow", "", "", "")
+			_, err := client.RunFlowWithCustomerUsage(context.Background(), "session", "", "test", srv.URL, "", "flow", "", "", "", "")
 			err = fmt.Errorf("wrapped: %w", err)
 			var apiErr *LangflowAPIError
 			if !errors.As(err, &apiErr) || apiErr.StatusCode != tc.status {

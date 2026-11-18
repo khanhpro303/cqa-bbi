@@ -22,6 +22,10 @@ from typing import Any
 
 SERVER_PREFIX = "cqa-erp"
 PERMISSION_VARIABLE = "ERP_PERMISSION_TOKEN"
+# CQA sends the agent token per request (X-Langflow-Global-Var-CQA_ERP_AGENT_TOKEN).
+# A stored-variable name here would be sent literally: Langflow stops loading
+# stored globals once a request carries any X-Langflow-Global-Var-* header.
+AGENT_TOKEN_VARIABLE = "CQA_ERP_AGENT_TOKEN"
 EXPECTED_TOOLS = 7
 
 
@@ -270,20 +274,7 @@ def main() -> int:
     planned: list[tuple[str, str]] = []
     for flow_id in args.flow_ids:
         flow = load_flow(api, flow_id)
-        legacy = [node for node in flow.get("data", {}).get("nodes", []) if legacy_erp_node(node)]
-        if legacy:
-            token_variable = token_variable_from_legacy(legacy[0])
-        else:
-            existing_mcp = [
-                node
-                for node in flow.get("data", {}).get("nodes", [])
-                if node.get("data", {}).get("type") == "MCPTools"
-                and str(node.get("data", {}).get("node", {}).get("mcpServerName", "")).startswith(SERVER_PREFIX)
-            ]
-            if len(existing_mcp) != 1:
-                raise UpdateError("cannot resolve existing ERP MCP node")
-            current_config = existing_mcp[0]["data"]["node"]["template"]["mcp_server"]["value"]["config"]
-            token_variable = current_config["headers"]["X-Agent-Token"]
+        token_variable = AGENT_TOKEN_VARIABLE
         name = server_name(str(flow.get("name", "")), flow_id)
         config = desired_server_config(mcp_url, token_variable)
         server_changed = register_server(api, name, config, args.apply)
