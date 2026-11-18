@@ -1108,28 +1108,28 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// 1b. Inventory by Web Name (#show_macha_options_by_web:<TEN_DONG_BO_WEB>)
-		// Triggered after the user selects a web-name option from the
-		// dongsp flow. Aggregates inventory across every MA_CHA that shares
-		// the same ten_dong_bo_web so a single product line answers with
-		// totals across all parent SKUs.
+		// Resolve the selected web name to its parent codes, then fetch
+		// inventory for all eligible SKUs belonging to those parents.
 		if strings.HasPrefix(userText, "#show_macha_options_by_web:") {
-			webName := strings.TrimPrefix(userText, "#show_macha_options_by_web:")
-			log.Printf("[stock-pick] entering inventory-by-web for web=%q (tenant=%s)", webName, matchedChannel.TenantID)
-			childProducts, err := getProductsByWebNameFromCache(ctx, matchedChannel.TenantID, webName)
-			if err != nil || len(childProducts) == 0 {
-				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy sản phẩm nào trong dòng '%s'.", webName))
+			if allowed, _, _ := permCtx.IsResourceAllowed("inventory"); !allowed {
+				reply := "Tài khoản của anh/chị chưa có quyền xem tồn kho."
+				if matchedGroup.ZaloGroupID != "" {
+					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
+				} else {
+					_ = adapter.SendMessage(ctx, payload.Sender.ID, reply)
+				}
 				return nil
 			}
-
-			maChaSeen := make(map[string]struct{})
+			webName := strings.TrimPrefix(userText, "#show_macha_options_by_web:")
+			log.Printf("[stock-pick] entering inventory-by-web for web=%q (tenant=%s)", webName, matchedChannel.TenantID)
 			var maChas []string
-			for _, p := range childProducts {
-				if mc := getMapString(p, "MA_CHA", "ma_cha"); mc != "" {
-					if _, dup := maChaSeen[mc]; !dup {
-						maChaSeen[mc] = struct{}{}
-						maChas = append(maChas, mc)
-					}
-				}
+			err := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).
+				Where("tenant_id = ? AND ten_dong_bo_web = ? AND ma_cha <> ''", matchedChannel.TenantID, webName).
+				Distinct().Pluck("ma_cha", &maChas).Error
+			if err != nil {
+				log.Printf("[stock-pick] failed to resolve parent codes for web=%q: %v", webName, err)
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy sản phẩm nào trong dòng '%s'.", webName))
+				return nil
 			}
 
 			if len(maChas) == 0 {
@@ -1141,7 +1141,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			var details []string
 			var okCount, errCount int
 			for _, mc := range maChas {
-				stock, lines, sumErr := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, mc, webName)
+				stock, lines, sumErr := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, mc, "")
 				if sumErr != nil {
 					errCount++
 					log.Printf("[zalo_webhook] inventory error ma_cha=%s web=%s: %v", mc, webName, sumErr)
@@ -1152,9 +1152,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				details = append(details, lines...)
 			}
 
-			// Every mã cha failed → the ERP is down for this line. Do NOT report
-			// "0.0" (the customer would read it as out of stock). Surface the error.
-			if okCount == 0 && errCount > 0 {
+			// A sum that omits any parent is incomplete.
+			if errCount > 0 {
 				errMsg := fmt.Sprintf("Hệ thống tồn kho đang tạm thời gặp sự cố nên em chưa lấy được số liệu cho dòng %s. Anh/chị vui lòng thử lại sau ít phút giúp em ạ.", webName)
 				if matchedGroup.ZaloGroupID != "" {
 					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, errMsg)
@@ -2514,11 +2513,14 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	var products []models.CachedProduct
 	q := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha)
 	if webName != "" {
-		q = q.Where("ten_dong_bo_web = ?", webName)
+		q = q.Where("ten_dong_bo_web = ?", webName).Limit(100)
 	}
-	err := q.Limit(100).Find(&products).Error
+	err := q.Find(&products).Error
 	if err != nil {
 		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+	}
+	if webName == "" && len(products) == 0 {
+		return 0, nil, fmt.Errorf("no cached SKUs for ma_cha=%s", maCha)
 	}
 
 	childProducts := make([]map[string]interface{}, len(products))
@@ -2602,6 +2604,9 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	}
 
 	if erpURL == "" {
+		if webName == "" {
+			return 0, nil, fmt.Errorf("Cloudify inventory URL is not configured")
+		}
 		return 45.0, []string{"[Mock Variant] FF800-Mock: 45.0"}, nil
 	}
 
@@ -2625,6 +2630,9 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	var details []string
 	var okCount, errCount int
 	for _, s := range allowedSKUs {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
+		}
 		stock, stockErr := client.InventoryStock(invEndpoint, invUsePost, s.Code)
 		if stockErr != nil {
 			errCount++
@@ -2637,10 +2645,9 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		log.Printf("[stock-pick] Cloudify stock ma_cha=%s sku=%s → %.1f", maCha, s.Code, stock)
 	}
 
-	// Every SKU lookup errored → propagate so the caller tells the user the ERP
-	// is failing rather than answering "0".
-	if okCount == 0 && errCount > 0 {
-		return 0, nil, fmt.Errorf("all %d SKU stock lookups failed for ma_cha=%s web=%s", errCount, maCha, webName)
+	// A parent-level total must include every eligible SKU.
+	if errCount > 0 && (webName == "" || okCount == 0) {
+		return 0, nil, fmt.Errorf("%d of %d SKU stock lookups failed for ma_cha=%s web=%s", errCount, len(allowedSKUs), maCha, webName)
 	}
 
 	return totalStock, details, nil
