@@ -106,3 +106,26 @@ func TestIsDisambiguationReply(t *testing.T) {
 		})
 	}
 }
+
+func TestParseMessageIntent(t *testing.T) {
+	cases := []struct {
+		name, response, message, want string
+	}{
+		{"out of scope", `{"label":"OUT_OF_SCOPE"}`, "mai có mưa không", "OUT_OF_SCOPE"},
+		{"fenced response", "```json\n{\"label\":\"out_of_scope\"}\n```", "giải bài toán giúp em", "OUT_OF_SCOPE"},
+		{"acknowledgment", `{"label":"CASUAL"}`, "dạ, cảm ơn", "CASUAL"},
+		{"question mislabelled casual", `{"label":"CASUAL"}`, "Mẫu này thì sao?", "IN_SCOPE"},
+		{"helmet question mislabelled casual", `{"label":"CASUAL"}`, "bên mình có mũ nguyên đầu không", "IN_SCOPE"},
+		{"helmet question mislabelled out of scope", `{"label":"OUT_OF_SCOPE"}`, "có loại mũ nửa đầu nào", "IN_SCOPE"},
+		{"explicit handover", `{"label":"HANDOVER"}`, "mũ nguyên đầu bị lỗi, cho em gặp nhân viên", "HANDOVER"},
+		{"bare label", " OUT_OF_SCOPE ", "mai có mưa không", "OUT_OF_SCOPE"},
+		{"ambiguous prose", "This is not HANDOVER or CASUAL", "có mẫu nguyên đầu không", "IN_SCOPE"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseMessageIntent(tc.response, tc.message); got != tc.want {
+				t.Errorf("parseMessageIntent() = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}

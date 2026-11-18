@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/channels"
@@ -29,8 +30,7 @@ import (
 // list: a single digit 1–9, or an SP product code (with optional 1–4 char
 // alpha/underscore suffix, e.g. SP458495_TL). These would otherwise be
 // classified as CASUAL by the intent LLM — "1" looks exactly like the
-// throwaway acknowledgements ("ok", "dạ") the prompt teaches it to drop —
-// which closes the session and silences the bot mid-flow.
+// throwaway acknowledgements ("ok", "dạ") the prompt teaches it to skip.
 var disambiguationReplyPattern = regexp.MustCompile(`^\s*(?:[1-9]|SP\d{6}[a-zA-Z_]{0,4})\s*$`)
 
 // productCodePattern matches model/SKU-like tokens: letters followed by digits
@@ -175,7 +175,12 @@ func selectSystemPrompt(agentType, publicPrompt, internalPrompt string) string {
 const (
 	botUnavailableMessage = "Dạ hệ thống tra cứu đang bận nên em chưa trả lời được câu này. Anh/chị vui lòng nhắn lại sau ít phút giúp em ạ."
 	botEmptyAnswerMessage = "Dạ em chưa tìm được câu trả lời phù hợp. Anh/chị nói rõ hơn giúp em (ví dụ mã sản phẩm, màu, size) nhé."
+	botOutOfScopeMessage  = "Dạ em chưa thể hỗ trợ câu hỏi này. Anh/chị có thể hỏi em câu khác nhé."
+	botCasualWarning      = "Dạ em chỉ hỗ trợ các câu hỏi về sản phẩm và nghiệp vụ nên em không được phép tán gẫu. Anh/chị thông cảm giúp em nhé."
+	botCasualSessionEnded = "Dạ em xin kết thúc phiên hỗ trợ tại đây. Khi cần hỗ trợ, anh/chị có thể mở lại phiên nhé."
 )
+
+const langflowUnansweredInstruction = `Nếu câu hỏi ngoài phạm vi hỗ trợ hoặc dữ liệu được phép tra cứu không đủ để trả lời, hãy nói ngắn gọn rằng em chưa thể trả lời câu hỏi này và mời người dùng hỏi tiếp. Chỉ nói em không được phép trả lời khi công cụ báo từ chối quyền rõ ràng. Khi kết quả tra cứu rỗng, không suy đoán nguyên nhân và không lấy dữ liệu từ nguồn khác để vượt phạm vi quyền. Giữ cuộc trò chuyện mở để người dùng hỏi tiếp.`
 
 // sendChatReply sends text into the chat the message came from: the Zalo group
 // when there is one, otherwise the 1:1 thread.
@@ -197,12 +202,26 @@ func isLastAttempt(ctx context.Context) bool {
 	return retried >= maxRetry
 }
 
-func truncateForLog(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
+// replyToCasualTurn records a warning only after Zalo accepts the reply.
+// A failed closing message leaves the warning in place so the task can retry.
+func replyToCasualTurn(ctx context.Context, warningKey, turnOwner string, ttl time.Duration, send func(string) error) (bool, error) {
+	warned, err := db.RedisClient.Get(ctx, warningKey).Result()
+	if err != nil && err != redis.Nil {
+		return false, fmt.Errorf("read small-talk warning: %w", err)
 	}
-	return string(r[:n]) + "…"
+	if warned == turnOwner {
+		if err := send(botCasualSessionEnded); err != nil {
+			return false, fmt.Errorf("send small-talk session end message: %w", err)
+		}
+		return true, nil
+	}
+	if err := send(botCasualWarning); err != nil {
+		return false, fmt.Errorf("send small-talk warning: %w", err)
+	}
+	if err := db.RedisClient.Set(ctx, warningKey, turnOwner, ttl).Err(); err != nil {
+		return false, fmt.Errorf("save small-talk warning: %w", err)
+	}
+	return false, nil
 }
 
 // loadTenantSettings fetches the requested app settings for a tenant in a
@@ -763,8 +782,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// Keep session alive
+		sessionTTL := time.Duration(meta.SessionTimeout)*time.Minute + time.Minute
 		if db.RedisClient != nil {
-			db.RedisClient.Expire(ctx, sessionKey, time.Duration(meta.SessionTimeout)*time.Minute+1*time.Minute)
+			db.RedisClient.Expire(ctx, sessionKey, sessionTTL)
 		}
 		if asynqClient != nil {
 			timeoutTask, err := NewSessionTimeoutTask(SessionTimeoutPayload{
@@ -797,16 +817,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Real-time intent classification for active sessions. Skip it when the
 		// previous turn was a backend-pushed prompt awaiting this reply: the
 		// answer ("tháng này", "quý 2", "3 ngày", a tapped option) is ordinary
-		// short text the classifier would mislabel CASUAL and drop, silencing
-		// the bot mid-flow. The marker is single-use, so only this one
-		// continuation turn bypasses classification.
+		// short text the classifier could mislabel CASUAL and skip. The marker
+		// is single-use, so only this continuation turn bypasses classification.
 		var intent string
 		if engine.TakeAwaitingFollowup(ctx, workKey) {
 			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
 			intent = "IN_SCOPE"
 		} else {
 			var err error
-			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, payload.Message.Text)
+			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText)
 			if err != nil {
 				log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
 				intent = "IN_SCOPE"
@@ -829,9 +848,33 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
+		// A warning belongs to one sender and one session. Reuse the turn's
+		// existing lock scope, including per-sender state when enabled in groups.
+		warningKey := workKey + engine.CasualWarningSuffix
 		if intent == "CASUAL" {
-			log.Printf("[zalo-drop] reason=casual sender=%s text=%q (session closed)", payload.Sender.ID, truncateForLog(userText, 80))
-			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
+			turnOwner := activeSessionID + ":" + payload.Sender.ID
+			endSession, err := replyToCasualTurn(ctx, warningKey, turnOwner, sessionTTL, func(text string) error {
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, text)
+			})
+			if err != nil {
+				return err
+			}
+			if endSession {
+				if err := teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID); err != nil {
+					return fmt.Errorf("close session after small talk: %w", err)
+				}
+				log.Printf("[worker] closed session %s after consecutive small-talk messages from %s", activeSessionID, payload.Sender.ID)
+			}
+			return nil
+		}
+		if err := db.RedisClient.Del(ctx, warningKey).Err(); err != nil {
+			return fmt.Errorf("clear small-talk warning: %w", err)
+		}
+
+		if intent == "OUT_OF_SCOPE" {
+			if err := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botOutOfScopeMessage); err != nil {
+				return fmt.Errorf("failed to send out-of-scope reply to Zalo: %w", err)
+			}
 			return nil
 		}
 
@@ -856,6 +899,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// the private staff flow, the public/OWN-scope prompt otherwise. Empty maps
 		// to the flow's own SYSTEM_PROMPT global (see selectSystemPrompt).
 		systemPromptToUse := selectSystemPrompt(agentType, meta.SystemPrompt, meta.SystemPromptInternal)
+		if systemPromptToUse != "" {
+			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
+		}
 
 		permCtx := engine.ResolvePermissionsWithGroup(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType, matchedGroup.ID)
 		// Carry the full mã KH set (owners of multiple shops) into the signed token
@@ -1528,16 +1574,19 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 // activation key is group-level, so ending it ends the session for everyone).
 // For 1:1 chats — and whenever the feature is off — this falls back to the exact
 // ClearSessionState(sessionKey), i.e. today's behaviour byte-for-byte.
-func teardownSession(ctx context.Context, sessionKey, zaloGroupID string) {
+func teardownSession(ctx context.Context, sessionKey, zaloGroupID string) error {
 	if zaloGroupID != "" && engine.PerSenderGroupSessions() {
-		if _, err := engine.ClearGroupSessionState(ctx, zaloGroupID); err != nil {
+		_, err := engine.ClearGroupSessionState(ctx, zaloGroupID)
+		if err != nil {
 			log.Printf("[worker] failed to clear group session state for group %s: %v", zaloGroupID, err)
 		}
-		return
+		return err
 	}
-	if err := engine.ClearSessionState(ctx, sessionKey); err != nil {
+	err := engine.ClearSessionState(ctx, sessionKey)
+	if err != nil {
 		log.Printf("[worker] failed to clear session state for key %s: %v", sessionKey, err)
 	}
+	return err
 }
 
 // HandleSessionTimeoutTask processes the session timeout delayed task
@@ -1936,15 +1985,13 @@ func loadCloudifyCredentials(tenantID string, cfg *config.Config) (erpURL, erpDB
 func classifyMessageIntent(ctx context.Context, tenantID, message string) (string, error) {
 	// 0. Fast-path: structural disambiguation reply (digit 1–9 or SPxxxxxx[_TL])
 	//    must not be re-classified by the LLM. The classifier prompt teaches
-	//    short tokens like "1"/"dạ"/"ok" as CASUAL, which would close the
-	//    session and drop the customer's actual pick on the floor.
+	//    short tokens like "1"/"dạ"/"ok" as CASUAL and skip the customer's pick.
 	if isDisambiguationReply(message) {
 		return "IN_SCOPE", nil
 	}
 	// 0b. Fast-path: an obvious ERP lookup (a product/model code like "FF805",
 	//     or a stock/price/order/debt keyword) is IN_SCOPE without paying for
-	//     an LLM call — and can never be mis-labelled CASUAL, which would close
-	//     the session and silently drop the question.
+	//     an LLM call — and can never be mislabelled CASUAL.
 	if isObviousBusinessQuery(message) {
 		return "IN_SCOPE", nil
 	}
@@ -2025,19 +2072,20 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string) (strin
 
 	// Define system prompt
 	systemPrompt := `Bạn là trợ lý lọc tin nhắn thông minh cho Chatbot doanh nghiệp BBI.
-Nhiệm vụ của bạn là phân loại tin nhắn của khách hàng thành một trong ba nhãn sau:
-1. "IN_SCOPE": Bất kỳ tin nhắn nào hỏi về nghiệp vụ HOẶC kiến thức sản phẩm mà RAG Bot có thể tự trả lời dựa trên tài liệu sản phẩm và dữ liệu tồn kho/công nợ. Bao gồm:
+Nhiệm vụ của bạn là phân loại tin nhắn của khách hàng thành một trong bốn nhãn sau:
+1. "IN_SCOPE": Bất kỳ tin nhắn nào hỏi về nghiệp vụ, ngành hàng hoặc kiến thức sản phẩm. Bao gồm:
    - Câu hỏi giao dịch: tồn kho, giá cả, đơn hàng, công nợ (financial debt).
    - Câu hỏi KIẾN THỨC / THÔNG SỐ / CẤU TẠO / CÔNG DỤNG / HƯỚNG DẪN sử dụng sản phẩm, kể cả khi không gắn với một giao dịch cụ thể. Ví dụ: "mũ bảo hiểm có bao nhiêu bộ phận", "sản phẩm này làm bằng chất liệu gì", "size áo tương ứng cân nặng bao nhiêu", "cách bảo quản giày".
-   Nếu câu hỏi là về sản phẩm/ngành hàng và tài liệu RAG có thể có câu trả lời, hãy chọn IN_SCOPE.
+   Luôn chọn IN_SCOPE cho câu hỏi về sản phẩm, kể cả khi chưa rõ bot có dữ liệu hoặc quyền tra cứu. Ví dụ: "bên mình có mũ nguyên đầu không", "có loại nửa đầu nào". Quyền truy cập và dữ liệu do công cụ tra cứu xác định.
 2. "HANDOVER": Tin nhắn phàn nàn về chất lượng dịch vụ, sản phẩm lỗi, chậm giao hàng, thái độ phục vụ, yêu cầu gặp nhân viên hoặc các vấn đề nghiêm trọng cần con người giải quyết.
-3. "CASUAL": CHỈ dùng cho tin nhắn chào hỏi xã giao, cảm ơn, đồng ý (ví dụ: "ok", "dạ", "cảm ơn", "hello", "hi") hoặc câu nói bâng quơ KHÔNG hề hỏi về sản phẩm hay nghiệp vụ.
+3. "CASUAL": Tin nhắn chỉ chào hỏi, cảm ơn, xác nhận hoặc trò chuyện xã giao và không có câu hỏi hay yêu cầu cần hỗ trợ. Ví dụ: "ok", "dạ", "cảm ơn", "hello", "hi".
+4. "OUT_OF_SCOPE": Câu hỏi hoặc yêu cầu rõ ràng không liên quan đến sản phẩm, ngành hàng hay nghiệp vụ BBI, ví dụ hỏi dự báo thời tiết hoặc yêu cầu giải bài toán trường học.
 
-QUY TẮC AN TOÀN: Nếu bạn không chắc chắn giữa IN_SCOPE và CASUAL, hãy LUÔN chọn IN_SCOPE. Lý do: chọn nhầm IN_SCOPE thì RAG Bot vẫn có thể trả lời hoặc từ chối nhẹ nhàng, nhưng chọn nhầm CASUAL sẽ đóng phiên và bỏ rơi câu hỏi thật của khách. CASUAL chỉ dành cho trường hợp rõ ràng là không có ý hỏi gì.
+Nếu chưa rõ câu hỏi có thuộc phạm vi hỗ trợ hay là câu hỏi tiếp nối, chọn IN_SCOPE. Tin nhắn có lời chào kèm câu hỏi vẫn phải được phân loại theo câu hỏi.
 
 Định dạng trả về duy nhất là một đối tượng JSON:
 {
-  "label": "IN_SCOPE" | "HANDOVER" | "CASUAL",
+  "label": "IN_SCOPE" | "HANDOVER" | "CASUAL" | "OUT_OF_SCOPE",
   "reason": "Giải thích ngắn gọn lý do phân loại"
 }
 CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`
@@ -2050,7 +2098,11 @@ CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`
 		return "IN_SCOPE", err
 	}
 
-	content := strings.TrimSpace(resp.Content)
+	return parseMessageIntent(resp.Content, message), nil
+}
+
+func parseMessageIntent(content, message string) string {
+	content = strings.TrimSpace(content)
 	if strings.HasPrefix(content, "```") {
 		if idx := strings.Index(content, "\n"); idx != -1 {
 			content = content[idx+1:]
@@ -2065,21 +2117,24 @@ CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`
 		Label string `json:"label"`
 	}
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		contentUpper := strings.ToUpper(content)
-		if strings.Contains(contentUpper, "HANDOVER") {
-			return "HANDOVER", nil
-		}
-		if strings.Contains(contentUpper, "CASUAL") {
-			return "CASUAL", nil
-		}
-		return "IN_SCOPE", nil
+		parsed.Label = content // Accept bare labels as well as the requested JSON.
 	}
 
-	label := strings.ToUpper(strings.TrimSpace(parsed.Label))
-	if label == "HANDOVER" || label == "CASUAL" {
-		return label, nil
+	switch label := strings.ToUpper(strings.TrimSpace(parsed.Label)); label {
+	case "HANDOVER":
+		return label
+	case "CASUAL", "OUT_OF_SCOPE":
+		// These are product categories, even when the classifier assumes
+		// the requested category is outside the bot's current permissions.
+		text := strings.ToLower(message)
+		if strings.Contains(text, "mũ nguyên đầu") || strings.Contains(text, "mũ nửa đầu") {
+			return "IN_SCOPE"
+		}
+		if label == "OUT_OF_SCOPE" || !strings.ContainsAny(message, "?？") {
+			return label
+		}
 	}
-	return "IN_SCOPE", nil
+	return "IN_SCOPE"
 }
 
 func parseAttachmentText(atts []ZaloWebhookAttachment) string {

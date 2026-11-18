@@ -78,7 +78,11 @@ var sessionStateSuffixes = []string{
 	AwaitingDebtCustomerSuffix,
 	PromptDeliveredSuffix,
 	PromptUndeliveredSuffix,
+	CasualWarningSuffix,
 }
+
+// CasualWarningSuffix remembers who received the last small-talk warning.
+const CasualWarningSuffix = ":casual_warning"
 
 // ClearSessionState deletes the base session key AND every sidecar flow-state
 // key hung off it, in a single Redis round-trip. Call this anywhere a session is

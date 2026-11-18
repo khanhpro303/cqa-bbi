@@ -23,6 +23,7 @@ func TestClearSessionStateCoversAllSidecars(t *testing.T) {
 		AwaitingDebtCustomerSuffix,
 		PromptDeliveredSuffix,
 		PromptUndeliveredSuffix,
+		CasualWarningSuffix,
 	}
 
 	if len(sessionStateSuffixes) != len(allSuffixes) {
