@@ -387,13 +387,25 @@
             <v-card v-for="(order, index) in selectedRow.insight.order_outcomes || []" :key="order.order_id || index" variant="outlined" class="pa-3 mb-3">
               <div class="d-flex align-center flex-wrap ga-2 mb-2">
                 <v-chip size="small" variant="tonal">{{ t(`sq_order_${order.status}`) }}</v-chip>
-                <span v-if="order.order_ref" class="text-body-2">{{ t('sq_order_ref') }}: {{ order.order_ref }}</span>
+                <v-chip v-if="isGeneratedOrderRef(order.order_ref)" size="x-small" variant="tonal" color="grey">{{ t('sq_order_auto') }}</v-chip>
+                <span v-else-if="order.order_ref" class="text-body-2">{{ t('sq_order_ref') }}: {{ order.order_ref }}</span>
                 <span v-if="order.confidence != null" class="text-caption text-medium-emphasis">{{ t('sq_order_confidence') }}: {{ Math.round(order.confidence * 100) }}%</span>
               </div>
-              <div class="text-body-2 mb-2"><strong>{{ t('sq_order_total') }}:</strong> {{ order.value_vnd != null ? new Intl.NumberFormat('vi-VN').format(order.value_vnd) + ' ₫' : t('sq_order_total_unknown') }}</div>
-              <div class="text-body-2 order-evidence"><strong>{{ t('sq_order_confirmation_evidence') }}:</strong> {{ order.confirmation_evidence || t('sq_order_evidence_unavailable') }}</div>
+              <div class="text-body-2 mb-2"><strong>{{ t('sq_order_total') }}:</strong> {{ formatOrderTotal(order) }}</div>
+              <div class="text-body-2 order-evidence">
+                <strong>{{ t('sq_order_confirmation_evidence') }}:</strong>
+                <blockquote v-if="getOrderConfirmationEvidence(order)" class="order-evidence-quote my-1 pa-2 rounded">
+                  {{ getOrderConfirmationEvidence(order) }}
+                </blockquote>
+                <span v-else class="text-medium-emphasis"> {{ t('sq_order_evidence_unavailable') }}</span>
+              </div>
               <div v-if="order.confirmation_message_id" class="text-caption text-medium-emphasis">{{ t('sq_order_message_id') }}: {{ order.confirmation_message_id }}</div>
-              <div v-if="order.amount_evidence" class="text-body-2 mt-2 order-evidence"><strong>{{ t('sq_order_amount_evidence') }}:</strong> {{ order.amount_evidence }}</div>
+              <div v-if="getOrderAmountEvidence(order)" class="text-body-2 mt-2 order-evidence">
+                <strong>{{ t('sq_order_amount_evidence') }}:</strong>
+                <blockquote class="order-evidence-quote my-1 pa-2 rounded">
+                  {{ getOrderAmountEvidence(order) }}
+                </blockquote>
+              </div>
               <div v-if="order.amount_message_id" class="text-caption text-medium-emphasis">{{ t('sq_order_message_id') }}: {{ order.amount_message_id }}</div>
               <div v-if="!order.confirmation_message_id && order.evidence_message_ids?.length" class="text-caption text-medium-emphasis">{{ t('sq_order_saved_ids') }}: {{ order.evidence_message_ids.join(', ') }}</div>
             </v-card>
@@ -567,6 +579,7 @@ import { useAuthStore } from '../stores/auth'
 import {
   aggregateInsights,
   type ConversationInsight,
+  type OrderOutcome,
   type ServiceQualityStatus,
 } from '../utils/service-quality'
 
@@ -829,9 +842,95 @@ async function loadReport(force = false) {
   }
 }
 
+interface ConversationMsg {
+  id: string
+  sender_type: string
+  sender_name: string
+  content: string
+  sent_at: string
+}
+
+const detailMessages = ref<Record<string, ConversationMsg>>({})
+const loadingDetailMessages = ref(false)
+
+async function fetchConversationMessagesForDetail(conversationId: string) {
+  if (!conversationId || !tenantId.value) return
+  loadingDetailMessages.value = true
+  try {
+    const { data } = await api.get<{ messages: ConversationMsg[] }>(
+      `/tenants/${tenantId.value}/conversations/${conversationId}/messages`
+    )
+    if (data?.messages) {
+      const map: Record<string, ConversationMsg> = {}
+      for (const msg of data.messages) {
+        map[msg.id] = msg
+      }
+      detailMessages.value = map
+    }
+  } catch {
+    // Non-blocking fallback
+  } finally {
+    loadingDetailMessages.value = false
+  }
+}
+
 function openDetail(row: Row) {
   selectedRow.value = row
+  detailMessages.value = {}
   detailDialog.value = true
+  if (row.conversation_id) {
+    void fetchConversationMessagesForDetail(row.conversation_id)
+  }
+}
+
+function isGeneratedOrderRef(ref?: string): boolean {
+  if (!ref) return false
+  return ref.startsWith('cqa_')
+}
+
+function getOrderConfirmationEvidence(order: OrderOutcome): string {
+  if (order.confirmation_evidence) {
+    return order.confirmation_evidence
+  }
+  if (order.confirmation_message_id && detailMessages.value[order.confirmation_message_id]?.content) {
+    return detailMessages.value[order.confirmation_message_id].content
+  }
+  if (order.evidence_message_ids?.length) {
+    for (const id of order.evidence_message_ids) {
+      if (detailMessages.value[id]?.content) {
+        return detailMessages.value[id].content
+      }
+    }
+  }
+  if (selectedRow.value?.insight?.lead_quality?.evidence) {
+    return selectedRow.value.insight.lead_quality.evidence
+  }
+  return ''
+}
+
+function getOrderAmountEvidence(order: OrderOutcome): string {
+  if (order.amount_evidence) {
+    return order.amount_evidence
+  }
+  if (order.amount_message_id && detailMessages.value[order.amount_message_id]?.content) {
+    return detailMessages.value[order.amount_message_id].content
+  }
+  return ''
+}
+
+function formatOrderTotal(order: OrderOutcome): string {
+  if (order.value_vnd != null) {
+    return new Intl.NumberFormat('vi-VN').format(order.value_vnd) + ' ₫'
+  }
+  const evidence = getOrderConfirmationEvidence(order) || getOrderAmountEvidence(order)
+  if (evidence) {
+    const match = evidence.match(/(?:tổng|đơn|hết|tiền|giá|bằng)?\s*([0-9][0-9.,\s]{0,20})\s*(?:₫|đ|vnd|k\b)/i)
+    if (match && match[1]) {
+      const rawDigits = match[1].trim()
+      return `${t('sq_order_total_unknown')} ${t('sq_order_detected_amount', { amount: rawDigits + 'đ' })}`
+    }
+  }
+  return t('sq_order_total_unknown')
 }
 
 function openResolve(row: Row) {
@@ -1241,4 +1340,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .order-evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
+.order-evidence-quote {
+  font-style: italic;
+  border-left: 3px solid rgba(var(--v-theme-primary), 0.5);
+  background-color: rgba(var(--v-theme-surface-variant), 0.2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 </style>
