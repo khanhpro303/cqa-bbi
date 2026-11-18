@@ -1972,20 +1972,6 @@ onMounted(async () => {
     const { data } = await api.get(`/tenants/${tenantId.value}/settings`)
     tenantAIProvider.value = data?.settings?.ai_provider || 'claude'
     tenantAIModel.value = data?.settings?.ai_model || ''
-    const perms = data?.settings?.erp_global_method_permissions
-    if (perms) {
-      try {
-        const parsed = JSON.parse(perms)
-        if (parsed.products && parsed.products.path && parsed.products.path !== 'products') {
-          erpProductEndpoint.value = parsed.products.path
-        }
-        if (parsed.customers && parsed.customers.path && parsed.customers.path !== 'customers') {
-          erpCustomerEndpoint.value = parsed.customers.path
-        }
-      } catch (e) {
-        // Ignore
-      }
-    }
   } catch { /* fallback empty */ }
   // Auto-start polling if job is currently running (e.g. after F5)
   if (isJobRunning.value) {

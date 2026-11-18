@@ -2,7 +2,6 @@ package workers
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -67,22 +66,17 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 	http.DefaultTransport = stockTestTransport(func(req *http.Request) (*http.Response, error) {
 		status, body := http.StatusOK, `{"result":{"uid":1,"session_id":"fixture"}}`
 		if req.URL.Path != "/web/session/authenticate" {
-			var payload struct {
-				SKU string `json:"MA_HANG"`
+			if req.Method != http.MethodPost || req.URL.Path != "/rest_api/private/tong_hop_ton_kho/search" {
+				t.Errorf("unexpected stock request: %s %s", req.Method, req.URL.Path)
 			}
-			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
-				return nil, err
+			values := req.URL.Query()
+			if values.Get("DS_KHO") != "1.KHO-TONG" || values.Get("CHI_NHANH") != "BBI NỘI BỘ" ||
+				values.Get("TU_NGAY") == "" || values.Get("TU_NGAY") != values.Get("DEN_NGAY") {
+				t.Errorf("unexpected warehouse parameters: %v", values)
 			}
-			switch payload.SKU {
-			case "fixture-visible":
-				body = `[{"TEN_KHO":"KHO-TONG","SO_LUONG_TON":5}]`
-			case "fixture-sibling":
-				body = `[{"TEN_KHO":"KHO-TONG","SO_LUONG_TON":376}]`
-				if failSibling {
-					status, body = http.StatusServiceUnavailable, "fixture inventory unavailable"
-				}
-			default:
-				status, body = http.StatusBadRequest, "unknown fixture SKU"
+			body = `[{"MA_HANG":"fixture-visible","SO_LUONG_CUOI_KY":5},{"MA_HANG":"fixture-sibling","SO_LUONG_CUOI_KY":376}]`
+			if failSibling {
+				status, body = http.StatusServiceUnavailable, "fixture inventory unavailable"
 			}
 		}
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil

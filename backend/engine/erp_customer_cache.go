@@ -13,8 +13,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
-// defaultCustomerEndpoint is the fallback Cloudify endpoint for the customer
-// (khách hàng) list when no override is set in the Global HTTP Method config.
+// defaultCustomerEndpoint is Cloudify's canonical customer-list endpoint.
 const defaultCustomerEndpoint = "khach_hang/search"
 
 // runERPCustomerCacheJob connects to Cloudify ERP, pulls the customer list
@@ -55,9 +54,8 @@ func (a *Analyzer) runERPCustomerCacheJob(ctx context.Context, job models.Job) (
 		Password: erpPassword,
 	}
 
-	// 3. Resolve endpoint from the Global HTTP Method config (key "customers"),
-	//    falling back to the official khach_hang/search endpoint.
-	endpointPath := resolveCustomerEndpoint(job.TenantID)
+	// 3. Fetch from Cloudify's canonical customer endpoint.
+	endpointPath := defaultCustomerEndpoint
 
 	data, err := client.SearchCustomEndpoint(endpointPath, map[string]string{
 		"limit": "50000",
@@ -173,41 +171,6 @@ func (a *Analyzer) runERPCustomerCacheJob(ctx context.Context, job models.Job) (
 		fmt.Sprintf("Job '%s': completed, %s", job.Name, summaryMsg), "", "")
 
 	return &run, nil
-}
-
-// resolveCustomerEndpoint reads the tenant's Global HTTP Method config
-// (erp_global_method_permissions, key "customers") and returns the configured
-// path, falling back to the official khach_hang/search endpoint.
-func resolveCustomerEndpoint(tenantID string) string {
-	endpointPath := defaultCustomerEndpoint
-
-	var setting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&setting).Error; err != nil || setting.ValuePlain == "" {
-		return endpointPath
-	}
-
-	type endpointConfig struct {
-		Get  bool   `json:"get"`
-		Post bool   `json:"post"`
-		Path string `json:"path"`
-	}
-	var perms map[string]endpointConfig
-	if json.Unmarshal([]byte(setting.ValuePlain), &perms) != nil {
-		return endpointPath
-	}
-
-	cust, ok := perms["customers"]
-	if !ok || cust.Path == "" || cust.Path == "customers" {
-		return endpointPath
-	}
-
-	path := strings.TrimPrefix(cust.Path, "/")
-	path = strings.TrimPrefix(path, "rest_api/private/")
-	path = strings.TrimPrefix(path, "/")
-	if path == "" {
-		return defaultCustomerEndpoint
-	}
-	return path
 }
 
 // coalesceFalse normalizes Cloudify's "empty" sentinels to "". Empty fields can

@@ -54,26 +54,8 @@ func (a *Analyzer) runERPProductCacheJob(ctx context.Context, job models.Job) (*
 		Password: erpPassword,
 	}
 
-	// 3. Fetch products from ERP (requesting up to 50000 items)
-	endpointPath := "danhmucvattuhanghoa/search" // default fallback
-	var globalPermsSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", job.TenantID).First(&globalPermsSetting).Error; err == nil && globalPermsSetting.ValuePlain != "" {
-		type EndpointConfig struct {
-			Get  bool   `json:"get"`
-			Post bool   `json:"post"`
-			Path string `json:"path"`
-		}
-		var globalPerms map[string]EndpointConfig
-		if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
-			if prodConfig, exists := globalPerms["products"]; exists && prodConfig.Path != "" && prodConfig.Path != "products" {
-				path := prodConfig.Path
-				path = strings.TrimPrefix(path, "/")
-				path = strings.TrimPrefix(path, "rest_api/private/")
-				path = strings.TrimPrefix(path, "/")
-				endpointPath = path
-			}
-		}
-	}
+	// 3. Fetch products from Cloudify's canonical catalogue endpoint.
+	endpointPath := "danhmucvattuhanghoa/search"
 
 	data, err := client.SearchCustomEndpoint(endpointPath, map[string]string{
 		"limit": "50000",

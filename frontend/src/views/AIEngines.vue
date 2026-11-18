@@ -323,61 +323,7 @@
 
           <v-divider class="my-6"></v-divider>
 
-          <!-- Part 2: Global Method Permissions -->
-          <div class="text-subtitle-2 font-weight-bold mb-3 d-flex align-center" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-3'">
-            <v-icon start size="small" color="primary" class="mr-2">mdi-api</v-icon>
-            Cấu hình HTTP Method cho Endpoint (Global dùng chung)
-          </div>
-          
-          <v-card variant="outlined" class="rounded-lg mb-6 pa-1" :bg-color="isDark ? '#2a2a2a' : 'white'">
-            <v-table density="compact">
-              <thead>
-                <tr>
-                  <th style="width: 30%;">Tài nguyên Endpoint</th>
-                  <th style="width: 30%;">Tên Endpoint / Path</th>
-                  <th style="width: 20%;" class="text-center">Cho phép GET</th>
-                  <th style="width: 20%;" class="text-center">Cho phép POST</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(methods, resource) in globalMethodPermissions" :key="resource">
-                  <td class="text-caption font-weight-bold py-2">{{ resourceLabels[resource] || resource }}</td>
-                  <td>
-                    <v-text-field
-                      v-model="methods.path"
-                      density="compact"
-                      variant="plain"
-                      hide-details
-                      placeholder="e.g. products"
-                      style="font-size: 0.75rem;"
-                    />
-                  </td>
-                  <td class="text-center">
-                    <v-checkbox
-                      v-model="methods.get"
-                      color="primary"
-                      density="compact"
-                      hide-details
-                      class="d-inline-flex"
-                    />
-                  </td>
-                  <td class="text-center">
-                    <v-checkbox
-                      v-model="methods.post"
-                      color="primary"
-                      density="compact"
-                      hide-details
-                      class="d-inline-flex"
-                    />
-                  </td>
-                </tr>
-              </tbody>
-            </v-table>
-          </v-card>
-
-          <v-divider class="my-6"></v-divider>
-
-          <!-- Part 3: Private Bot Permissions -->
+          <!-- Part 2: Private Bot Permissions -->
           <div class="text-subtitle-2 font-weight-bold mb-3 d-flex align-center" :class="isDark ? 'text-grey-lighten-1' : 'text-grey-darken-3'">
             <v-icon start size="small" color="indigo" class="mr-2">mdi-robot-outline</v-icon>
             Phân quyền Endpoint cho Private Chatbot (Nhân viên nội bộ)
@@ -659,14 +605,6 @@ const scopeOptions = [
   { title: 'Phân công (ASSIGNED)', value: 'assigned' },
 ]
 
-const globalMethodPermissions = ref<Record<string, { get: boolean; post: boolean; path: string }>>({
-  products: { get: true, post: true, path: 'products' },
-  inventory: { get: true, post: true, path: 'inventory' },
-  orders: { get: true, post: true, path: 'orders' },
-  customers: { get: true, post: true, path: 'customers' },
-  debt: { get: true, post: true, path: 'debt' },
-})
-
 const privateEndpoints = ref<any[]>([
   { resource: 'products', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
   { resource: 'inventory', is_enabled: true, scope_type: 'all', product_groups_arr: [], brands_arr: [], all_brands: true },
@@ -722,24 +660,6 @@ async function loadSettings() {
     astradb.collection = settings.astradb_collection || ''
     if (settings.astradb_token) {
       astradb.token = settings.astradb_token
-    }
-
-    if (settings.erp_global_method_permissions) {
-      try {
-        const parsed = JSON.parse(settings.erp_global_method_permissions)
-        // Ensure path fallback if not saved in old settings format
-        for (const key in parsed) {
-          if (parsed[key] && !parsed[key].path) {
-            parsed[key].path = key
-          }
-        }
-        globalMethodPermissions.value = {
-          ...globalMethodPermissions.value,
-          ...parsed
-        }
-      } catch (e) {
-        // Ignore
-      }
     }
 
     if (data.private_endpoints && data.private_endpoints.length > 0) {
@@ -887,8 +807,6 @@ async function saveERP() {
       private_active: 'true',
       private_scopes: '',
       private_product_groups: '',
-
-      global_method_permissions: globalMethodPermissions.value,
       private_endpoints: privateEndpointsPayload
     })
     showSnack(t('success'), 'success')

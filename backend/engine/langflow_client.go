@@ -36,6 +36,12 @@ var fallbackAgentNodeIDs = []string{
 }
 
 const (
+	// langflowERPPermissionHeader exposes the request-scoped ERP permission token
+	// as a Langflow global variable. The MCP Tools server maps this variable to
+	// its X-Permission-Token header, so the credential never becomes a tool
+	// argument chosen or observed by the model.
+	langflowERPPermissionHeader = "X-Langflow-Global-Var-ERP_PERMISSION_TOKEN"
+
 	// agentNodeCacheTTL is how long a successful node-ID discovery is cached
 	// per flow. Flow structure changes rarely, so this keeps the extra
 	// GET /flows/{id} call to roughly once per flow per interval.
@@ -452,12 +458,21 @@ func (l *LangflowClient) RunFlowWithCustomerUsage(ctx context.Context, sessionID
 		"tweaks":      tweaks,
 	}
 
-	return l.sendAndParse(ctx, url, apiKey, payload)
+	extraHeaders := make(http.Header)
+	if permissionToken != "" {
+		extraHeaders.Set(langflowERPPermissionHeader, permissionToken)
+	}
+
+	return l.sendAndParseWithHeaders(ctx, url, apiKey, payload, extraHeaders)
 }
 
 // sendAndParse marshals the payload, performs the Langflow HTTP call, and parses
 // the reply text plus best-effort token usage from the response.
 func (l *LangflowClient) sendAndParse(ctx context.Context, url, apiKey string, payload map[string]interface{}) (LangflowResult, error) {
+	return l.sendAndParseWithHeaders(ctx, url, apiKey, payload, nil)
+}
+
+func (l *LangflowClient) sendAndParseWithHeaders(ctx context.Context, url, apiKey string, payload map[string]interface{}, extraHeaders http.Header) (LangflowResult, error) {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		return LangflowResult{}, fmt.Errorf("marshal langflow payload: %w", err)
@@ -472,6 +487,11 @@ func (l *LangflowClient) sendAndParse(ctx context.Context, url, apiKey string, p
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("x-api-key", apiKey)
+	}
+	for name, values := range extraHeaders {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
 	}
 
 	resp, err := l.client.Do(req)

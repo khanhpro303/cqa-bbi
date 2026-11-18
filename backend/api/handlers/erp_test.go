@@ -936,45 +936,6 @@ func equalStringSlices(a, b []string) bool {
 	return true
 }
 
-// TestFetchInventoryStockForSKU_CacheHitSkipsClient verifies that the helper
-// returns the cached stock value WITHOUT touching the Cloudify client when a
-// cache entry exists. Passing a nil client would panic if the helper tried
-// to reach upstream — the test relies on the early return inside the helper.
-func TestFetchInventoryStockForSKU_CacheHitSkipsClient(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	cache := engine.NewInventoryStockCache(time.Minute)
-	cache.Set(ctx, "tenant-1", "SKU-CACHED-1", 17)
-
-	got, err := fetchInventoryStockForSKU(ctx, nil, cache, "tenant-1", "SKU-CACHED-1", "inventory_receipt/search", false)
-	if err != nil {
-		t.Fatalf("unexpected error on cache hit: %v", err)
-	}
-	if got != 17 {
-		t.Fatalf("expected 17, got %v", got)
-	}
-}
-
-// TestFetchInventoryStockForSKU_DisabledCacheRequiresClient verifies that when
-// the cache is disabled (zero TTL) and no entry exists, the helper attempts a
-// live call — with a nil client this manifests as a runtime panic, so we use
-// a recover guard to confirm the early-return path is the cache-hit-only one.
-func TestFetchInventoryStockForSKU_DisabledCacheRequiresClient(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	disabled := engine.NewInventoryStockCache(0)
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected the helper to attempt a client call with disabled cache + no entry")
-		}
-	}()
-
-	_, _ = fetchInventoryStockForSKU(ctx, nil, disabled, "tenant-1", "SKU-NOPE", "inventory_receipt/search", false)
-}
-
 func TestOrderStatusDisplayName(t *testing.T) {
 	cases := map[string]string{
 		"0":  "Hủy",
@@ -1225,127 +1186,7 @@ func TestTrimOrdersForLLM(t *testing.T) {
 	})
 }
 
-func TestResolveGlobalMethodPermission(t *testing.T) {
-	// orders allows POST only; debt allows GET only; products has a custom path.
-	// The get/post flags configure how the BACKEND calls the upstream Cloudify
-	// endpoint (see debt usePost at erp.go), NOT the trusted internal hop — the
-	// Langflow ERP caller always reaches /erp/query over POST. So a resource is
-	// "allowed" for the gate when it is enabled under ANY method; gating the
-	// incoming POST on the upstream method wrongly blocked GET-only upstreams
-	// like debt → forbidden_method ("lỗi kết nối ERP Gateway").
-	validConfig := `{
-		"orders":   {"get": false, "post": true,  "path": ""},
-		"debt":     {"get": true,  "post": false, "path": ""},
-		"products": {"get": true,  "post": true,  "path": "danhmucvattuhanghoa/search"},
-		"disabled": {"get": false, "post": false, "path": ""}
-	}`
-
-	tests := []struct {
-		name        string
-		config      string
-		resource    string
-		method      string
-		wantSysRes  string
-		wantAllowed bool
-		wantErr     bool
-	}{
-		{
-			name:        "GET-only debt allows incoming GET",
-			config:      validConfig,
-			resource:    "debt",
-			method:      "GET",
-			wantSysRes:  "debt",
-			wantAllowed: true,
-		},
-		{
-			// Regression: the Langflow caller always POSTs to /erp/query. A
-			// GET-only upstream (debt → th_cong_no_phai_thu/search) must NOT be
-			// rejected just because post is unticked — that produced the
-			// "lỗi kết nối ERP Gateway" 403 on every công nợ query.
-			name:        "GET-only debt still allows incoming POST",
-			config:      validConfig,
-			resource:    "debt",
-			method:      "POST",
-			wantSysRes:  "debt",
-			wantAllowed: true,
-		},
-		{
-			name:        "resource with no method enabled is blocked",
-			config:      validConfig,
-			resource:    "disabled",
-			method:      "POST",
-			wantSysRes:  "disabled",
-			wantAllowed: false,
-		},
-		{
-			name:        "POST allowed for orders",
-			config:      validConfig,
-			resource:    "orders",
-			method:      "POST",
-			wantSysRes:  "orders",
-			wantAllowed: true,
-		},
-		{
-			name:        "custom path match re-routes to system key",
-			config:      validConfig,
-			resource:    "danhmucvattuhanghoa/search",
-			method:      "GET",
-			wantSysRes:  "products",
-			wantAllowed: true,
-		},
-		{
-			name:        "resource not in map is blocked, no error",
-			config:      validConfig,
-			resource:    "inventory",
-			method:      "GET",
-			wantSysRes:  "",
-			wantAllowed: false,
-		},
-		{
-			name:        "malformed JSON fails closed with error",
-			config:      `{"orders": {"post": true`,
-			resource:    "orders",
-			method:      "POST",
-			wantSysRes:  "",
-			wantAllowed: false,
-			wantErr:     true,
-		},
-		{
-			// HTTP verb no longer gates the trusted internal hop: an enabled
-			// resource is allowed regardless of the incoming method (the route
-			// only exposes GET/POST anyway).
-			name:        "enabled resource allowed regardless of incoming verb",
-			config:      validConfig,
-			resource:    "orders",
-			method:      "PUT",
-			wantSysRes:  "orders",
-			wantAllowed: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sysRes, allowed, err := resolveGlobalMethodPermission(tt.config, tt.resource, tt.method)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
-			}
-			if sysRes != tt.wantSysRes {
-				t.Errorf("systemResource = %q, want %q", sysRes, tt.wantSysRes)
-			}
-			if allowed != tt.wantAllowed {
-				t.Errorf("allowed = %v, want %v", allowed, tt.wantAllowed)
-			}
-		})
-	}
-}
-
-// TestMethodPermissionResource guards the alias that both the global HTTP-method
-// gate and the scope check rely on. product_variants must resolve under
-// products so a tenant's method whitelist (which lists products, not the
-// finer-grained product_variants) does not block variant lookups — the bug that
-// surfaced as "HTTP Method POST không được cho phép đối với tài nguyên
-// 'product_variants'" after variant queries shipped.
-func TestMethodPermissionResource(t *testing.T) {
+func TestPermissionResource(t *testing.T) {
 	tests := []struct {
 		resource string
 		want     string
@@ -1358,8 +1199,8 @@ func TestMethodPermissionResource(t *testing.T) {
 		{"", ""},
 	}
 	for _, tt := range tests {
-		if got := methodPermissionResource(tt.resource); got != tt.want {
-			t.Errorf("methodPermissionResource(%q) = %q; want %q", tt.resource, got, tt.want)
+		if got := permissionResource(tt.resource); got != tt.want {
+			t.Errorf("permissionResource(%q) = %q; want %q", tt.resource, got, tt.want)
 		}
 	}
 }

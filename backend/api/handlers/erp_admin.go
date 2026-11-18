@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -43,14 +42,7 @@ func SaveERPSettings(c *gin.Context) {
 		PrivateScopes        string `json:"private_scopes"`
 		PrivateProductGroups string `json:"private_product_groups"`
 
-		// New: Global HTTP Method permissions per resource
-		GlobalMethodPermissions map[string]struct {
-			Get  bool   `json:"get"`
-			Post bool   `json:"post"`
-			Path string `json:"path"`
-		} `json:"global_method_permissions"`
-
-		// New: Private bot endpoint permissions
+		// Private bot endpoint permissions
 		PrivateEndpoints []struct {
 			Resource      string `json:"resource"`
 			IsEnabled     bool   `json:"is_enabled"`
@@ -97,7 +89,6 @@ func SaveERPSettings(c *gin.Context) {
 	oldUsername := getPlainSetting(tenantID, "erp_api_username")
 	oldPublicActive := getPlainSetting(tenantID, "erp_public_active")
 	oldPrivateActive := getPlainSetting(tenantID, "erp_private_active")
-	oldMethodPerms := getPlainSetting(tenantID, "erp_global_method_permissions")
 	passwordChanged := req.Password != "" && !isMaskedSecret(req.Password)
 	tokenChanged := req.Token != "" && !isMaskedSecret(req.Token)
 
@@ -151,14 +142,6 @@ func SaveERPSettings(c *gin.Context) {
 	upsertSetting(tenantID, "erp_private_active", req.PrivateActive, nil)
 	upsertSetting(tenantID, "erp_private_scopes", req.PrivateScopes, nil)
 	upsertSetting(tenantID, "erp_private_product_groups", req.PrivateProductGroups, nil)
-
-	// ── Global method permissions ─────────────────────────────────────────
-	if req.GlobalMethodPermissions != nil {
-		bytes, err := json.Marshal(req.GlobalMethodPermissions)
-		if err == nil {
-			upsertSetting(tenantID, "erp_global_method_permissions", string(bytes), nil)
-		}
-	}
 
 	// ── Private bot endpoints ─────────────────────────────────────────────
 	for _, ep := range req.PrivateEndpoints {
@@ -233,17 +216,6 @@ func SaveERPSettings(c *gin.Context) {
 	if len(changed) > 0 {
 		db.LogActivity(tenantID, uid, uemail, "erp.settings_updated", "settings", "erp",
 			"Cập nhật kết nối ERP: "+strings.Join(changed, ", "), "", ip)
-	}
-
-	newMethodPerms := oldMethodPerms
-	if req.GlobalMethodPermissions != nil {
-		if b, err := json.Marshal(req.GlobalMethodPermissions); err == nil {
-			newMethodPerms = string(b)
-		}
-	}
-	if newMethodPerms != oldMethodPerms {
-		db.LogActivity(tenantID, uid, uemail, "erp.method_permissions_updated", "settings", "erp_global_method_permissions",
-			"Cập nhật quyền GET/POST các endpoint ERP", "", ip)
 	}
 
 	if req.PublicActive != oldPublicActive {

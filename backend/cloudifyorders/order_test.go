@@ -161,17 +161,3 @@ func TestRender(t *testing.T) {
 		t.Fatal("FormatVND")
 	}
 }
-
-func TestOrdersEndpoint(t *testing.T) {
-	cases := map[string]string{
-		"":                             DefaultOrdersEndpoint,
-		"not json":                     DefaultOrdersEndpoint,
-		`{"orders":{"path":"orders"}}`: DefaultOrdersEndpoint,
-		`{"orders":{"path":"/rest_api/private/custom/so"}}`: "custom/so",
-	}
-	for raw, want := range cases {
-		if got := ordersEndpoint(raw); got != want {
-			t.Fatalf("ordersEndpoint(%q) = %q want %q", raw, got, want)
-		}
-	}
-}

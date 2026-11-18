@@ -1137,11 +1137,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return nil
 			}
 
+			stockCtx := engine.WithWarehouseStock(ctx, matchedChannel.TenantID)
 			var totalStock float64
 			var details []string
 			var okCount, errCount int
 			for _, mc := range maChas {
-				stock, lines, sumErr := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, mc, "")
+				stock, lines, sumErr := sumInventoryByMaChaAndWebName(stockCtx, matchedChannel.TenantID, &permCtx, mc, "")
 				if sumErr != nil {
 					errCount++
 					log.Printf("[zalo_webhook] inventory error ma_cha=%s web=%s: %v", mc, webName, sumErr)
@@ -1167,7 +1168,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// Concise customer reply: chỉ tổng tồn cả dòng + gợi ý hỏi tiếp theo
 			// màu/size. Chi tiết từng biến thể (details) chỉ dùng cho log nội bộ —
 			// không đẩy lên Zalo để tránh tin nhắn dài bị từ chối.
-			reply := fmt.Sprintf("Dòng %s hiện còn %.0f cái. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", webName, totalStock)
+			reply := fmt.Sprintf("Dòng %s hiện còn %.0f cái tại 1.KHO-TONG. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", webName, totalStock)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
@@ -1199,7 +1200,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 
 			// Concise reply: chỉ tổng tồn cả dòng, bỏ liệt kê biến thể (tránh tin dài).
-			reply := fmt.Sprintf("Dòng %s hiện còn %.0f cái. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", parsed.WebName, stock)
+			reply := fmt.Sprintf("Dòng %s hiện còn %.0f cái tại 1.KHO-TONG. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", parsed.WebName, stock)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
@@ -1254,7 +1255,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return nil
 			}
 
-			reply := fmt.Sprintf("Tổng tồn kho của dòng sản phẩm %s (Mã: %s) trên hệ thống hiện tại là: %.1f", displayName, clickPayload.MaCha, totalStock)
+			reply := fmt.Sprintf("Tổng tồn kho của dòng sản phẩm %s (Mã: %s) tại 1.KHO-TONG hiện là %.1f", displayName, clickPayload.MaCha, totalStock)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
@@ -1669,8 +1670,11 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 	}
 
 	// 2. Fetch allowed product groups + brand boundary for "inventory" resource
-	_, _, allowedProductGroups := permCtx.IsResourceAllowed("inventory")
-	brandSet := allowedBrandSet(permCtx, "inventory")
+	canView, _, allowedGroups := permCtx.IsResourceAllowed("inventory")
+	if !canView {
+		return 0, fmt.Errorf("inventory access denied")
+	}
+	allowedBrands, allBrands := permCtx.ResolveBrandFilter("inventory")
 
 	// Collect original-case SKUs (ERP MA_HANG is case-sensitive). Dedup, preserve
 	// first-seen order.
@@ -1680,22 +1684,8 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 		sku := getMapString(p, "MA", "code", "ma")
 		group := getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
 
-		isAllowed := len(allowedProductGroups) == 0
-		if !isAllowed {
-			gLower := strings.ToLower(group)
-			for _, allowed := range allowedProductGroups {
-				if strings.Contains(gLower, strings.ToLower(allowed)) {
-					isAllowed = true
-					break
-				}
-			}
-		}
-
-		if isAllowed && !brandAllowedBySet(brandSet, getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")) {
-			isAllowed = false
-		}
-
-		if isAllowed && sku != "" {
+		brand := getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")
+		if engine.WarehouseProductAllowed(group, brand, allowedGroups, allowedBrands, allBrands) && sku != "" {
 			if _, dup := seen[sku]; dup {
 				continue
 			}
@@ -1705,7 +1695,7 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 	}
 
 	// If the user has permission to see none of the variants, return 0 stock
-	if len(allowedSKUs) == 0 && len(childProducts) > 0 {
+	if len(allowedSKUs) == 0 {
 		return 0, nil
 	}
 
@@ -1716,9 +1706,8 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 		return 0, err
 	}
 
-	// If ERP URL is empty, fallback to mock sum
 	if erpURL == "" {
-		return 45.0, nil
+		return 0, fmt.Errorf("Cloudify inventory URL is not configured")
 	}
 
 	client := &pkg.CloudifyClient{
@@ -1728,28 +1717,13 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 		Password: erpPassword,
 	}
 
-	// 4. Read live stock per allowed SKU from the inventory endpoint resolved
-	// from the tenant's Global HTTP Method config (erp_global_method_permissions),
-	// matching the SKU-level handler. The legacy inventory_receipt/search keyword
-	// search is gone (it returns HTTP 500 from Cloudify). All SKUs failing
-	// propagates an error instead of answering 0.
-	invEndpoint, invUsePost := engine.ResolveInventoryEndpoint(ctx, tenantID)
-
-	var totalStock float64
-	var okCount, errCount int
-	for _, sku := range allowedSKUs {
-		stock, stockErr := client.InventoryStock(invEndpoint, invUsePost, sku)
-		if stockErr != nil {
-			errCount++
-			log.Printf("[zalo_webhook] stock lookup failed ma_cha=%s sku=%s: %v", maCha, sku, stockErr)
-			continue
-		}
-		okCount++
-		totalStock += stock
+	totals, err := engine.MainWarehouseStock(ctx, tenantID, client)
+	if err != nil {
+		return 0, err
 	}
-
-	if okCount == 0 && errCount > 0 {
-		return 0, fmt.Errorf("all %d SKU stock lookups failed for ma_cha=%s", errCount, maCha)
+	var totalStock float64
+	for _, sku := range allowedSKUs {
+		totalStock += totals[sku]
 	}
 
 	return totalStock, nil
@@ -2549,8 +2523,11 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	}
 
 	// 2. Fetch allowed product groups + brand boundary for "inventory" resource
-	_, _, allowedProductGroups := permCtx.IsResourceAllowed("inventory")
-	brandSet := allowedBrandSet(permCtx, "inventory")
+	canView, _, allowedGroups := permCtx.IsResourceAllowed("inventory")
+	if !canView {
+		return 0, nil, fmt.Errorf("inventory access denied")
+	}
+	allowedBrands, allBrands := permCtx.ResolveBrandFilter("inventory")
 
 	// allowedSKU pairs an original-case SKU with its display name. Original case
 	// matters: the ERP MA_HANG lookup is case-sensitive, so the code we send must
@@ -2564,22 +2541,8 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		group := getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
 		name := getMapString(p, "TEN", "ten_hang", "ten")
 
-		isAllowed := len(allowedProductGroups) == 0
-		if !isAllowed {
-			gLower := strings.ToLower(group)
-			for _, allowed := range allowedProductGroups {
-				if strings.Contains(gLower, strings.ToLower(allowed)) {
-					isAllowed = true
-					break
-				}
-			}
-		}
-
-		if isAllowed && !brandAllowedBySet(brandSet, getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")) {
-			isAllowed = false
-		}
-
-		if isAllowed && sku != "" {
+		brand := getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")
+		if engine.WarehouseProductAllowed(group, brand, allowedGroups, allowedBrands, allBrands) && sku != "" {
 			if _, dup := seen[sku]; dup {
 				continue
 			}
@@ -2592,7 +2555,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	}
 
 	// User may be permitted to see none of the variants → genuine 0 stock.
-	if len(allowedSKUs) == 0 && len(childProducts) > 0 {
+	if len(allowedSKUs) == 0 {
 		return 0, nil, nil
 	}
 
@@ -2604,10 +2567,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	}
 
 	if erpURL == "" {
-		if webName == "" {
-			return 0, nil, fmt.Errorf("Cloudify inventory URL is not configured")
-		}
-		return 45.0, []string{"[Mock Variant] FF800-Mock: 45.0"}, nil
+		return 0, nil, fmt.Errorf("Cloudify inventory URL is not configured")
 	}
 
 	client := &pkg.CloudifyClient{
@@ -2617,37 +2577,18 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		Password: erpPassword,
 	}
 
-	// 4. Read live stock per allowed SKU from the inventory endpoint resolved
-	// from the tenant's Global HTTP Method config (erp_global_method_permissions),
-	// the same source the SKU-level handler uses — instead of the legacy
-	// inventory_receipt/search keyword search (which returns HTTP 500 from
-	// Cloudify). An ERP failure is surfaced as an error, never silently reported
-	// as 0 stock.
-	invEndpoint, invUsePost := engine.ResolveInventoryEndpoint(ctx, tenantID)
-	log.Printf("[stock-pick] querying Cloudify for ma_cha=%s web=%q: %d allowed SKU(s) via endpoint=%s (post=%t)", maCha, webName, len(allowedSKUs), invEndpoint, invUsePost)
+	totals, err := engine.MainWarehouseStock(ctx, tenantID, client)
+	if err != nil {
+		return 0, nil, err
+	}
 
 	var totalStock float64
 	var details []string
-	var okCount, errCount int
-	for _, s := range allowedSKUs {
-		if err := ctx.Err(); err != nil {
-			return 0, nil, err
-		}
-		stock, stockErr := client.InventoryStock(invEndpoint, invUsePost, s.Code)
-		if stockErr != nil {
-			errCount++
-			log.Printf("[zalo_webhook] stock lookup failed ma_cha=%s sku=%s: %v", maCha, s.Code, stockErr)
-			continue
-		}
-		okCount++
+	for _, sku := range allowedSKUs {
+		stock := totals[sku.Code]
 		totalStock += stock
-		details = append(details, fmt.Sprintf("- %s: %.1f", s.Name, stock))
-		log.Printf("[stock-pick] Cloudify stock ma_cha=%s sku=%s → %.1f", maCha, s.Code, stock)
-	}
-
-	// A parent-level total must include every eligible SKU.
-	if errCount > 0 && (webName == "" || okCount == 0) {
-		return 0, nil, fmt.Errorf("%d of %d SKU stock lookups failed for ma_cha=%s web=%s", errCount, len(allowedSKUs), maCha, webName)
+		details = append(details, fmt.Sprintf("- %s: %.1f", sku.Name, stock))
+		log.Printf("[stock-pick] warehouse=%s ma_cha=%s sku=%s stock=%.1f", engine.MainWarehouseCode, maCha, sku.Code, stock)
 	}
 
 	return totalStock, details, nil

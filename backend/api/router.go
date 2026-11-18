@@ -390,6 +390,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// MCP Server (Streamable HTTP transport)
 	mcp.SetupMCPRoutes(r)
+	r.POST("/mcp/erp/:tenantId", handlers.ERPMCP)
+	r.GET("/mcp/erp/:tenantId", handlers.ERPMCP)
 
 	// OAuth 2.0 (for Claude Web MCP authentication)
 	mcp.SetupOAuthRoutes(r)

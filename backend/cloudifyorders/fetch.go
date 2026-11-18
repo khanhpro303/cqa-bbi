@@ -1,7 +1,6 @@
 package cloudifyorders
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -42,11 +41,10 @@ func (f *cloudifyFetcher) ByCode(code string) ([]map[string]any, error) {
 }
 
 // NewCloudifyFetcher builds a Fetcher from the tenant's ERP settings (the same
-// erp_api_* keys the chatbot gateway uses) and honours a custom orders path
-// configured in erp_global_method_permissions.
+// erp_api_* keys the chatbot gateway uses).
 func NewCloudifyFetcher(database *gorm.DB, tenantID, encryptionKey string) (Fetcher, error) {
 	var rows []models.AppSetting
-	keys := []string{"erp_api_url", "erp_api_db", "erp_api_username", "erp_api_password", "erp_global_method_permissions"}
+	keys := []string{"erp_api_url", "erp_api_db", "erp_api_username", "erp_api_password"}
 	if err := database.Where("tenant_id = ? AND setting_key IN ?", tenantID, keys).Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -71,23 +69,5 @@ func NewCloudifyFetcher(database *gorm.DB, tenantID, encryptionKey string) (Fetc
 	if client.BaseURL == "" || client.Login == "" || client.Password == "" {
 		return nil, ErrNotConfigured
 	}
-	return &cloudifyFetcher{client: client, endpoint: ordersEndpoint(values["erp_global_method_permissions"].ValuePlain)}, nil
-}
-
-// ordersEndpoint mirrors the chatbot gateway: a custom "orders" path in
-// erp_global_method_permissions overrides saorders/search.
-func ordersEndpoint(raw string) string {
-	var perms map[string]struct {
-		Path string `json:"path"`
-	}
-	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &perms) != nil {
-		return DefaultOrdersEndpoint
-	}
-	path := strings.TrimSpace(perms["orders"].Path)
-	if path == "" || path == "orders" {
-		return DefaultOrdersEndpoint
-	}
-	path = strings.TrimPrefix(path, "/")
-	path = strings.TrimPrefix(path, "rest_api/private/")
-	return strings.TrimPrefix(path, "/")
+	return &cloudifyFetcher{client: client, endpoint: DefaultOrdersEndpoint}, nil
 }

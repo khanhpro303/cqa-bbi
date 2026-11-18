@@ -13,6 +13,7 @@ import (
 
 type captureRoundTripper struct {
 	payload map[string]interface{}
+	headers http.Header
 }
 
 func (c *captureRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -23,6 +24,7 @@ func (c *captureRoundTripper) RoundTrip(r *http.Request) (*http.Response, error)
 	if err := json.NewDecoder(r.Body).Decode(&c.payload); err != nil {
 		return nil, err
 	}
+	c.headers = r.Header.Clone()
 
 	body := `{"outputs":[{"outputs":[{"results":{"message":{"text":"ok"}}}]}]}`
 	return &http.Response{
@@ -63,6 +65,9 @@ func TestRunFlowWithCustomerPassesPermissionTokenToCustomComponent(t *testing.T)
 	}
 	if reply != "ok" {
 		t.Fatalf("expected reply ok, got %q", reply)
+	}
+	if got := transport.headers.Get(langflowERPPermissionHeader); got != "permission-token-1" {
+		t.Fatalf("expected MCP permission header, got %q", got)
 	}
 
 	tweaks, ok := transport.payload["tweaks"].(map[string]interface{})
@@ -146,6 +151,9 @@ func TestRunFlowWithCustomerOmitsZaloUserIDTweaksWhenEmpty(t *testing.T) {
 		"",
 	); err != nil {
 		t.Fatalf("RunFlowWithCustomer returned error: %v", err)
+	}
+	if got := transport.headers.Get(langflowERPPermissionHeader); got != "" {
+		t.Fatalf("expected no MCP permission header without a token, got %q", got)
 	}
 
 	tweaks, ok := transport.payload["tweaks"].(map[string]interface{})

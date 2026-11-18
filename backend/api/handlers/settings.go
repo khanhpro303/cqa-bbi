@@ -32,6 +32,9 @@ func GetSettings(c *gin.Context) {
 
 	result := make(map[string]string)
 	for _, s := range settings {
+		if s.SettingKey == "erp_global_method_permissions" {
+			continue
+		}
 		if s.ValuePlain != "" {
 			result[s.SettingKey] = s.ValuePlain
 		} else if len(s.ValueEncrypted) > 0 {

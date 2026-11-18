@@ -2,10 +2,12 @@ package pkg
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -156,8 +158,8 @@ func (c *CloudifyClient) authenticate() (string, error) {
 
 	// uid=false means wrong credentials in Odoo-based systems
 	var result struct {
-		UID      interface{} `json:"uid"`
-		SessionID string     `json:"session_id"`
+		UID       interface{} `json:"uid"`
+		SessionID string      `json:"session_id"`
 	}
 	if err := json.Unmarshal(rpcResp.Result, &result); err != nil {
 		return "", fmt.Errorf("decode auth result: %w", err)
@@ -367,12 +369,20 @@ func (c *CloudifyClient) SearchCustomEndpoint(endpoint string, params map[string
 }
 
 func (c *CloudifyClient) restSearchPost(endpoint string, params map[string]string) ([]map[string]interface{}, error) {
+	return c.SearchCustomEndpointContext(context.Background(), endpoint, params)
+}
+
+// SearchCustomEndpointContext runs a POST search with query parameters.
+func (c *CloudifyClient) SearchCustomEndpointContext(ctx context.Context, endpoint string, params map[string]string) ([]map[string]interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	session, err := c.getSession()
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 
-	data, statusCode, err := c.doRESTPost(endpoint, params, session)
+	data, statusCode, err := c.doRESTPost(ctx, endpoint, params, session)
 	if err != nil {
 		return nil, err
 	}
@@ -384,20 +394,23 @@ func (c *CloudifyClient) restSearchPost(endpoint string, params map[string]strin
 		if err != nil {
 			return nil, fmt.Errorf("re-authenticate after session expiry: %w", err)
 		}
-		data, _, err = c.doRESTPost(endpoint, params, session)
+		data, statusCode, err = c.doRESTPost(ctx, endpoint, params, session)
 		if err != nil {
 			return nil, err
+		}
+		if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("Cloudify refused authorization for %s after re-authentication", endpoint)
 		}
 	}
 
 	return data, nil
 }
 
-func (c *CloudifyClient) doRESTPost(endpoint string, params map[string]string, session string) ([]map[string]interface{}, int, error) {
+func (c *CloudifyClient) doRESTPost(ctx context.Context, endpoint string, params map[string]string, session string) ([]map[string]interface{}, int, error) {
 	baseURL := strings.TrimRight(c.BaseURL, "/")
 	apiURL := fmt.Sprintf("%s/rest_api/private/%s", baseURL, endpoint)
 
-	req, err := http.NewRequest("POST", apiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
@@ -422,6 +435,9 @@ func (c *CloudifyClient) doRESTPost(endpoint string, params map[string]string, s
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		if requestErr, ok := err.(*url.Error); ok {
+			err = requestErr.Err
+		}
 		return nil, 0, fmt.Errorf("Cloudify API request to %s failed: %w", endpoint, err)
 	}
 	defer resp.Body.Close()

@@ -25,74 +25,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// resolveGlobalMethodPermission matches a requested resource against the
-// tenant's global HTTP-method config (setting key erp_global_method_permissions).
-// It returns the system resource key to re-route to (empty if no match), whether
-// the resource is permitted for ERP gateway access, and an error if the config
-// JSON is malformed — in which case the caller MUST fail closed rather than allow
-// the request.
-//
-// The httpMethod argument is no longer used to gate access: the get/post flags
-// configure how the BACKEND calls the upstream Cloudify endpoint, while the
-// Langflow ERP caller always reaches /erp/query over POST. A resource is allowed
-// when it is enabled under ANY method (get||post); both off means disabled.
-//
-// Matching order is preserved from the original inline gate: custom Path first,
-// then the system resource key.
-func resolveGlobalMethodPermission(configJSON, reqResource, httpMethod string) (systemResource string, allowed bool, err error) {
-	type endpointConfig struct {
-		Get  bool   `json:"get"`
-		Post bool   `json:"post"`
-		Path string `json:"path"`
-	}
-	var perms map[string]endpointConfig
-	if e := json.Unmarshal([]byte(configJSON), &perms); e != nil {
-		return "", false, e
-	}
-
-	var matched endpointConfig
-	for sysRes, cfg := range perms {
-		path := cfg.Path
-		if path == "" {
-			path = sysRes
-		}
-		if strings.EqualFold(path, reqResource) {
-			systemResource, matched = sysRes, cfg
-			break
-		}
-	}
-	if systemResource == "" {
-		for sysRes, cfg := range perms {
-			if strings.EqualFold(sysRes, reqResource) {
-				systemResource, matched = sysRes, cfg
-				break
-			}
-		}
-	}
-	if systemResource == "" {
-		// Configured but the resource is not listed → treat as blocked.
-		return "", false, nil
-	}
-
-	// The get/post flags configure how the BACKEND calls the upstream Cloudify
-	// endpoint (e.g. debt → th_cong_no_phai_thu/search via GET, see usePost at
-	// erp.go), NOT the trusted internal hop: the Langflow ERP caller always
-	// reaches /erp/query over POST. Gating that incoming POST on the upstream
-	// method rejected GET-only resources like debt with forbidden_method
-	// ("lỗi kết nối ERP Gateway") even though the agent was permitted to query
-	// them. The gate's real job is the resource whitelist, so a resource is
-	// allowed when it is enabled under ANY method; both flags off = disabled.
-	return systemResource, matched.Get || matched.Post, nil
-}
-
-// methodPermissionResource maps a requested resource to the resource key used
-// for permission checks. product_variants is a finer-grained read against the
-// same cache as products, so it inherits the products grant — both the global
-// HTTP-method gate and the scope check resolve it under products. Centralizing
-// the alias here stops the two gates from drifting: the method gate previously
-// lacked it and blocked every product_variants call once a tenant configured a
-// global method whitelist.
-func methodPermissionResource(resource string) string {
+// permissionResource maps variant reads to the products grant.
+func permissionResource(resource string) string {
 	if resource == "product_variants" {
 		return "products"
 	}
@@ -153,6 +87,7 @@ func ERPQuery(c *gin.Context) {
 		ZaloUserID      string `json:"zalo_user_id" form:"zalo_user_id"` // reserved for user-level scoping
 		PermissionToken string `json:"permission_token" form:"permission_token"`
 		ParentCode      string `json:"parent_code" form:"parent_code"`
+		ExactSKU        bool   `json:"exact_sku" form:"exact_sku"`
 		ExactWebName    bool   `json:"exact_web_name" form:"exact_web_name"`
 		Color           string `json:"color" form:"color"`
 		Size            string `json:"size" form:"size"`
@@ -216,52 +151,24 @@ func ERPQuery(c *gin.Context) {
 		permCtx = &resolved
 	}
 
-	// ── 4.5. Global HTTP Method & Custom Endpoint Path Validation ──────────────────
-	methodAllowed := true
-	var globalPermsSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; err == nil && globalPermsSetting.ValuePlain != "" {
-		// product_variants inherits the products method grant (see
-		// methodPermissionResource): same cache, finer-grained read, so tenants
-		// do not configure a second whitelist entry. Resolve the method gate
-		// under the aliased resource but keep req.Resource = product_variants so
-		// the variant dispatch (§6b) still runs.
-		methodResource := methodPermissionResource(req.Resource)
-		variantAlias := methodResource != req.Resource
-		sysRes, ok, perr := resolveGlobalMethodPermission(globalPermsSetting.ValuePlain, methodResource, c.Request.Method)
-		if perr != nil {
-			// Fail closed: a configured-but-corrupt global config must not
-			// silently open every method/resource. Block and log for the admin.
-			log.Printf("[erp_query] malformed erp_global_method_permissions for tenant %s: %v — blocking (fail-safe)", tenantID, perr)
-			methodAllowed = false
-		} else {
-			if sysRes != "" && !variantAlias {
-				// Re-route internally to the system expected resource. Skipped
-				// for the product_variants alias so §6b keeps dispatching it.
-				req.Resource = sysRes
-			} else if sysRes == "" {
-				// Surface why an otherwise-valid resource is blocked: once a
-				// global config exists it acts as a whitelist, so anything not
-				// listed is denied.
-				log.Printf("[erp_query] resource %q not in global method config for tenant %s — blocked", req.Resource, tenantID)
-			}
-			methodAllowed = ok
-		}
+	switch req.Resource {
+	case "products", "product_variants", "inventory", "orders", "customers", "debt":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_resource"})
+		return
 	}
-	if !methodAllowed {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error":   "forbidden_method",
-			"message": fmt.Sprintf("Yêu cầu không hợp lệ hoặc HTTP Method %s không được cho phép đối với tài nguyên '%s' trên hệ thống ERP Gateway.", c.Request.Method, req.Resource),
-		})
+	if permCtx.TenantID != tenantID || permCtx.AgentType != agentType {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden_token"})
 		return
 	}
 
 	// Enforce permitted resources & scope. product_variants inherits the
-	// products grant via methodPermissionResource (same cache, finer read).
-	allowed, scopeType, productGroups := permCtx.IsResourceAllowed(methodPermissionResource(req.Resource))
+	// products grant via permissionResource (same cache, finer read).
+	allowed, scopeType, productGroups := permCtx.IsResourceAllowed(permissionResource(req.Resource))
 	// Brand (nhãn hiệu) boundary — a second filter parallel to productGroups,
 	// resolved alongside it and threaded through the same chokepoints. allBrands
 	// (or an empty list) means no brand restriction → legacy behavior preserved.
-	brandFilter, allBrands := permCtx.ResolveBrandFilter(methodPermissionResource(req.Resource))
+	brandFilter, allBrands := permCtx.ResolveBrandFilter(permissionResource(req.Resource))
 	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden_scope",
@@ -608,12 +515,23 @@ func ERPQuery(c *gin.Context) {
 		// Stock is live in Cloudify (not the product cache), so this needs ERP
 		// credentials; when absent (dev/mock) we degrade to variants-without-stock.
 		if req.IncludeStock {
-			if rows, ok := response["data"].([]map[string]interface{}); ok && len(rows) > 0 {
-				if erpURL, erpDB, erpLogin, erpPassword, credErr := loadCloudifyCredentials(tenantID, cfg); credErr == nil && erpURL != "" && erpLogin != "" && erpPassword != "" {
-					stockClient := &pkg.CloudifyClient{BaseURL: erpURL, DB: erpDB, Login: erpLogin, Password: erpPassword}
-					enrichVariantsWithLiveStock(c.Request.Context(), stockClient, tenantID, rows)
-				} else if credErr != nil {
-					log.Printf("[erp_query] include_stock skipped, credential error: %v", credErr)
+			if inventoryAllowed, _, inventoryGroups := permCtx.IsResourceAllowed("inventory"); inventoryAllowed {
+				if rows, ok := response["data"].([]map[string]interface{}); ok && len(rows) > 0 {
+					inventoryBrands, allInventoryBrands := permCtx.ResolveBrandFilter("inventory")
+					eligible := make([]map[string]interface{}, 0, len(rows))
+					for _, row := range rows {
+						sku := getMapString(row, "ma", "MA", "ma_hang")
+						group, brand := getProductGroupAndBrandFromAstra(c.Request.Context(), tenantID, sku)
+						if sku != "" && engine.WarehouseProductAllowed(group, brand, inventoryGroups, inventoryBrands, allInventoryBrands) {
+							eligible = append(eligible, row)
+						}
+					}
+					if erpURL, erpDB, erpLogin, erpPassword, credErr := loadCloudifyCredentials(tenantID, cfg); credErr == nil && erpURL != "" && erpLogin != "" && erpPassword != "" && len(eligible) > 0 {
+						stockClient := &pkg.CloudifyClient{BaseURL: erpURL, DB: erpDB, Login: erpLogin, Password: erpPassword}
+						enrichVariantsWithLiveStock(c.Request.Context(), stockClient, tenantID, eligible)
+					} else if credErr != nil {
+						log.Printf("[erp_query] include_stock skipped, credential error: %v", credErr)
+					}
 				}
 			}
 		}
@@ -676,6 +594,17 @@ func ERPQuery(c *gin.Context) {
 					return
 				}
 			}
+		}
+	}
+
+	if tool := c.GetString(erpMCPToolContextKey); tool != "" {
+		if erpURL == "" || erpLogin == "" || erpPassword == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "erp_credentials_missing"})
+			return
+		}
+		if tool == "inventory_by_line" || (tool == "inventory_by_sku" && req.ExactSKU) {
+			respondWithWarehouseStock(c, client, permCtx, scopeType, productGroups, req.Search, tool == "inventory_by_line")
+			return
 		}
 	}
 
@@ -2007,14 +1936,11 @@ func getFirstNonEmptyMapString(m map[string]interface{}, keys ...string) string 
 func resolveVariantStockDirect(
 	c *gin.Context,
 	client *pkg.CloudifyClient,
-	stockCache *engine.InventoryStockCache,
 	tenantID string,
 	permCtx *engine.GroupPermissionContext,
 	productGroups []string,
 	scopeType string,
 	search string,
-	inventoryEndpoint string,
-	usePostMethod bool,
 	variantRows []map[string]interface{},
 ) bool {
 	var variantData []map[string]interface{}
@@ -2023,7 +1949,7 @@ func resolveVariantStockDirect(
 		if childSKU == "" {
 			continue
 		}
-		skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, stockCache, tenantID, childSKU, inventoryEndpoint, usePostMethod)
+		skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, tenantID, childSKU)
 		if errQuery != nil {
 			log.Printf("[inventory_query] variant stock error for SKU %s: %v", childSKU, errQuery)
 			continue
@@ -2080,18 +2006,12 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 	switch resource {
 	case "inventory":
-		// Resolve the inventory endpoint + HTTP method from the tenant's Global
-		// HTTP Method config (erp_global_method_permissions). Shared with the Zalo
-		// worker via engine.ResolveInventoryEndpoint so both honor the same
-		// admin-configured endpoint. Default: official total-stock endpoint (POST).
-		inventoryEndpoint, usePostMethod := engine.ResolveInventoryEndpoint(c.Request.Context(), tenantID)
-
-		stockCache := engine.DefaultInventoryStockCache()
+		c.Request = c.Request.WithContext(engine.WithWarehouseStock(c.Request.Context(), tenantID))
 
 		if parentCode != "" && search != "" {
 			matchedProducts, errSearch := searchProductsFromCacheWithFilter(c.Request.Context(), tenantID, search, parentCode, 20)
 			if errSearch == nil && len(matchedProducts) > 0 {
-				matchedProducts = filterProductsByBrands(filterProductsByGroups(matchedProducts, productGroups), brandFilter, allBrands)
+				matchedProducts = filterWarehouseProducts(matchedProducts, productGroups, brandFilter, allBrands)
 				var variantData []map[string]interface{}
 				for _, child := range matchedProducts {
 					childSKU := getMapString(child, "MA", "ma", "ma_hang")
@@ -2099,7 +2019,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						continue
 					}
 
-					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, stockCache, tenantID, childSKU, inventoryEndpoint, usePostMethod)
+					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, tenantID, childSKU)
 					if errQuery != nil {
 						log.Printf("[inventory_query_filtered] error querying stock for SKU %s: %v", childSKU, errQuery)
 						continue
@@ -2152,7 +2072,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			if errExact != nil {
 				log.Printf("[inventory_query] exact web-name search error for tenant=%s search=%s: %v", tenantID, search, errExact)
 			}
-			exactRows = filterProductsByBrands(filterProductsByGroups(exactRows, productGroups), brandFilter, allBrands)
+			exactRows = filterWarehouseProducts(exactRows, productGroups, brandFilter, allBrands)
 
 			// STOCK continuation guard. When the agent already named a color/size,
 			// the customer has passed the dòng-vs-SKU step (they chose "🔍 Xem theo
@@ -2166,7 +2086,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			if hasVariantAttribute(color, size, brand) {
 				variantRows := filterVariantsByAttributes(exactRows, color, size, brand)
 				if len(variantRows) > 0 {
-					if resolveVariantStockDirect(c, client, stockCache, tenantID, permCtx, productGroups, scopeType, search, inventoryEndpoint, usePostMethod, variantRows) {
+					if resolveVariantStockDirect(c, client, tenantID, permCtx, productGroups, scopeType, search, variantRows) {
 						return
 					}
 				}
@@ -2276,7 +2196,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					if hasVariantAttribute(color, size, brand) {
 						variantRows := filterVariantsByAttributes(matchedProducts, color, size, brand)
 						if len(variantRows) > 0 && distinctMaChaCount(variantRows) == 1 {
-							if resolveVariantStockDirect(c, client, stockCache, tenantID, permCtx, productGroups, scopeType, search, inventoryEndpoint, usePostMethod, variantRows) {
+							if resolveVariantStockDirect(c, client, tenantID, permCtx, productGroups, scopeType, search, variantRows) {
 								return
 							}
 						}
@@ -2379,7 +2299,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			if errVal != nil {
 				err = fmt.Errorf("failed to fetch variants from cache: %w", errVal)
 			} else if len(childProducts) > 0 {
-				childProducts = filterProductsByBrands(filterProductsByGroups(childProducts, productGroups), brandFilter, allBrands)
+				childProducts = filterWarehouseProducts(childProducts, productGroups, brandFilter, allBrands)
 
 				// Sum stocks for each child variant
 				var variantData []map[string]interface{}
@@ -2389,7 +2309,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						continue
 					}
 
-					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, stockCache, tenantID, childSKU, inventoryEndpoint, usePostMethod)
+					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, tenantID, childSKU)
 					if errQuery != nil {
 						log.Printf("[inventory_query] error querying stock for SKU %s: %v", childSKU, errQuery)
 						continue
@@ -2421,105 +2341,26 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				data = variantData
 			}
 		} else {
-			// Query for single SKU
-			if usePostMethod {
-				data, err = client.SearchCustomEndpointWithBody(inventoryEndpoint, inventoryStockRequestBody(inventoryEndpoint, search, limit))
-			} else {
-				params := map[string]string{}
-				for k, v := range inventoryStockRequestBody(inventoryEndpoint, search, limit) {
-					params[k] = fmt.Sprintf("%v", v)
-				}
-				data, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
-			}
-
-			if err != nil {
-				errMsg := err.Error()
-				if strings.Contains(errMsg, "HTTP 400") && (strings.Contains(errMsg, "Không tìm thấy hàng") || strings.Contains(errMsg, "Không tìm thấy")) {
-					log.Printf("[inventory_query] overriding Cloudify 400 'product not found' error to success empty list for search: %s", search)
-					err = nil
-					data = []map[string]interface{}{}
-				}
-			}
-
-			// The official total-stock endpoint returns the KHO-TỔNG row first
-			// then per-warehouse breakdown rows. Collapse the response to a
-			// single record carrying the aggregate stock and ignore branches.
-			if err == nil && inventoryEndpoint == inventoryTotalStockEndpoint {
-				total := totalStockFromInventoryItems(data)
-				skuOut := search
-				name := ""
-				if len(data) > 0 {
-					if v := getMapString(data[0], "MA_HANG", "ma_hang", "MA", "ma"); v != "" {
-						skuOut = v
+			data, err = getProductByMaFromCache(c.Request.Context(), tenantID, search)
+			if err == nil {
+				data = filterWarehouseProducts(data, productGroups, brandFilter, allBrands)
+				for _, product := range data {
+					sku := getMapString(product, "ma", "MA")
+					total, stockErr := fetchInventoryStockForSKU(c.Request.Context(), client, tenantID, sku)
+					if stockErr != nil {
+						err = stockErr
+						break
 					}
-					name = getMapString(data[0], "TEN_HANG", "ten_hang", "TEN", "ten", "name")
-				}
-				if len(data) == 0 {
-					data = []map[string]interface{}{}
-				} else {
-					data = []map[string]interface{}{{
-						"MA": skuOut, "ma": skuOut, "code": skuOut,
-						"ma_hang": skuOut, "product_code": skuOut,
-						"TEN": name, "ten": name, "name": name, "ten_hang": name,
-						"TON_KHO": total, "ton_kho": total, "stock": total,
-					}}
-					stockCache.Set(c.Request.Context(), tenantID, skuOut, total)
-				}
-			} else if err == nil {
-				// Custom (non-total-stock) endpoint: normalize stock keys per
-				// item and write-through to the stock cache so subsequent
-				// parent-loop queries can serve the same SKU from cache.
-				for i, item := range data {
-					stockVal := getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
-					if _, hasTon := item["ton_kho"]; !hasTon {
-						data[i]["ton_kho"] = stockVal
-						data[i]["TON_KHO"] = stockVal
-						data[i]["stock"] = stockVal
-					}
-					// Inject standard product keys for compatibility
-					sku := getMapString(item, "MA_HANG", "ma_hang", "MA", "ma", "code", "product_code")
-					if sku != "" {
-						data[i]["MA"] = sku
-						data[i]["ma"] = sku
-						data[i]["code"] = sku
-						data[i]["ma_hang"] = sku
-						data[i]["product_code"] = sku
-						stockCache.Set(c.Request.Context(), tenantID, sku, stockVal)
-					}
-					name := getMapString(item, "TEN_HANG", "ten_hang", "TEN", "ten", "name")
-					if name != "" {
-						data[i]["TEN"] = name
-						data[i]["ten"] = name
-						data[i]["name"] = name
-						data[i]["ten_hang"] = name
-					}
+					product["TON_KHO"], product["ton_kho"], product["stock"] = total, total, total
 				}
 			}
 		}
+
 	case "orders":
 		// Định tuyến dựa thẳng vào `search` mà LLM gửi (đã phân loại theo system
 		// prompt): mã đơn → tra 1 đơn; "N ngày gần đây" → cửa sổ ngày; còn lại
 		// (mơ hồ) → hỏi 3/5/7 ngày. Không cần danh sách cụm từ generic cứng.
 		ordersEndpoint := "saorders/search" // default (official Cloudify endpoint)
-		var globalPermsSetting models.AppSetting
-		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
-			type EndpointConfig struct {
-				Get  bool   `json:"get"`
-				Post bool   `json:"post"`
-				Path string `json:"path"`
-			}
-			var globalPerms map[string]EndpointConfig
-			if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
-				if orderConfig, exists := globalPerms["orders"]; exists && orderConfig.Path != "" && orderConfig.Path != "orders" {
-					path := orderConfig.Path
-					path = strings.TrimPrefix(path, "/")
-					path = strings.TrimPrefix(path, "rest_api/private/")
-					path = strings.TrimPrefix(path, "/")
-					ordersEndpoint = path
-				}
-			}
-		}
-
 		var allowedCodes []string
 		if scopeType == "assigned" {
 			var groupIDs []string
@@ -2844,25 +2685,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			if len(ownCodes) > 0 {
 				cfg, _ := config.Load()
 
-				// Resolve the partner-search path once — it is resource-level
-				// config, independent of the individual customer code.
-				customPath := "partner/search"
-				var globalPermsSetting models.AppSetting
-				if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
-					type EndpointConfig struct {
-						Get  bool   `json:"get"`
-						Post bool   `json:"post"`
-						Path string `json:"path"`
-					}
-					var globalPerms map[string]EndpointConfig
-					if json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms) == nil {
-						if config, exists := globalPerms["customers"]; exists && config.Path != "" {
-							customPath = strings.TrimPrefix(config.Path, "/")
-							customPath = strings.TrimPrefix(customPath, "rest_api/private/")
-							customPath = strings.TrimPrefix(customPath, "/")
-						}
-					}
-				}
+				const customPath = "partner/search"
 
 				var aggregated []map[string]interface{}
 				var lastErr error
@@ -3233,50 +3056,14 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		}
 
 		debtEndpoint := "th_cong_no_phai_thu/search"
-		usePost := false
-		var globalPermsSetting models.AppSetting
-		if errSetting := db.DB.Where("tenant_id = ? AND setting_key = 'erp_global_method_permissions'", tenantID).First(&globalPermsSetting).Error; errSetting == nil && globalPermsSetting.ValuePlain != "" {
-			type EndpointConfig struct {
-				Get  bool   `json:"get"`
-				Post bool   `json:"post"`
-				Path string `json:"path"`
-			}
-			var globalPerms map[string]EndpointConfig
-			if errUnmarshal := json.Unmarshal([]byte(globalPermsSetting.ValuePlain), &globalPerms); errUnmarshal == nil {
-				if debtConfig, exists := globalPerms["debt"]; exists {
-					usePost = debtConfig.Post
-					if debtConfig.Path != "" && debtConfig.Path != "debt" {
-						path := debtConfig.Path
-						path = strings.TrimPrefix(path, "/")
-						path = strings.TrimPrefix(path, "rest_api/private/")
-						path = strings.TrimPrefix(path, "/")
-						debtEndpoint = path
-					}
-				}
-			}
+		params := map[string]string{
+			"CHI_NHANH":                           branchName,
+			"TU_NGAY":                             tuNgay,
+			"DEN_NGAY":                            denNgay,
+			"BAO_GOM_SO_LIEU_CHI_NHANH_PHU_THUOC": "true",
+			"DS_KHACH_HANG":                       strings.Join(targetCustomerCodes, ","),
 		}
-
-		dsKhachHang := strings.Join(targetCustomerCodes, ",")
-
-		if usePost {
-			bodyPayload := map[string]interface{}{
-				"CHI_NHANH":                           branchName,
-				"TU_NGAY":                             tuNgay,
-				"DEN_NGAY":                            denNgay,
-				"BAO_GOM_SO_LIEU_CHI_NHANH_PHU_THUOC": true,
-				"DS_KHACH_HANG":                       dsKhachHang,
-			}
-			data, err = client.SearchCustomEndpointWithBody(debtEndpoint, bodyPayload)
-		} else {
-			params := map[string]string{
-				"CHI_NHANH":                           branchName,
-				"TU_NGAY":                             tuNgay,
-				"DEN_NGAY":                            denNgay,
-				"BAO_GOM_SO_LIEU_CHI_NHANH_PHU_THUOC": "true",
-				"DS_KHACH_HANG":                       dsKhachHang,
-			}
-			data, err = client.SearchCustomEndpoint(debtEndpoint, params)
-		}
+		data, err = client.SearchCustomEndpoint(debtEndpoint, params)
 
 		if err == nil && data != nil {
 			mappedData := make([]map[string]interface{}, 0, len(data))
@@ -3316,7 +3103,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				data[i]["nhan_hieu_name"] = brandName
 			}
 		}
-		data = filterProductsByBrands(filterProductsByGroups(data, productGroups), brandFilter, allBrands)
+		data = filterWarehouseProducts(data, productGroups, brandFilter, allBrands)
 	}
 
 	if resource == "customers" && permCtx.AgentType != "private" && scopeType == "assigned" {
@@ -3356,80 +3143,12 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	})
 }
 
-// inventoryTotalStockEndpoint / inventoryTotalWarehouseName are aliases of the
-// canonical definitions in package pkg, the single source of truth shared with
-// the Zalo worker's line-level stock flow. To change the reportable warehouse,
-// edit pkg.InventoryTotalWarehouseName (backend/pkg/inventory_stock.go).
-const inventoryTotalStockEndpoint = pkg.InventoryTotalStockEndpoint
-const inventoryTotalWarehouseName = pkg.InventoryTotalWarehouseName
-
-// normalizeWarehouseName delegates to the shared pkg implementation.
-func normalizeWarehouseName(name string) string {
-	return pkg.NormalizeWarehouseName(name)
-}
-
-// inventoryStockRequestBody builds the documented request body for an inventory
-// endpoint. The total-stock endpoint takes only {"MA_HANG": sku}; any other
-// custom POST endpoint defaults to MA_HANG + limit.
-func inventoryStockRequestBody(inventoryEndpoint, sku string, limit int) map[string]interface{} {
-	switch inventoryEndpoint {
-	case inventoryTotalStockEndpoint:
-		return map[string]interface{}{"MA_HANG": sku}
-	default:
-		return map[string]interface{}{"limit": limit, "MA_HANG": sku}
-	}
-}
-
-// totalStockFromInventoryItems delegates to the shared pkg implementation so
-// the handler and the Zalo worker compute "Kho Tổng" stock identically.
-func totalStockFromInventoryItems(items []map[string]interface{}) float64 {
-	return pkg.TotalStockFromInventoryItems(items)
-}
-
-// fetchInventoryStockForSKU returns the live ERP stock for a single SKU,
-// served from cache when an entry under the configured TTL is available. On a
-// miss it calls Cloudify and extracts the aggregate stock, stores the result in
-// cache and returns it. The endpoint and HTTP method are passed in by the
-// caller so the per-tenant inventory endpoint config is honoured.
-func fetchInventoryStockForSKU(
-	ctx context.Context,
-	client *pkg.CloudifyClient,
-	cache *engine.InventoryStockCache,
-	tenantID, sku, inventoryEndpoint string,
-	usePostMethod bool,
-) (float64, error) {
-	if cached, ok := cache.Get(ctx, tenantID, sku); ok {
-		return cached, nil
-	}
-
-	var skuInventory []map[string]interface{}
-	var err error
-	if usePostMethod {
-		skuInventory, err = client.SearchCustomEndpointWithBody(inventoryEndpoint, inventoryStockRequestBody(inventoryEndpoint, sku, 100))
-	} else {
-		params := map[string]string{}
-		for k, v := range inventoryStockRequestBody(inventoryEndpoint, sku, 100) {
-			params[k] = fmt.Sprintf("%v", v)
-		}
-		skuInventory, err = client.SearchCustomEndpoint(inventoryEndpoint, params)
-	}
+func fetchInventoryStockForSKU(ctx context.Context, client *pkg.CloudifyClient, tenantID, sku string) (float64, error) {
+	totals, err := engine.MainWarehouseStock(ctx, tenantID, client)
 	if err != nil {
 		return 0, err
 	}
-
-	var total float64
-	if inventoryEndpoint == inventoryTotalStockEndpoint {
-		// Official endpoint: take only the KHO-TỔNG row, never sum branches.
-		total = totalStockFromInventoryItems(skuInventory)
-	} else {
-		// Custom (non-total-stock) endpoint: sum stock across returned rows.
-		for _, item := range skuInventory {
-			total += getMapFloat(item, "stock", "ton", "ton_kho", "SO_LUONG_TON_KHA_DUNG", "so_luong_ton_kha_dung", "SO_LUONG_TON_TONG", "so_luong_ton_tong")
-		}
-	}
-
-	cache.Set(ctx, tenantID, sku, total)
-	return total, nil
+	return totals[sku], nil
 }
 
 // maxVariantStockEnrichment caps how many variant SKUs get a live stock lookup
@@ -3446,17 +3165,11 @@ const maxVariantStockEnrichment = 12
 // per-SKU inventory round trips. A per-SKU lookup error is logged and that row is
 // left without ton_kho rather than failing the whole response.
 func enrichVariantsWithLiveStock(ctx context.Context, client *pkg.CloudifyClient, tenantID string, rows []map[string]interface{}) {
-	inventoryEndpoint, usePostMethod := engine.ResolveInventoryEndpoint(ctx, tenantID)
-	stockCache := engine.DefaultInventoryStockCache()
-	enrichVariantRowsWithStock(ctx, client, stockCache, tenantID, inventoryEndpoint, usePostMethod, rows)
+	ctx = engine.WithWarehouseStock(ctx, tenantID)
+	enrichVariantRowsWithStock(ctx, client, tenantID, rows)
 }
 
-// enrichVariantRowsWithStock is the injectable core of enrichVariantsWithLiveStock:
-// the inventory endpoint and stock cache are passed in so the per-row stock logic
-// (cap + per-SKU error tolerance) is unit-testable without the DB-backed endpoint
-// resolution. A per-SKU lookup error is logged and that row is left without
-// ton_kho rather than failing the whole response.
-func enrichVariantRowsWithStock(ctx context.Context, client *pkg.CloudifyClient, cache *engine.InventoryStockCache, tenantID, inventoryEndpoint string, usePostMethod bool, rows []map[string]interface{}) {
+func enrichVariantRowsWithStock(ctx context.Context, client *pkg.CloudifyClient, tenantID string, rows []map[string]interface{}) {
 	for i, row := range rows {
 		if i >= maxVariantStockEnrichment {
 			break
@@ -3465,7 +3178,7 @@ func enrichVariantRowsWithStock(ctx context.Context, client *pkg.CloudifyClient,
 		if strings.TrimSpace(sku) == "" {
 			continue
 		}
-		stock, err := fetchInventoryStockForSKU(ctx, client, cache, tenantID, sku, inventoryEndpoint, usePostMethod)
+		stock, err := fetchInventoryStockForSKU(ctx, client, tenantID, sku)
 		if err != nil {
 			log.Printf("[erp_query] include_stock lookup failed sku=%s: %v", sku, err)
 			continue
