@@ -76,6 +76,8 @@ var sessionStateSuffixes = []string{
 	AwaitingFollowupSuffix,
 	AwaitingOrderCustomerSuffix,
 	AwaitingDebtCustomerSuffix,
+	PromptDeliveredSuffix,
+	PromptUndeliveredSuffix,
 }
 
 // ClearSessionState deletes the base session key AND every sidecar flow-state
@@ -410,4 +412,66 @@ func TakeDebtCustomerState(ctx context.Context, sessionKey string) (DebtCustomer
 		return DebtCustomerState{}, false
 	}
 	return state, true
+}
+
+// PromptDeliveredSuffix / PromptUndeliveredSuffix record, per session work key,
+// whether the ERP handler actually managed to push its Zalo prompt (stock
+// picker, debt period, orders range…) during a Langflow tool call. The Agent
+// answers [RICH_MESSAGE_SENT] either way, so without this receipt the worker
+// suppressed its own reply even when the push had FAILED — the customer saw
+// nothing at all. On failure the handler stores the prompt text so the worker
+// can deliver it itself through the channel it already holds.
+const (
+	PromptDeliveredSuffix   = ":prompt_delivered"
+	PromptUndeliveredSuffix = ":prompt_undelivered"
+)
+
+// promptReceiptTTL only has to outlive one Langflow round-trip.
+const promptReceiptTTL = 10 * time.Minute
+
+// RecordPromptDelivery stores the outcome of a backend-pushed prompt. A nil
+// sendErr marks it delivered; otherwise the prompt text is kept for the worker
+// to resend. No-op without Redis or a session key.
+func RecordPromptDelivery(ctx context.Context, sessionKey, text string, sendErr error) {
+	if db.RedisClient == nil || sessionKey == "" {
+		return
+	}
+	if sendErr == nil {
+		db.RedisClient.Set(ctx, sessionKey+PromptDeliveredSuffix, "1", promptReceiptTTL)
+		db.RedisClient.Del(ctx, sessionKey+PromptUndeliveredSuffix)
+		return
+	}
+	if strings.TrimSpace(text) != "" {
+		db.RedisClient.Set(ctx, sessionKey+PromptUndeliveredSuffix, text, promptReceiptTTL)
+	}
+}
+
+// TakePromptDelivery returns (and clears) the receipt for this turn: whether a
+// prompt was delivered, and any prompt text that failed to send. known=false
+// means no receipt exists at all (e.g. Redis down or an old backend).
+func TakePromptDelivery(ctx context.Context, sessionKey string) (delivered bool, undelivered string, known bool) {
+	if db.RedisClient == nil || sessionKey == "" {
+		return false, "", false
+	}
+	dKey := sessionKey + PromptDeliveredSuffix
+	uKey := sessionKey + PromptUndeliveredSuffix
+	if v, err := db.RedisClient.Get(ctx, dKey).Result(); err == nil && v != "" {
+		delivered = true
+		known = true
+	}
+	if v, err := db.RedisClient.Get(ctx, uKey).Result(); err == nil && v != "" {
+		undelivered = v
+		known = true
+	}
+	db.RedisClient.Del(ctx, dKey, uKey)
+	return delivered, undelivered, known
+}
+
+// ClearPromptDelivery drops any stale receipt before a new Langflow turn so a
+// leftover from a previous turn can never be mistaken for this one.
+func ClearPromptDelivery(ctx context.Context, sessionKey string) {
+	if db.RedisClient == nil || sessionKey == "" {
+		return
+	}
+	db.RedisClient.Del(ctx, sessionKey+PromptDeliveredSuffix, sessionKey+PromptUndeliveredSuffix)
 }

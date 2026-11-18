@@ -201,27 +201,7 @@ func sortedCustomerCodes(set map[string]bool) []string {
 // chat over the direct user thread — mirroring the period-prompt delivery in the
 // debt branch. Only used by the private-bot debt path.
 func sendDebtCustomerPrompt(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext) error {
-	adapter, _, err := loadActiveZaloOAAdapter(tenantID)
-	if err != nil {
-		return err
-	}
-
-	var matchedGroup models.CRMGroup
-	hasGroup := false
-	for _, gp := range permCtx.Groups {
-		if gp.GroupID == "private_bot" {
-			continue
-		}
-		if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
-			hasGroup = true
-			break
-		}
-	}
-
-	if hasGroup {
-		return adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, debtCustomerPromptText)
-	}
-	return adapter.SendMessage(ctx, permCtx.ZaloUserID, debtCustomerPromptText)
+	return sendPrivateDebtPrompt(ctx, tenantID, permCtx, debtCustomerPromptText)
 }
 
 // sendPrivateDebtPrompt delivers an arbitrary plain-text prompt (pick / period)
@@ -229,14 +209,16 @@ func sendDebtCustomerPrompt(ctx context.Context, tenantID string, permCtx *engin
 // CRM group chat over the direct user thread. Mirrors sendPrivateOrdersPrompt so
 // the debt pick/period steps use the same delivery path as the orders flow.
 func sendPrivateDebtPrompt(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, text string) error {
-	adapter, _, err := loadActiveZaloOAAdapter(tenantID)
-	if err != nil {
-		return err
+	adapter, _, err := loadZaloOAAdapterFor(tenantID, permCtx)
+	if err == nil {
+		if groupID := resolveZaloGroupID(tenantID, permCtx); groupID != "" {
+			err = adapter.SendGroupMessage(ctx, groupID, text)
+		} else {
+			err = adapter.SendMessage(ctx, permCtx.ZaloUserID, text)
+		}
 	}
-	if groupID := resolveZaloGroupID(tenantID, permCtx); groupID != "" {
-		return adapter.SendGroupMessage(ctx, groupID, text)
-	}
-	return adapter.SendMessage(ctx, permCtx.ZaloUserID, text)
+	recordPromptDelivery(ctx, permCtx, text, err)
+	return err
 }
 
 // debtCustomerCandidate is one matched customer offered in the pick prompt when
@@ -379,7 +361,7 @@ func scopeApprovedDebtCodes(resolved []string, scopeType string, ownCodes []stri
 // worker's session key so the next free-text turn resumes it. No-op when no
 // active OA channel exists.
 func storeDebtCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, state engine.DebtCustomerState) {
-	_, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
+	_, activeChannel, err := loadZaloOAAdapterFor(tenantID, permCtx)
 	if err != nil || activeChannel == nil {
 		log.Printf("[debt_query] cannot store debt-customer state (no active OA channel): %v", err)
 		return
@@ -392,7 +374,7 @@ func storeDebtCustomerState(ctx context.Context, tenantID string, permCtx *engin
 // takeDebtCustomerState returns and clears any stored debt-by-customer flow
 // state for this staff member's session.
 func takeDebtCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext) (engine.DebtCustomerState, bool) {
-	_, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
+	_, activeChannel, err := loadZaloOAAdapterFor(tenantID, permCtx)
 	if err != nil || activeChannel == nil {
 		return engine.DebtCustomerState{}, false
 	}

@@ -27,6 +27,12 @@ type GroupPermissionContext struct {
 	// to [CustomerCode]. Omitted from old tokens → still decodes.
 	CustomerCodes []string          `json:"customer_codes,omitempty"`
 	AgentType     string            `json:"agent_type"` // "public" | "private"
+	// ChannelID / ZaloGroupID pin the exact chat the question came from (set by
+	// the worker before signing). The ERP handler uses them to push prompts
+	// through the same OA and into the same chat (ZaloGroupID "" = 1:1).
+	// Omitted from old tokens → handlers fall back to legacy guessing.
+	ChannelID   string `json:"channel_id,omitempty"`
+	ZaloGroupID string `json:"zalo_group_id,omitempty"`
 	Groups        []GroupPermission `json:"groups"`
 }
 

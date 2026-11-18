@@ -249,14 +249,16 @@ func orderCustomerSessionTimeout() int {
 // the active Zalo OA adapter, preferring the matched CRM group chat over the
 // direct user thread (mirroring the debt/period prompt delivery).
 func sendPrivateOrdersPrompt(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, text string) error {
-	adapter, _, err := loadActiveZaloOAAdapter(tenantID)
-	if err != nil {
-		return err
+	adapter, _, err := loadZaloOAAdapterFor(tenantID, permCtx)
+	if err == nil {
+		if groupID := resolveZaloGroupID(tenantID, permCtx); groupID != "" {
+			err = adapter.SendGroupMessage(ctx, groupID, text)
+		} else {
+			err = adapter.SendMessage(ctx, permCtx.ZaloUserID, text)
+		}
 	}
-	if groupID := resolveZaloGroupID(tenantID, permCtx); groupID != "" {
-		return adapter.SendGroupMessage(ctx, groupID, text)
-	}
-	return adapter.SendMessage(ctx, permCtx.ZaloUserID, text)
+	recordPromptDelivery(ctx, permCtx, text, err)
+	return err
 }
 
 // sendOrdersCustomerPickPrompt delivers the ENUMERATED multi-match pick prompt
@@ -277,7 +279,7 @@ func sendOrdersCustomerPickPrompt(ctx context.Context, tenantID string, permCtx 
 // worker's session key so the next free-text turn resumes it. No-op when no
 // active OA channel exists.
 func storeOrdersCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, state engine.OrderCustomerState) {
-	_, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
+	_, activeChannel, err := loadZaloOAAdapterFor(tenantID, permCtx)
 	if err != nil || activeChannel == nil {
 		log.Printf("[orders_query] cannot store order-customer state (no active OA channel): %v", err)
 		return
@@ -290,7 +292,7 @@ func storeOrdersCustomerState(ctx context.Context, tenantID string, permCtx *eng
 // takeOrdersCustomerState returns and clears any stored orders-by-customer flow
 // state for this staff member's session.
 func takeOrdersCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext) (engine.OrderCustomerState, bool) {
-	_, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
+	_, activeChannel, err := loadZaloOAAdapterFor(tenantID, permCtx)
 	if err != nil || activeChannel == nil {
 		return engine.OrderCustomerState{}, false
 	}

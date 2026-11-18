@@ -24,18 +24,14 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 	}
 
 	return func(c *gin.Context) {
-		// Log raw body for debugging group chats
-		bodyBytes, err := io.ReadAll(c.Request.Body)
-		if err == nil {
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-			
-			// Append to webhook_debug.log in the workspace root
-			f, fileErr := os.OpenFile("/Users/kariendoan/Downloads/cqa-bbi/webhook_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if fileErr == nil {
-				_, _ = f.WriteString(string(bodyBytes) + "\n---\n")
-				f.Close()
+		// Raw-body logging is opt-in (ZALO_WEBHOOK_DEBUG=true): it dumps every
+		// customer message into the logs, and the old version also appended it to
+		// a developer-machine path that does not exist on the server.
+		if os.Getenv("ZALO_WEBHOOK_DEBUG") == "true" {
+			if bodyBytes, err := io.ReadAll(c.Request.Body); err == nil {
+				c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+				log.Printf("[debug-webhook] raw payload: %s", string(bodyBytes))
 			}
-			log.Printf("[debug-webhook] raw payload: %s", string(bodyBytes))
 		}
 
 		var payload workers.ZaloWebhookPayload

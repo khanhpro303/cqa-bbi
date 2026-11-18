@@ -33,6 +33,34 @@ import (
 // which closes the session and silences the bot mid-flow.
 var disambiguationReplyPattern = regexp.MustCompile(`^\s*(?:[1-9]|SP\d{6}[a-zA-Z_]{0,4})\s*$`)
 
+// productCodePattern matches model/SKU-like tokens: letters followed by digits
+// (FF805, SP000123, LS2), optionally with a trailing letter suffix.
+var productCodePattern = regexp.MustCompile(`(?i)(^|[^\p{L}\d])\p{L}{1,5}\d{2,7}\p{L}{0,4}([^\p{L}\d]|$)`)
+
+// businessKeywords are lowercase phrases that only appear in ERP lookups.
+var businessKeywords = []string{
+	"tồn", "còn hàng", "hết hàng", "giá", "bao nhiêu tiền", "đơn hàng", "công nợ",
+	"mã sp", "mã sản phẩm", "sku", "size", "màu",
+}
+
+// isObviousBusinessQuery reports whether text is unmistakably an ERP question,
+// so the intent classifier can skip the LLM.
+func isObviousBusinessQuery(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+	if productCodePattern.MatchString(t) {
+		return true
+	}
+	for _, kw := range businessKeywords {
+		if strings.Contains(t, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // isDisambiguationReply reports whether the given user text should bypass
 // the CASUAL/HANDOVER intent classifier and be treated as IN_SCOPE because
 // it is structurally a follow-up to an earlier product disambiguation list.
@@ -142,6 +170,57 @@ func selectSystemPrompt(agentType, publicPrompt, internalPrompt string) string {
 		return internalPrompt
 	}
 	return publicPrompt
+}
+
+const (
+	botUnavailableMessage = "Dạ hệ thống tra cứu đang bận nên em chưa trả lời được câu này. Anh/chị vui lòng nhắn lại sau ít phút giúp em ạ."
+	botEmptyAnswerMessage = "Dạ em chưa tìm được câu trả lời phù hợp. Anh/chị nói rõ hơn giúp em (ví dụ mã sản phẩm, màu, size) nhé."
+)
+
+// sendChatReply sends text into the chat the message came from: the Zalo group
+// when there is one, otherwise the 1:1 thread.
+func sendChatReply(ctx context.Context, adapter *channels.ZaloOAAdapter, zaloGroupID, zaloUserID, text string) error {
+	if zaloGroupID != "" {
+		return adapter.SendGroupMessage(ctx, zaloGroupID, text)
+	}
+	return adapter.SendMessage(ctx, zaloUserID, text)
+}
+
+// isLastAttempt reports whether this asynq run is the final one (no retries
+// left). Outside asynq (tests) it returns true so callers never stay silent.
+func isLastAttempt(ctx context.Context) bool {
+	retried, ok1 := asynq.GetRetryCount(ctx)
+	maxRetry, ok2 := asynq.GetMaxRetry(ctx)
+	if !ok1 || !ok2 {
+		return true
+	}
+	return retried >= maxRetry
+}
+
+func truncateForLog(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// loadTenantSettings fetches the requested app settings for a tenant in a
+// single query, keyed by setting_key. Missing keys are simply absent.
+func loadTenantSettings(tenantID string, keys ...string) map[string]models.AppSetting {
+	out := make(map[string]models.AppSetting, len(keys))
+	if db.DB == nil || len(keys) == 0 {
+		return out
+	}
+	var rows []models.AppSetting
+	if err := db.DB.Where("tenant_id = ? AND setting_key IN ?", tenantID, keys).Find(&rows).Error; err != nil {
+		log.Printf("[worker] failed to load tenant settings for %s: %v", tenantID, err)
+		return out
+	}
+	for _, r := range rows {
+		out[r.SettingKey] = r
+	}
+	return out
 }
 
 // HandleZaloWebhookTask processes the webhook task
@@ -369,17 +448,28 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
+		// Load every tenant setting this turn needs in ONE query instead of one
+		// round-trip per key (was 7 sequential SELECTs on every message).
+		tenantSettings := loadTenantSettings(matchedChannel.TenantID,
+			"chatbot_active",
+			"ai_engine_langflow_url",
+			"ai_engine_langflow_token",
+			"ai_engine_langflow_flow_id",
+			"ai_engine_langflow_public_flow_id",
+			"ai_engine_system_prompt",
+			"ai_engine_system_prompt_internal",
+		)
+
 		// Check if chatbot is active (defaults to true if setting is not found)
-		var activeSetting models.AppSetting
 		chatbotActive := true
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "chatbot_active").First(&activeSetting).Error; err == nil {
+		if activeSetting, ok := tenantSettings["chatbot_active"]; ok {
 			chatbotActive = (activeSetting.ValuePlain == "true")
 		}
 
 		// Auto-reply requires BOTH the tenant master switch (chatbot_active) AND the
 		// per-channel flag. AutoReplyEnabled comes from the already-loaded channel (no extra query).
 		if !chatbotActive || !matchedChannel.AutoReplyEnabled {
-			log.Printf("[worker] auto-reply disabled (tenant=%s master=%v channel=%s auto_reply=%v); ignoring message from Zalo user %s",
+			log.Printf("[zalo-drop] reason=auto_reply_off tenant=%s master=%v channel=%s auto_reply=%v sender=%s",
 				matchedChannel.TenantID, chatbotActive, matchedChannel.ID, matchedChannel.AutoReplyEnabled, payload.Sender.ID)
 			return nil
 		}
@@ -410,16 +500,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			meta.SessionTimeoutMessage = cfg.ChatbotSessionTimeoutMessage
 		}
 		if meta.LangflowAPIURL == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_url").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+			if setting, ok := tenantSettings["ai_engine_langflow_url"]; ok && setting.ValuePlain != "" {
 				meta.LangflowAPIURL = setting.ValuePlain
 			} else {
 				meta.LangflowAPIURL = cfg.LangflowAPIURL
 			}
 		}
 		if meta.LangflowAPIKey == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_token").First(&setting).Error; err == nil && len(setting.ValueEncrypted) > 0 {
+			if setting, ok := tenantSettings["ai_engine_langflow_token"]; ok && len(setting.ValueEncrypted) > 0 {
 				decrypted, _ := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
 				meta.LangflowAPIKey = string(decrypted)
 			} else {
@@ -427,16 +515,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 		if meta.LangflowFlowID == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_flow_id").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+			if setting, ok := tenantSettings["ai_engine_langflow_flow_id"]; ok && setting.ValuePlain != "" {
 				meta.LangflowFlowID = setting.ValuePlain
 			} else {
 				meta.LangflowFlowID = cfg.LangflowFlowID
 			}
 		}
 		if meta.LangflowPublicFlowID == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_langflow_public_flow_id").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+			if setting, ok := tenantSettings["ai_engine_langflow_public_flow_id"]; ok && setting.ValuePlain != "" {
 				meta.LangflowPublicFlowID = setting.ValuePlain
 			} else {
 				meta.LangflowPublicFlowID = cfg.LangflowPublicFlowID
@@ -446,8 +532,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// "use the SYSTEM_PROMPT global variable configured inside Langflow",
 		// so there is no env/global fallback here.
 		if meta.SystemPrompt == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_system_prompt").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+			if setting, ok := tenantSettings["ai_engine_system_prompt"]; ok && setting.ValuePlain != "" {
 				meta.SystemPrompt = setting.ValuePlain
 			}
 		}
@@ -457,8 +542,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// back to the public prompt, whose OWN-scope "never ask for identity" rule
 		// is wrong for an internal ALL-scope staff bot.
 		if meta.SystemPromptInternal == "" {
-			var setting models.AppSetting
-			if err := db.DB.Where("tenant_id = ? AND setting_key = ?", matchedChannel.TenantID, "ai_engine_system_prompt_internal").First(&setting).Error; err == nil && setting.ValuePlain != "" {
+			if setting, ok := tenantSettings["ai_engine_system_prompt_internal"]; ok && setting.ValuePlain != "" {
 				meta.SystemPromptInternal = setting.ValuePlain
 			}
 		}
@@ -667,7 +751,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return nil
 			}
 			// Ignore message
-			log.Printf("[worker] ignoring message from %s (no session)", payload.Sender.ID)
+			log.Printf("[zalo-drop] reason=no_session sender=%s key=%s (send the session keyword first)", payload.Sender.ID, sessionKey)
 			return nil
 		}
 
@@ -682,7 +766,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// ignored (no Langflow call, no cost, no usage log). Silent in groups to
 		// avoid spamming verified members with repeated verify DMs.
 		if !isWhitelisted && !isCustomer {
-			log.Printf("[worker] ignoring message from unverified Zalo user %s for tenant %s (active session, not whitelisted/customer)", payload.Sender.ID, matchedChannel.TenantID)
+			log.Printf("[zalo-drop] reason=unverified_sender sender=%s tenant=%s (active session, not whitelisted/customer)", payload.Sender.ID, matchedChannel.TenantID)
 			return nil
 		}
 
@@ -742,12 +826,6 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}()
 
-		// Unverified public user block:
-		// If session is already active, auto-ignore unverified users instead of sending DM instructions
-		if !isWhitelisted && !isCustomer {
-			log.Printf("[worker] auto-ignoring unverified Zalo user %s in active session %s for tenant %s", payload.Sender.ID, activeSessionID, matchedChannel.TenantID)
-			return nil
-		}
 
 		// Real-time intent classification for active sessions. Skip it when the
 		// previous turn was a backend-pushed prompt awaiting this reply: the
@@ -785,7 +863,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		if intent == "CASUAL" {
-			log.Printf("[worker] message classified as CASUAL. Closing session and passing through (auto-ignoring).")
+			log.Printf("[zalo-drop] reason=casual sender=%s text=%q (session closed)", payload.Sender.ID, truncateForLog(userText, 80))
 			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
 			return nil
 		}
@@ -819,6 +897,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Carry the full mã KH set (owners of multiple shops) into the signed token
 		// so scope="own" aggregates across shops. CustomerCode remains the primary.
 		permCtx.CustomerCodes = customerCodes
+		// Pin the exact chat so ERP-side pushed prompts go out through this OA
+		// and into this conversation (group or 1:1), and land under workKey.
+		permCtx.ChannelID = matchedChannel.ID
+		permCtx.ZaloGroupID = matchedGroup.ZaloGroupID
 
 		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
 		// presented numbered menu (inventory ten_dong_bo_web options). On a valid
@@ -1368,9 +1450,23 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			langflowSessionID = activeSessionID + ":" + payload.Sender.ID
 		}
 
+		// Drop any stale prompt-delivery receipt so this turn's [RICH_MESSAGE_SENT]
+		// is judged only on what the ERP handler did during THIS Langflow call.
+		engine.ClearPromptDelivery(ctx, workKey)
+
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
 		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, meta.LangflowAPIURL, meta.LangflowAPIKey, flowIDToUse, customerCode, permissionToken, systemPromptToUse)
 		if err != nil {
+			// Retry transient failures, but never leave the customer in silence:
+			// on the last attempt tell them the bot could not answer.
+			if isLastAttempt(ctx) {
+				log.Printf("[zalo-drop] reason=langflow_error final_attempt=true sender=%s flow=%s err=%v", payload.Sender.ID, flowIDToUse, err)
+				if sendErr := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botUnavailableMessage); sendErr != nil {
+					log.Printf("[worker] failed to send langflow-error fallback: %v", sendErr)
+				}
+				return fmt.Errorf("langflow error: %v: %w", err, asynq.SkipRetry)
+			}
+			log.Printf("[worker] langflow error (will retry) sender=%s flow=%s: %v", payload.Sender.ID, flowIDToUse, err)
 			return fmt.Errorf("langflow error: %w", err)
 		}
 		replyText := lfRes.Text
@@ -1380,8 +1476,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// matchedGroup.ID is "" for 1:1 chats; whitelistRec.Name is "" for customers.
 		go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, agentType, matchedGroup.ID, lfRes, systemPromptToUse+userText, lfRes.Text)
 
-		if replyText == "" {
-			log.Printf("[worker] langflow returned empty response")
+		if strings.TrimSpace(replyText) == "" {
+			log.Printf("[zalo-drop] reason=langflow_empty sender=%s flow=%s", payload.Sender.ID, flowIDToUse)
+			if sendErr := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botEmptyAnswerMessage); sendErr != nil {
+				log.Printf("[worker] failed to send empty-answer fallback: %v", sendErr)
+			}
 			return nil
 		}
 
@@ -1391,7 +1490,21 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Agent's prose so the customer doesn't receive a duplicate — often
 		// hallucinated — answer alongside the backend-pushed prompt.
 		if strings.Contains(replyText, "[RICH_MESSAGE_SENT]") {
-			log.Printf("[worker] suppressing Langflow reply: backend already sent rich message (sentinel)")
+			// The Agent says "sent" whether or not the ERP handler's push to Zalo
+			// actually succeeded. Check the handler's receipt: if the push failed,
+			// deliver the prompt ourselves through the channel we already hold.
+			delivered, undelivered, known := engine.TakePromptDelivery(ctx, workKey)
+			switch {
+			case delivered:
+				log.Printf("[worker] suppressing Langflow reply: backend already sent rich message (sentinel, receipt ok)")
+			case undelivered != "":
+				log.Printf("[worker] sentinel but backend push FAILED; resending prompt via worker channel (sender=%s)", payload.Sender.ID)
+				if sendErr := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, undelivered); sendErr != nil {
+					return fmt.Errorf("failed to resend undelivered prompt to Zalo: %w", sendErr)
+				}
+			case !known:
+				log.Printf("[worker] suppressing Langflow reply on sentinel without delivery receipt (legacy path?) sender=%s", payload.Sender.ID)
+			}
 			// The backend just pushed a prompt expecting the customer's next
 			// message as the answer (debt period, orders date range, inventory
 			// dòng-vs-SKU). Mark the session so that reply — which arrives as
@@ -1875,6 +1988,13 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string) (strin
 	//    short tokens like "1"/"dạ"/"ok" as CASUAL, which would close the
 	//    session and drop the customer's actual pick on the floor.
 	if isDisambiguationReply(message) {
+		return "IN_SCOPE", nil
+	}
+	// 0b. Fast-path: an obvious ERP lookup (a product/model code like "FF805",
+	//     or a stock/price/order/debt keyword) is IN_SCOPE without paying for
+	//     an LLM call — and can never be mis-labelled CASUAL, which would close
+	//     the session and silently drop the question.
+	if isObviousBusinessQuery(message) {
 		return "IN_SCOPE", nil
 	}
 
