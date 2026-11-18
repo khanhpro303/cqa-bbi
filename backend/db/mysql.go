@@ -61,6 +61,8 @@ func AutoMigrate() error {
 		&models.Channel{},
 		&models.Conversation{},
 		&models.Message{},
+		&models.ChatSession{},
+		&models.ChatCustomerProfile{},
 		&models.ServiceResolution{},
 		&models.MessengerLabelState{},
 		&models.MessengerLabelSnapshot{},

@@ -79,6 +79,16 @@ type Config struct {
 	AstraDBCollection        string
 	AstraDBProductCollection string
 
+	// AstraRawChatHistoryWrite keeps the legacy per-message write of every
+	// chat turn into AstraDBCollection from Go. The Langflow flow's own
+	// HistoryStore node writes the same turns, so this only doubled writes and
+	// embedding calls. Default OFF; MySQL is now the source of truth.
+	AstraRawChatHistoryWrite bool
+
+	// Chat memory: per-session summaries + customer profiles built from the
+	// MySQL transcript, with a swappable vector index over the summaries.
+	ChatMemory ChatMemoryConfig
+
 	// ERPEmbeddingFuzzyEnabled gates the Astra hybrid (label) search used to
 	// resolve product variants. Defaults ON; set ERP_EMBEDDING_FUZZY_ENABLED
 	// to "false" to disable.
@@ -147,6 +157,8 @@ func Load() (*Config, error) {
 		AstraDBCollection:            getEnv("ASTRA_DB_COLLECTION", "zalo_chat_history"),
 		AstraDBProductCollection:     getEnv("ASTRA_DB_PRODUCT_COLLECTION", "erp_product_bbi"),
 		ERPEmbeddingFuzzyEnabled:     !strings.EqualFold(getEnv("ERP_EMBEDDING_FUZZY_ENABLED", "true"), "false"),
+		AstraRawChatHistoryWrite:     strings.EqualFold(getEnv("ASTRA_RAW_CHAT_HISTORY_WRITE", "false"), "true"),
+		ChatMemory:                   loadChatMemoryConfig(),
 		ChatbotSessionKeyword:        getEnv("CHATBOT_SESSION_KEYWORD", "chào bull"),
 		ChatbotSessionEndKeyword:     getEnv("CHATBOT_SESSION_END_KEYWORD", "tạm biệt"),
 		ChatbotSessionWelcomeMessage: getEnv("CHATBOT_SESSION_WELCOME_MESSAGE", "Chào bạn, tôi đã sẵn sàng!"),

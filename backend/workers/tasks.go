@@ -693,6 +693,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			defer engine.ReleaseSessionLock(ctx, lockKey, lockToken)
 		}
 
+		// Display name of the sender for chat memory.
+		memSenderName := ""
+		if isCustomer {
+			memSenderName = customerRec.Name
+		} else if isWhitelisted {
+			memSenderName = whitelistRec.Name
+		}
+
 		// Check session
 		var activeSessionID string
 		if db.RedisClient != nil {
@@ -745,6 +753,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 						_, _ = asynqClient.Enqueue(timeoutTask, asynq.ProcessIn(time.Duration(meta.SessionTimeout)*time.Minute))
 					}
 				}
+				// Record the trigger message; the welcome sent with this ctx
+				// lands in the same chat-memory session.
+				ctx = startChatMemoryTurn(ctx, chatMemoryTurn(matchedChannel.TenantID, matchedChannel.ID, newSessionID,
+					payload.Sender.ID, matchedGroup.ZaloGroupID, matchedGroup.Name, memSenderName, customerCode,
+					isWhitelisted && matchedGroup.ZaloGroupID == ""), payload, userText, memSenderName)
 				// Send welcome message
 				var err error
 				if matchedGroup.ZaloGroupID != "" {
@@ -777,6 +790,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[zalo-drop] reason=unverified_sender sender=%s tenant=%s (active session, not whitelisted/customer)", payload.Sender.ID, matchedChannel.TenantID)
 			return nil
 		}
+
+		// Record this message in the session's chat memory (MySQL). Replies
+		// sent with ctx from here on, including the goodbye, are recorded too.
+		memTurn := chatMemoryTurn(matchedChannel.TenantID, matchedChannel.ID, activeSessionID,
+			payload.Sender.ID, matchedGroup.ZaloGroupID, matchedGroup.Name, memSenderName, customerCode,
+			isWhitelisted && matchedGroup.ZaloGroupID == "")
+		ctx = startChatMemoryTurn(ctx, memTurn, payload, userText, memSenderName)
 
 		// Has session. Check for end word.
 		var isEndTriggered bool
@@ -822,18 +842,22 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
-		// Save user message to Astra DB asynchronously
-		go func() {
-			err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, engine.ChatMessage{
-				ZaloUserID: payload.Sender.ID,
-				SessionID:  activeSessionID,
-				Role:       "user",
-				Content:    payload.Message.Text,
-			}, astraEmbedder)
-			if err != nil {
-				log.Printf("[worker] failed to save user message to Astra DB: %v", err)
-			}
-		}()
+		// Legacy raw history in Astra, read by the flow's history retriever.
+		// Off by default: the flow's own history store already writes each
+		// turn, and chat memory keeps the full transcript in MySQL.
+		if cfg.AstraRawChatHistoryWrite {
+			go func() {
+				err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, engine.ChatMessage{
+					ZaloUserID: payload.Sender.ID,
+					SessionID:  activeSessionID,
+					Role:       "user",
+					Content:    payload.Message.Text,
+				}, astraEmbedder)
+				if err != nil {
+					log.Printf("[worker] failed to save user message to Astra DB: %v", err)
+				}
+			}()
+		}
 
 		// A pending order draft waits for this sender's "1"/"2". Settle it here,
 		// before the intent classifier, which would read "ok" as small talk.
@@ -943,6 +967,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// the private staff flow, the public/OWN-scope prompt otherwise. Empty maps
 		// to the flow's own SYSTEM_PROMPT global (see selectSystemPrompt).
 		systemPromptToUse := selectSystemPrompt(agentType, meta.SystemPrompt, meta.SystemPromptInternal)
+		systemPromptToUse = appendChatMemoryContext(ctx, cfg, systemPromptToUse, memTurn)
 		if systemPromptToUse != "" {
 			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
 		}
@@ -1587,18 +1612,21 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
-		// Save assistant reply to Astra DB asynchronously
-		go func() {
-			err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, engine.ChatMessage{
-				ZaloUserID: payload.Sender.ID,
-				SessionID:  activeSessionID,
-				Role:       "assistant",
-				Content:    replyText,
-			}, astraEmbedder)
-			if err != nil {
-				log.Printf("[worker] failed to save assistant message to Astra DB: %v", err)
-			}
-		}()
+		// Legacy raw history in Astra (see the user message above). The reply
+		// is recorded in chat memory by the adapter when it is sent.
+		if cfg.AstraRawChatHistoryWrite {
+			go func() {
+				err := engine.SaveChatMessage(context.Background(), meta.AstraDBAPIEndpoint, meta.AstraDBToken, meta.AstraDBKeyspace, meta.AstraDBCollection, engine.ChatMessage{
+					ZaloUserID: payload.Sender.ID,
+					SessionID:  activeSessionID,
+					Role:       "assistant",
+					Content:    replyText,
+				}, astraEmbedder)
+				if err != nil {
+					log.Printf("[worker] failed to save assistant message to Astra DB: %v", err)
+				}
+			}()
+		}
 
 		// 3. Send message back to Zalo
 		var sendErr error
@@ -2045,79 +2073,16 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string) (strin
 		return "IN_SCOPE", nil
 	}
 
-	// 1. Get AI provider from tenant settings
-	provider := "claude"
-	var providerSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_provider'", tenantID).First(&providerSetting).Error; err == nil && providerSetting.ValuePlain != "" {
-		provider = providerSetting.ValuePlain
-	}
-
-	// 2. Get API key from tenant settings (per provider)
-	var setting models.AppSetting
-	keyFound := false
-	for _, key := range ai.ProviderAPIKeySettingKeys(provider) {
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&setting).Error; err == nil {
-			keyFound = true
-			break
-		}
-	}
-
+	// 1. Resolve the tenant's AI provider (settings → key → model → base URL).
 	cfg, _ := config.Load()
-	apiKey := ""
-	if keyFound {
-		if setting.ValueEncrypted != nil && len(setting.ValueEncrypted) > 0 {
-			decrypted, err := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
-			if err != nil {
-				return "IN_SCOPE", fmt.Errorf("failed to decrypt API key: %w", err)
-			}
-			apiKey = string(decrypted)
-		} else {
-			apiKey = setting.ValuePlain
-		}
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	if err != nil {
+		return "IN_SCOPE", err
 	}
-
-	// If no API key found, fallback to global configs (if any) or skip
-	if apiKey == "" {
-		if provider == "openai" {
-			apiKey = cfg.LangflowAPIKey
-		}
-	}
-
-	if apiKey == "" {
+	if resolved.Client == nil {
 		return "IN_SCOPE", nil // Fallback if no API key configured
 	}
-
-	// 3. Get model from settings (fallback to provider defaults)
-	model := "claude-haiku-4-5"
-	if provider == "gemini" {
-		model = "gemini-2.0-flash"
-	} else if provider == "openai" {
-		model = "gpt-5-mini"
-	}
-	var modelSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_model'", tenantID).First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
-		model = modelSetting.ValuePlain
-	}
-
-	// 4. Get base URL
-	var baseURL string
-	var baseURLSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_base_url'", tenantID).First(&baseURLSetting).Error; err == nil {
-		baseURL = baseURLSetting.ValuePlain
-	}
-
-	// 5. Initialize provider client
-	var aiClient ai.AIProvider
-	switch provider {
-	case "claude":
-		aiClient = ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL)
-	case "gemini":
-		aiClient = ai.NewGeminiProvider(apiKey, model, baseURL)
-	case "openai":
-		aiClient = ai.NewOpenAIProvider(apiKey, model, baseURL)
-	default:
-		return "IN_SCOPE", fmt.Errorf("unsupported AI provider: %s", provider)
-	}
+	aiClient := resolved.Client
 
 	// Define system prompt
 	systemPrompt := `Bạn là trợ lý lọc tin nhắn thông minh cho Chatbot doanh nghiệp BBI.

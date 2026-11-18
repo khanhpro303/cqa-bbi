@@ -195,6 +195,9 @@ func (s *IngestService) upsertMessage(tx *gorm.DB, tenantID, conversationID stri
 	if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return false, result.Error
 	}
+	if hasLiveTwin(tx, tenantID, conversationID, msg) {
+		return false, nil
+	}
 
 	attachmentsJSON, _ := json.Marshal(msg.Attachments)
 	rawDataJSON, _ := json.Marshal(msg.RawData)
@@ -217,4 +220,27 @@ func (s *IngestService) upsertMessage(tx *gorm.DB, tenantID, conversationID stri
 		return false, err
 	}
 	return true, nil
+}
+
+// LiveTwinWindow is how far apart in time a synced message and the same
+// message recorded live by the chatbot worker may be and still count as one.
+const LiveTwinWindow = 2 * time.Minute
+
+// hasLiveTwin reports whether the chatbot worker already recorded this message
+// live (raw_data.cqa_live = true) under a different external id. Zalo's
+// conversation API and webhook/send responses are expected to share message
+// ids, but if they ever differ this keeps the sync from storing every chatbot
+// turn twice. Only live-recorded rows are matched, so other channels and
+// ordinary repeated messages are unaffected.
+func hasLiveTwin(tx *gorm.DB, tenantID, conversationID string, msg channels.SyncedMessage) bool {
+	if msg.Content == "" || msg.SentAt.IsZero() {
+		return false
+	}
+	var count int64
+	err := tx.Model(&models.Message{}).
+		Where("tenant_id = ? AND conversation_id = ? AND sender_type = ? AND content = ?", tenantID, conversationID, msg.SenderType, msg.Content).
+		Where("sent_at BETWEEN ? AND ?", msg.SentAt.Add(-LiveTwinWindow), msg.SentAt.Add(LiveTwinWindow)).
+		Where("JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_live')) = 'true'").
+		Count(&count).Error
+	return err == nil && count > 0
 }

@@ -32,9 +32,19 @@ type ChannelStore struct {
 // persisted to (and coordinated through) the given channel row. Every adapter
 // for a stored channel must be built here; a bare adapter would rotate tokens
 // in memory only and silently invalidate the channel's stored refresh token.
+// SentObserver, when set at startup, is told about every message an adapter
+// built by NewAdapter delivers, with the channel it belongs to. The chat
+// memory recorder uses it to store chatbot replies with Zalo's message id.
+var SentObserver func(ctx context.Context, channelID string, msg channels.SentMessage)
+
 func NewAdapter(channelID string, creds channels.ZaloOACredentials, encryptionKey string) *channels.ZaloOAAdapter {
 	adapter := channels.NewZaloOAAdapter(creds)
 	adapter.SetTokenStore(ChannelStore{ChannelID: channelID, EncryptionKey: encryptionKey})
+	if observer := SentObserver; observer != nil {
+		adapter.SetSentObserver(func(ctx context.Context, msg channels.SentMessage) {
+			observer(ctx, channelID, msg)
+		})
+	}
 	return adapter
 }
 

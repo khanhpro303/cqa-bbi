@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -270,6 +272,9 @@ func tenantTimezone(tenantID string) string {
 	return "Asia/Ho_Chi_Minh"
 }
 
+// TenantTimezone is tenantTimezone for other packages.
+func TenantTimezone(tenantID string) string { return tenantTimezone(tenantID) }
+
 // loadCronJobs loads active jobs with cron schedules and registers them.
 func (s *Scheduler) loadCronJobs() {
 	var jobs []models.Job
@@ -371,7 +376,11 @@ func (s *Scheduler) SyncEngine() *SyncEngine {
 	return s.syncEngine
 }
 
-// cleanupAstraDBChatHistory removes old chat logs from Astra DB daily.
+// cleanupAstraDBChatHistory removes old raw chat turns from Astra DB daily.
+// Rows written by SaveChatMessage keep their time in metadata.created_at
+// (unix seconds); a top-level created_at is matched too for older rows.
+// deleteMany removes a limited number of documents per call and reports
+// status.moreData, so it is called until nothing is left.
 func (s *Scheduler) cleanupAstraDBChatHistory() {
 	if s.cfg.AstraDBAPIEndpoint == "" || s.cfg.AstraDBToken == "" || s.cfg.AstraDBCollection == "" {
 		return
@@ -381,52 +390,81 @@ func (s *Scheduler) cleanupAstraDBChatHistory() {
 	if retentionDays <= 0 {
 		retentionDays = 30 // fallback
 	}
-
 	cutoff := time.Now().AddDate(0, 0, -retentionDays).Unix()
 
-	url := fmt.Sprintf("%s/api/json/v1/%s/%s", s.cfg.AstraDBAPIEndpoint, s.cfg.AstraDBKeyspace, s.cfg.AstraDBCollection)
+	keyspace := s.cfg.AstraDBKeyspace
+	if keyspace == "" {
+		keyspace = "default_keyspace"
+	}
+	url := fmt.Sprintf("%s/api/json/v1/%s/%s", strings.TrimRight(s.cfg.AstraDBAPIEndpoint, "/"), keyspace, s.cfg.AstraDBCollection)
 
-	// Build the JSON payload to delete all documents older than the cutoff
-	payload := map[string]interface{}{
+	deleted, err := astraDeleteOlderThan(url, s.cfg.AstraDBToken, cutoff)
+	if err != nil {
+		log.Printf("[scheduler] Astra DB chat history cleanup stopped after %d deletions: %v", deleted, err)
+		return
+	}
+	log.Printf("[scheduler] Astra DB chat history cleanup removed %d documents older than %d days (cutoff: %v)", deleted, retentionDays, time.Unix(cutoff, 0))
+}
+
+// astraDeleteOlderThan runs deleteMany on url until no matching document is
+// left and returns how many were removed.
+func astraDeleteOlderThan(url, token string, cutoff int64) (int, error) {
+	body, err := json.Marshal(map[string]interface{}{
 		"deleteMany": map[string]interface{}{
 			"filter": map[string]interface{}{
-				"created_at": map[string]interface{}{
-					"$lt": cutoff,
+				"$or": []interface{}{
+					map[string]interface{}{"metadata.created_at": map[string]interface{}{"$lt": cutoff}},
+					map[string]interface{}{"created_at": map[string]interface{}{"$lt": cutoff}},
 				},
 			},
 		},
-	}
-
-	bodyBytes, err := json.Marshal(payload)
+	})
 	if err != nil {
-		log.Printf("[scheduler] failed to marshal Astra DB cleanup payload: %v", err)
-		return
+		return 0, err
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		log.Printf("[scheduler] failed to create Astra DB cleanup request: %v", err)
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Token", s.cfg.AstraDBToken)
-
 	client := &http.Client{Timeout: 50 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[scheduler] Astra DB cleanup request failed: %v", err)
-		return
+	total := 0
+	for i := 0; i < 1000; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			cancel()
+			return total, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Token", token)
+		resp, err := client.Do(req)
+		if err != nil {
+			cancel()
+			return total, err
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		cancel()
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			return total, fmt.Errorf("status %d: %s", resp.StatusCode, string(raw))
+		}
+		var out struct {
+			Status struct {
+				DeletedCount int  `json:"deletedCount"`
+				MoreData     bool `json:"moreData"`
+			} `json:"status"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return total, fmt.Errorf("decode response: %w", err)
+		}
+		if len(out.Errors) > 0 {
+			return total, fmt.Errorf("astra error: %s", out.Errors[0].Message)
+		}
+		if out.Status.DeletedCount > 0 {
+			total += out.Status.DeletedCount
+		}
+		if !out.Status.MoreData {
+			return total, nil
+		}
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		log.Printf("[scheduler] Astra DB cleanup returned error status %d", resp.StatusCode)
-		return
-	}
-
-	log.Printf("[scheduler] successfully cleaned up Astra DB chat history older than %d days (cutoff: %v)", retentionDays, time.Unix(cutoff, 0))
+	return total, nil
 }
