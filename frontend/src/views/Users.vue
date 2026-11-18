@@ -362,6 +362,7 @@ import { useChannelStore } from '../stores/channels'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useI18n } from 'vue-i18n'
+import { useTenantEvents } from '../composables/useTenantEvents'
 
 const { t } = useI18n()
 
@@ -428,8 +429,21 @@ onMounted(async () => {
   await fetchWhitelist()
 })
 
-async function fetchWhitelist() {
-  loadingWhitelist.value = true
+// Live updates: when an employee pairs their Zalo account ("verify <code>"),
+// the backend signals over SSE and we refresh the list without a page reload.
+useTenantEvents(() => tenantId.value, async (event) => {
+  if (event !== 'zalo_whitelist_updated') return
+  const wasPending = activeInvite.value?.status === 'pending' ? activeInvite.value.id : null
+  await fetchWhitelist(true)
+  if (wasPending && whitelist.value.some((w) => w.id === wasPending && w.status === 'active')) {
+    qrDialog.value = false
+    activeInvite.value = null
+    showSnack(t('users_whitelist_toast_linked_live'), 'success')
+  }
+})
+
+async function fetchWhitelist(silent = false) {
+  if (!silent) loadingWhitelist.value = true
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/zalo-whitelist`)
     whitelist.value = data

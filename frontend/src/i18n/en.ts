@@ -698,6 +698,7 @@ export default {
   users_reset_password_title: 'Reset Password — {name}',
   users_reset_password_field: 'New Password',
   users_reset_password_btn: 'Reset',
+  users_whitelist_toast_linked_live: 'Staff member verified their Zalo account',
   users_whitelist_toast_load_err: 'Failed to load Zalo whitelist',
   users_whitelist_toast_add_direct_success: 'Staff member added directly to whitelist',
   users_whitelist_confirm_delete: 'Are you sure you want to remove this staff member from the Zalo whitelist?',

@@ -282,6 +282,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 			// Zalo Whitelist
 			tenant.GET("/zalo-whitelist", handlers.ListZaloWhitelist)
+			tenant.GET("/events", handlers.StreamTenantEvents)
 			tenant.POST("/zalo-whitelist", middleware.RequireRole("owner", "admin"), handlers.AddZaloWhitelist)
 			tenant.POST("/zalo-whitelist/invite", middleware.RequireRole("owner", "admin"), handlers.InviteZaloWhitelist)
 			tenant.DELETE("/zalo-whitelist/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteZaloWhitelist)

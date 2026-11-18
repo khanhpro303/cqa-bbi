@@ -21,6 +21,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"github.com/vietbui/chat-quality-agent/realtime"
 )
 
 // disambiguationReplyPattern matches the short replies the Langflow agent's
@@ -301,6 +302,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					whitelistRec.UpdatedAt = time.Now()
 
 					if err := db.DB.Save(&whitelistRec).Error; err == nil {
+						// Let open admin screens flip "pending" to "linked" without a reload.
+						realtime.Publish(ctx, matchedChannel.TenantID, realtime.EventZaloWhitelistUpdated)
 						// Send success message back to Zalo
 						successMsg := "Xác thực thành công! Tài khoản Zalo của bạn đã được thêm vào danh sách nhân viên nội bộ được phép sử dụng Chatbot."
 						_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
