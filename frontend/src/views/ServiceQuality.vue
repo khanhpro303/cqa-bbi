@@ -399,15 +399,12 @@
                 </blockquote>
                 <span v-else class="text-medium-emphasis"> {{ t('sq_order_evidence_unavailable') }}</span>
               </div>
-              <div v-if="order.confirmation_message_id" class="text-caption text-medium-emphasis">{{ t('sq_order_message_id') }}: {{ order.confirmation_message_id }}</div>
               <div v-if="getOrderAmountEvidence(order)" class="text-body-2 mt-2 order-evidence">
                 <strong>{{ t('sq_order_amount_evidence') }}:</strong>
                 <blockquote class="order-evidence-quote my-1 pa-2 rounded">
                   {{ getOrderAmountEvidence(order) }}
                 </blockquote>
               </div>
-              <div v-if="order.amount_message_id" class="text-caption text-medium-emphasis">{{ t('sq_order_message_id') }}: {{ order.amount_message_id }}</div>
-              <div v-if="!order.confirmation_message_id && order.evidence_message_ids?.length" class="text-caption text-medium-emphasis">{{ t('sq_order_saved_ids') }}: {{ order.evidence_message_ids.join(', ') }}</div>
             </v-card>
             <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_lead_quality') }}</div>
             <v-alert v-if="selectedRow.insight.lead_quality" :type="leadAlertType(selectedRow.insight.lead_quality.level)" variant="tonal" density="compact">
@@ -888,48 +885,124 @@ function isGeneratedOrderRef(ref?: string): boolean {
   return ref.startsWith('cqa_')
 }
 
+function isRealOrderConfirmation(text: string): boolean {
+  if (!text) return false
+  const lower = text.toLowerCase()
+  return /nhận đơn|lên đơn|tạo đơn|chốt đơn|đặt hàng|đơn của|mã vận đơn|tracking/i.test(lower)
+}
+
 function getOrderConfirmationEvidence(order: OrderOutcome): string {
-  if (order.confirmation_evidence) {
-    return order.confirmation_evidence
+  // If lead_quality has real order confirmation evidence, prefer it over an old deposit or missing text
+  const leadEvidence = selectedRow.value?.insight?.lead_quality?.evidence
+  if (leadEvidence && isRealOrderConfirmation(leadEvidence)) {
+    return leadEvidence.trim()
+  }
+
+  if (order.confirmation_evidence && order.confirmation_evidence.trim()) {
+    return order.confirmation_evidence.trim()
   }
   if (order.confirmation_message_id && detailMessages.value[order.confirmation_message_id]?.content) {
-    return detailMessages.value[order.confirmation_message_id].content
+    return detailMessages.value[order.confirmation_message_id].content.trim()
   }
   if (order.evidence_message_ids?.length) {
     for (const id of order.evidence_message_ids) {
       if (detailMessages.value[id]?.content) {
-        return detailMessages.value[id].content
+        return detailMessages.value[id].content.trim()
       }
     }
   }
-  if (selectedRow.value?.insight?.lead_quality?.evidence) {
-    return selectedRow.value.insight.lead_quality.evidence
+  if (leadEvidence) {
+    return leadEvidence.trim()
   }
   return ''
 }
 
 function getOrderAmountEvidence(order: OrderOutcome): string {
   if (order.amount_evidence) {
-    return order.amount_evidence
+    return order.amount_evidence.trim()
   }
   if (order.amount_message_id && detailMessages.value[order.amount_message_id]?.content) {
-    return detailMessages.value[order.amount_message_id].content
+    return detailMessages.value[order.amount_message_id].content.trim()
   }
   return ''
+}
+
+function parseMoneyText(text: string): { amount: number; isDeposit: boolean } | null {
+  if (!text) return null
+  const clean = text.toLowerCase()
+
+  const isDeposit = /(?:cọc|đặt cọc|chuyển cọc)/i.test(clean)
+
+  // 1. Numbers with dot/comma thousand separators: e.g. 2.790.000đ, 2.790.000, 450,000 ₫
+  const sepMatch = clean.match(/(?:tổng|đơn|hết|tiền|giá|cọc)?\s*([0-9]{1,3}(?:[.,][0-9]{3})+)\s*(?:₫|đ|vnd)?/i)
+  if (sepMatch && sepMatch[1]) {
+    const digits = sepMatch[1].replace(/[.,]/g, '')
+    const val = parseInt(digits, 10)
+    if (!isNaN(val) && val > 0) {
+      return { amount: val, isDeposit }
+    }
+  }
+
+  // 2. Numbers with k / nghìn / ngàn: e.g. 200k, 200 nghìn, 1500k
+  const kMatch = clean.match(/([0-9]+(?:[.,][0-9]+)?)\s*(?:k|nghìn|ngàn)\b/i)
+  if (kMatch && kMatch[1]) {
+    const num = parseFloat(kMatch[1].replace(',', '.'))
+    if (!isNaN(num) && num > 0) {
+      return { amount: Math.round(num * 1000), isDeposit }
+    }
+  }
+
+  // 3. Numbers with tr / triệu: e.g. 2.79tr, 2 triệu
+  const trMatch = clean.match(/([0-9]+(?:[.,][0-9]+)?)\s*(?:tr|triệu)\b/i)
+  if (trMatch && trMatch[1]) {
+    const num = parseFloat(trMatch[1].replace(',', '.'))
+    if (!isNaN(num) && num > 0) {
+      return { amount: Math.round(num * 1000000), isDeposit }
+    }
+  }
+
+  // 4. Standalone numbers with đ/vnd: e.g. 50000đ, 250000 vnđ
+  const plainMatch = clean.match(/([0-9]{4,10})\s*(?:₫|đ|vnd)\b/i)
+  if (plainMatch && plainMatch[1]) {
+    const val = parseInt(plainMatch[1], 10)
+    if (!isNaN(val) && val > 0) {
+      return { amount: val, isDeposit }
+    }
+  }
+
+  return null
 }
 
 function formatOrderTotal(order: OrderOutcome): string {
   if (order.value_vnd != null) {
     return new Intl.NumberFormat('vi-VN').format(order.value_vnd) + ' ₫'
   }
-  const evidence = getOrderConfirmationEvidence(order) || getOrderAmountEvidence(order)
-  if (evidence) {
-    const match = evidence.match(/(?:tổng|đơn|hết|tiền|giá|bằng)?\s*([0-9][0-9.,\s]{0,20})\s*(?:₫|đ|vnd|k\b)/i)
-    if (match && match[1]) {
-      const rawDigits = match[1].trim()
-      return `${t('sq_order_total_unknown')} ${t('sq_order_detected_amount', { amount: rawDigits + 'đ' })}`
+
+  const candidates = [
+    getOrderAmountEvidence(order),
+    selectedRow.value?.insight?.lead_quality?.evidence,
+    getOrderConfirmationEvidence(order),
+  ].filter(Boolean) as string[]
+
+  let depositAmount: number | null = null
+
+  for (const text of candidates) {
+    const parsed = parseMoneyText(text)
+    if (parsed) {
+      if (!parsed.isDeposit) {
+        const formatted = new Intl.NumberFormat('vi-VN').format(parsed.amount) + ' ₫'
+        return `${t('sq_order_total_unknown')} ${t('sq_order_detected_amount', { amount: formatted })}`
+      } else if (depositAmount == null) {
+        depositAmount = parsed.amount
+      }
     }
   }
+
+  if (depositAmount != null) {
+    const formatted = new Intl.NumberFormat('vi-VN').format(depositAmount) + ' ₫'
+    return `${t('sq_order_total_unknown')} (${formatted} cọc)`
+  }
+
   return t('sq_order_total_unknown')
 }
 

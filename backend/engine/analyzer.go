@@ -958,7 +958,11 @@ func validateOrderOutcomes(conversationID string, proposals []ai.OrderOutcomeIns
 			continue
 		}
 		if status == "confirmed" && !validOrderConfirmation(*confirmation, messages) {
-			continue
+			if validOrderReview(*confirmation) {
+				status = "review"
+			} else {
+				continue
+			}
 		}
 		if (status == "cancelled" || status == "refunded") && !validOrderTransition(status, *confirmation) {
 			continue
