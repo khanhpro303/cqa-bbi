@@ -304,6 +304,7 @@ func (z *ZaloOAAdapter) FetchRecentConversations(ctx context.Context, since time
 			break
 		}
 
+		var pageTimes []time.Time
 		for _, item := range data {
 			conv, ok := item.(map[string]interface{})
 			if !ok {
@@ -331,8 +332,14 @@ func (z *ZaloOAAdapter) FetchRecentConversations(ctx context.Context, since time
 				lastMsgAt = time.UnixMilli(int64(ts))
 			}
 
-			// Don't filter by since here — let DB dedup handle it.
-			// Zalo listrecentchat is already sorted newest first and max 10 per page.
+			pageTimes = append(pageTimes, lastMsgAt)
+
+			// A conversation whose last message is older than `since` has
+			// nothing new to sync; reading its history again only spends the
+			// OA's API quota. Conversations without a timestamp are kept.
+			if !since.IsZero() && !lastMsgAt.IsZero() && lastMsgAt.Before(since) {
+				continue
+			}
 
 			conversations = append(conversations, SyncedConversation{
 				ExternalID:     userID, // Zalo uses user_id as conversation key
@@ -344,6 +351,11 @@ func (z *ZaloOAAdapter) FetchRecentConversations(ctx context.Context, since time
 		}
 
 		if len(data) < pageSize {
+			break
+		}
+		// listrecentchat is sorted newest first: once a page ends before
+		// `since`, every later page is older still.
+		if pageReachedSince(pageTimes, since) {
 			break
 		}
 		offset += pageSize
@@ -372,6 +384,7 @@ func (z *ZaloOAAdapter) FetchMessages(ctx context.Context, conversationID string
 			break
 		}
 
+		var pageTimes []time.Time
 		for _, item := range data {
 			msg, ok := item.(map[string]interface{})
 			if !ok {
@@ -382,8 +395,10 @@ func (z *ZaloOAAdapter) FetchMessages(ctx context.Context, conversationID string
 			if ts, ok := msg["time"].(float64); ok {
 				sentAt = time.UnixMilli(int64(ts))
 			}
+			pageTimes = append(pageTimes, sentAt)
 
-			// Don't filter by since — let DB dedup handle duplicates
+			// Messages of the last page may be older than `since`; they are
+			// kept and DB dedup drops the ones already stored.
 
 			msgID := fmt.Sprintf("%v", msg["message_id"])
 			content, _ := msg["message"].(string)
@@ -450,10 +465,36 @@ func (z *ZaloOAAdapter) FetchMessages(ctx context.Context, conversationID string
 		if len(data) < pageSize {
 			break
 		}
+		// Each sync used to page through the whole conversation history,
+		// which exhausted the OA's daily API quota ("reached limit call
+		// api"). Stop once a newest-first page reaches messages older than
+		// `since`: everything after it is already stored.
+		if pageReachedSince(pageTimes, since) {
+			break
+		}
 		offset += pageSize
 	}
 
 	return messages, nil
+}
+
+// pageReachedSince reports whether a page of Zalo results proves that later
+// pages hold only items older than since. It requires the page to be ordered
+// newest first (first timestamp >= last) so that an unexpected oldest-first
+// order falls back to reading every page instead of skipping new messages.
+// A zero since or a page without usable timestamps never stops paging.
+func pageReachedSince(times []time.Time, since time.Time) bool {
+	if since.IsZero() || len(times) == 0 {
+		return false
+	}
+	first, last := times[0], times[len(times)-1]
+	if first.IsZero() || last.IsZero() {
+		return false
+	}
+	if first.Before(last) {
+		return false
+	}
+	return last.Before(since)
 }
 
 // extractZaloDataArray handles both {"data": [...]} and {"data": {"data": [...]}}

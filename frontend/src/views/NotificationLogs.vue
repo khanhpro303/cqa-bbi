@@ -18,6 +18,9 @@
           <v-btn value="campaign" size="small" variant="outlined">
             <v-icon start size="small">mdi-bullhorn-outline</v-icon>Chiến dịch
           </v-btn>
+          <v-btn value="handover" size="small" variant="outlined">
+            <v-icon start size="small">mdi-account-alert-outline</v-icon>Chuyển nhân viên
+          </v-btn>
         </v-btn-toggle>
 
         <DeleteLogsDialog
@@ -128,7 +131,7 @@ const perPage = 20
 const totalPages = computed(() => Math.ceil(total.value / perPage))
 const snackbar = ref(false)
 const snackbarText = ref('')
-const sourceFilter = ref<'all' | 'job' | 'campaign'>('all')
+const sourceFilter = ref<'all' | 'job' | 'campaign' | 'handover'>('all')
 
 // channelMeta maps a stored channel_type to a human label + chip color. The two
 // Zalo variants are deliberately distinct: a job pushes into a GMF group ("zalo"),
@@ -154,6 +157,9 @@ function sourceMeta(log: NotificationLog): { label: string; color: string; icon:
   const source = log.source || (log.channel_type === 'zalo_oa' ? 'campaign' : 'job')
   if (source === 'campaign') {
     return { label: 'Chiến dịch', color: 'purple', icon: 'mdi-bullhorn-outline' }
+  }
+  if (source === 'handover') {
+    return { label: 'Chuyển nhân viên', color: 'red', icon: 'mdi-account-alert-outline' }
   }
   return { label: 'Tác vụ AI', color: 'indigo', icon: 'mdi-robot-outline' }
 }
