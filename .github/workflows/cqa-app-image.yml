@@ -1,0 +1,54 @@
+name: Stage CQA app image on the VPS
+
+on:
+  push:
+    branches: [codex/cqa-app-image-3b563b6]
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: 3b563b67b44eee92d222933a4937e1b1b4b3d8ce
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 3b563b67b44eee92d222933a4937e1b1b4b3d8ce
+          persist-credentials: false
+      - name: Build and export exact main revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          tag="cqa-app:git-$TARGET_SHA"
+          output="$RUNNER_TEMP/cqa-image"
+          mkdir -p "$output"
+          docker build --platform linux/amd64 --build-arg VERSION="$TARGET_SHA" \
+            --label "org.opencontainers.image.revision=$TARGET_SHA" --tag "$tag" .
+          docker image inspect --format '{{.Id}}' "$tag" > "$output/image-id"
+          docker image save "$tag" | gzip -1 > "$output/app.tar.gz"
+          cd "$output"
+          sha256sum app.tar.gz image-id > SHA256SUMS
+      - name: Stage verified files on the existing CQA VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USERNAME }}
+          VPS_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          ssh_dir=$(mktemp -d)
+          trap 'rm -f "$ssh_dir/key" "$ssh_dir/known_hosts"; rmdir "$ssh_dir"' EXIT
+          printf '%s\n' "$VPS_KEY" > "$ssh_dir/key"
+          ssh-keyscan -T 10 -t ed25519 "$VPS_HOST" > "$ssh_dir/known_hosts" 2>/dev/null
+          test "$(ssh-keygen -lf "$ssh_dir/known_hosts" | awk '{print $2}')" = 'SHA256:RBKTIUlSdGXAXXTXwFfui52CWuYadrjGCgW4eL1aLkg'
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+          tar -C "$RUNNER_TEMP/cqa-image" -cf - SHA256SUMS image-id app.tar.gz |
+            ssh -T -l "$VPS_USER" -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=12 \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/known_hosts" \
+              -i "$ssh_dir/key" -- "$VPS_HOST" \
+              "set -eu; umask 077; stage=\$(mktemp -d /home/karien/cqa-image-stage.${GITHUB_RUN_ID}.XXXXXXXX); cd \"\$stage\"; tar -xf - SHA256SUMS image-id app.tar.gz; sha256sum -c SHA256SUMS; printf 'Image staged: %s\\n' \"\$stage\""
