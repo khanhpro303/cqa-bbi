@@ -29,3 +29,9 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style>
+html {
+  overscroll-behavior-y: none;
+}
+</style>
