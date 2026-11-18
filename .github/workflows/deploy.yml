@@ -6,6 +6,8 @@ on:
       - main
     paths-ignore:
       - '.github/workflows/deploy.yml'
+      - 'scripts/retain_deploy_backups.py'
+      - 'scripts/test_retain_deploy_backups.py'
 
 concurrency:
   group: deploy-vps-main
@@ -29,6 +31,8 @@ jobs:
           --health-retries=10
     steps:
       - uses: actions/checkout@v4
+      - name: Test deployment backup retention
+        run: python3 -m unittest discover -s scripts -p test_retain_deploy_backups.py
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
@@ -95,7 +99,10 @@ jobs:
               exit 1
             fi
             echo "Capacity reserves passed before host changes."
-            backup_dir="/home/karien/cqa-backups/${{ github.run_id }}"
+            backup_root=/home/karien/cqa-backups
+            exec 9>"$backup_root/.deploy.lock"
+            flock -n 9
+            backup_dir="$backup_root/${{ github.run_id }}"
             mkdir -p "$backup_dir"
             previous_image=$(docker inspect --format '{{.Image}}' cqa-app)
             app_tag=$(docker inspect --format '{{.Config.Image}}' cqa-app)
@@ -124,7 +131,7 @@ jobs:
             fi
             healthy=0
             for attempt in $(seq 1 36); do
-              if docker exec cqa-app wget -q -T 5 -O - http://127.0.0.1:8080/health > "$backup_dir/health.json"; then
+              if docker exec cqa-app wget -q -T 5 -O - http://127.0.0.1:8080/health > "$backup_dir/health.pending.json"; then
                 healthy=1
                 break
               fi
@@ -149,5 +156,10 @@ jobs:
               exit 1
             fi
             docker compose ps
+            mv -- "$backup_dir/health.pending.json" "$backup_dir/health.json"
             cat "$backup_dir/health.json"
             echo "Verified commit ${{ github.sha }}: app healthy, Messenger tables and frontend present."
+
+            if ! python3 scripts/retain_deploy_backups.py "$backup_root" '${{ github.run_id }}'; then
+              echo "WARNING: Backup retention did not complete. The verified deployment is still active."
+            fi
