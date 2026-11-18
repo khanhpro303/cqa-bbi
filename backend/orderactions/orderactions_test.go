@@ -40,8 +40,8 @@ func TestCreatedOrderCode(t *testing.T) {
 	cases := map[string]string{
 		`{"code":200,"message":"ok","data":{"id":12,"SO_DON_HANG":"ĐH000017"}}`: "ĐH000017",
 		`{"data":[{"id":12,"MA_HOA_DON":"ĐH000018"}]}`:                          "ĐH000018",
-		`{"result":{"record":{"SO_DON_HANG":"ĐH000019"}}}`:                       "ĐH000019",
-		`[{"SO_DON_HANG":"ĐH000020"}]`:                                           "ĐH000020",
+		`{"result":{"record":{"SO_DON_HANG":"ĐH000019"}}}`:                      "ĐH000019",
+		`[{"SO_DON_HANG":"ĐH000020"}]`:                                          "ĐH000020",
 	}
 	for raw, want := range cases {
 		if got, ok := CreatedOrderCode([]byte(raw)); !ok || got != want {

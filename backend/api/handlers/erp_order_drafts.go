@@ -77,7 +77,7 @@ var erpMCPOrderTools = []erpMCPTool{
 				"order_code": map[string]any{"type": "string", "description": "Mã đơn, ví dụ ĐH000016."},
 				"items":      orderDraftItemsSchema,
 				"note":       map[string]any{"type": "string", "description": "Ghi chú mới (thay ghi chú cũ)."},
-				"status":     map[string]any{"type": "string", "enum": []string{"1", "2", "3"}, "description": "Chỉ nhân viên: 1 Đang thực hiện, 2 Hoàn thành, 3 Đang giao. Huỷ đơn thì dùng draft_order_cancel."},
+				"status":     map[string]any{"type": "string", "enum": []string{"0", "1", "2", "4"}, "description": "Chỉ nhân viên: 0 Chưa thực hiện, 1 Đang thực hiện, 2 Hoàn thành, 4 Đang giao. Huỷ đơn thì dùng draft_order_cancel."},
 			},
 			"required":             []string{"order_code"},
 			"additionalProperties": false,
@@ -463,7 +463,7 @@ func resolveDraftLines(permissions *engine.GroupPermissionContext, items []order
 		}
 		seen[key] = true
 		var product models.CachedProduct
-		if err := db.DB.Where("tenant_id = ? AND ma = ?", permissions.TenantID, sku).First(&product).Error; err != nil {
+		if err := db.DB.Where("tenant_id = ? AND ma = ?", permissions.TenantID, sku).First(&product).Error; err != nil || product.MA == "" {
 			return nil, refuse("Không tìm thấy mã sản phẩm %s. Vui lòng kiểm tra lại mã SKU (màu, size).", sku)
 		}
 		if filtered && len(filterWarehouseProducts(cachedProductsToMaps([]models.CachedProduct{product}), groups, brands, allBrands)) == 0 {
@@ -529,11 +529,12 @@ func loadDraftOrder(ctx context.Context, permissions *engine.GroupPermissionCont
 	if id, ok := orderRowID(row); !ok || id <= 0 {
 		return nil, "", fmt.Errorf("order %s has no numeric id", code)
 	}
-	status := getMapString(row, "TRANG_THAI")
+	status := cloudifyorders.NormalizeStatus(getMapString(row, "TRANG_THAI"))
 	switch {
 	case status == orderactions.OrderStatusCancelled:
 		return nil, "", refuse("Đơn %s đã huỷ nên không sửa được nữa.", code)
-	case permissions.AgentType != "private" && status != orderactions.OrderStatusInProgress && status != "":
+	// Customers may change an order only before it is completed or on the way.
+	case permissions.AgentType != "private" && status != orderactions.OrderStatusNotStarted && status != orderactions.OrderStatusInProgress && status != "":
 		return nil, "", refuse("Đơn %s đang ở trạng thái %s nên không sửa qua chatbot được. Vui lòng liên hệ nhân viên.", code, cloudifyorders.StatusName(status))
 	}
 	return row, code, nil
@@ -559,7 +560,7 @@ func orderRowID(row map[string]any) (int64, bool) {
 func orderBodyFromRow(row map[string]any) (map[string]any, []orderLine) {
 	body := map[string]any{
 		"TINH_TRANG":       firstNonEmpty(getMapString(row, "TINH_TRANG"), orderactions.OrderStatusInProgress),
-		"TRANG_THAI":       getMapString(row, "TRANG_THAI"),
+		"TRANG_THAI":       cloudifyorders.NormalizeStatus(getMapString(row, "TRANG_THAI")),
 		"MA_HOA_DON":       getMapString(row, "MA_HOA_DON", "SO_DON_HANG"),
 		"MA_KHACH_HANG":    orderCustomerCode(row),
 		"TEN_KHACH_HANG":   getMapString(row, "TEN_KHACH_HANG"),
@@ -623,7 +624,7 @@ func buildUpdateDraft(ctx context.Context, permissions *engine.GroupPermissionCo
 		return nil, refuse("Chỉ nhân viên mới đổi được trạng thái đơn.")
 	}
 	switch args.Status {
-	case "", orderactions.OrderStatusInProgress, orderactions.OrderStatusCompleted, orderactions.OrderStatusDelivering:
+	case "", orderactions.OrderStatusNotStarted, orderactions.OrderStatusInProgress, orderactions.OrderStatusCompleted, orderactions.OrderStatusDelivering:
 	default:
 		return nil, refuse("Trạng thái %s không hợp lệ.", args.Status)
 	}

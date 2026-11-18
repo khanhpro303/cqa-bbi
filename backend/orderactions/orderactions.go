@@ -46,12 +46,14 @@ const (
 	StatusSuperseded = "superseded"
 )
 
-// Cloudify TRANG_THAI codes (see cloudifyorders.StatusName).
+// Cloudify TRANG_THAI codes, confirmed by the user on 2026-11-18 (see
+// cloudifyorders.StatusName).
 const (
-	OrderStatusCancelled  = "0"
+	OrderStatusNotStarted = "0"
 	OrderStatusInProgress = "1"
 	OrderStatusCompleted  = "2"
-	OrderStatusDelivering = "3"
+	OrderStatusCancelled  = "3"
+	OrderStatusDelivering = "4"
 )
 
 // DraftTTL is how long a draft waits for the customer's confirmation.

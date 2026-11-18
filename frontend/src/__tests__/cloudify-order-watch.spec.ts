@@ -13,7 +13,7 @@ const payload = () => ({
   status: { seeded_at: '2026-11-18T06:00:00Z', last_poll_at: '2026-11-18T06:10:00Z', last_ok_at: '2026-11-18T06:10:00Z', last_error: '', last_count: 12 },
   webhook: { has_secret: false, path: '/api/v1/webhooks/cloudify/tenant' },
   events: [
-    { ID: 'e1', Kind: 'status_changed', OrderCode: 'ĐH1', CustomerCode: 'KH1', PrevStatus: '1', Status: '3', DeliveryStatus: 'skipped', DeliveryNote: 'notify_off', CreatedAt: '2026-11-18T06:10:00Z' },
+    { ID: 'e1', Kind: 'status_changed', OrderCode: 'ĐH1', CustomerCode: 'KH1', PrevStatus: '1', Status: '4', DeliveryStatus: 'skipped', DeliveryNote: 'notify_off', CreatedAt: '2026-11-18T06:10:00Z' },
     { ID: 'e2', Kind: 'created', OrderCode: 'ĐH2', CustomerCode: 'KH2', PrevStatus: '', Status: '1', DeliveryStatus: 'sent', DeliveryNote: '', CreatedAt: '2026-11-18T06:10:00Z' },
   ],
 })

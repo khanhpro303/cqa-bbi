@@ -130,7 +130,7 @@ func TestIngestIsIdempotentAcrossSources(t *testing.T) {
 		t.Fatalf("seed: %+v %v", res, err)
 	}
 	opts := DiffOptions{CreatedCutoff: now.AddDate(0, 0, -1)}
-	rows := []map[string]any{sampleRow(1, "ĐH1", "3"), sampleRow(2, "ĐH2", "1")}
+	rows := []map[string]any{sampleRow(1, "ĐH1", "4"), sampleRow(2, "ĐH2", "1")}
 	res, err = Ingest(ctx, database, tenant, rows, SourceWebhook, opts, now)
 	if err != nil || len(res.Events) != 2 {
 		t.Fatalf("first change: %+v %v", res, err)
@@ -144,7 +144,7 @@ func TestIngestIsIdempotentAcrossSources(t *testing.T) {
 		t.Fatalf("duplicate transition must not create events: %+v %v", res, err)
 	}
 	got := events(t, database, tenant)
-	if len(got) != 2 || got[0].Kind != KindStatusChanged || got[0].PrevStatus != "1" || got[0].Status != "3" || got[1].Kind != KindCreated {
+	if len(got) != 2 || got[0].Kind != KindStatusChanged || got[0].PrevStatus != "1" || got[0].Status != "4" || got[1].Kind != KindCreated {
 		t.Fatalf("events = %+v", got)
 	}
 	if got[0].CustomerCode != "KH125" || got[0].Source != SourceWebhook || got[0].DeliveryStatus != DeliveryPending {
@@ -159,7 +159,7 @@ func TestDeliverPending(t *testing.T) {
 	tenant := "tenant-1"
 	mk := func(kind, code, customer string, created time.Time) {
 		database.Create(&models.CloudifyOrderEvent{ID: pkg.NewUUID(), TenantID: tenant, DedupKey: pkg.NewUUID(), Kind: kind, Source: SourcePoll,
-			OrderCode: code, CustomerCode: customer, Status: "3", PrevStatus: "1", DeliveryStatus: DeliveryPending, CreatedAt: created})
+			OrderCode: code, CustomerCode: customer, Status: "4", PrevStatus: "1", DeliveryStatus: DeliveryPending, CreatedAt: created})
 	}
 	mk(KindStatusChanged, "ĐH1", "KH1", now)
 	mk(KindUpdated, "ĐH2", "KH1", now)                   // kind off by default
@@ -234,7 +234,7 @@ func TestWatcherTickSeedsThenDetects(t *testing.T) {
 		t.Fatalf("first tick must seed silently: %+v", watch)
 	}
 
-	fetcher.set(sampleRow(1, "ĐH1", "3"), sampleRow(2, "ĐH2", "1"))
+	fetcher.set(sampleRow(1, "ĐH1", "4"), sampleRow(2, "ĐH2", "1"))
 	clock = clock.Add(5 * time.Second)
 	w.Tick(ctx, tenant)
 	if fetcher.n != 1 || len(events(t, database, tenant)) != 0 {

@@ -36,15 +36,33 @@ const (
 
 // statusNames maps BBI's TRANG_THAI codes to the label shown to customers.
 // Keep in sync with api/handlers/erp_orders.go orderStatusName.
+// Confirmed by the user on 2026-11-18. Some rows carry the label itself
+// ("Chưa thực hiện") instead of the code; NormalizeStatus maps it back.
 var statusNames = map[string]string{
-	"0": "Hủy",
+	"0": "Chưa thực hiện",
 	"1": "Đang thực hiện",
 	"2": "Hoàn thành",
-	"3": "Đang giao",
+	"3": "Hủy bỏ",
+	"4": "Đang giao",
+}
+
+// NormalizeStatus returns the TRANG_THAI code for a code or a label.
+func NormalizeStatus(value string) string {
+	value = strings.TrimSpace(value)
+	if _, ok := statusNames[value]; ok {
+		return value
+	}
+	for code, name := range statusNames {
+		if strings.EqualFold(name, value) {
+			return code
+		}
+	}
+	return value
 }
 
 // StatusName returns the customer-facing label of a TRANG_THAI code.
 func StatusName(code string) string {
+	code = NormalizeStatus(code)
 	if name, ok := statusNames[code]; ok {
 		return name
 	}
