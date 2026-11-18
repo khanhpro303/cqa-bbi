@@ -5,6 +5,7 @@
 
     <!-- Chatbot health: effective runtime config per channel -->
     <ChatbotHealthCard ref="healthCard" :tenant-id="tenantId" />
+    <CloudifyOrderWatchCard :tenant-id="tenantId" />
 
     <!-- Langflow Config -->
     <v-card class="pa-6 mb-6" data-testid="langflow-config">
@@ -556,6 +557,7 @@ import { useTheme } from 'vuetify'
 import api from '../api'
 import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
 import ChatbotHealthCard from '../components/ChatbotHealthCard.vue'
+import CloudifyOrderWatchCard from '../components/CloudifyOrderWatchCard.vue'
 import { findEndpointsMissingGroups, findEndpointsMissingBrands } from '../utils/erp-permission-validation'
 
 const route = useRoute()

@@ -7,6 +7,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/api"
 	"github.com/vietbui/chat-quality-agent/api/handlers"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
+	"github.com/vietbui/chat-quality-agent/cloudifyorders"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/engine"
@@ -67,6 +68,15 @@ func main() {
 		defer stopListener()
 		go pancakelabels.NewListener(db.DB, cfg.EncryptionKey, cfg.PancakeSocketURL).Run(listenerCtx)
 		log.Println("[pancake-socket] realtime tag listener enabled")
+	}
+
+	// Cloudify order watcher: detects new/changed ERP orders and messages the
+	// customer's Zalo group. Each tenant opts in from Settings.
+	if cfg.CloudifyOrderWatchEnabled {
+		watcherCtx, stopWatcher := context.WithCancel(context.Background())
+		defer stopWatcher()
+		go cloudifyorders.NewWatcher(db.DB, cfg.EncryptionKey).Run(watcherCtx)
+		log.Println("[cloudify-orders] order watcher enabled")
 	}
 
 	// Start worker pool (Asynq server)

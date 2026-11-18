@@ -117,6 +117,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		api.POST("/webhooks/zalo", handlers.ZaloWebhookHandler(cfg))
 		api.GET("/webhooks/facebook", handlers.FacebookWebhookHandler(cfg))
 		api.POST("/webhooks/facebook", handlers.FacebookWebhookHandler(cfg))
+		api.POST("/webhooks/cloudify/:tenantId", handlers.CloudifyOrderWebhookHandler(cfg))
 
 		// Initial setup (only works when no users exist)
 		api.GET("/setup/status", handlers.SetupStatus)
@@ -348,6 +349,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 			// ERP Settings, Test Connect & Endpoint Permission Management
 			tenant.PUT("/settings/erp", middleware.RequirePermission("settings", "w"), handlers.SaveERPSettings)
+			tenant.GET("/cloudify-orders", middleware.RequirePermission("settings", "r"), handlers.GetCloudifyOrderWatch)
+			tenant.PUT("/cloudify-orders", middleware.RequirePermission("settings", "w"), handlers.SaveCloudifyOrderWatch)
+			tenant.POST("/cloudify-orders/webhook-secret", middleware.RequirePermission("settings", "w"), handlers.RotateCloudifyOrderWebhookSecret)
+			tenant.POST("/cloudify-orders/poll", middleware.RequirePermission("settings", "w"), handlers.PollCloudifyOrdersNow)
 			tenant.POST("/settings/erp/test", middleware.RequirePermission("settings", "w"), handlers.TestERPConnection)
 
 			// ERP Parent-SKU exclusion list (filters AI-facing product cache)
