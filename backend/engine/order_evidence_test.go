@@ -28,6 +28,8 @@ func TestValidOrderConfirmation(t *testing.T) {
 		{name: "staff numeric tracking", message: orderEvidenceMessage("tracking", "agent", "Mã vận đơn: 123456789", 3), want: true},
 		{name: "price disguised as bill", message: orderEvidenceMessage("tracking", "agent", "Bill 450000", 3), want: false},
 		{name: "staff created after phone and address", message: orderEvidenceMessage("created", "agent", "Shop đã tạo đơn cho mình rồi ạ", 3), messages: []models.Message{phone, address}, want: true},
+		{name: "staff nhan don after phone and address", message: orderEvidenceMessage("created", "agent", "dạ bên shop nhận đơn của mình ạ , Đơn của mình tổng 2.790.000đ chưa bao gồm ship ạ", 3), messages: []models.Message{phone, address}, want: true},
+		{name: "staff chot don after phone and address", message: orderEvidenceMessage("created", "agent", "Shop đã chốt đơn cho mình nhé", 3), messages: []models.Message{phone, address}, want: true},
 		{name: "staff created colloquial", message: orderEvidenceMessage("created", "agent", "Đơn của mình lên xong rồi chị nhé", 3), messages: []models.Message{phone, address}, want: true},
 		{name: "staff created with unlabeled street address", message: orderEvidenceMessage("created", "agent", "Tạo đơn thành công rồi ạ", 3), messages: []models.Message{phone, orderEvidenceMessage("address", "customer", "12 Nguyen Trai Q1", 2)}, want: true},
 		{name: "staff created without address", message: orderEvidenceMessage("created", "agent", "Shop đã tạo đơn rồi ạ", 3), messages: []models.Message{phone}, want: false},

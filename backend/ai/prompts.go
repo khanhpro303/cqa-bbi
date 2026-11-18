@@ -286,10 +286,10 @@ func BuildClassificationPrompt(rulesConfigJSON string, promptOverride ...string)
 ## Quy tắc nhận diện đơn hàng
 - Trường bắt buộc trong insights: "order_outcomes": [{"status":"confirmed|cancelled|refunded|review","order_ref":"","value_vnd":null,"confirmation_message_id":"ID sau message_id=","confirmation_evidence":"","amount_message_id":"ID sau message_id= hoặc rỗng","amount_evidence":"","confidence":0.0}]. Nếu không có bằng chứng hợp lệ, trả mảng rỗng.
 - Chỉ trả order_outcomes khi có bằng chứng hợp lệ cho thấy đơn hàng đã được tạo hoặc khách đã mua trực tiếp; bằng chứng có thể từ customer hoặc agent.
-- confirmed khi agent gửi mã vận đơn cụ thể hợp lệ; hoặc customer cung cấp SĐT và địa chỉ và agent xác nhận đã tạo đơn; hoặc customer xác nhận đã đến cửa hàng và mua/lấy sản phẩm.
-- Không xem gửi QR, báo giá, xin thông tin giao hàng, hứa lên đơn hoặc trả lời "dạ ok" là bằng chứng xác nhận đơn.
-- confirmation_evidence là TOÀN BỘ nội dung nguyên văn của một tin nhắn làm bằng chứng; confirmation_message_id là ID sau message_id= cạnh tin nhắn đó.
-- value_vnd chỉ ghi khi tổng tiền của chính đơn được nói rõ trong transcript. Không suy giá trị từ QR, số điện thoại, mã đơn, mã vận đơn, giá niêm yết hay báo giá chưa được khách chấp nhận.
+- confirmed khi agent gửi mã vận đơn cụ thể hợp lệ; hoặc customer cung cấp SĐT và địa chỉ và agent xác nhận đã tạo/lên/nhận/chốt đơn; hoặc customer xác nhận đã đến cửa hàng và mua/lấy sản phẩm.
+- Không xem gửi QR, báo giá, xin thông tin giao hàng, hứa lên đơn hoặc trả lời "dạ ok" là bằng chứng xác nhận đơn. Tiền đặt cọc (như "cọc 200k") không phải là tổng tiền đơn hàng (value_vnd).
+- confirmation_evidence là TOÀN BỘ nội dung nguyên văn của một tin nhắn làm bằng chứng; confirmation_message_id là ID sau message_id= cạnh tin nhắn đó. Ưu tiên tin nhắn xác nhận chốt đơn hoàn tất cuối cùng thay vì mốc đặt cọc tạm thời.
+- value_vnd chỉ ghi khi tổng tiền của chính đơn được nói rõ trong transcript (không lấy tiền cọc hay số tiền chuyển khoản một phần). Không suy giá trị từ QR, số điện thoại, mã đơn, mã vận đơn, giá niêm yết hay báo giá chưa được khách chấp nhận.
 - Nếu đã confirmed nhưng không có tổng tiền, giữ status="confirmed", value_vnd=null, amount_evidence="" và amount_message_id="".
 - amount_evidence là toàn bộ tin nhắn có tổng tiền; amount_message_id là ID sau message_id= cạnh tin nhắn đó, hoặc rỗng khi không có bằng chứng.
 - Chỉ dùng review khi có dấu hiệu đơn hàng nhưng chưa đủ bằng chứng xác định trạng thái. cancelled hoặc refunded chỉ dùng khi đơn đã confirmed trước đó và có bằng chứng hủy hoặc hoàn tiền.

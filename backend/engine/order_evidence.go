@@ -125,6 +125,8 @@ func validOrderConfirmation(message models.Message, messages []models.Message) b
 		created := containsAny(text,
 			"da tao don", "da len don", "tao don thanh cong", "len don thanh cong", "len don xong", "tao don xong",
 			"don da duoc tao", "don minh tao xong", "don cua minh len xong",
+			"nhan don", "da nhan don", "shop nhan don", "ben shop nhan don",
+			"chot don", "da chot don",
 		)
 		return created && customerSuppliedPhoneAndAddressBefore(messages, message)
 	}
