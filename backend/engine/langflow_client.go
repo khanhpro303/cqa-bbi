@@ -20,8 +20,9 @@ import (
 // Each Langflow flow has its own randomly-suffixed node ID, taken from the
 // flow's exported definition:
 //
-//   - ToolCallingAgent-zznkZ — private/internal RAG flow (BBI_RAG_Bot_Ext.json)
-//   - ToolCallingAgent-biiBD — public/group flow (37593e48-052f-4be3-abcc-94a21465b3aa)
+//   - ToolCallingAgent-biiBD — both live flows, BBI_RAG_Bot_Int (4dd93268…) and
+//     BBI_RAG_Bot_Ext (37593e48…); see langflow/flows/
+//   - ToolCallingAgent-zznkZ — the retired June export, kept as a harmless fallback
 //
 // On the happy path we don't use these at all; the node IDs are read straight
 // from the running flow's definition so re-imports that change node IDs keep
