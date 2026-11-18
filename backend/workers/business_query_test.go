@@ -16,3 +16,19 @@ func TestIsObviousBusinessQuery(t *testing.T) {
 		}
 	}
 }
+
+func TestIsLangflowConfigError(t *testing.T) {
+	if !isLangflowConfigError(errString(`langflow api error (status 403): {"detail":"Invalid or missing API key"}`)) {
+		t.Error("403 should be a config error")
+	}
+	if isLangflowConfigError(errString("langflow api error (status 502): bad gateway")) {
+		t.Error("502 should be retryable")
+	}
+	if isLangflowConfigError(nil) {
+		t.Error("nil is not an error")
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }

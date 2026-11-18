@@ -197,6 +197,21 @@ func isLastAttempt(ctx context.Context) bool {
 	return retried >= maxRetry
 }
 
+// isLangflowConfigError reports a Langflow error that no retry can fix: an
+// invalid/missing API key (401/403) or a flow ID that does not exist (404).
+func isLangflowConfigError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, code := range []string{"(status 401)", "(status 403)", "(status 404)"} {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	return false
+}
+
 func truncateForLog(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
@@ -499,6 +514,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if meta.SessionTimeoutMessage == "" {
 			meta.SessionTimeoutMessage = cfg.ChatbotSessionTimeoutMessage
 		}
+		// Remember where the Langflow key/flow came from: a stale per-channel
+		// override silently beats the AI Engine settings, which is hard to spot.
+		langflowKeySource, langflowFlowSource := "channel_metadata", "channel_metadata"
 		if meta.LangflowAPIURL == "" {
 			if setting, ok := tenantSettings["ai_engine_langflow_url"]; ok && setting.ValuePlain != "" {
 				meta.LangflowAPIURL = setting.ValuePlain
@@ -510,15 +528,19 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if setting, ok := tenantSettings["ai_engine_langflow_token"]; ok && len(setting.ValueEncrypted) > 0 {
 				decrypted, _ := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
 				meta.LangflowAPIKey = string(decrypted)
+				langflowKeySource = "tenant_setting"
 			} else {
 				meta.LangflowAPIKey = cfg.LangflowAPIKey
+				langflowKeySource = "env"
 			}
 		}
 		if meta.LangflowFlowID == "" {
 			if setting, ok := tenantSettings["ai_engine_langflow_flow_id"]; ok && setting.ValuePlain != "" {
 				meta.LangflowFlowID = setting.ValuePlain
+				langflowFlowSource = "tenant_setting"
 			} else {
 				meta.LangflowFlowID = cfg.LangflowFlowID
+				langflowFlowSource = "env"
 			}
 		}
 		if meta.LangflowPublicFlowID == "" {
@@ -825,7 +847,6 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				log.Printf("[worker] failed to save user message to Astra DB: %v", err)
 			}
 		}()
-
 
 		// Real-time intent classification for active sessions. Skip it when the
 		// previous turn was a backend-pushed prompt awaiting this reply: the
@@ -1459,8 +1480,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if err != nil {
 			// Retry transient failures, but never leave the customer in silence:
 			// on the last attempt tell them the bot could not answer.
-			if isLastAttempt(ctx) {
-				log.Printf("[zalo-drop] reason=langflow_error final_attempt=true sender=%s flow=%s err=%v", payload.Sender.ID, flowIDToUse, err)
+			// 401/403/404 are config errors (bad key, deleted flow): retrying
+			// cannot help, so answer the customer now instead of after N retries.
+			if isLastAttempt(ctx) || isLangflowConfigError(err) {
+				log.Printf("[zalo-drop] reason=langflow_error sender=%s flow=%s flow_source=%s key_source=%s err=%v (channel_metadata overrides AI Engine settings)", payload.Sender.ID, flowIDToUse, langflowFlowSource, langflowKeySource, err)
 				if sendErr := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botUnavailableMessage); sendErr != nil {
 					log.Printf("[worker] failed to send langflow-error fallback: %v", sendErr)
 				}
