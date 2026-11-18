@@ -260,6 +260,112 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return asynq.SkipRetry // Skip retry if channel not found
 		}
 
+		// Setup Zalo adapter for replies
+		adapter := zalotoken.NewAdapter(matchedChannel.ID, zaloCreds, cfg.EncryptionKey)
+
+		userText := strings.TrimSpace(payload.Message.Text)
+		attachmentText := parseAttachmentText(payload.Message.Attachments)
+		if attachmentText != "" {
+			if userText == "" {
+				userText = strings.TrimSpace(attachmentText)
+			} else {
+				userText = userText + "\n" + strings.TrimSpace(attachmentText)
+			}
+		}
+
+		// Pairing ("verify <token>") must work whether or not the chatbot is switched on:
+		// staff/customers link their Zalo account before any auto-reply is enabled, so
+		// this runs before the auto-reply gate below.
+		// 1. Check for verification token command: "verify <token>"
+		if strings.HasPrefix(strings.ToLower(userText), "verify ") {
+			token := strings.TrimSpace(userText[7:])
+			if token != "" {
+				// Try to find a pending whitelist record for this tenant and channel with this token
+				var whitelistRec models.ZaloWhitelist
+				if err := db.DB.Where("tenant_id = ? AND (channel_id = ? OR channel_id = '' OR channel_id IS NULL) AND verify_token = ? AND status = ?", matchedChannel.TenantID, matchedChannel.ID, token, "pending").First(&whitelistRec).Error; err == nil {
+					// Found! Fetch their Zalo profile to get their avatar
+					avatarURL := ""
+					if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
+						avatarURL = profile.Avatar
+					}
+
+					// Update whitelist record (Keep the original Name entered by the admin)
+					whitelistRec.ZaloUserID = payload.Sender.ID
+					if whitelistRec.ChannelID == "" {
+						whitelistRec.ChannelID = matchedChannel.ID
+					}
+					if avatarURL != "" {
+						whitelistRec.Avatar = avatarURL
+					}
+					whitelistRec.Status = "active"
+					whitelistRec.UpdatedAt = time.Now()
+
+					if err := db.DB.Save(&whitelistRec).Error; err == nil {
+						// Send success message back to Zalo
+						successMsg := "Xác thực thành công! Tài khoản Zalo của bạn đã được thêm vào danh sách nhân viên nội bộ được phép sử dụng Chatbot."
+						_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
+						log.Printf("[worker] successfully whitelisted Zalo user %s for tenant %s", payload.Sender.ID, matchedChannel.TenantID)
+						return nil
+					}
+				} else {
+					// Not found in whitelist staff. Try ZaloCustomer!
+					var customerRec models.ZaloCustomer
+					if err := db.DB.Where("tenant_id = ? AND verify_token = ?", matchedChannel.TenantID, token).First(&customerRec).Error; err == nil {
+						avatarURL := ""
+						if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
+							avatarURL = profile.Avatar
+							if profile.DisplayName != "" {
+								customerRec.Name = profile.DisplayName
+							}
+						}
+
+						customerRec.ZaloUserID = payload.Sender.ID
+						if avatarURL != "" {
+							customerRec.Avatar = avatarURL
+						}
+
+						statusWas := customerRec.Status
+						if customerRec.Status == "pending_verify" {
+							customerRec.Status = "pending_approval"
+						}
+						customerRec.UpdatedAt = time.Now()
+
+						if err := db.DB.Save(&customerRec).Error; err == nil {
+							if customerRec.Status == "approved" {
+								successMsg := "Xác thực thành công! Tài khoản Zalo của bạn đã được liên kết với hệ thống CRM."
+								_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
+
+								// Auto-invite customer to Zalo GMF group chats they are already pre-added to locally
+								var groupLinks []models.CRMGroupCustomer
+								if err := db.DB.Where("zalo_customer_id = ?", customerRec.ID).Find(&groupLinks).Error; err == nil {
+									for _, link := range groupLinks {
+										var grp models.CRMGroup
+										if err := db.DB.First(&grp, "id = ?", link.GroupID).Error; err == nil && grp.ZaloGroupID != "" {
+											if inviteErr := adapter.InviteGMFGroupMembers(ctx, grp.ZaloGroupID, []string{customerRec.ZaloUserID}); inviteErr != nil {
+												log.Printf("[worker] failed to auto-invite customer %s to Zalo GMF group %s: %v", customerRec.ID, grp.Name, inviteErr)
+											} else {
+												log.Printf("[worker] successfully auto-invited customer %s to Zalo GMF group %s", customerRec.ID, grp.Name)
+											}
+										}
+									}
+								}
+							} else {
+								successMsg := "Xác thực thành công! Yêu cầu liên kết tài khoản của bạn đã được gửi tới Ban quản trị để phê duyệt."
+								_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
+							}
+							log.Printf("[worker] successfully processed customer verification (token: %s, previous status: %s, current status: %s) for Zalo user %s", token, statusWas, customerRec.Status, payload.Sender.ID)
+							return nil
+						}
+					}
+
+					// Token invalid or expired
+					errorMsg := "Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra lại."
+					_ = adapter.SendMessage(ctx, payload.Sender.ID, errorMsg)
+					return nil
+				}
+			}
+		}
+
 		// Check if chatbot is active (defaults to true if setting is not found)
 		var activeSetting models.AppSetting
 		chatbotActive := true
@@ -379,109 +485,6 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			BaseURL:        cfg.LangflowEmbeddingBaseURL,
 			EncryptionKey:  cfg.EncryptionKey,
 		})
-
-		// Setup Zalo adapter for replies
-		adapter := zalotoken.NewAdapter(matchedChannel.ID, zaloCreds, cfg.EncryptionKey)
-
-		userText := strings.TrimSpace(payload.Message.Text)
-		attachmentText := parseAttachmentText(payload.Message.Attachments)
-		if attachmentText != "" {
-			if userText == "" {
-				userText = strings.TrimSpace(attachmentText)
-			} else {
-				userText = userText + "\n" + strings.TrimSpace(attachmentText)
-			}
-		}
-
-		// 1. Check for verification token command: "verify <token>"
-		if strings.HasPrefix(strings.ToLower(userText), "verify ") {
-			token := strings.TrimSpace(userText[7:])
-			if token != "" {
-				// Try to find a pending whitelist record for this tenant and channel with this token
-				var whitelistRec models.ZaloWhitelist
-				if err := db.DB.Where("tenant_id = ? AND (channel_id = ? OR channel_id = '' OR channel_id IS NULL) AND verify_token = ? AND status = ?", matchedChannel.TenantID, matchedChannel.ID, token, "pending").First(&whitelistRec).Error; err == nil {
-					// Found! Fetch their Zalo profile to get their avatar
-					avatarURL := ""
-					if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
-						avatarURL = profile.Avatar
-					}
-
-					// Update whitelist record (Keep the original Name entered by the admin)
-					whitelistRec.ZaloUserID = payload.Sender.ID
-					if whitelistRec.ChannelID == "" {
-						whitelistRec.ChannelID = matchedChannel.ID
-					}
-					if avatarURL != "" {
-						whitelistRec.Avatar = avatarURL
-					}
-					whitelistRec.Status = "active"
-					whitelistRec.UpdatedAt = time.Now()
-
-					if err := db.DB.Save(&whitelistRec).Error; err == nil {
-						// Send success message back to Zalo
-						successMsg := "Xác thực thành công! Tài khoản Zalo của bạn đã được thêm vào danh sách nhân viên nội bộ được phép sử dụng Chatbot."
-						_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
-						log.Printf("[worker] successfully whitelisted Zalo user %s for tenant %s", payload.Sender.ID, matchedChannel.TenantID)
-						return nil
-					}
-				} else {
-					// Not found in whitelist staff. Try ZaloCustomer!
-					var customerRec models.ZaloCustomer
-					if err := db.DB.Where("tenant_id = ? AND verify_token = ?", matchedChannel.TenantID, token).First(&customerRec).Error; err == nil {
-						avatarURL := ""
-						if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
-							avatarURL = profile.Avatar
-							if profile.DisplayName != "" {
-								customerRec.Name = profile.DisplayName
-							}
-						}
-
-						customerRec.ZaloUserID = payload.Sender.ID
-						if avatarURL != "" {
-							customerRec.Avatar = avatarURL
-						}
-
-						statusWas := customerRec.Status
-						if customerRec.Status == "pending_verify" {
-							customerRec.Status = "pending_approval"
-						}
-						customerRec.UpdatedAt = time.Now()
-
-						if err := db.DB.Save(&customerRec).Error; err == nil {
-							if customerRec.Status == "approved" {
-								successMsg := "Xác thực thành công! Tài khoản Zalo của bạn đã được liên kết với hệ thống CRM."
-								_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
-
-								// Auto-invite customer to Zalo GMF group chats they are already pre-added to locally
-								var groupLinks []models.CRMGroupCustomer
-								if err := db.DB.Where("zalo_customer_id = ?", customerRec.ID).Find(&groupLinks).Error; err == nil {
-									for _, link := range groupLinks {
-										var grp models.CRMGroup
-										if err := db.DB.First(&grp, "id = ?", link.GroupID).Error; err == nil && grp.ZaloGroupID != "" {
-											if inviteErr := adapter.InviteGMFGroupMembers(ctx, grp.ZaloGroupID, []string{customerRec.ZaloUserID}); inviteErr != nil {
-												log.Printf("[worker] failed to auto-invite customer %s to Zalo GMF group %s: %v", customerRec.ID, grp.Name, inviteErr)
-											} else {
-												log.Printf("[worker] successfully auto-invited customer %s to Zalo GMF group %s", customerRec.ID, grp.Name)
-											}
-										}
-									}
-								}
-							} else {
-								successMsg := "Xác thực thành công! Yêu cầu liên kết tài khoản của bạn đã được gửi tới Ban quản trị để phê duyệt."
-								_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
-							}
-							log.Printf("[worker] successfully processed customer verification (token: %s, previous status: %s, current status: %s) for Zalo user %s", token, statusWas, customerRec.Status, payload.Sender.ID)
-							return nil
-						}
-					}
-
-					// Token invalid or expired
-					errorMsg := "Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra lại."
-					_ = adapter.SendMessage(ctx, payload.Sender.ID, errorMsg)
-					return nil
-				}
-			}
-		}
 
 		// 2. Determine Whitelist / Staff / Customer Routing:
 		// Check if the current sender is active in the Zalo whitelist for this tenant and channel.

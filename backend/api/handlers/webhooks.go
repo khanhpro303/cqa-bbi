@@ -52,11 +52,17 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 
 		// Process async via Asynq if available
-		if asynqClient != nil {
-			task, err := workers.NewZaloWebhookTask(payload)
-			if err == nil {
-				asynqClient.Enqueue(task, asynq.MaxRetry(3))
-			}
+		if asynqClient == nil {
+			log.Printf("[zalo-webhook] REDIS_URL not configured; dropping %s from Zalo user %s", payload.EventName, payload.Sender.ID)
+			return
+		}
+		task, err := workers.NewZaloWebhookTask(payload)
+		if err != nil {
+			log.Printf("[zalo-webhook] failed to build task for Zalo user %s: %v", payload.Sender.ID, err)
+			return
+		}
+		if _, err := asynqClient.Enqueue(task, asynq.MaxRetry(3)); err != nil {
+			log.Printf("[zalo-webhook] failed to enqueue %s from Zalo user %s: %v", payload.EventName, payload.Sender.ID, err)
 		}
 	}
 }
