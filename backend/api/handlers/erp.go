@@ -2183,22 +2183,18 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				}
 				prompt := fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search)
 
-				adapter, activeChannel, adapterErr := loadActiveZaloOAAdapter(tenantID)
+				adapter, activeChannel, adapterErr := loadZaloOAAdapterFor(tenantID, permCtx)
 				if adapterErr != nil {
 					log.Printf("[inventory_query] cannot send exact-web Zalo Rich Message: %v", adapterErr)
+					// Keep the numbered menu so the worker can resend it and a "1"/"2" reply still resolves.
+					storePendingDisambiguationOptions(c.Request.Context(), tenantID, permCtx, buttons)
+					recordPromptDelivery(c.Request.Context(), permCtx, channels.BuildButtonOptionsAsText(prompt, buttons), adapterErr)
 				} else {
 					var matchedGroup models.CRMGroup
-					hasGroup := false
-					if len(permCtx.Groups) > 0 {
-						for _, gp := range permCtx.Groups {
-							if gp.GroupID != "private_bot" {
-								if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
-									hasGroup = true
-									break
-								}
-							}
-						}
-					}
+					// The worker signs the exact chat (channel + group) into the token;
+					// resolveZaloGroupID honours it so a 1:1 question is never answered in a group.
+					matchedGroup.ZaloGroupID = resolveZaloGroupID(tenantID, permCtx)
+					hasGroup := matchedGroup.ZaloGroupID != ""
 
 					// Store the dòng-vs-SKU postbacks under the same session key the
 					// worker uses so a "1"/"2" reply is resolved by the numeric-reply
@@ -2223,6 +2219,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					} else {
 						sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, text)
 					}
+					recordPromptDelivery(c.Request.Context(), permCtx, text, sendErr)
 					if sendErr != nil {
 						log.Printf("[inventory_query] failed to send exact-web dòng-vs-SKU picker: %v", sendErr)
 					} else {
@@ -2304,22 +2301,18 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						}
 						prompt := fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search)
 
-						adapter, activeChannel, adapterErr := loadActiveZaloOAAdapter(tenantID)
+						adapter, activeChannel, adapterErr := loadZaloOAAdapterFor(tenantID, permCtx)
 						if adapterErr != nil {
 							log.Printf("[inventory_query] cannot send Zalo Rich Message: %v", adapterErr)
+							// Keep the numbered menu so the worker can resend it and a "1"/"2" reply still resolves.
+							storePendingDisambiguationOptions(c.Request.Context(), tenantID, permCtx, buttons)
+							recordPromptDelivery(c.Request.Context(), permCtx, channels.BuildButtonOptionsAsText(prompt, buttons), adapterErr)
 						} else {
 							var matchedGroup models.CRMGroup
-							hasGroup := false
-							if len(permCtx.Groups) > 0 {
-								for _, gp := range permCtx.Groups {
-									if gp.GroupID != "private_bot" {
-										if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
-											hasGroup = true
-											break
-										}
-									}
-								}
-							}
+							// The worker signs the exact chat (channel + group) into the token;
+							// resolveZaloGroupID honours it so a 1:1 question is never answered in a group.
+							matchedGroup.ZaloGroupID = resolveZaloGroupID(tenantID, permCtx)
+							hasGroup := matchedGroup.ZaloGroupID != ""
 
 							// Store the dòng-vs-SKU postbacks in Redis under the same session
 							// key the worker uses (engine.BuildSessionKey). When the customer
@@ -2350,6 +2343,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 								sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, text)
 							}
 
+							recordPromptDelivery(c.Request.Context(), permCtx, text, sendErr)
 							if sendErr != nil {
 								log.Printf("[inventory_query] failed to send Zalo option list directly: %v", sendErr)
 							} else {
@@ -2802,25 +2796,22 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			// worker không đọc field đó nên khách sẽ không nhận được câu hỏi.
 			promptText := "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\"."
 
-			if adapter, _, adapterErr := loadActiveZaloOAAdapter(tenantID); adapterErr != nil {
+			if adapter, _, adapterErr := loadZaloOAAdapterFor(tenantID, permCtx); adapterErr != nil {
 				log.Printf("[orders_query] cannot send date-range prompt: %v", adapterErr)
+				recordPromptDelivery(c.Request.Context(), permCtx, promptText, adapterErr)
 			} else {
 				var matchedGroup models.CRMGroup
-				hasGroup := false
-				for _, gp := range permCtx.Groups {
-					if gp.GroupID != "private_bot" {
-						if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
-							hasGroup = true
-							break
-						}
-					}
-				}
+				// The worker signs the exact chat (channel + group) into the token;
+				// resolveZaloGroupID honours it so a 1:1 question is never answered in a group.
+				matchedGroup.ZaloGroupID = resolveZaloGroupID(tenantID, permCtx)
+				hasGroup := matchedGroup.ZaloGroupID != ""
 				var sendErr error
 				if hasGroup {
 					sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, promptText)
 				} else {
 					sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, promptText)
 				}
+				recordPromptDelivery(c.Request.Context(), permCtx, promptText, sendErr)
 				if sendErr != nil {
 					log.Printf("[orders_query] failed to send date-range prompt to %s: %v", permCtx.ZaloUserID, sendErr)
 				} else {
@@ -2971,25 +2962,22 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			// gets a [RICH_MESSAGE_SENT] sentinel back, so if we merely return the
 			// rich payload (the old behaviour) nobody sends it and the customer
 			// never sees the "tháng này / tháng trước / quý này" question.
-			if adapter, _, adapterErr := loadActiveZaloOAAdapter(tenantID); adapterErr != nil {
+			if adapter, _, adapterErr := loadZaloOAAdapterFor(tenantID, permCtx); adapterErr != nil {
 				log.Printf("[debt_query] cannot send period prompt: %v", adapterErr)
+				recordPromptDelivery(c.Request.Context(), permCtx, promptText, adapterErr)
 			} else {
 				var matchedGroup models.CRMGroup
-				hasGroup := false
-				for _, gp := range permCtx.Groups {
-					if gp.GroupID != "private_bot" {
-						if errGrp := db.DB.Where("id = ? AND tenant_id = ?", gp.GroupID, tenantID).First(&matchedGroup).Error; errGrp == nil && matchedGroup.ZaloGroupID != "" {
-							hasGroup = true
-							break
-						}
-					}
-				}
+				// The worker signs the exact chat (channel + group) into the token;
+				// resolveZaloGroupID honours it so a 1:1 question is never answered in a group.
+				matchedGroup.ZaloGroupID = resolveZaloGroupID(tenantID, permCtx)
+				hasGroup := matchedGroup.ZaloGroupID != ""
 				var sendErr error
 				if hasGroup {
 					sendErr = adapter.SendGroupMessage(c.Request.Context(), matchedGroup.ZaloGroupID, promptText)
 				} else {
 					sendErr = adapter.SendMessage(c.Request.Context(), permCtx.ZaloUserID, promptText)
 				}
+				recordPromptDelivery(c.Request.Context(), permCtx, promptText, sendErr)
 				if sendErr != nil {
 					log.Printf("[debt_query] failed to send period prompt to %s: %v", permCtx.ZaloUserID, sendErr)
 				} else {
@@ -4155,10 +4143,30 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 // resolveZaloGroupID returns the Zalo group ID for the customer's active group
 // chat (empty for 1:1 DMs) so the session key matches the one the worker builds
 // in workers/tasks.go. Returns "" when no group is resolvable.
+// recordPromptDelivery tells the worker whether a backend-pushed Zalo prompt
+// actually went out, keyed by the same work key the worker uses. Only new
+// tokens (with ChannelID) can be keyed; legacy tokens are skipped.
+func recordPromptDelivery(ctx context.Context, permCtx *engine.GroupPermissionContext, text string, sendErr error) {
+	if permCtx == nil || permCtx.ChannelID == "" || permCtx.ZaloUserID == "" {
+		return
+	}
+	key := engine.BuildSessionKey(permCtx.ChannelID, permCtx.ZaloUserID, permCtx.ZaloGroupID)
+	engine.RecordPromptDelivery(ctx, key, text, sendErr)
+}
+
 func resolveZaloGroupID(tenantID string, permCtx *engine.GroupPermissionContext) string {
 	if permCtx == nil {
 		return ""
 	}
+	// New tokens carry the exact chat the question came from. ChannelID is the
+	// marker: when it is set, ZaloGroupID is authoritative ("" = 1:1 chat), so
+	// a customer who belongs to a CRM group but asks in 1:1 gets the prompt in
+	// 1:1 — not in the group.
+	if permCtx.ChannelID != "" {
+		return permCtx.ZaloGroupID
+	}
+	// Legacy tokens (signed before ChannelID existed): best-effort guess from
+	// the caller's CRM groups.
 	for _, gp := range permCtx.Groups {
 		if gp.GroupID == "private_bot" {
 			continue
@@ -4181,13 +4189,17 @@ func storePendingDisambiguationOptions(ctx context.Context, tenantID string, per
 	if len(buttons) == 0 || permCtx == nil {
 		return
 	}
-	_, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
-	if err != nil || activeChannel == nil {
-		log.Printf("[erp_query] cannot store pending options (no active OA channel): %v", err)
-		return
+	channelID := permCtx.ChannelID
+	if channelID == "" {
+		_, activeChannel, err := loadActiveZaloOAAdapter(tenantID)
+		if err != nil || activeChannel == nil {
+			log.Printf("[erp_query] cannot store pending options (no active OA channel): %v", err)
+			return
+		}
+		channelID = activeChannel.ID
 	}
 	groupID := resolveZaloGroupID(tenantID, permCtx)
-	sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
+	sessionKey := engine.BuildSessionKey(channelID, permCtx.ZaloUserID, groupID)
 	timeoutMinutes := 30
 	if cfg, cfgErr := config.Load(); cfgErr == nil && cfg.ChatbotSessionTimeout > 0 {
 		timeoutMinutes = cfg.ChatbotSessionTimeout
@@ -4195,11 +4207,37 @@ func storePendingDisambiguationOptions(ctx context.Context, tenantID string, per
 	engine.StorePendingOptions(ctx, sessionKey, buttons, timeoutMinutes)
 }
 
+// loadZaloOAAdapterFor returns the Zalo OA adapter for the exact channel the
+// question arrived on (signed into the permission token by the worker). Zalo
+// user IDs are per-OA, so sending through any other OA fails or reaches the
+// wrong person — which used to make backend-pushed prompts (stock picker, debt
+// period, orders range) silently vanish when a tenant has several OA channels.
+// Falls back to the legacy "first active channel" lookup for old tokens.
+func loadZaloOAAdapterFor(tenantID string, permCtx *engine.GroupPermissionContext) (*channels.ZaloOAAdapter, *models.Channel, error) {
+	if permCtx == nil || permCtx.ChannelID == "" {
+		return loadActiveZaloOAAdapter(tenantID)
+	}
+	var ch models.Channel
+	if err := db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = true", permCtx.ChannelID, tenantID, "zalo_oa").First(&ch).Error; err != nil {
+		return nil, nil, fmt.Errorf("zalo_oa channel %s not found/active: %w", permCtx.ChannelID, err)
+	}
+	cfg, _ := config.Load()
+	credBytes, err := pkg.Decrypt(ch.CredentialsEncrypted, cfg.EncryptionKey)
+	if err != nil {
+		return nil, &ch, fmt.Errorf("decrypt credentials: %w", err)
+	}
+	var zaloCreds channels.ZaloOACredentials
+	if err := json.Unmarshal(credBytes, &zaloCreds); err != nil {
+		return nil, &ch, fmt.Errorf("invalid credentials json: %w", err)
+	}
+	return zalotoken.NewAdapter(ch.ID, zaloCreds, cfg.EncryptionKey), &ch, nil
+}
+
 // loadActiveZaloOAAdapter looks up the tenant's active Zalo OA channel,
 // decrypts its credentials and builds a ZaloOAAdapter whose token rotation is
 // persisted through the shared channel token store. Returns (nil, nil,
 // err) when the tenant has no active OA channel or credentials cannot be
-// loaded. Used by both the rich-message and the debug-fallback push paths.
+// loaded. Legacy fallback for tokens without a ChannelID; prefer loadZaloOAAdapterFor.
 func loadActiveZaloOAAdapter(tenantID string) (*channels.ZaloOAAdapter, *models.Channel, error) {
 	var allChannels []models.Channel
 	if err := db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = true", tenantID, "zalo_oa").Find(&allChannels).Error; err != nil {
@@ -4263,7 +4301,7 @@ func pushFallbackPayloadToZaloOA(ctx context.Context, tenantID, stage, search st
 		return
 	}
 
-	adapter, _, err := loadActiveZaloOAAdapter(tenantID)
+	adapter, _, err := loadZaloOAAdapterFor(tenantID, permCtx)
 	if err != nil {
 		log.Printf("[erp_query] debug push to zalo oa skipped (stage=%s): %v", stage, err)
 		return

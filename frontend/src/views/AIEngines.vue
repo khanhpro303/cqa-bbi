@@ -3,6 +3,9 @@
     <h1 class="text-h5 font-weight-bold mb-6">{{ $t('ai_engines') }}</h1>
     <div class="text-grey-darken-1 mb-6">{{ $t('ai_engines_desc') }}</div>
 
+    <!-- Chatbot health: effective runtime config per channel -->
+    <ChatbotHealthCard ref="healthCard" :tenant-id="tenantId" />
+
     <!-- Langflow Config -->
     <v-card class="pa-6 mb-6" data-testid="langflow-config">
       <div class="text-subtitle-1 font-weight-bold mb-4">
@@ -552,6 +555,7 @@ import { useI18n } from 'vue-i18n'
 import { useTheme } from 'vuetify'
 import api from '../api'
 import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
+import ChatbotHealthCard from '../components/ChatbotHealthCard.vue'
 import { findEndpointsMissingGroups, findEndpointsMissingBrands } from '../utils/erp-permission-validation'
 
 const route = useRoute()
@@ -568,6 +572,7 @@ const snackColor = ref('success')
 
 const saving = ref(false)
 const testing = ref(false)
+const healthCard = ref<InstanceType<typeof ChatbotHealthCard> | null>(null)
 
 const savingERP = ref(false)
 const testingERP = ref(false)
@@ -782,6 +787,8 @@ async function save() {
       astradb_collection: astradb.collection,
     })
     showSnack(t('success'), 'success')
+    // Re-check what the bot will actually use after this change.
+    healthCard.value?.run()
   } catch (err: any) {
     showSnack(err.response?.data?.error || t('error'), 'error')
   } finally {
