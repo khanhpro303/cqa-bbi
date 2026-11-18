@@ -1,16 +1,21 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
+	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"github.com/vietbui/chat-quality-agent/servicequality"
 	"gorm.io/gorm"
@@ -129,6 +134,131 @@ func ResolveServiceConversation(c *gin.Context) {
 	}
 	db.LogActivity(tid, middleware.GetUserID(c), middleware.GetUserEmail(c), "service_quality.resolved", "conversation", cid, req.Note, "", c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"status": "resolved"})
+}
+
+func ReanalyseServiceConversation(c *gin.Context) {
+	tid := middleware.GetTenantID(c)
+	cid := c.Param("conversationId")
+
+	var req struct {
+		JobID string `json:"job_id"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	var conv models.Conversation
+	if err := db.DB.WithContext(c.Request.Context()).Where("id = ? AND tenant_id = ?", cid, tid).First(&conv).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "hội thoại không tồn tại"})
+			return
+		}
+		serviceQualityError(c, err)
+		return
+	}
+
+	var job models.Job
+	targetJobID := strings.TrimSpace(req.JobID)
+	if targetJobID != "" {
+		if err := db.DB.WithContext(c.Request.Context()).Where("id = ? AND tenant_id = ?", targetJobID, tid).First(&job).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "không tìm thấy tác vụ đã chỉ định"})
+			return
+		}
+	} else {
+		type prevJobRecord struct {
+			JobID string `gorm:"column:job_id"`
+		}
+		var prev prevJobRecord
+		_ = db.DB.WithContext(c.Request.Context()).Table("job_results AS j").
+			Select("jr.job_id").
+			Joins("JOIN job_runs AS jr ON jr.id = j.job_run_id").
+			Where("j.tenant_id = ? AND j.conversation_id = ? AND j.result_type = ?", tid, cid, "conversation_insight").
+			Order("j.created_at DESC, j.id DESC").
+			Limit(1).Scan(&prev)
+
+		if prev.JobID != "" {
+			_ = db.DB.WithContext(c.Request.Context()).Where("id = ? AND tenant_id = ?", prev.JobID, tid).First(&job).Error
+		}
+	}
+
+	if job.ID == "" || job.JobType != "classification" || !ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+		var candidates []models.Job
+		if err := db.DB.WithContext(c.Request.Context()).Where("tenant_id = ? AND job_type = ? AND is_active = ?", tid, "classification", true).Find(&candidates).Error; err == nil {
+			for _, candidate := range candidates {
+				if !ai.ParseClassificationConfig(candidate.RulesConfig).MessengerInsightsEnabled() {
+					continue
+				}
+				var channels []string
+				_ = json.Unmarshal([]byte(candidate.InputChannelIDs), &channels)
+				hasChannel := false
+				for _, ch := range channels {
+					if ch == conv.ChannelID || ch == "global" {
+						hasChannel = true
+						break
+					}
+				}
+				if hasChannel {
+					job = candidate
+					break
+				}
+				if job.ID == "" {
+					job = candidate
+				}
+			}
+		}
+	}
+
+	if job.ID == "" || job.JobType != "classification" || !ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "không tìm thấy tác vụ phân tích Messenger Insights cho hội thoại này"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cfg, _ := config.Load()
+	analyzer := engine.NewAnalyzer(cfg)
+	run, err := analyzer.RunJobSingleConversation(ctx, job, cid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("phân tích thất bại: %v", err)})
+		return
+	}
+	if run != nil && run.Status == "error" {
+		msg := "phân tích thất bại: lỗi xử lý tác vụ"
+		if run.ErrorMessage != "" {
+			msg = fmt.Sprintf("phân tích thất bại: %s", run.ErrorMessage)
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
+		return
+	}
+
+	type insightRow struct {
+		Detail    string    `gorm:"column:detail"`
+		CreatedAt time.Time `gorm:"column:created_at"`
+	}
+	var latest insightRow
+	if err := db.DB.WithContext(c.Request.Context()).Table("job_results").
+		Select("detail, created_at").
+		Where("tenant_id = ? AND conversation_id = ? AND result_type = ?", tid, cid, "conversation_insight").
+		Order("created_at DESC, id DESC").
+		First(&latest).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "hội thoại chưa có tin nhắn để phân tích"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "không thể tải kết quả phân tích mới"})
+		return
+	}
+
+	isStale := servicequality.IsInsightStale(latest.Detail, conv.LastMessageAt)
+	db.LogActivity(tid, middleware.GetUserID(c), middleware.GetUserEmail(c), "service_quality.reanalyse", "conversation", cid,
+		fmt.Sprintf("Reanalysed conversation %s with job %s", cid, job.ID), "", c.ClientIP())
+
+	c.JSON(http.StatusOK, gin.H{
+		"conversation_id": cid,
+		"insight":         json.RawMessage(latest.Detail),
+		"insight_job_id":  job.ID,
+		"insight_at":      latest.CreatedAt,
+		"insight_stale":   isStale,
+	})
 }
 
 func serviceQualityError(c *gin.Context, err error) {

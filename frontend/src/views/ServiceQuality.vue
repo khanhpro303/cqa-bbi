@@ -487,6 +487,18 @@
         <v-card-actions>
           <span v-if="selectedRow.resolution_note" class="text-caption text-medium-emphasis px-2">{{ t('sq_resolution_note', { note: selectedRow.resolution_note }) }}</span>
           <v-spacer />
+          <v-btn
+            v-if="authStore.canEdit('jobs')"
+            variant="tonal"
+            color="primary"
+            prepend-icon="mdi-refresh"
+            :loading="reanalysingRow"
+            :disabled="loading"
+            class="mr-2"
+            @click="reanalyseCurrentRow"
+          >
+            {{ t('sq_reanalyse_action') }}
+          </v-btn>
           <v-btn color="primary" :to="messageLink(selectedRow)">{{ t('sq_open_conversation') }}</v-btn>
         </v-card-actions>
       </v-card>
@@ -873,6 +885,41 @@ async function reanalyseStaleInsights() {
     showSnack(error?.response?.data?.error || t('sq_reanalyse_error'), 'error')
   } finally {
     reanalysingStale.value = false
+  }
+}
+
+const reanalysingRow = ref(false)
+
+async function reanalyseCurrentRow() {
+  if (!selectedRow.value || reanalysingRow.value) return
+  reanalysingRow.value = true
+  const targetConversationId = selectedRow.value.conversation_id
+  const targetTenant = tenantId.value
+  try {
+    const { data } = await api.post(`/tenants/${targetTenant}/service-quality/${targetConversationId}/reanalyse`, {
+      job_id: selectedRow.value.insight_job_id,
+    })
+    if (tenantId.value === targetTenant && selectedRow.value?.conversation_id === targetConversationId) {
+      selectedRow.value.insight = data.insight
+      selectedRow.value.insight_job_id = data.insight_job_id
+      selectedRow.value.insight_at = data.insight_at
+      selectedRow.value.insight_stale = data.insight_stale
+
+      const rowIndex = report.value?.rows.findIndex((r) => r.conversation_id === targetConversationId)
+      if (rowIndex != null && rowIndex >= 0 && report.value) {
+        report.value.rows[rowIndex].insight = data.insight
+        report.value.rows[rowIndex].insight_job_id = data.insight_job_id
+        report.value.rows[rowIndex].insight_at = data.insight_at
+        report.value.rows[rowIndex].insight_stale = data.insight_stale
+      }
+    }
+    showSnack(t('sq_reanalyse_success'), 'success')
+  } catch (error: any) {
+    if (tenantId.value === targetTenant) {
+      showSnack(error?.response?.data?.error || t('sq_reanalyse_failed'), 'error')
+    }
+  } finally {
+    reanalysingRow.value = false
   }
 }
 

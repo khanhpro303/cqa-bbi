@@ -243,6 +243,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/pancake-labels/:channelId/sync", middleware.RequirePermission("messages", "w"), handlers.SyncPancakeLabels)
 			tenant.PUT("/service-quality/policy", middleware.RequirePermission("settings", "w"), handlers.SaveServiceQualityPolicy)
 			tenant.POST("/service-quality/:conversationId/resolve", middleware.RequirePermission("messages", "w"), handlers.ResolveServiceConversation)
+			tenant.POST("/service-quality/:conversationId/reanalyse", middleware.RequirePermission("jobs", "w"), handlers.ReanalyseServiceConversation)
 			tenant.GET("/dashboard", handlers.GetDashboard)
 			tenant.GET("/analytics/ai-cost", handlers.GetAICostAnalytics)
 

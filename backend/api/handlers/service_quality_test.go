@@ -76,3 +76,15 @@ func TestStaleReanalysisRequiresJobWritePermission(t *testing.T) {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestSingleConversationReanalysisRequiresJobWritePermission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("tenant_role", "member"); c.Set("tenant_permissions", `{}`) })
+	r.POST("/test/:conversationId", middleware.RequirePermission("jobs", "w"), ReanalyseServiceConversation)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/test/conv-123", nil))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+}

@@ -138,6 +138,40 @@ describe('ServiceQuality queue banner navigation', () => {
     expect(wrapper.get('[data-id="c1"]').text()).toContain('Chưa phân tích')
   })
 
+  it('allows manual reanalysis of a single conversation from detail dialog', async () => {
+    mocks.canEditJobs = true
+    const wrapper = await render(['answered', 'waiting'], [], [0], true)
+
+    await wrapper.get('[data-id="c0"] button[title="Xem chi tiết"]').trigger('click')
+    await nextTick()
+
+    const reanalyseBtn = wrapper.findAll('button').find((item) => item.text().includes('Phân tích lại'))
+    expect(reanalyseBtn).toBeDefined()
+
+    mocks.post.mockResolvedValueOnce({
+      data: {
+        conversation_id: 'c0',
+        insight: {
+          summary: 'Đã phân tích lại',
+          lead_quality: { level: 'converted', reason: 'Đã chốt đơn' },
+          order_outcomes: [{ status: 'confirmed', order_ref: 'DH-NEW', value_vnd: 500000 }],
+        },
+        insight_job_id: 'job-1',
+        insight_at: '2026-09-15T04:00:00Z',
+        insight_stale: false,
+      },
+    })
+
+    await reanalyseBtn!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-one/service-quality/c0/reanalyse', {
+      job_id: undefined,
+    })
+    expect(wrapper.text()).toContain('Đã phân tích lại')
+    expect(wrapper.text()).toContain('DH-NEW')
+  })
+
   it('reanalyses only rows carrying the stale badge and groups them by insight job', async () => {
     mocks.canEditJobs = true
     const wrapper = await render(['answered', 'waiting', 'overdue', 'resolved'], [0, 2, 3])

@@ -193,6 +193,18 @@ func (a *Analyzer) RunJobStale(ctx context.Context, job models.Job, conversation
 	return a.runJobInternalExt(ctx, job, 0, nil, true, "", "", nil, false, eligible)
 }
 
+// RunJobSingleConversation re-analyzes a single conversation using the specified job.
+func (a *Analyzer) RunJobSingleConversation(ctx context.Context, job models.Job, conversationID string) (*models.JobRun, error) {
+	if job.JobType != "classification" || !ai.ParseClassificationConfig(job.RulesConfig).MessengerInsightsEnabled() {
+		return nil, fmt.Errorf("job is not a Messenger Insights classification job")
+	}
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return nil, fmt.Errorf("conversation_id cannot be empty")
+	}
+	return a.runJobInternalExt(ctx, job, 0, nil, true, "", "", nil, false, []string{conversationID})
+}
+
 func (a *Analyzer) runPendingMessengerInsights(ctx context.Context, job models.Job, maxConversations int, provider ai.AIProvider) (*models.JobRun, error) {
 	candidates, err := pendingMessengerInsightCandidates(ctx, job, nil)
 	if err != nil {
@@ -510,9 +522,11 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 
 	// Fetch conversations with messages in time range
 	var conversations []models.Conversation
-	q := db.DB.Where("tenant_id = ? AND channel_id IN ?", job.TenantID, channelIDs)
+	q := db.DB.Where("tenant_id = ?", job.TenantID)
 	if conversationIDs != nil {
 		q = q.Where("id IN ?", conversationIDs)
+	} else {
+		q = q.Where("channel_id IN ?", channelIDs)
 	}
 	if !since.IsZero() {
 		q = q.Where("last_message_at > ?", since)
@@ -753,8 +767,8 @@ complete:
 		break
 	}
 
-	// Update job last_run (skip for test runs to avoid affecting future normal runs)
-	if !isTestRun {
+	// Update job last_run (skip for test runs and targeted re-analyses to avoid affecting future normal runs)
+	if !isTestRun && conversationIDs == nil {
 		db.DB.Model(&job).Updates(map[string]interface{}{
 			"last_run_at":     &finishedAt,
 			"last_run_status": runStatus,
