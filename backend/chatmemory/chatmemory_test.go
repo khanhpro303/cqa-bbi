@@ -228,3 +228,13 @@ func TestAstraIndex(t *testing.T) {
 		t.Fatalf("createCollection called %d times", creates)
 	}
 }
+
+func TestChannelSettingsFrom(t *testing.T) {
+	if s := ChannelSettingsFrom(""); s.ProfileInPrompt || !s.IssueAlerts {
+		t.Fatalf("defaults = %+v", s)
+	}
+	s := ChannelSettingsFrom(`{"chat_memory_profile_in_prompt":true,"chat_memory_issue_alerts":false}`)
+	if !s.ProfileInPrompt || s.IssueAlerts {
+		t.Fatalf("parsed = %+v", s)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
@@ -138,23 +140,10 @@ func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (stri
 		lines = append(lines, fmt.Sprintf("%s | %s", c.MaCha, label))
 	}
 
-	systemPrompt := fmt.Sprintf(`Bạn là trợ lý mapping mã sản phẩm BBI.
-
-Khách hàng tìm kiếm: %q
-
-Hãy chọn 1 MÃ SẢN PHẨM (ma_cha) khớp nhất từ danh sách bên dưới.
-
-Quy tắc khớp:
-- Khớp cả theo MÃ và theo TÊN (web/ERP) sau dấu "|".
-- Bỏ dấu gạch ngang, dấu chấm, số 0 đầu khi so mã (E05 = E-5, E.5 = E-5).
-- Số La Mã ↔ số Ả Rập tương đương (Storm III = Storm 3, MK II = MK 2).
-- Bỏ dấu tiếng Việt khi so tên ("mu bao hiem" = "mũ bảo hiểm").
-- Viết tắt thương hiệu chấp nhận được (LS2 FF818 ≈ FF818).
-- TRẢ LỜI CHỈ ma_cha duy nhất, không thêm chữ, dấu câu, hay tên.
-- Nếu thực sự không có dòng nào hợp lý → trả "NONE".
-
-Danh sách (ma_cha | tên):
-%s`, keyword, strings.Join(lines, "\n"))
+	systemPrompt := engine.BuildTaskPrompt(tenantID, engine.PromptProductCodeMatch, map[string]string{
+		"keyword":    strconv.Quote(keyword),
+		"candidates": strings.Join(lines, "\n"),
+	})
 
 	llmCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -207,34 +196,14 @@ func fuzzyMatchAttributesWithLLM(
 	// Build a compact bilingual-matching prompt. The LLM gets every
 	// candidate set and must respond with line-tagged values it picked
 	// from those sets (or NONE), nothing else.
-	systemPrompt := fmt.Sprintf(`Bạn là trợ lý map thuộc tính sản phẩm song ngữ Việt-Anh.
-
-Khách hàng nhập:
-- COLOR: %q
-- SIZE: %q
-- BRAND: %q
-
-Danh sách giá trị HỢP LỆ trong kho (chỉ được chọn từ đây):
-- COLORS: %s
-- SIZES: %s
-- BRANDS: %s
-
-Nhiệm vụ:
-- Với mỗi trường khách nhập KHÔNG rỗng, chọn 1 giá trị KHỚP NHẤT từ danh sách tương ứng.
-- "Đen bóng" / "den bong" / "black gloss" / "gloss black" → khớp "Gloss Black".
-- "Trắng nhám" → "Matt White". "Đỏ" → có thể là "Red" hoặc "Red Matte" tuỳ list.
-- Nếu trường khách nhập là rỗng → trả NONE cho trường đó.
-- Nếu thật sự không có giá trị nào hợp lý trong list → trả NONE.
-
-CHỈ trả về đúng 3 dòng theo format (không thêm chữ khác):
-COLOR: <giá trị từ COLORS hoặc NONE>
-SIZE: <giá trị từ SIZES hoặc NONE>
-BRAND: <giá trị từ BRANDS hoặc NONE>`,
-		color, size, brand,
-		joinForPrompt(availableColors),
-		joinForPrompt(availableSizes),
-		joinForPrompt(availableBrands),
-	)
+	systemPrompt := engine.BuildTaskPrompt(tenantID, engine.PromptAttributeMatch, map[string]string{
+		"color":  strconv.Quote(color),
+		"size":   strconv.Quote(size),
+		"brand":  strconv.Quote(brand),
+		"colors": joinForPrompt(availableColors),
+		"sizes":  joinForPrompt(availableSizes),
+		"brands": joinForPrompt(availableBrands),
+	})
 
 	llmCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

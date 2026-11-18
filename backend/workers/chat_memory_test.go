@@ -35,13 +35,13 @@ func TestAppendChatMemoryContextDisabled(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.ChatMemory.Enabled = true
 	turn := chatmemory.Turn{TenantID: "t", ChannelID: "c", ZaloUserID: "u"}
-	// Off by default: the prompt is unchanged.
-	if got := appendChatMemoryContext(context.Background(), cfg, "base", turn); got != "base" {
+	// Off unless the channel turns it on: the prompt is unchanged.
+	if got := appendChatMemoryContext(context.Background(), cfg, `{}`, "base", turn); got != "base" {
 		t.Fatalf("got %q", got)
 	}
 	// An empty prompt means the flow's own prompt; it must stay empty.
-	cfg.ChatMemory.ProfileInPrompt = true
-	if got := appendChatMemoryContext(context.Background(), cfg, "", turn); got != "" {
+	on := `{"chat_memory_profile_in_prompt":true}`
+	if got := appendChatMemoryContext(context.Background(), cfg, on, "", turn); got != "" {
 		t.Fatalf("got %q", got)
 	}
 }

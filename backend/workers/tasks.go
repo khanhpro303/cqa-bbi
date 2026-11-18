@@ -967,7 +967,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// the private staff flow, the public/OWN-scope prompt otherwise. Empty maps
 		// to the flow's own SYSTEM_PROMPT global (see selectSystemPrompt).
 		systemPromptToUse := selectSystemPrompt(agentType, meta.SystemPrompt, meta.SystemPromptInternal)
-		systemPromptToUse = appendChatMemoryContext(ctx, cfg, systemPromptToUse, memTurn)
+		systemPromptToUse = appendChatMemoryContext(ctx, cfg, matchedChannel.Metadata, systemPromptToUse, memTurn)
 		if systemPromptToUse != "" {
 			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
 		}
@@ -2085,24 +2085,7 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string) (strin
 	aiClient := resolved.Client
 
 	// Define system prompt
-	systemPrompt := `Bạn là trợ lý lọc tin nhắn thông minh cho Chatbot doanh nghiệp BBI.
-Nhiệm vụ của bạn là phân loại tin nhắn của khách hàng thành một trong bốn nhãn sau:
-1. "IN_SCOPE": Bất kỳ tin nhắn nào hỏi về nghiệp vụ, ngành hàng hoặc kiến thức sản phẩm. Bao gồm:
-   - Câu hỏi giao dịch: tồn kho, giá cả, đơn hàng, công nợ (financial debt).
-   - Câu hỏi KIẾN THỨC / THÔNG SỐ / CẤU TẠO / CÔNG DỤNG / HƯỚNG DẪN sử dụng sản phẩm, kể cả khi không gắn với một giao dịch cụ thể. Ví dụ: "mũ bảo hiểm có bao nhiêu bộ phận", "sản phẩm này làm bằng chất liệu gì", "size áo tương ứng cân nặng bao nhiêu", "cách bảo quản giày".
-   Luôn chọn IN_SCOPE cho câu hỏi về sản phẩm, kể cả khi chưa rõ bot có dữ liệu hoặc quyền tra cứu. Ví dụ: "bên mình có mũ nguyên đầu không", "có loại nửa đầu nào". Quyền truy cập và dữ liệu do công cụ tra cứu xác định.
-2. "HANDOVER": Tin nhắn phàn nàn về chất lượng dịch vụ, sản phẩm lỗi, chậm giao hàng, thái độ phục vụ, yêu cầu gặp nhân viên hoặc các vấn đề nghiêm trọng cần con người giải quyết.
-3. "CASUAL": Tin nhắn chỉ chào hỏi, cảm ơn, xác nhận hoặc trò chuyện xã giao và không có câu hỏi hay yêu cầu cần hỗ trợ. Ví dụ: "ok", "dạ", "cảm ơn", "hello", "hi".
-4. "OUT_OF_SCOPE": Câu hỏi hoặc yêu cầu rõ ràng không liên quan đến sản phẩm, ngành hàng hay nghiệp vụ BBI, ví dụ hỏi dự báo thời tiết hoặc yêu cầu giải bài toán trường học.
-
-Nếu chưa rõ câu hỏi có thuộc phạm vi hỗ trợ hay là câu hỏi tiếp nối, chọn IN_SCOPE. Tin nhắn có lời chào kèm câu hỏi vẫn phải được phân loại theo câu hỏi.
-
-Định dạng trả về duy nhất là một đối tượng JSON:
-{
-  "label": "IN_SCOPE" | "HANDOVER" | "CASUAL" | "OUT_OF_SCOPE",
-  "reason": "Giải thích ngắn gọn lý do phân loại"
-}
-CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`
+	systemPrompt := engine.BuildTaskPrompt(tenantID, engine.PromptIntentClassifier, nil)
 
 	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -2403,23 +2386,10 @@ func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (stri
 		lines = append(lines, fmt.Sprintf("%s | %s", c.MaCha, label))
 	}
 
-	systemPrompt := fmt.Sprintf(`Bạn là trợ lý mapping mã sản phẩm BBI.
-
-Khách hàng tìm kiếm: %q
-
-Hãy chọn 1 MÃ SẢN PHẨM (ma_cha) khớp nhất từ danh sách bên dưới.
-
-Quy tắc khớp:
-- Khớp cả theo MÃ và theo TÊN (web/ERP) sau dấu "|".
-- Bỏ dấu gạch ngang, dấu chấm, số 0 đầu khi so mã (E05 = E-5, E.5 = E-5).
-- Số La Mã ↔ số Ả Rập tương đương (Storm III = Storm 3, MK II = MK 2).
-- Bỏ dấu tiếng Việt khi so tên ("mu bao hiem" = "mũ bảo hiểm").
-- Viết tắt thương hiệu chấp nhận được (LS2 FF818 ≈ FF818).
-- TRẢ LỜI CHỈ ma_cha duy nhất, không thêm chữ, dấu câu, hay tên.
-- Nếu thực sự không có dòng nào hợp lý → trả "NONE".
-
-Danh sách (ma_cha | tên):
-%s`, keyword, strings.Join(lines, "\n"))
+	systemPrompt := engine.BuildTaskPrompt(tenantID, engine.PromptProductCodeMatch, map[string]string{
+		"keyword":    strconv.Quote(keyword),
+		"candidates": strings.Join(lines, "\n"),
+	})
 
 	llmCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -2452,17 +2422,7 @@ func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string)
 		return false, "", nil
 	}
 
-	systemPrompt := `Bạn là trợ lý trích xuất từ khóa sản phẩm thông minh của doanh nghiệp BBI.
-Nhiệm vụ của bạn là phân tích tin nhắn của khách hàng và thực hiện:
-1. Xác định xem khách hàng có đang hỏi về tồn kho, còn hàng, hết hàng của một dòng sản phẩm nào đó hay không.
-2. Trích xuất từ khóa sản phẩm chính xác (ví dụ: "FF800", "FF600", "áo thun trơn",...). Chỉ trích xuất từ khóa ngắn gọn, đại diện cho mã/tên sản phẩm được nhắc đến trong câu hỏi tồn kho.
-
-Định dạng trả về duy nhất là một đối tượng JSON:
-{
-  "is_inventory_query": true | false,
-  "keyword": "từ khóa sản phẩm hoặc rỗng"
-}
-CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`
+	systemPrompt := engine.BuildTaskPrompt(tenantID, engine.PromptInventoryKeyword, nil)
 
 	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

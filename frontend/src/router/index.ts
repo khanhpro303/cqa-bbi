@@ -100,6 +100,12 @@ const router = createRouter({
           meta: { perm: 'settings' },
         },
         {
+          path: 'chat-memory',
+          name: 'chat-memory',
+          component: () => import('../views/ChatMemory.vue'),
+          meta: { perm: 'messages' },
+        },
+        {
           path: 'notifications',
           name: 'notifications',
           component: () => import('../views/NotificationLogs.vue'),

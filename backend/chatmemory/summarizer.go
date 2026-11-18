@@ -101,8 +101,8 @@ func (s *Service) Start(ctx context.Context) {
 	if s.index != nil {
 		indexName = s.index.Name()
 	}
-	log.Printf("[chat-memory] started: idle=%s vector_store=%s retention=%dd profile_in_prompt=%v",
-		s.idleThreshold(), indexName, s.cfg.ChatMemory.VectorRetentionDays, s.cfg.ChatMemory.ProfileInPrompt)
+	log.Printf("[chat-memory] started: idle=%s vector_store=%s retention=%dd",
+		s.idleThreshold(), indexName, s.cfg.ChatMemory.VectorRetentionDays)
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
@@ -224,7 +224,7 @@ func (s *Service) SummarizeSession(ctx context.Context, sessionID string) error 
 
 	loc := tenantLocation(sess.TenantID)
 	input := BuildSummaryInput(sess, profile.Profile, msgs, loc)
-	resp, provider, model, err := s.summarize(ctx, sess.TenantID, summarySystemPrompt, input)
+	resp, provider, model, err := s.summarize(ctx, sess.TenantID, SummarySystemPrompt(sess.TenantID), input)
 	if err != nil {
 		return fail(err)
 	}
@@ -251,10 +251,15 @@ func (s *Service) SummarizeSession(ctx context.Context, sessionID string) error 
 		log.Printf("[chat-memory] profile update for session %s: %v", sess.ID, err)
 	}
 
-	if s.cfg.ChatMemory.IssueAlerts && sess.AlertedAt == nil {
+	if sess.AlertedAt == nil {
 		s.alertIssues(ctx, sess, result)
 	}
 	return nil
+}
+
+// SessionMessages returns the transcript of a session, oldest first.
+func SessionMessages(ctx context.Context, sess models.ChatSession) ([]models.Message, error) {
+	return sessionMessages(ctx, sess)
 }
 
 func sessionMessages(ctx context.Context, sess models.ChatSession) ([]models.Message, error) {
@@ -280,6 +285,12 @@ func customerTurns(msgs []models.Message) int {
 	return n
 }
 
+// IsBotMessage reports whether m was sent by the chatbot (recorded live).
+func IsBotMessage(m models.Message) bool {
+	return m.SenderType != "customer" &&
+		(strings.Contains(m.RawData, `"cqa_source": "chatbot"`) || strings.Contains(m.RawData, `"cqa_source":"chatbot"`))
+}
+
 // speakerLabel tells customer, chatbot and staff apart for the transcript.
 func speakerLabel(m models.Message) string {
 	if m.SenderType == "customer" {
@@ -288,7 +299,7 @@ func speakerLabel(m models.Message) string {
 		}
 		return "Khách"
 	}
-	if strings.Contains(m.RawData, `"cqa_source": "chatbot"`) || strings.Contains(m.RawData, `"cqa_source":"chatbot"`) {
+	if IsBotMessage(m) {
 		return "Bot"
 	}
 	return "Nhân viên"
@@ -341,35 +352,30 @@ func BuildSummaryInput(sess models.ChatSession, currentProfile string, msgs []mo
 	return b.String()
 }
 
-const summarySystemPrompt = `Bạn phân tích một phiên chat Zalo giữa khách hàng với chatbot (và đôi khi nhân viên) của một doanh nghiệp bán hàng. Trả về DUY NHẤT một đối tượng JSON theo đúng mẫu:
+// summaryOutputFormat is the fixed part of the summary prompt: the JSON the
+// code parses. The instructions before it are editable per tenant in the AI
+// Engine page (chat_memory_summary, chat_memory_profile, chat_memory_issues).
+const summaryOutputFormat = `ĐỊNH DẠNG TRẢ VỀ: DUY NHẤT một đối tượng JSON theo đúng mẫu, không thêm chữ nào khác:
 {
-  "summary": "2-4 câu: khách hỏi gì, bot/nhân viên trả lời ra sao, kết quả",
-  "intents": ["ý định chính, ví dụ: hỏi tồn kho, hỏi giá, tra đơn, tra công nợ, khiếu nại"],
-  "products": ["mã hoặc tên sản phẩm được nhắc tới"],
+  "summary": "...",
+  "intents": ["..."],
+  "products": ["..."],
   "outcome": "answered | partially_answered | unanswered | handover | order_intent | abandoned | other",
   "sentiment": "positive | neutral | negative",
-  "issues": [{"type": "complaint | delivery | product_defect | price | payment | bot_failure | staff_request | other", "severity": "low | medium | high", "detail": "mô tả ngắn", "evidence": "trích nguyên văn lời khách, tối đa 200 ký tự"}],
-  "profile": {
-    "address_form": "cách khách xưng hô và muốn được gọi",
-    "communication_style": "ngắn gọn/chi tiết, trang trọng/thân mật, hay dùng viết tắt...",
-    "active_hours": "khung giờ hay nhắn nếu thấy rõ",
-    "interests": ["dòng sản phẩm, nhu cầu thường hỏi"],
-    "price_behavior": "hay hỏi giá, hay xin chiết khấu, nhạy cảm giá...",
-    "service_notes": ["lưu ý khi phục vụ khách này"],
-    "risk_flags": ["dấu hiệu cần chú ý: hay khiếu nại, công nợ quá hạn được nhắc tới..."]
-  },
-  "card": "tối đa 500 ký tự, viết cho chatbot đọc trước khi trả lời khách này"
-}
+  "issues": [{"type": "complaint | delivery | product_defect | price | payment | bot_failure | staff_request | other", "severity": "low | medium | high", "detail": "mô tả ngắn", "evidence": "trích lời khách"}],
+  "profile": {"address_form": "", "communication_style": "", "active_hours": "", "interests": [], "price_behavior": "", "service_notes": [], "risk_flags": []},
+  "card": "tối đa 500 ký tự"
+}`
 
-Quy tắc:
-- Chỉ dựa trên phiên chat và hồ sơ hiện tại. Không bịa. Mục nào không có thông tin thì để chuỗi rỗng hoặc mảng rỗng.
-- "profile" là hồ sơ ĐÃ CẬP NHẬT: giữ các nhận định cũ còn đúng, bổ sung điều mới, bỏ điều phiên này cho thấy đã sai.
-- Không suy đoán sức khoẻ, tôn giáo, chính trị, đời tư, giới tính. Không ghi số điện thoại, địa chỉ, số tài khoản, mật khẩu vào "profile" và "card". Không dùng từ ngữ chê bai khách.
-- "issues" chỉ gồm vấn đề cần người xử lý: khiếu nại, hàng lỗi, giao sai hoặc chậm, sai tiền hoặc công nợ, bot trả lời sai hoặc không trả lời được câu quan trọng, khách đòi gặp nhân viên. Không có thì để [].
-- severity "high" khi khách bức xúc, có nguy cơ mất đơn hoặc sai tiền, hoặc cần xử lý trong ngày; "medium" khi cần theo dõi; "low" cho góp ý nhỏ.
-- "card" giọng trung tính, gồm cách xưng hô nên dùng, khách hay quan tâm gì, lưu ý khi trả lời. Không nhắc lại nội dung riêng tư.
-- Với chat nhóm, hồ sơ là của cả nhóm (cửa hàng), không phải của một người.
-- Viết bằng tiếng Việt. CHỈ trả về JSON.`
+// SummarySystemPrompt builds the tenant's summary prompt.
+func SummarySystemPrompt(tenantID string) string {
+	parts := []string{
+		engine.TaskPromptInstructions(tenantID, engine.PromptChatMemorySummary),
+		"HỒ SƠ KHÁCH:\n" + engine.TaskPromptInstructions(tenantID, engine.PromptChatMemoryProfile),
+		"VẤN ĐỀ VÀ MỨC ĐỘ:\n" + engine.TaskPromptInstructions(tenantID, engine.PromptChatMemoryIssues),
+	}
+	return engine.ComposeTaskPrompt(strings.Join(parts, "\n\n"), summaryOutputFormat, nil)
+}
 
 // ParseSummaryResult extracts and validates the model's JSON answer.
 func ParseSummaryResult(content string) (SummaryResult, error) {
@@ -460,6 +466,9 @@ func (s *Service) alertIssues(ctx context.Context, sess models.ChatSession, r Su
 	var ch models.Channel
 	if err := db.DB.WithContext(ctx).Where("id = ?", sess.ChannelID).First(&ch).Error; err != nil {
 		log.Printf("[chat-memory] alert: load channel %s: %v", sess.ChannelID, err)
+		return
+	}
+	if !ChannelSettingsFrom(ch.Metadata).IssueAlerts {
 		return
 	}
 	adapter, err := channelAdapter(ch, s.cfg.EncryptionKey)
@@ -603,7 +612,8 @@ func PromptContext(ctx context.Context, tenantID, channelID, subjectType, subjec
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("THÔNG TIN TỪ CÁC LẦN TRÒ CHUYỆN TRƯỚC (chỉ để tham khảo cách phục vụ; không đọc lại cho khách, dữ liệu tồn kho/giá/đơn/công nợ luôn phải tra bằng công cụ):\n")
+	b.WriteString(engine.TaskPromptInstructions(tenantID, engine.PromptChatMemoryContext))
+	b.WriteString("\n")
 	if hasCard {
 		b.WriteString(truncate(p.Card, maxCardRunes))
 		b.WriteString("\n")

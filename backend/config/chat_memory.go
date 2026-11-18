@@ -15,13 +15,9 @@ type ChatMemoryConfig struct {
 	// SummarizeIdleMinutes is how long a session must be idle before it is
 	// summarized. 0 means "session timeout + 10 minutes".
 	SummarizeIdleMinutes int
-	// ProfileInPrompt appends the customer's profile card and last session
-	// summary to the chatbot system prompt. Default OFF until staff have
-	// reviewed profile quality (CHAT_MEMORY_PROFILE_IN_PROMPT=true enables).
-	ProfileInPrompt bool
-	// IssueAlerts sends high-severity issues found in a session summary to
-	// the channel's handover alert group. Default ON.
-	IssueAlerts bool
+	// Whether the bot reads the profile card and whether session issues are
+	// alerted are per-channel settings (channel metadata), see
+	// chatmemory.ChannelSettingsFrom.
 
 	// VectorStore is "astra", "vectorize" or "none". Empty means "astra"
 	// when Astra credentials exist, else "none".
@@ -51,8 +47,6 @@ func loadChatMemoryConfig() ChatMemoryConfig {
 	return ChatMemoryConfig{
 		Enabled:              !strings.EqualFold(getEnv("CHAT_MEMORY_ENABLED", "true"), "false"),
 		SummarizeIdleMinutes: getEnvInt("CHAT_MEMORY_SUMMARIZE_IDLE_MINUTES", 0),
-		ProfileInPrompt:      strings.EqualFold(getEnv("CHAT_MEMORY_PROFILE_IN_PROMPT", "false"), "true"),
-		IssueAlerts:          !strings.EqualFold(getEnv("CHAT_MEMORY_ISSUE_ALERTS", "true"), "false"),
 		VectorStore:          strings.ToLower(strings.TrimSpace(getEnv("CHAT_MEMORY_VECTOR_STORE", ""))),
 		VectorRetentionDays:  getEnvInt("CHAT_MEMORY_VECTOR_RETENTION_DAYS", 365),
 		AstraCollection:      getEnv("CHAT_MEMORY_ASTRA_COLLECTION", "zalo_session_summaries"),

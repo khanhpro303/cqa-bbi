@@ -67,11 +67,14 @@ func webhookTime(ts string) time.Time {
 }
 
 // appendChatMemoryContext adds what earlier sessions taught about this chat to
-// the system prompt, when CHAT_MEMORY_PROFILE_IN_PROMPT is on. An empty base
-// prompt means the flow uses its own prompt, which this tweak would replace,
-// so nothing is added then.
-func appendChatMemoryContext(ctx context.Context, cfg *config.Config, systemPrompt string, turn chatmemory.Turn) string {
-	if cfg == nil || !cfg.ChatMemory.Enabled || !cfg.ChatMemory.ProfileInPrompt || strings.TrimSpace(systemPrompt) == "" {
+// the system prompt, when the channel turns on "bot uses customer profiles".
+// An empty base prompt means the flow uses its own prompt, which this tweak
+// would replace, so nothing is added then.
+func appendChatMemoryContext(ctx context.Context, cfg *config.Config, channelMetadata, systemPrompt string, turn chatmemory.Turn) string {
+	if cfg == nil || !cfg.ChatMemory.Enabled || strings.TrimSpace(systemPrompt) == "" {
+		return systemPrompt
+	}
+	if !chatmemory.ChannelSettingsFrom(channelMetadata).ProfileInPrompt {
 		return systemPrompt
 	}
 	subjectType, subjectID := turn.Subject()
