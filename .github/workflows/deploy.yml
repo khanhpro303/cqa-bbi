@@ -81,7 +81,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          docker build --platform linux/amd64 --build-arg VERSION="v1" \
+          # The deployment health check compares the runtime version to this SHA.
+          docker build --platform linux/amd64 --build-arg VERSION="$TARGET_SHA" \
             --label "org.opencontainers.image.revision=$TARGET_SHA" \
             --tag "cqa-app:ci-$TARGET_SHA" .
           docker build --platform linux/amd64 --file docker/Dockerfile.nginx \
