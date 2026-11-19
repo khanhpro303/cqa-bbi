@@ -111,7 +111,7 @@
           <v-spacer />
           <v-chip size="small" variant="tonal" :color="updateInfo?.has_update ? 'warning' : 'success'" href="https://khanhpro303.github.io/cqa-bbi/changelog.html" target="_blank" style="cursor: pointer;">
             <v-icon start size="10" icon="mdi-circle" />
-            {{ updateInfo?.current || 'dev' }}
+            {{ displayVersion }}
           </v-chip>
         </div>
 
@@ -160,7 +160,7 @@
         <div class="d-flex align-center flex-wrap">
           <span class="text-body-2">Có phiên bản mới: <a href="https://khanhpro303.github.io/cqa-bbi/changelog.html" target="_blank" class="text-primary font-weight-bold">{{ updateInfo.latest }}</a></span>
           <span class="text-caption text-grey mx-2">|</span>
-          <span class="text-caption text-grey">Hiện tại: {{ updateInfo.current }}</span>
+          <span class="text-caption text-grey">Hiện tại: {{ displayVersion }}</span>
           <span class="text-caption text-grey mx-2">|</span>
           <span class="text-caption"><a href="https://khanhpro303.github.io/cqa-bbi/guide/installation.html#tu-%C4%91ong-cap-nhat-tuy-chon" target="_blank" class="text-primary">Cài Watchtower</a> để tự động cập nhật.</span>
         </div>
@@ -528,6 +528,13 @@ const passwordForm = ref({ currentPassword: '', newPassword: '', confirmPassword
 
 // Version update check
 const updateInfo = ref<any>(null)
+const displayVersion = computed(() => {
+  const cur = updateInfo.value?.current?.trim()
+  if (!cur || cur === 'dev') return 'v1'
+  // If it's a git commit hash or long hex string, display 'v1' instead of a raw hash
+  if (/^[0-9a-f]{7,}$/i.test(cur)) return 'v1'
+  return cur.startsWith('v') ? cur : `v${cur}`
+})
 const isUpdateDismissed = computed(() => {
   if (!updateInfo.value?.latest) return true
   return localStorage.getItem('cqa_dismissed_version') === updateInfo.value.latest

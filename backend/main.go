@@ -17,7 +17,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/workers"
 )
 
-var version = "dev"
+var version = "v1"
 
 func main() {
 	log.Printf("Chat Quality Agent %s", version)
