@@ -1,0 +1,47 @@
+name: Verify PR 19 Chat Memory against MySQL
+
+on:
+  push:
+    branches: [codex/cqa-pr19-offhost]
+
+permissions:
+  contents: read
+
+jobs:
+  chat-memory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: cqa-ci-test
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: cqa_chatmemory_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pcqa-ci-test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 9f52ecaba68dec8e1c057bb56cc584e9643a50b5
+          persist-credentials: false
+      - name: Reconstruct the exact tested merge tree
+        run: |
+          git fetch --no-tags origin refs/pull/19/head
+          test "$(git rev-parse FETCH_HEAD)" = 66d50546ca15d299cbafa4788ce016a83779ae8f
+          git -c user.name=CI -c user.email=ci@users.noreply.github.com merge --no-commit --no-ff FETCH_HEAD
+          test "$(git write-tree)" = be087778d10cb739f873ed5c6a8964ee8ec9db89
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: backend/go.sum
+      - name: Check session persistence, summaries and profiles on MySQL 8
+        working-directory: backend
+        env:
+          CQA_TEST_MYSQL_DSN: root:cqa-ci-test@tcp(127.0.0.1:3306)/cqa_chatmemory_test?parseTime=true&loc=UTC&charset=utf8mb4
+        run: go test -count=1 -v ./chatmemory -run '^TestPipelineMySQL$'
