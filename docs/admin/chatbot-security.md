@@ -20,6 +20,26 @@ khách không điều khiển được bot vượt quyền.
    loại bot. Token đi qua header Langflow, không nằm trong prompt hay tham số
    công cụ.
 
+## Nhóm Zalo nhiều người
+
+Mỗi nhóm khách chăm một mã KH; chủ và nhân viên của khách cùng nói với bot.
+
+- Bật `CHATBOT_GROUP_PER_SENDER_SESSIONS=true`: khoá đồng thời, menu số, câu
+  hỏi kỳ công nợ, giỏ hàng và lịch sử Langflow tách theo từng người gửi. Một
+  từ khoá kích hoạt mở phiên cho cả nhóm.
+- Đơn nháp chỉ người tạo được xác nhận bằng "1"; người khác gõ "1" không chốt
+  đơn của họ.
+- Câu xã giao trong nhóm (người với người: "dạ", "ok anh"…) bot im lặng và
+  không đóng phiên. Phiên nhóm chỉ đóng khi hết thời gian chờ, có từ khoá kết
+  thúc, hoặc có người xin gặp nhân viên. Chat 1:1 giữ cách cũ: nhắc một lần,
+  câu xã giao thứ hai liên tiếp thì đóng phiên.
+- Mặc định mỗi người có lịch sử Langflow riêng, nên bot không thấy câu của người
+  khác trong nhóm. Bật "Trợ lý trong nhóm khách" trên kênh để bot đọc cả nhóm và
+  dùng một cuộc hội thoại chung (xem `group-assistant.md`). Tin của người trong
+  nhóm vào ngữ cảnh dưới dạng một dòng có thẻ `<tin_nhom>`, đã bỏ xuống dòng và
+  dấu `< >`, nên không giả được lời người khác hay đóng thẻ. Quyền vẫn ký theo
+  từng người gửi.
+
 ## ERP
 
 - `/mcp/erp/:tenantId` và `/api/v1/tenants/:tenantId/erp/query` đều bắt buộc
