@@ -96,7 +96,8 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 	totalMessages := 0
 	totalInserted := 0
 	failedConversations := 0
-	for _, conv := range conversations {
+	skippedConversations := 0
+	for i, conv := range conversations {
 		convID, err := s.ingestor.EnsureConversation(channel.TenantID, channel.ID, conv)
 		if err != nil {
 			log.Printf("[sync] error upserting conversation %s: %v", conv.ExternalID, err)
@@ -107,6 +108,18 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 		// Fetch messages for this conversation
 		messages, err := adapter.FetchMessages(ctx, conv.ExternalID, since)
 		if err != nil {
+			if channels.IsRateLimited(err) {
+				// Every remaining request would fail the same way and keep
+				// the quota exhausted; stop and retry the window next run.
+				log.Printf("[sync] channel %s: API call limit reached at conversation %d/%d, stopping this run: %v", channel.Name, i+1, len(conversations), err)
+				failedConversations += len(conversations) - i
+				break
+			}
+			if channels.IsConversationScoped(err) {
+				log.Printf("[sync] skipping conversation %s: the channel refused its messages: %v", conv.ExternalID, err)
+				skippedConversations++
+				continue
+			}
 			log.Printf("[sync] error fetching messages for %s: %v", conv.ExternalID, err)
 			failedConversations++
 			continue
@@ -133,7 +146,13 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 		totalInserted += ingestResult.MessagesInserted
 	}
 
-	log.Printf("[sync] channel %s: synced %d conversations, %d messages (%d new)", channel.Name, len(conversations), totalMessages, totalInserted)
+	if skippedConversationsBlockSync(skippedConversations, len(conversations)) {
+		// Too many refusals at once looks like a channel-wide outage, not a
+		// few broken conversations: keep the window and retry it.
+		failedConversations += skippedConversations
+	}
+
+	log.Printf("[sync] channel %s: synced %d conversations, %d messages (%d new), %d skipped", channel.Name, len(conversations), totalMessages, totalInserted, skippedConversations)
 
 	// Log activity only when there are new messages, OR if triggered manually
 	isManual, _ := ctx.Value("manual_sync").(bool)
@@ -148,6 +167,9 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 		}
 
 		detail := fmt.Sprintf("Sync '%s': %d conversations, %d messages (%d new)", channel.Name, len(conversations), totalMessages, totalInserted)
+		if skippedConversations > 0 {
+			detail += fmt.Sprintf(", bỏ qua %d hội thoại kênh từ chối trả tin nhắn", skippedConversations)
+		}
 		if isManual {
 			if userEmail != "" {
 				detail += fmt.Sprintf(" (Thủ công bởi %s)", userEmail)
@@ -176,6 +198,26 @@ func (s *SyncEngine) SyncChannel(ctx context.Context, channel models.Channel) er
 	}
 	syncMessengerLabelsAfterMessages(ctx, channel, adapter, credBytes)
 	return nil
+}
+
+// maxSkippedConversationShare is the largest share of a sync's conversations
+// that may be skipped for conversation-scoped errors while the sync still
+// counts as successful and moves last_sync_at forward.
+const maxSkippedConversationShare = 10 // at most 1 in 10
+
+// skippedConversationsBlockSync reports whether the conversations skipped for
+// conversation-scoped errors are too many to let the sync succeed. One broken
+// conversation is always tolerated so that it cannot pin the sync window and
+// make every run re-read (and re-bill) the whole window.
+func skippedConversationsBlockSync(skipped, total int) bool {
+	if skipped == 0 {
+		return false
+	}
+	allowed := total / maxSkippedConversationShare
+	if allowed < 1 {
+		allowed = 1
+	}
+	return skipped > allowed
 }
 
 // SyncAllChannels syncs all active channels for a tenant.

@@ -334,7 +334,7 @@ func (z *ZaloOAAdapter) doRequest(ctx context.Context, method, apiURL string, pa
 
 		if errCode, ok := result["error"].(float64); ok && errCode != 0 {
 			msg, _ := result["message"].(string)
-			return nil, fmt.Errorf("zalo api error %v: %s", errCode, msg)
+			return nil, &ZaloAPIError{Code: int(errCode), Message: msg}
 		}
 
 		return result, nil
@@ -1200,7 +1200,7 @@ func (z *ZaloOAAdapter) doRequestMultipart(ctx context.Context, apiURL, fieldNam
 
 		if errCode, ok := result["error"].(float64); ok && errCode != 0 {
 			msg, _ := result["message"].(string)
-			return nil, fmt.Errorf("zalo api error %v: %s", errCode, msg)
+			return nil, &ZaloAPIError{Code: int(errCode), Message: msg}
 		}
 
 		return result, nil
@@ -1278,7 +1278,7 @@ func (z *ZaloOAAdapter) doRequestQueryParams(ctx context.Context, method, apiURL
 
 		if errCode, ok := result["error"].(float64); ok && errCode != 0 {
 			msg, _ := result["message"].(string)
-			return nil, fmt.Errorf("zalo api error %v: %s", errCode, msg)
+			return nil, &ZaloAPIError{Code: int(errCode), Message: msg}
 		}
 
 		return result, nil
