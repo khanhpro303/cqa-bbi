@@ -207,6 +207,12 @@ func isLastAttempt(ctx context.Context) bool {
 
 // replyToCasualTurn records a warning only after Zalo accepts the reply.
 // A failed closing message leaves the warning in place so the task can retry.
+// quietGroupCasualTurn reports whether a turn is small talk inside a Zalo
+// group, which the bot ignores instead of warning and ending the session.
+func quietGroupCasualTurn(intent, zaloGroupID string) bool {
+	return intent == "CASUAL" && zaloGroupID != ""
+}
+
 func replyToCasualTurn(ctx context.Context, warningKey, turnOwner string, ttl time.Duration, send func(string) error) (bool, error) {
 	warned, err := db.RedisClient.Get(ctx, warningKey).Result()
 	if err != nil && err != redis.Nil {
@@ -944,6 +950,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// A warning belongs to one sender and one session. Reuse the turn's
 		// existing lock scope, including per-sender state when enabled in groups.
 		warningKey := workKey + engine.CasualWarningSuffix
+		if quietGroupCasualTurn(intent, matchedGroup.ZaloGroupID) {
+			// In a customer group the owner and staff also talk to each other
+			// ("dạ", "ok anh", "chiều giao nhé"). Answering that chatter floods
+			// the group, and the second casual line used to close the session
+			// for every member, wiping others' half-finished menus and prompts.
+			// Stay silent and leave closing to the idle timeout or end keyword.
+			log.Printf("[worker] group %s: ignoring small talk from %s without closing the session", matchedGroup.ZaloGroupID, payload.Sender.ID)
+			return nil
+		}
 		if intent == "CASUAL" {
 			turnOwner := activeSessionID + ":" + payload.Sender.ID
 			endSession, err := replyToCasualTurn(ctx, warningKey, turnOwner, sessionTTL, func(text string) error {
