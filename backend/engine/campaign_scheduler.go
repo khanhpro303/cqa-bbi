@@ -106,6 +106,12 @@ func (s *Scheduler) fireCampaignSegment(segmentID string) {
 		return
 	}
 
+	if crmGroupIsArchived(campaign.TenantID, seg.GroupID) {
+		// Paused while its group is archived; restoring the group resumes it.
+		log.Printf("[scheduler] campaign %s segment %s skipped: group %s is archived", campaign.ID, segmentID, seg.GroupID)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), campaignFireTimeout)
 	defer cancel()
 

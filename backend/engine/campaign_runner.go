@@ -148,6 +148,9 @@ func (b *campaignBroadcast) fireSegment(ctx context.Context, seg models.Campaign
 	var group models.CRMGroup
 	gErr := db.DB.Where("id = ? AND tenant_id = ?", seg.GroupID, b.tenantID).First(&group).Error
 	switch {
+	case gErr != nil && crmGroupIsArchived(b.tenantID, seg.GroupID):
+		run.Status, run.FailCount, run.ErrorMessage = "error", 1, "group_archived"
+		fail = 1
 	case gErr != nil:
 		run.Status, run.FailCount, run.ErrorMessage = "error", 1, "group_not_found"
 		fail = 1
@@ -393,4 +396,16 @@ func nextCampaignRun(expr string, loc *time.Location) *time.Time {
 		return nil
 	}
 	return &next
+}
+
+// crmGroupIsArchived reports whether the CRM group exists but is archived
+// (soft-deleted). Normal lookups do not see archived groups.
+func crmGroupIsArchived(tenantID, groupID string) bool {
+	if groupID == "" {
+		return false
+	}
+	var n int64
+	db.DB.Unscoped().Model(&models.CRMGroup{}).
+		Where("id = ? AND tenant_id = ? AND archived_at IS NOT NULL", groupID, tenantID).Count(&n)
+	return n > 0
 }

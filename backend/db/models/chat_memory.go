@@ -9,7 +9,7 @@ import "time"
 type ChatSession struct {
 	// ID is the worker's session id (the Langflow session_id of the session).
 	ID             string `gorm:"type:varchar(100);primaryKey" json:"id"`
-	TenantID       string `gorm:"type:char(36);not null;index:idx_chatsess_tenant_subject,priority:1;index:idx_chatsess_status_activity,priority:1" json:"tenant_id"`
+	TenantID       string `gorm:"type:char(36);not null;index:idx_chatsess_tenant_subject,priority:1;index:idx_chatsess_status_activity,priority:1;index:idx_chatsess_tenant_code,priority:1" json:"tenant_id"`
 	ChannelID      string `gorm:"type:char(36);not null" json:"channel_id"`
 	ConversationID string `gorm:"type:char(36);index" json:"conversation_id"`
 	// SubjectType is "user" for a 1:1 chat and "group" for a GMF group chat;
@@ -19,7 +19,7 @@ type ChatSession struct {
 	ZaloUserID   string `gorm:"type:varchar(255)" json:"zalo_user_id"`
 	ZaloGroupID  string `gorm:"type:varchar(255)" json:"zalo_group_id"`
 	CustomerName string `gorm:"type:varchar(255)" json:"customer_name"`
-	CustomerCode string `gorm:"type:varchar(50)" json:"customer_code"`
+	CustomerCode string `gorm:"type:varchar(50);index:idx_chatsess_tenant_code,priority:2" json:"customer_code"`
 	// AgentType is "public" (customer bot) or "private" (staff bot).
 	AgentType      string    `gorm:"type:varchar(20)" json:"agent_type"`
 	StartedAt      time.Time `gorm:"not null" json:"started_at"`
@@ -56,12 +56,12 @@ func (ChatSession) TableName() string { return "chat_sessions" }
 // or a GMF group), updated after each summarized session.
 type ChatCustomerProfile struct {
 	ID           string `gorm:"type:char(36);primaryKey" json:"id"`
-	TenantID     string `gorm:"type:char(36);not null;uniqueIndex:uq_chatprofile_subject,priority:1" json:"tenant_id"`
+	TenantID     string `gorm:"type:char(36);not null;uniqueIndex:uq_chatprofile_subject,priority:1;index:idx_chatprofile_tenant_code,priority:1" json:"tenant_id"`
 	ChannelID    string `gorm:"type:char(36);not null;uniqueIndex:uq_chatprofile_subject,priority:2" json:"channel_id"`
 	SubjectType  string `gorm:"type:varchar(10);not null;uniqueIndex:uq_chatprofile_subject,priority:3" json:"subject_type"`
 	SubjectID    string `gorm:"type:varchar(255);not null;uniqueIndex:uq_chatprofile_subject,priority:4" json:"subject_id"`
 	CustomerName string `gorm:"type:varchar(255)" json:"customer_name"`
-	CustomerCode string `gorm:"type:varchar(50)" json:"customer_code"`
+	CustomerCode string `gorm:"type:varchar(50);index:idx_chatprofile_tenant_code,priority:2" json:"customer_code"`
 	// Profile is the structured JSON profile (traits with evidence).
 	Profile string `gorm:"type:json" json:"profile"`
 	// Card is the short text (<= 500 chars) that may be given to the chatbot.

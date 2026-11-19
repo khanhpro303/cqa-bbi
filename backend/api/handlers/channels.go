@@ -409,7 +409,7 @@ func deleteChannelCascade(tx *gorm.DB, tenantID, channelID string) ([]string, er
 	if err := tx.Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Delete(&models.Conversation{}).Error; err != nil {
 		return nil, fmt.Errorf("delete conversations: %w", err)
 	}
-	if err := tx.Model(&models.CRMGroup{}).Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Update("channel_id", nil).Error; err != nil {
+	if err := tx.Unscoped().Model(&models.CRMGroup{}).Where("channel_id = ? AND tenant_id = ?", channelID, tenantID).Update("channel_id", nil).Error; err != nil {
 		return nil, fmt.Errorf("detach crm groups: %w", err)
 	}
 	whitelistIDs := tx.Model(&models.ZaloWhitelist{}).Select("id").Where("channel_id = ? AND tenant_id = ?", channelID, tenantID)

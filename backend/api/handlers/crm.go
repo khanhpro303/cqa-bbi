@@ -56,8 +56,14 @@ func mergeRequestCustomerCodes(single string, list []string) []string {
 func ListCRMGroups(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
+	// ?archived=1 lists the archive (soft-deleted groups) instead of the
+	// active groups.
+	q := db.DB.Preload("Employees").Preload("Customers").Preload("Channel").Where("tenant_id = ?", tenantID)
+	if c.Query("archived") == "1" {
+		q = q.Unscoped().Where("archived_at IS NOT NULL").Order("archived_at DESC")
+	}
 	var groups []models.CRMGroup
-	if err := db.DB.Preload("Employees").Preload("Customers").Preload("Channel").Where("tenant_id = ?", tenantID).Find(&groups).Error; err != nil {
+	if err := q.Find(&groups).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_list_groups"})
 		return
 	}
@@ -259,73 +265,6 @@ func UpdateCRMGroup(c *gin.Context) {
 		fmt.Sprintf("Cập nhật nhóm GMF '%s' (khách=%s)", group.Name, strings.Join(codes, ", ")), "", c.ClientIP())
 
 	c.JSON(http.StatusOK, group)
-}
-
-func DeleteCRMGroup(c *gin.Context) {
-	tenantID := middleware.GetTenantID(c)
-	groupID := c.Param("id")
-
-	var group models.CRMGroup
-	if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "group_not_found"})
-		return
-	}
-
-	// 1. Disband on Zalo GMF if linked
-	if group.ZaloGroupID != "" {
-		var channel models.Channel
-		var err error
-		if group.ChannelID != "" {
-			err = db.DB.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", group.ChannelID, tenantID, "zalo_oa", true).First(&channel).Error
-		} else {
-			err = db.DB.Where("tenant_id = ? AND channel_type = ? AND is_active = ?", tenantID, "zalo_oa", true).First(&channel).Error
-		}
-		if err == nil {
-			cfg, _ := config.Load()
-			if credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, cfg.EncryptionKey); err == nil {
-				var zaloCreds channels.ZaloOACredentials
-				if json.Unmarshal(credBytes, &zaloCreds) == nil {
-					adapter := zalotoken.NewAdapter(channel.ID, zaloCreds, cfg.EncryptionKey)
-
-					if deleteErr := adapter.DeleteGMFGroup(c.Request.Context(), group.ZaloGroupID); deleteErr != nil {
-						log.Printf("[crm] failed to dissolve Zalo GMF group %s (%s): %v", group.Name, group.ZaloGroupID, deleteErr)
-						c.JSON(http.StatusInternalServerError, gin.H{
-							"error":   "failed_to_delete_zalo_group",
-							"details": deleteErr.Error(),
-						})
-						return
-					}
-					log.Printf("[crm] successfully dissolved Zalo GMF group %s (%s)", group.Name, group.ZaloGroupID)
-				}
-			}
-		}
-	}
-
-	tx := db.DB.Begin()
-	// Delete group association
-	if err := tx.Where("group_id = ?", groupID).Delete(&models.CRMGroupEmployee{}).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_delete_group_employees"})
-		return
-	}
-	if err := tx.Where("group_id = ?", groupID).Delete(&models.CRMGroupCustomer{}).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_delete_group_customers"})
-		return
-	}
-	// Delete group itself
-	if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).Delete(&models.CRMGroup{}).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_delete_group"})
-		return
-	}
-
-	tx.Commit()
-
-	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "crm_group.delete", "crm_group", groupID,
-		fmt.Sprintf("Xóa/giải tán nhóm GMF '%s' (zalo_group_id=%s)", group.Name, group.ZaloGroupID), "", c.ClientIP())
-
-	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
 // ClearCRMGroupSession wipes the live Redis bot-session cache for one GMF group

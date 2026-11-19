@@ -325,6 +325,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
+		// 1b. An archived CRM group is out of service: the bot stays silent in it
+		// until the group is restored (its Zalo group may still be alive).
+		if resolvedGroup == nil && payload.Recipient.ID != "" && crmGroupArchived(payload.Recipient.ID) {
+			log.Printf("[worker] Zalo group %s belongs to an archived CRM group; ignoring message from %s", payload.Recipient.ID, payload.Sender.ID)
+			return nil
+		}
+
 		// Determine the OA ID from the payload (either Recipient.ID for direct messages, or OAID for group messages)
 		oaID := payload.Recipient.ID
 		if payload.OAID != "" {
@@ -473,7 +480,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 								// Auto-invite customer to Zalo GMF group chats they are already pre-added to locally
 								var groupLinks []models.CRMGroupCustomer
-								if err := db.DB.Where("zalo_customer_id = ?", customerRec.ID).Find(&groupLinks).Error; err == nil {
+								if err := db.DB.Where("zalo_customer_id = ? AND group_id IN (?)", customerRec.ID, db.ActiveCRMGroupIDs()).Find(&groupLinks).Error; err == nil {
 									for _, link := range groupLinks {
 										var grp models.CRMGroup
 										if err := db.DB.First(&grp, "id = ?", link.GroupID).Error; err == nil && grp.ZaloGroupID != "" {

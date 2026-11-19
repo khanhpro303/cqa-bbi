@@ -25,6 +25,10 @@ type ChatMemoryConfig struct {
 	// VectorRetentionDays deletes summary vectors older than this many days
 	// from the index (the MySQL summary is kept). 0 disables deletion.
 	VectorRetentionDays int
+	// MessageRetentionDays deletes raw Zalo OA chat messages (MySQL
+	// `messages`) older than this many days. Session summaries and customer
+	// profiles are kept. 0 disables deletion. Default 730 (24 months).
+	MessageRetentionDays int
 
 	AstraCollection string
 
@@ -49,6 +53,7 @@ func loadChatMemoryConfig() ChatMemoryConfig {
 		SummarizeIdleMinutes: getEnvInt("CHAT_MEMORY_SUMMARIZE_IDLE_MINUTES", 0),
 		VectorStore:          strings.ToLower(strings.TrimSpace(getEnv("CHAT_MEMORY_VECTOR_STORE", ""))),
 		VectorRetentionDays:  getEnvInt("CHAT_MEMORY_VECTOR_RETENTION_DAYS", 365),
+		MessageRetentionDays: getEnvInt("CHAT_MESSAGE_RETENTION_DAYS", 730),
 		AstraCollection:      getEnv("CHAT_MEMORY_ASTRA_COLLECTION", "zalo_session_summaries"),
 		VectorizeAccountID:   getEnv("CHAT_MEMORY_VECTORIZE_ACCOUNT_ID", ""),
 		VectorizeAPIToken:    getEnv("CHAT_MEMORY_VECTORIZE_API_TOKEN", ""),
