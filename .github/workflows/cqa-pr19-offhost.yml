@@ -1,4 +1,4 @@
-name: Verify PR 19 Chat Memory against MySQL
+name: Stage CQA app image on the VPS
 
 on:
   push:
@@ -8,41 +8,47 @@ permissions:
   contents: read
 
 jobs:
-  chat-memory:
+  image:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: cqa-ci-test
-          MYSQL_ROOT_HOST: '%'
-          MYSQL_DATABASE: cqa_chatmemory_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h localhost -pcqa-ci-test"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=15
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: ba1e65fe623dbbb87355fed2965f2eae3627702b
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 9f52ecaba68dec8e1c057bb56cc584e9643a50b5
-          fetch-depth: 0
+          ref: ba1e65fe623dbbb87355fed2965f2eae3627702b
           persist-credentials: false
-      - name: Reconstruct the exact tested merge tree
+      - name: Build and export exact main revision
+        shell: bash
         run: |
-          git fetch --no-tags origin refs/pull/19/head
-          test "$(git rev-parse FETCH_HEAD)" = 66d50546ca15d299cbafa4788ce016a83779ae8f
-          git -c user.name=CI -c user.email=ci@users.noreply.github.com merge --no-commit --no-ff FETCH_HEAD
-          test "$(git write-tree)" = be087778d10cb739f873ed5c6a8964ee8ec9db89
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache-dependency-path: backend/go.sum
-      - name: Check session persistence, summaries and profiles on MySQL 8
-        working-directory: backend
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          tag="cqa-app:git-$TARGET_SHA"
+          output="$RUNNER_TEMP/cqa-image"
+          mkdir -p "$output"
+          docker build --platform linux/amd64 --build-arg VERSION="$TARGET_SHA" \
+            --label "org.opencontainers.image.revision=$TARGET_SHA" --tag "$tag" .
+          docker image inspect --format '{{.Id}}' "$tag" > "$output/image-id"
+          docker image save "$tag" | gzip -1 > "$output/app.tar.gz"
+          cd "$output"
+          sha256sum app.tar.gz image-id > SHA256SUMS
+      - name: Stage verified files on the existing CQA VPS
+        shell: bash
         env:
-          CQA_TEST_MYSQL_DSN: root:cqa-ci-test@tcp(127.0.0.1:3306)/cqa_chatmemory_test?parseTime=true&loc=UTC&charset=utf8mb4
-        run: go test -count=1 -v ./chatmemory -run '^TestPipelineMySQL$'
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USERNAME }}
+          VPS_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          ssh_dir=$(mktemp -d)
+          trap 'rm -f "$ssh_dir/key" "$ssh_dir/known_hosts"; rmdir "$ssh_dir"' EXIT
+          printf '%s\n' "$VPS_KEY" > "$ssh_dir/key"
+          ssh-keyscan -T 10 -t ed25519 "$VPS_HOST" > "$ssh_dir/known_hosts" 2>/dev/null
+          test "$(ssh-keygen -lf "$ssh_dir/known_hosts" | awk '{print $2}')" = 'SHA256:RBKTIUlSdGXAXXTXwFfui52CWuYadrjGCgW4eL1aLkg'
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+          tar -C "$RUNNER_TEMP/cqa-image" -cf - SHA256SUMS image-id app.tar.gz |
+            ssh -T -l "$VPS_USER" -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=12 \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/known_hosts" \
+              -i "$ssh_dir/key" -- "$VPS_HOST" \
+              "set -eu; umask 077; stage=\$(mktemp -d /home/karien/cqa-image-stage.${GITHUB_RUN_ID}.XXXXXXXX); cd \"\$stage\"; tar -xf - SHA256SUMS image-id app.tar.gz; sha256sum -c SHA256SUMS; printf 'Image staged: %s\\n' \"\$stage\""
