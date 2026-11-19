@@ -25,7 +25,7 @@ vi.mock('../api', () => ({ default: {
 
 const Btn = defineComponent({ emits: ['click'], setup: (_, { slots, emit }) => () => h('button', { onClick: () => emit('click') }, slots.default?.()) })
 const stubs = {
-  ...Object.fromEntries(['VCard', 'VIcon', 'VSpacer', 'VAlert', 'VRow', 'VCol', 'VSwitch', 'VTextField', 'VSelect', 'VTextarea', 'VDivider', 'VTable']
+  ...Object.fromEntries(['VCard', 'VDialog', 'VIcon', 'VSpacer', 'VAlert', 'VRow', 'VCol', 'VSwitch', 'VTextField', 'VSelect', 'VTextarea', 'VDivider', 'VTable']
     .map(name => [name, true])),
   VBtn: Btn,
 }
