@@ -145,7 +145,7 @@
     :opacity="0.12"
     transition="slide-x-reverse-transition"
     class="cloudify-settings-dialog justify-end"
-    content-class="cloudify-settings-panel border-s elevation-6"
+    content-class="cloudify-settings-panel bg-surface border-s elevation-6"
     aria-labelledby="cloudify-settings-title"
     @after-leave="panelActivator?.focus({ preventScroll: true })"
   >
@@ -455,7 +455,6 @@ defineExpose({ load })
 
 <style scoped>
 .cloudify-settings-dialog :deep(.cloudify-settings-panel) {
-  background-color: rgb(var(--v-theme-surface));
   margin: 0;
 }
 
