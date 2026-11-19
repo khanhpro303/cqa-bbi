@@ -382,6 +382,20 @@ func DeleteChannel(c *gin.Context) {
 		os.RemoveAll(filepath.Join("/var/lib/cqa/files", tenantID, convID))
 	}
 
+	// A personal Zalo channel's gateway account would otherwise keep
+	// listening and posting imports for a channel that no longer exists.
+	// Best effort: the channel is already gone, and an unreachable gateway
+	// now pauses the orphaned account itself on the first rejected import.
+	if channel.ChannelType == "personal_zalo_import" {
+		if cfg, err := config.Load(); err == nil && cfg.PersonalZaloGatewayBaseURL != "" {
+			if n, err := deletePersonalZaloGatewayAccounts(cfg.PersonalZaloGatewayBaseURL, tenantID, channelID); err != nil {
+				log.Printf("[channels] delete channel %s: removing personal Zalo gateway accounts failed after %d: %v", channelID, n, err)
+			} else if n > 0 {
+				log.Printf("[channels] delete channel %s: removed %d personal Zalo gateway account(s)", channelID, n)
+			}
+		}
+	}
+
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "channel.delete", "channel", channelID, "Deleted channel: "+channel.Name, "", c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
@@ -591,7 +605,7 @@ func PurgeChannelConversations(c *gin.Context) {
 		}
 		convsDeleted = result.RowsAffected
 		return tx.Model(&channel).Updates(map[string]interface{}{
-			"last_sync_at": nil, "last_sync_status": nil, "last_sync_error": "", "updated_at": time.Now(),
+			"last_sync_at": nil, "last_sync_status": nil, "last_sync_error": "", "sync_retry_state": nil, "updated_at": time.Now(),
 		}).Error
 	})
 	if err != nil {

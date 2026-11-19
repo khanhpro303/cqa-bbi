@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -79,7 +81,7 @@ func PersonalZaloImportSecretResolver(encryptionKey, fallbackSecret string) Inte
 
 		var channel models.Channel
 		if err := db.DB.Where("id = ? AND tenant_id = ?", req.ChannelID, req.TenantID).First(&channel).Error; err != nil {
-			return nil, err
+			return nil, fmt.Errorf("channel %s of tenant %s: %w", req.ChannelID, req.TenantID, err)
 		}
 		if channel.ChannelType != "personal_zalo_import" {
 			return nil, errors.New("channel_type_not_supported")
@@ -87,7 +89,7 @@ func PersonalZaloImportSecretResolver(encryptionKey, fallbackSecret string) Inte
 
 		credBytes, err := pkg.Decrypt(channel.CredentialsEncrypted, encryptionKey)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decrypt channel %s credentials: %w", channel.ID, err)
 		}
 
 		var creds contracts.PersonalZaloImportCredentials
@@ -149,6 +151,11 @@ func InternalHMACAuth(resolveSecret InternalSecretResolver, maxSkew time.Duratio
 
 		authCtx, err := resolveSecret(c, body)
 		if err != nil || authCtx == nil || authCtx.Secret == "" {
+			reason := "empty secret"
+			if err != nil {
+				reason = err.Error()
+			}
+			log.Printf("[internal-auth] %s rejected request %s: invalid target: %s", c.FullPath(), requestID, reason)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid_internal_target"})
 			return
 		}

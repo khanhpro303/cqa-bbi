@@ -1,5 +1,5 @@
 import { logger } from '../logger.js';
-import { sendImportBatch } from './cqa-client.js';
+import { CQAImportError, sendImportBatch } from './cqa-client.js';
 import type { GatewayStore } from '../store/file-store.js';
 
 export class SyncService {
@@ -34,6 +34,11 @@ export class SyncService {
       if (!account.accountExternalId && !account.zaloUid) {
         continue;
       }
+      // CQA said this account's channel is gone; resending the same batch
+      // every interval only floods both logs with 401s.
+      if (account.syncBlockedReason) {
+        continue;
+      }
       try {
         await this.syncAccount(account.id);
       } catch (error) {
@@ -57,7 +62,21 @@ export class SyncService {
           return;
         }
 
-        const response = await sendImportBatch(batch, this.timeoutMs);
+        let response;
+        try {
+          response = await sendImportBatch(batch, this.timeoutMs);
+        } catch (error) {
+          if (error instanceof CQAImportError && error.targetGone) {
+            const reason = `CQA rejected imports for channel ${batch.account.channelId} (${error.code}); the channel was probably deleted. Reconnect from CQA or delete this gateway account.`;
+            await this.store.setAccountRuntime(accountId, {
+              syncBlockedReason: reason,
+              syncBlockedAt: new Date().toISOString(),
+              lastError: reason,
+            });
+            logger.warn(`[sync] account=${accountId} paused: ${reason}`);
+          }
+          throw error;
+        }
         const syncedAt = new Date().toISOString();
         await this.store.markBatchSynced(
           accountId,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -328,6 +329,28 @@ func fetchPersonalZaloGatewayAccount(baseURL, accountID string) (*personalZaloGa
 		return nil, err
 	}
 	return &account, nil
+}
+
+// deletePersonalZaloGatewayAccounts removes every gateway account that imports
+// into tenantID/channelID. Without this, deleting the channel left the
+// account listening to Zalo and posting imports that CQA rejects with
+// 401 invalid_internal_target on every sync interval.
+func deletePersonalZaloGatewayAccounts(baseURL, tenantID, channelID string) (int, error) {
+	accounts, err := listPersonalZaloGatewayAccounts(baseURL)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, account := range accounts {
+		if account.TenantID != tenantID || account.ChannelID != channelID || account.ID == "" {
+			continue
+		}
+		if err := personalZaloGatewayJSON(baseURL, http.MethodDelete, "/api/v1/accounts/"+url.PathEscape(account.ID), nil, nil); err != nil {
+			return deleted, fmt.Errorf("delete gateway account %s: %w", account.ID, err)
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 func personalZaloGatewayAction(baseURL, accountID, action string) error {

@@ -334,12 +334,36 @@ func (z *ZaloOAAdapter) doRequest(ctx context.Context, method, apiURL string, pa
 
 		if errCode, ok := result["error"].(float64); ok && errCode != 0 {
 			msg, _ := result["message"].(string)
-			return nil, fmt.Errorf("zalo api error %v: %s", errCode, msg)
+			return nil, &ZaloAPIError{Code: int(errCode), Message: msg}
 		}
 
 		return result, nil
 	}
 	return nil, fmt.Errorf("zalo api failed after retry")
+}
+
+// zaloQuotaErrorCode is Zalo's "Your OA reached limit call api" error.
+const zaloQuotaErrorCode = -32
+
+// ZaloAPIError is a Zalo OpenAPI application error: HTTP 200 with a non-zero
+// "error" field.
+type ZaloAPIError struct {
+	Code    int
+	Message string
+}
+
+func (e *ZaloAPIError) Error() string {
+	return fmt.Sprintf("zalo api error %d: %s", e.Code, e.Message)
+}
+
+// IsZaloQuotaError reports whether err is Zalo saying the OA used up its API
+// call quota. Further calls fail the same way until the quota resets.
+func IsZaloQuotaError(err error) bool {
+	var apiErr *ZaloAPIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.Code == zaloQuotaErrorCode || strings.Contains(strings.ToLower(apiErr.Message), "reached limit call api")
 }
 
 func (z *ZaloOAAdapter) FetchRecentConversations(ctx context.Context, since time.Time, limit int) ([]SyncedConversation, error) {

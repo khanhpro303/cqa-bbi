@@ -69,6 +69,9 @@ export class GatewayStore {
         sessionData: existing?.sessionData,
         lastError: existing?.lastError,
         lastImportedAt: existing?.lastImportedAt,
+        // Saving re-points the account at a channel CQA just validated.
+        syncBlockedReason: undefined,
+        syncBlockedAt: undefined,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
         threads: existing?.threads || {},
@@ -76,6 +79,14 @@ export class GatewayStore {
 
       state.accounts[id] = next;
       return next;
+    });
+  }
+
+  async deleteAccount(accountId: string): Promise<boolean> {
+    return this.updateState((state) => {
+      if (!state.accounts[accountId]) return false;
+      delete state.accounts[accountId];
+      return true;
     });
   }
 
@@ -260,6 +271,8 @@ export class GatewayStore {
 
       account.lastImportedAt = syncedAt;
       account.lastError = '';
+      delete account.syncBlockedReason;
+      delete account.syncBlockedAt;
       account.updatedAt = syncedAt;
       return undefined;
     });
