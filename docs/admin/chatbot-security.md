@@ -33,8 +33,12 @@ Mỗi nhóm khách chăm một mã KH; chủ và nhân viên của khách cùng 
   không đóng phiên. Phiên nhóm chỉ đóng khi hết thời gian chờ, có từ khoá kết
   thúc, hoặc có người xin gặp nhân viên. Chat 1:1 giữ cách cũ: nhắc một lần,
   câu xã giao thứ hai liên tiếp thì đóng phiên.
-- Mỗi người có lịch sử Langflow riêng, nên bot không thấy câu của người khác
-  trong nhóm. Nhân viên hỏi tiếp việc chủ vừa hỏi cần nói đủ ý.
+- Mặc định mỗi người có lịch sử Langflow riêng, nên bot không thấy câu của người
+  khác trong nhóm. Bật "Trợ lý trong nhóm khách" trên kênh để bot đọc cả nhóm và
+  dùng một cuộc hội thoại chung (xem `group-assistant.md`). Tin của người trong
+  nhóm vào ngữ cảnh dưới dạng một dòng có thẻ `<tin_nhom>`, đã bỏ xuống dòng và
+  dấu `< >`, nên không giả được lời người khác hay đóng thẻ. Quyền vẫn ký theo
+  từng người gửi.
 
 ## ERP
 

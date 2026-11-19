@@ -426,6 +426,17 @@
               color="primary"
               data-testid="chat-memory-profile-in-prompt"
             />
+            <v-divider class="my-3" />
+            <div class="text-body-2 font-weight-medium mb-1">{{ $t('group_assistant_settings_title') }}</div>
+            <v-switch
+              v-model="editForm.group_assistant_mode"
+              :label="$t('group_assistant_mode')"
+              :hint="$t('group_assistant_mode_hint')"
+              persistent-hint
+              density="compact"
+              color="primary"
+              data-testid="group-assistant-mode"
+            />
           </template>
           <template v-else>
             <v-select
@@ -545,7 +556,7 @@ const gatewayLoading = ref(false)
 const gatewayActionLoading = ref<'connect' | 'reconnect' | 'sync' | ''>('')
 let gatewayPollTimer: number | null = null
 
-const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[], handover_alert_group_id: '', chat_memory_profile_in_prompt: false, chat_memory_issue_alerts: true })
+const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[], handover_alert_group_id: '', chat_memory_profile_in_prompt: false, chat_memory_issue_alerts: true, group_assistant_mode: false })
 
 // Alert recipient options: this channel's GMF groups that have a linked Zalo group.
 const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
@@ -825,6 +836,7 @@ async function saveEdit() {
         handover_alert_group_id: editForm.value.handover_alert_group_id || '',
         chat_memory_profile_in_prompt: editForm.value.chat_memory_profile_in_prompt,
         chat_memory_issue_alerts: editForm.value.chat_memory_issue_alerts,
+        group_assistant_mode: editForm.value.group_assistant_mode,
       })
     } else {
       payload.metadata = JSON.stringify({ sync_interval: editForm.value.sync_interval, sync_files: editForm.value.sync_files })
@@ -913,6 +925,7 @@ watch(editDialog, (v) => {
       handover_alert_group_id: metadata.value.handover_alert_group_id || '',
       chat_memory_profile_in_prompt: metadata.value.chat_memory_profile_in_prompt === true,
       chat_memory_issue_alerts: metadata.value.chat_memory_issue_alerts !== false,
+      group_assistant_mode: metadata.value.group_assistant_mode === true,
     }
     if (channel.value.channel_type === 'zalo_oa') {
       loadAlertGroupOptions()

@@ -126,6 +126,9 @@ type SessionTimeoutPayload struct {
 	ZaloUserID     string `json:"zalo_user_id"`
 	ZaloGroupID    string `json:"zalo_group_id"`
 	TimeoutMessage string `json:"timeout_message"`
+	// Quiet closes the session without a message (group assistant mode,
+	// where the bot never announces sessions).
+	Quiet bool `json:"quiet,omitempty"`
 }
 
 // NewSessionTimeoutTask creates a new task to check session timeout
@@ -145,6 +148,10 @@ type ChannelMetadata struct {
 	SessionGoodbyeMessage string `json:"session_goodbye_message"`
 	SessionTimeout        int    `json:"session_timeout_minutes"`
 	SessionTimeoutMessage string `json:"session_timeout_message"`
+	// GroupAssistant makes the bot a quiet member of customer groups: no
+	// trigger word, it reads the whole group and answers only when needed.
+	// See group_assistant.go.
+	GroupAssistant bool `json:"group_assistant_mode"`
 
 	LangflowAPIURL       string `json:"langflow_api_url"`
 	LangflowAPIKey       string `json:"langflow_api_key"`
@@ -694,6 +701,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// is off, workKey == sessionKey (byte-identical to the previous behaviour).
 		workKey := engine.BuildSessionKey(matchedChannel.ID, payload.Sender.ID, matchedGroup.ZaloGroupID)
 
+		// Group assistant mode: the bot reads the whole customer group and
+		// answers only when needed (group_assistant.go).
+		groupAssistant := groupAssistantOn(meta, matchedGroup.ZaloGroupID)
+
 		// Concurrency control: sequential processing per lock key using a safe,
 		// owner-token Redis lock (engine.AcquireSessionLock / ReleaseSessionLock).
 		// The lock TTL (engine.SessionLockTTL) comfortably exceeds the Langflow
@@ -775,6 +786,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 						ZaloUserID:     payload.Sender.ID,
 						ZaloGroupID:    matchedGroup.ZaloGroupID,
 						TimeoutMessage: meta.SessionTimeoutMessage,
+						Quiet:          groupAssistant,
 					})
 					if err == nil {
 						_, _ = asynqClient.Enqueue(timeoutTask, asynq.ProcessIn(time.Duration(meta.SessionTimeout)*time.Minute))
@@ -798,10 +810,24 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				log.Printf("[worker] opened new session %s for key %s", newSessionID, sessionKey)
 				return nil
 			}
-			// Ignore message
-			log.Printf("[zalo-drop] reason=no_session sender=%s key=%s (send the session keyword first)", payload.Sender.ID, sessionKey)
-			return nil
+			if !groupAssistant {
+				// Ignore message
+				log.Printf("[zalo-drop] reason=no_session sender=%s key=%s (send the session keyword first)", payload.Sender.ID, sessionKey)
+				return nil
+			}
+			// Group assistant mode: any message opens the session silently and
+			// is handled in this same turn. The keep-alive below schedules the
+			// (quiet) idle timeout.
+			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
+			activeSessionID = uuid.New().String()
+			if db.RedisClient != nil {
+				db.RedisClient.Set(ctx, sessionKey, activeSessionID, time.Duration(meta.SessionTimeout)*time.Minute+time.Minute)
+			}
+			log.Printf("[group-assistant] opened session %s for group %s", activeSessionID, matchedGroup.ZaloGroupID)
 		}
+
+		sessionTTL := time.Duration(meta.SessionTimeout)*time.Minute + time.Minute
+		groupName, groupRole := groupSpeaker(isWhitelisted, isCustomer, whitelistRec.Name, customerRec.Name)
 
 		// Verified-only interaction (design intent): the trigger-time gate above
 		// only blocks unverified senders at session OPEN. Because a group session
@@ -814,6 +840,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// ignored (no Langflow call, no cost, no usage log). Silent in groups to
 		// avoid spamming verified members with repeated verify DMs.
 		if !isWhitelisted && !isCustomer {
+			if groupAssistant {
+				// Not answered, but part of the group's conversation.
+				rememberGroupLine(ctx, sessionKey, newGroupLine(groupName, groupRole, userText), true, sessionTTL)
+			}
 			log.Printf("[zalo-drop] reason=unverified_sender sender=%s tenant=%s (active session, not whitelisted/customer)", payload.Sender.ID, matchedChannel.TenantID)
 			return nil
 		}
@@ -850,7 +880,6 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// Keep session alive
-		sessionTTL := time.Duration(meta.SessionTimeout)*time.Minute + time.Minute
 		if db.RedisClient != nil {
 			db.RedisClient.Expire(ctx, sessionKey, sessionTTL)
 		}
@@ -863,6 +892,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				ZaloUserID:     payload.Sender.ID,
 				ZaloGroupID:    matchedGroup.ZaloGroupID,
 				TimeoutMessage: meta.SessionTimeoutMessage,
+				Quiet:          groupAssistant,
 			})
 			if err == nil {
 				_, _ = asynqClient.Enqueue(timeoutTask, asynq.ProcessIn(time.Duration(meta.SessionTimeout)*time.Minute))
@@ -901,6 +931,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if engine.TakeAwaitingFollowup(ctx, workKey) {
 			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
 			intent = "IN_SCOPE"
+		} else if groupAssistant {
+			intent = classifyGroupMessage(ctx, matchedChannel.TenantID, workKey, recentGroupLines(ctx, sessionKey), groupName, groupRole, userText)
+			log.Printf("[group-assistant] group %s sender %s: %s", matchedGroup.ZaloGroupID, payload.Sender.ID, intent)
+			if keepOrderConversation(ctx, matchedChannel.TenantID, workKey, intent) {
+				log.Printf("[worker] chat has an open order cart; treating %s reply as IN_SCOPE", intent)
+				intent = "IN_SCOPE"
+			}
 		} else {
 			var err error
 			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText)
@@ -912,6 +949,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				log.Printf("[worker] chat has an open order cart; treating %s reply as IN_SCOPE", intent)
 				intent = "IN_SCOPE"
 			}
+		}
+
+		if groupAssistant {
+			// Every message joins the group log the classifier reads. Messages
+			// that will not reach Langflow as a question are also queued for
+			// it, so the next answer knows what the group said meanwhile.
+			rememberGroupLine(ctx, sessionKey, newGroupLine(groupName, groupRole, userText), intent != "IN_SCOPE", sessionTTL)
 		}
 
 		if intent == "HANDOVER" {
@@ -1008,6 +1052,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// to the flow's own SYSTEM_PROMPT global (see selectSystemPrompt).
 		systemPromptToUse := selectSystemPrompt(agentType, meta.SystemPrompt, meta.SystemPromptInternal)
 		systemPromptToUse = appendChatMemoryContext(ctx, cfg, matchedChannel.Metadata, systemPromptToUse, memTurn)
+		if groupAssistant {
+			systemPromptToUse = appendGroupAssistantContext(matchedChannel.TenantID, systemPromptToUse)
+		}
 		if systemPromptToUse != "" {
 			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
 		}
@@ -1574,8 +1621,18 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// built-in chat memory too). With the feature off, this is the unchanged
 		// group/1:1 session UUID.
 		langflowSessionID := activeSessionID
-		if matchedGroup.ZaloGroupID != "" && engine.PerSenderGroupSessions() {
+		if matchedGroup.ZaloGroupID != "" && engine.PerSenderGroupSessions() && !groupAssistant {
 			langflowSessionID = activeSessionID + ":" + payload.Sender.ID
+		}
+
+		// Group assistant mode: one Langflow conversation per group. The input
+		// carries the group messages Langflow has not seen and who is asking.
+		langflowInput := userText
+		var unseenGroup []groupLine
+		var unseenGroupRaw []string
+		if groupAssistant {
+			unseenGroup, unseenGroupRaw = unseenGroupLines(ctx, sessionKey)
+			langflowInput = groupAssistantInput(unseenGroup, groupName, groupRole, userText)
 		}
 
 		// Drop any stale prompt-delivery receipt so this turn's [RICH_MESSAGE_SENT]
@@ -1588,7 +1645,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		erpAgentToken := erpAgentTokenFor(matchedChannel.TenantID, agentType)
 
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
-		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
+		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, langflowInput, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
 		// Self-heal: a per-channel Langflow override that Langflow rejects (bad
 		// key / deleted flow) must not take the whole bot down while the AI
 		// Engine settings are fine. Retry once with the tenant config.
@@ -1597,7 +1654,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] WARNING channel %s Langflow override rejected (%v); falling back to AI Engine config flow=%s (source=%s). Clear the Langflow fields on this channel to silence this.",
 				matchedChannel.ID, err, fallbackFlow, fallbackSource)
 			if fallbackFlow != "" && lfTenantCfg.APIURL != "" {
-				lfRes, err = langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, userText, lfTenantCfg.APIURL, lfTenantCfg.APIKey, fallbackFlow, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
+				lfRes, err = langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, langflowInput, lfTenantCfg.APIURL, lfTenantCfg.APIKey, fallbackFlow, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
 				flowIDToUse, flowSource = fallbackFlow, fallbackSource
 				lfCfg = lfTenantCfg
 			}
@@ -1617,11 +1674,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return fmt.Errorf("langflow error: %w", err)
 		}
 		replyText := lfRes.Text
+		if groupAssistant {
+			markGroupLinesSeen(ctx, sessionKey, unseenGroupRaw)
+		}
 
 		// Record AI spend for this chatbot turn (non-blocking). Tokens come from
 		// the Langflow response when present, else are estimated from text length.
 		// matchedGroup.ID is "" for 1:1 chats; whitelistRec.Name is "" for customers.
-		go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, agentType, matchedGroup.ID, lfRes, systemPromptToUse+userText, lfRes.Text)
+		go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, agentType, matchedGroup.ID, lfRes, systemPromptToUse+langflowInput, lfRes.Text)
 
 		if strings.TrimSpace(replyText) == "" {
 			log.Printf("[zalo-drop] reason=langflow_empty sender=%s flow=%s", payload.Sender.ID, flowIDToUse)
@@ -1688,6 +1748,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return fmt.Errorf("failed to send reply to Zalo: %w", sendErr)
 		}
 
+		if groupAssistant {
+			rememberGroupLine(ctx, sessionKey, newGroupLine("Bot", groupRoleBot, replyText), false, sessionTTL)
+		}
 		log.Printf("[worker] successfully replied to user %s via Langflow", payload.Sender.ID)
 		return nil
 	}
@@ -1760,6 +1823,10 @@ func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
 		// per-sender group session the per-user sidecars live off the per-user
 		// work key, so wipe the whole group rather than just the base key.
 		teardownSession(ctx, payload.SessionKey, payload.ZaloGroupID)
+		if payload.Quiet {
+			log.Printf("[worker] closed session %s quietly after idle timeout", payload.SessionID)
+			return nil
+		}
 
 		// Find the channel to get credentials
 		var ch models.Channel
@@ -2122,29 +2189,88 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string) (strin
 		return "IN_SCOPE", nil
 	}
 
-	// 1. Resolve the tenant's AI provider (settings → key → model → base URL).
+	content, err := classifyWithTaskPrompt(ctx, tenantID, engine.PromptIntentClassifier, message)
+	if err != nil || content == "" {
+		return "IN_SCOPE", err
+	}
+	return parseMessageIntent(content, message), nil
+}
+
+// classifyWithTaskPrompt asks the tenant's AI provider to label input with
+// the given task prompt and returns the raw answer. It returns "" without an
+// error when no provider is configured, so each caller picks its own fallback.
+func classifyWithTaskPrompt(ctx context.Context, tenantID, promptKey, input string) (string, error) {
+	// Resolve the tenant's AI provider (settings → key → model → base URL).
 	cfg, _ := config.Load()
 	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
 	if err != nil {
-		return "IN_SCOPE", err
+		return "", err
 	}
 	if resolved.Client == nil {
-		return "IN_SCOPE", nil // Fallback if no API key configured
+		return "", nil
 	}
-	aiClient := resolved.Client
-
-	// Define system prompt
-	systemPrompt := engine.BuildTaskPrompt(tenantID, engine.PromptIntentClassifier, nil)
+	systemPrompt := engine.BuildTaskPrompt(tenantID, promptKey, nil)
 
 	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	resp, err := aiClient.AnalyzeChat(testCtx, systemPrompt, message)
+	resp, err := resolved.Client.AnalyzeChat(testCtx, systemPrompt, input)
 	if err != nil {
-		return "IN_SCOPE", err
+		return "", err
 	}
+	return resp.Content, nil
+}
 
-	return parseMessageIntent(resp.Content, message), nil
+// classifyGroupMessage decides whether the bot answers a message in group
+// assistant mode. The classifier sees the recent group log, so members
+// talking to each other stay CASUAL (silent). Without a working classifier
+// the bot answers only obvious business questions: answering every message
+// in a busy group would be worse than missing one.
+func classifyGroupMessage(ctx context.Context, tenantID, workKey string, recent []groupLine, name, role, message string) string {
+	if isDisambiguationReply(message) && hasPendingOptions(ctx, workKey) {
+		return "IN_SCOPE"
+	}
+	content, err := classifyWithTaskPrompt(ctx, tenantID, engine.PromptGroupClassifier, groupClassifierInput(recent, name, role, message))
+	if err != nil {
+		log.Printf("[group-assistant] classifier error: %v; using keyword fallback", err)
+	}
+	if label := parseGroupIntent(content); label != "" {
+		return label
+	}
+	if isObviousBusinessQuery(message) {
+		return "IN_SCOPE"
+	}
+	return "CASUAL"
+}
+
+// parseGroupIntent reads the group classifier's label as given. Unlike
+// parseMessageIntent it does not turn questions into IN_SCOPE: in a group
+// most questions are for other members. "" means no usable answer.
+func parseGroupIntent(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if strings.HasPrefix(content, "```") {
+		if idx := strings.Index(content, "\n"); idx != -1 {
+			content = content[idx+1:]
+		}
+		if idx := strings.LastIndex(content, "```"); idx != -1 {
+			content = content[:idx]
+		}
+		content = strings.TrimSpace(content)
+	}
+	var parsed struct {
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		parsed.Label = content
+	}
+	switch label := strings.ToUpper(strings.TrimSpace(parsed.Label)); label {
+	case "IN_SCOPE", "HANDOVER", "CASUAL", "OUT_OF_SCOPE":
+		return label
+	}
+	return ""
 }
 
 func parseMessageIntent(content, message string) string {
