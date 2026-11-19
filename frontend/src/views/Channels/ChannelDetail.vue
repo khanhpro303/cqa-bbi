@@ -405,6 +405,27 @@
               :hint="$t('handover_alert_group_hint')"
               persistent-hint
             />
+            <v-divider class="my-3" />
+            <div class="text-body-2 font-weight-medium mb-1">{{ $t('chat_memory_settings_title') }}</div>
+            <v-switch
+              v-model="editForm.chat_memory_issue_alerts"
+              :label="$t('chat_memory_issue_alerts')"
+              :hint="$t('chat_memory_issue_alerts_hint')"
+              persistent-hint
+              density="compact"
+              color="primary"
+              class="mb-2"
+              data-testid="chat-memory-issue-alerts"
+            />
+            <v-switch
+              v-model="editForm.chat_memory_profile_in_prompt"
+              :label="$t('chat_memory_profile_in_prompt')"
+              :hint="$t('chat_memory_profile_in_prompt_hint')"
+              persistent-hint
+              density="compact"
+              color="primary"
+              data-testid="chat-memory-profile-in-prompt"
+            />
           </template>
           <template v-else>
             <v-select
@@ -524,7 +545,7 @@ const gatewayLoading = ref(false)
 const gatewayActionLoading = ref<'connect' | 'reconnect' | 'sync' | ''>('')
 let gatewayPollTimer: number | null = null
 
-const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[], handover_alert_group_id: '' })
+const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[], handover_alert_group_id: '', chat_memory_profile_in_prompt: false, chat_memory_issue_alerts: true })
 
 // Alert recipient options: this channel's GMF groups that have a linked Zalo group.
 const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
@@ -802,6 +823,8 @@ async function saveEdit() {
         campaign_alert_group_id: editForm.value.campaign_alerts_enabled ? editForm.value.campaign_alert_group_id : '',
         campaign_alert_outputs: editForm.value.campaign_alerts_enabled ? editForm.value.campaign_alert_outputs : [],
         handover_alert_group_id: editForm.value.handover_alert_group_id || '',
+        chat_memory_profile_in_prompt: editForm.value.chat_memory_profile_in_prompt,
+        chat_memory_issue_alerts: editForm.value.chat_memory_issue_alerts,
       })
     } else {
       payload.metadata = JSON.stringify({ sync_interval: editForm.value.sync_interval, sync_files: editForm.value.sync_files })
@@ -888,6 +911,8 @@ watch(editDialog, (v) => {
       campaign_alert_group_id: metadata.value.campaign_alert_group_id || '',
       campaign_alert_outputs: Array.isArray(metadata.value.campaign_alert_outputs) ? metadata.value.campaign_alert_outputs : [],
       handover_alert_group_id: metadata.value.handover_alert_group_id || '',
+      chat_memory_profile_in_prompt: metadata.value.chat_memory_profile_in_prompt === true,
+      chat_memory_issue_alerts: metadata.value.chat_memory_issue_alerts !== false,
     }
     if (channel.value.channel_type === 'zalo_oa') {
       loadAlertGroupOptions()

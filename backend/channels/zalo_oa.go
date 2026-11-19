@@ -131,6 +131,69 @@ type ZaloOAAdapter struct {
 	client     *http.Client
 	mu         sync.Mutex
 	tokenStore ZaloTokenStore
+	onSent     func(ctx context.Context, msg SentMessage)
+}
+
+// SentMessage describes one message the OA delivered through the API, as
+// reported to the observer set with SetSentObserver. Exactly one of UserID and
+// GroupID is set. MessageID is Zalo's id for the message (empty when the API
+// response did not include one).
+type SentMessage struct {
+	UserID      string
+	GroupID     string
+	MessageID   string
+	Text        string
+	ContentType string // "text" or "template"
+	SentAt      time.Time
+}
+
+// SetSentObserver registers fn to be called after every successful send. The
+// observer runs on the sending goroutine, so it must return quickly and must
+// never fail the send; it receives the caller's context.
+func (z *ZaloOAAdapter) SetSentObserver(fn func(ctx context.Context, msg SentMessage)) {
+	z.onSent = fn
+}
+
+// notifySent reports a delivered payload to the observer, if any.
+func (z *ZaloOAAdapter) notifySent(ctx context.Context, payload, result map[string]interface{}) {
+	if z.onSent == nil {
+		return
+	}
+	msg := sentMessageFromPayload(payload, result)
+	if msg.UserID == "" && msg.GroupID == "" {
+		return
+	}
+	z.onSent(ctx, msg)
+}
+
+// sentMessageFromPayload extracts recipient, text and Zalo message id from a
+// send payload and its API response. Template payloads keep their JSON as text
+// so the transcript still shows what was sent.
+func sentMessageFromPayload(payload, result map[string]interface{}) SentMessage {
+	msg := SentMessage{ContentType: "text", SentAt: time.Now()}
+	if r, ok := payload["recipient"].(map[string]interface{}); ok {
+		msg.UserID, _ = r["user_id"].(string)
+		msg.GroupID, _ = r["group_id"].(string)
+	}
+	if m, ok := payload["message"].(map[string]interface{}); ok {
+		if text, ok := m["text"].(string); ok {
+			msg.Text = text
+		} else if att, ok := m["attachment"]; ok {
+			msg.ContentType = "template"
+			if b, err := json.Marshal(att); err == nil {
+				msg.Text = string(b)
+			}
+		}
+	}
+	if data, ok := result["data"].(map[string]interface{}); ok {
+		switch id := data["message_id"].(type) {
+		case string:
+			msg.MessageID = id
+		case float64:
+			msg.MessageID = fmt.Sprintf("%.0f", id)
+		}
+	}
+	return msg
 }
 
 func NewZaloOAAdapter(creds ZaloOACredentials) *ZaloOAAdapter {
@@ -576,6 +639,7 @@ func (z *ZaloOAAdapter) sendCSPayload(ctx context.Context, payload map[string]in
 		msg, _ := result["message"].(string)
 		return fmt.Errorf("zalo send message api error %v: %s", errCode, msg)
 	}
+	z.notifySent(ctx, payload, result)
 	return nil
 }
 
@@ -1024,6 +1088,7 @@ func (z *ZaloOAAdapter) sendGroupPayload(ctx context.Context, payload map[string
 		msg, _ := result["message"].(string)
 		return fmt.Errorf("zalo send group message api error %v: %s", errCode, msg)
 	}
+	z.notifySent(ctx, payload, result)
 	return nil
 }
 

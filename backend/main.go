@@ -7,6 +7,8 @@ import (
 	"github.com/vietbui/chat-quality-agent/api"
 	"github.com/vietbui/chat-quality-agent/api/handlers"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
+	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
+	"github.com/vietbui/chat-quality-agent/chatmemory"
 	"github.com/vietbui/chat-quality-agent/cloudifyorders"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
@@ -51,6 +53,16 @@ func main() {
 	// Run migrations
 	if err := db.AutoMigrate(); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
+	}
+
+	// Chat memory: record every Zalo OA chatbot turn in MySQL, then summarize
+	// idle sessions into customer profiles, issue alerts and a summary index.
+	chatmemory.SetEnabled(cfg.ChatMemory.Enabled)
+	if cfg.ChatMemory.Enabled {
+		zalotoken.SentObserver = chatmemory.RecordOutbound
+		memoryCtx, stopMemory := context.WithCancel(context.Background())
+		defer stopMemory()
+		chatmemory.NewService(cfg).Start(memoryCtx)
 	}
 
 	// Start scheduler

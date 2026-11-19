@@ -133,6 +133,9 @@
       </div>
     </v-card>
 
+    <!-- Editable task prompts (chat memory, chatbot helpers, ERP matching) -->
+    <TaskPromptsCard :tenant-id="tenantId" />
+
     <!-- Astra DB Config -->
     <v-card class="pa-6 mb-6">
       <div class="text-subtitle-1 font-weight-bold mb-4 d-flex align-center">
@@ -504,6 +507,7 @@ import api from '../api'
 import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
 import ChatbotHealthCard from '../components/ChatbotHealthCard.vue'
 import CloudifyOrderWatchCard from '../components/CloudifyOrderWatchCard.vue'
+import TaskPromptsCard from '../components/TaskPromptsCard.vue'
 import { findEndpointsMissingGroups, findEndpointsMissingBrands } from '../utils/erp-permission-validation'
 
 const route = useRoute()

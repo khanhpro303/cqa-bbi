@@ -153,3 +153,120 @@ func recordHandoverAlertLog(a HandoverAlert, recipient, body, status, errMsg str
 		log.Printf("[handover-alert] failed to write notification log: %v", err)
 	}
 }
+
+// SessionIssue is one problem the chat-memory summarizer found in a session.
+type SessionIssue struct {
+	Type     string
+	Severity string
+	Detail   string
+	Evidence string
+}
+
+// SessionIssueAlert describes the issues of one summarized chatbot session.
+type SessionIssueAlert struct {
+	TenantID     string
+	Channel      models.Channel
+	SessionID    string
+	ZaloUserID   string
+	CustomerName string
+	CustomerCode string
+	ChatGroup    string
+	Summary      string
+	Issues       []SessionIssue
+}
+
+// BuildSessionIssueAlertMessage renders the staff alert for a session's
+// issues. Pure for unit tests.
+func BuildSessionIssueAlertMessage(a SessionIssueAlert, at time.Time) string {
+	var b strings.Builder
+	b.WriteString("⚠️ Phiên chatbot có vấn đề cần xử lý\n")
+	name := strings.TrimSpace(a.CustomerName)
+	if name == "" {
+		name = "(chưa xác minh)"
+	}
+	fmt.Fprintf(&b, "Khách: %s\n", name)
+	if code := strings.TrimSpace(a.CustomerCode); code != "" {
+		fmt.Fprintf(&b, "Mã KH: %s\n", code)
+	}
+	if g := strings.TrimSpace(a.ChatGroup); g != "" {
+		fmt.Fprintf(&b, "Nhóm chat: %s\n", g)
+	}
+	if s := strings.TrimSpace(a.Summary); s != "" {
+		fmt.Fprintf(&b, "Tóm tắt: %s\n", truncateRunes(s, 400))
+	}
+	for _, is := range a.Issues {
+		fmt.Fprintf(&b, "• [%s] %s", issueTypeLabel(is.Type), truncateRunes(strings.TrimSpace(is.Detail), 300))
+		if ev := strings.TrimSpace(is.Evidence); ev != "" {
+			fmt.Fprintf(&b, " (khách: \"%s\")", truncateRunes(ev, 200))
+		}
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "Thời điểm: %s", at.Format("15:04 02/01/2006"))
+	return b.String()
+}
+
+// issueTypeLabel shows an issue type from the summarizer in Vietnamese.
+func issueTypeLabel(t string) string {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "complaint":
+		return "Khiếu nại"
+	case "delivery":
+		return "Giao hàng"
+	case "product_defect":
+		return "Hàng lỗi"
+	case "price":
+		return "Giá"
+	case "payment":
+		return "Thanh toán, công nợ"
+	case "bot_failure":
+		return "Bot trả lời sai"
+	case "staff_request":
+		return "Khách cần nhân viên"
+	default:
+		return "Khác"
+	}
+}
+
+// NotifySessionIssues sends a session's serious issues to the channel's
+// handover alert group (same destination as handover alerts). It reports
+// whether the alert was sent; the caller records that so a session is
+// alerted at most once.
+func NotifySessionIssues(ctx context.Context, sender HandoverGroupSender, a SessionIssueAlert) bool {
+	if len(a.Issues) == 0 {
+		return false
+	}
+	groupID := ParseHandoverAlertGroupID(a.Channel.Metadata)
+	if groupID == "" {
+		log.Printf("[issue-alert] channel %s has no alert group configured; session %s not alerted", a.Channel.ID, a.SessionID)
+		return false
+	}
+	logAlert := func(body, status, errMsg string) {
+		recordHandoverAlertLog(HandoverAlert{TenantID: a.TenantID}, groupID, body, status, errMsg)
+	}
+	var group models.CRMGroup
+	if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, a.TenantID).First(&group).Error; err != nil || strings.TrimSpace(group.ZaloGroupID) == "" {
+		log.Printf("[issue-alert] channel %s alert group %s misconfigured: %v", a.Channel.ID, groupID, err)
+		logAlert("", "failed", "alert_group_misconfigured")
+		return false
+	}
+	loc, err := time.LoadLocation(tenantTimezone(a.TenantID))
+	if err != nil || loc == nil {
+		loc = time.Local
+	}
+	msg := BuildSessionIssueAlertMessage(a, time.Now().In(loc))
+	if err := sender.SendGroupMessage(ctx, group.ZaloGroupID, msg); err != nil {
+		log.Printf("[issue-alert] send to group %s failed: %v", group.ZaloGroupID, err)
+		logAlert(msg, "failed", err.Error())
+		return false
+	}
+	logAlert(msg, "sent", "")
+	return true
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}

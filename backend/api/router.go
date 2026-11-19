@@ -342,6 +342,15 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.PUT("/settings/ai", middleware.RequirePermission("settings", "w"), handlers.SaveAISettings)
 			tenant.PUT("/settings/ai-engines", middleware.RequirePermission("settings", "w"), handlers.SaveAIEnginesSettings)
 			tenant.POST("/settings/ai-engines/test", middleware.RequirePermission("settings", "w"), handlers.TestLangflowConnection)
+			tenant.GET("/settings/ai-prompts", middleware.RequirePermission("settings", "r"), handlers.ListTaskPrompts)
+			tenant.PUT("/settings/ai-prompts/:key", middleware.RequirePermission("settings", "w"), handlers.SaveTaskPrompt)
+
+			// Chat memory: customer profiles and summarized chatbot sessions.
+			tenant.GET("/chat-memory/profiles", middleware.RequirePermission("messages", "r"), handlers.ListChatProfiles)
+			tenant.DELETE("/chat-memory/profiles/:profileId", middleware.RequirePermission("messages", "w"), handlers.DeleteChatProfile)
+			tenant.GET("/chat-memory/sessions", middleware.RequirePermission("messages", "r"), handlers.ListChatSessions)
+			tenant.GET("/chat-memory/sessions/:sessionId/messages", middleware.RequirePermission("messages", "r"), handlers.GetChatSessionMessages)
+			tenant.POST("/chat-memory/sessions/:sessionId/resummarize", middleware.RequirePermission("messages", "w"), handlers.ResummarizeChatSession)
 			tenant.GET("/chatbot/health", middleware.RequirePermission("settings", "r"), handlers.GetChatbotHealth)
 			tenant.PUT("/settings/analysis", middleware.RequirePermission("settings", "w"), handlers.SaveAnalysisSettings)
 			tenant.POST("/settings/ai/test", middleware.RequirePermission("settings", "w"), handlers.TestAIKey)
