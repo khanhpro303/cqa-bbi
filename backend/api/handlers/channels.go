@@ -591,7 +591,7 @@ func PurgeChannelConversations(c *gin.Context) {
 		}
 		convsDeleted = result.RowsAffected
 		return tx.Model(&channel).Updates(map[string]interface{}{
-			"last_sync_at": nil, "last_sync_status": nil, "last_sync_error": "", "updated_at": time.Now(),
+			"last_sync_at": nil, "last_sync_status": nil, "last_sync_error": "", "sync_retry_state": nil, "updated_at": time.Now(),
 		}).Error
 	})
 	if err != nil {

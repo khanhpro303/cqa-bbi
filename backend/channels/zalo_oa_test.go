@@ -205,3 +205,15 @@ func TestPageReachedSince(t *testing.T) {
 		})
 	}
 }
+
+func TestIsZaloQuotaError(t *testing.T) {
+	if !IsZaloQuotaError(fmt.Errorf("fetch messages: %w", &ZaloAPIError{Code: -32, Message: "Your OA reached limit call api"})) {
+		t.Fatal("-32 is the quota error")
+	}
+	if IsZaloQuotaError(&ZaloAPIError{Code: -1, Message: "Error fetching messages: -2"}) || IsZaloQuotaError(fmt.Errorf("network down")) {
+		t.Fatal("other errors are not quota errors")
+	}
+	if got := (&ZaloAPIError{Code: -1, Message: "Error fetching messages: -2"}).Error(); got != "zalo api error -1: Error fetching messages: -2" {
+		t.Fatalf("error text changed: %q", got)
+	}
+}

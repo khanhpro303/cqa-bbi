@@ -15,8 +15,13 @@ type Channel struct {
 	LastSyncStatus       string     `gorm:"type:varchar(20)" json:"last_sync_status"`
 	LastSyncError        string     `gorm:"type:text" json:"last_sync_error,omitempty"`
 	Metadata             string     `gorm:"type:json" json:"metadata"`
-	CreatedAt            time.Time  `gorm:"not null" json:"created_at"`
-	UpdatedAt            time.Time  `gorm:"not null" json:"updated_at"`
+	// SyncRetryState holds the conversations whose last sync failed, keyed by
+	// external conversation id, with the window to re-read and the attempt
+	// count. It lets last_sync_at advance past a run with a few failed
+	// conversations without dropping them (see engine.SyncChannel).
+	SyncRetryState *string   `gorm:"type:json" json:"-"`
+	CreatedAt      time.Time `gorm:"not null" json:"created_at"`
+	UpdatedAt      time.Time `gorm:"not null" json:"updated_at"`
 
 	Tenant Tenant `gorm:"foreignKey:TenantID" json:"tenant,omitempty"`
 }
