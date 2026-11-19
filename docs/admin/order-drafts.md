@@ -2,7 +2,46 @@
 
 Chatbot Zalo có thể tạo đơn đặt hàng mới, sửa đơn hoặc huỷ đơn trên Cloudify. AI không ghi thẳng lên ERP: nó chỉ tạo **bản nháp**. Đơn chỉ được ghi khi chính người yêu cầu trả lời **1** (hoặc "xác nhận").
 
-## Luồng xử lý
+## Lên đơn nhiều sản phẩm qua chat (giỏ hàng)
+
+Khách (hoặc nhân viên đặt hộ) có thể lên một đơn hoàn chỉnh ngay trong cuộc chat, giống đặt trên web dealers. Ví dụ:
+
+> **Khách:** lên đơn giúp em: FF800 Storm đen L 1 cái, kính FF800 1 cái, FF901 1 cái
+> **Bot:** Dạ em đã ghi FF800 Storm Gloss Black L và kính FF800. Riêng FF901 có 2 dòng: 1) LS2 FF901, 2) LS2 FF901 Carbon. Anh lấy dòng nào ạ?
+> **Khách:** carbon size M
+> **Bot:** Dạ đã thêm FF901 Carbon M. Anh còn lấy gì nữa không ạ?
+> **Khách:** à Storm lấy 2 cái, bỏ kính đi. Chốt
+> **Bot:** *(bản xác nhận đầy đủ: từng dòng, số lượng, đơn giá, tạm tính)* Trả lời 1 để lên đơn.
+> **Khách:** 1
+> **Bot:** ✅ Đã lên đơn CQA-261119-XXXXXX cho KH125 - Shop A. Đơn gồm 2 sản phẩm (3 món), tạm tính ... Bên em sẽ báo khi đơn đổi trạng thái.
+
+### Cách hoạt động
+
+- Mỗi cuộc chat có **một giỏ hàng** (bảng `order_carts`), lưu qua nhiều lượt chat, giữ 24 giờ kể từ lần sửa cuối. Bot luôn thấy giỏ hiện tại trong system prompt, nên khách sửa lúc nào cũng được.
+- Agent gọi 4 tool MCP (cần quyền `order_create`):
+  - `order_cart_update`: thêm, đổi số lượng (`op=set`), bỏ (`op=remove`) sản phẩm; trả lời câu hỏi chọn sản phẩm (`pending_id` + `option` hoặc `line`/`color`/`size`). Agent ghi `product` đúng như khách gõ, **backend** tự tìm SKU.
+  - `order_cart_view`, `order_cart_clear`.
+  - `order_cart_checkout`: gửi bản xác nhận cuối cùng.
+- Backend phân giải sản phẩm:
+  - Tên khớp **nhiều dòng** (FF901 và FF901 Carbon): không đoán, trả câu hỏi `pending` kèm lựa chọn đánh số. Chỉ khi khách gõ đúng tên đầy đủ của một dòng mới tự chọn dòng đó.
+  - Đã rõ dòng nhưng **thiếu màu/size**: hỏi lại, chỉ đưa các biến thể còn hàng ở kho tổng, kèm danh sách màu và size.
+  - Màu tiếng Việt ("đen") được đổi sang giá trị trong kho ("Gloss Black") bằng prompt "Khớp màu, size, thương hiệu".
+  - Không tìm thấy tên nào khớp: dùng tìm kiếm gần đúng, nhưng vẫn hỏi khách xác nhận sản phẩm gần nhất.
+  - Giá lấy từ `DON_GIA_BAN`, tồn lấy từ báo cáo tồn 1.KHO-TONG (giữ 2 phút). Dòng vượt tồn được đánh dấu và không cho chốt.
+- Khi chốt: backend đọc lại giá và tồn, tạo bản nháp `order_actions` (gắn `cart_id`), gửi bản xác nhận đầy đủ, chờ **30 phút**.
+  - Khách sửa giỏ sau khi đã nhận bản xác nhận: bản cũ bị huỷ, agent gửi bản xác nhận mới. Trả lời "1" luôn chốt đúng danh sách khách thấy cuối cùng.
+  - Khách trả lời "2"/"huỷ": chưa lên đơn, giỏ vẫn giữ để sửa tiếp.
+  - Khách trả lời "1": ghi đơn lên Cloudify, gửi lời chốt (mã đơn, số sản phẩm, tạm tính), đóng giỏ.
+- Khi giỏ đang mở, câu trả lời ngắn như "2", "ok", "cái carbon" không bị bộ phân loại coi là tán gẫu và đóng phiên.
+- Cron theo dõi đơn không gửi thêm tin "đơn đã được tạo" cho đơn khách vừa chốt trong chat, nhưng vẫn báo khi đơn đổi trạng thái.
+
+### Sửa cách bot lên đơn
+
+AI Engine → **Prompt cho các tác vụ AI** → **Lên đơn qua chatbot (giỏ hàng)**. Phần này được nối vào system prompt của bot khi người chat có quyền tạo đơn hoặc đang có giỏ dở. Phần giỏ hàng hiện tại và quy ước `[RICH_MESSAGE_SENT]` do hệ thống thêm, không sửa được. Chỉ áp dụng khi kênh hoặc AI Engine có system prompt; nếu để trống, flow dùng prompt riêng trong Langflow và bot chỉ biết giỏ hàng qua tool.
+
+Sau khi deploy, mở node MCP Tools trong các flow Langflow v2 và làm mới danh sách tool để agent thấy 4 tool `order_cart_*`. Tool `draft_order_create` không còn được liệt kê (vẫn chạy cho flow chưa làm mới).
+
+## Luồng xử lý (bản nháp sửa, huỷ đơn)
 
 1. Agent trong Langflow gọi một trong ba tool MCP của `/mcp/erp/:tenantId`:
    - `draft_order_create`: tham số `items` [{sku, quantity}], `note`. Nhân viên đặt hộ khách thì truyền thêm `customer_code`.

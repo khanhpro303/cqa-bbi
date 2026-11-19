@@ -47,7 +47,7 @@ func testDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.AutoMigrate(&models.OrderAction{}); err != nil {
+	if err := database.AutoMigrate(&models.OrderAction{}, &models.OrderCart{}); err != nil {
 		t.Fatal(err)
 	}
 	saved := db.DB

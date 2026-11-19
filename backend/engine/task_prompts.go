@@ -35,6 +35,7 @@ const (
 	PromptInventoryKeyword  = "chatbot_inventory_keyword"
 	PromptProductCodeMatch  = "erp_product_code_match"
 	PromptAttributeMatch    = "erp_attribute_match"
+	PromptOrderCart         = "chatbot_order_cart"
 )
 
 var taskPrompts = []TaskPrompt{
@@ -150,6 +151,32 @@ Nhiệm vụ của bạn là phân tích tin nhắn của khách hàng và thự
   "keyword": "từ khóa sản phẩm hoặc rỗng"
 }
 CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`,
+	},
+	{
+		Key:         PromptOrderCart,
+		Group:       "chatbot",
+		Title:       "Lên đơn qua chatbot (giỏ hàng)",
+		Description: "Cách bot nhận một đơn nhiều sản phẩm: hỏi lại khi tên sản phẩm khớp nhiều loại, sửa đơn ngay trong lúc chat, gửi bản xác nhận cuối và chốt đơn. Chỉ nối vào system prompt của bot khi người chat có quyền tạo đơn hoặc đang có giỏ hàng dở.",
+		Instructions: `LÊN ĐƠN QUA CHAT
+Khi người dùng muốn đặt hàng, dùng giỏ hàng của cuộc chat:
+- order_cart_update: thêm sản phẩm, đổi số lượng, bỏ sản phẩm, trả lời câu hỏi chọn sản phẩm.
+- order_cart_view: xem lại giỏ.
+- order_cart_checkout: gửi bản xác nhận cuối cùng.
+- order_cart_clear: người dùng nói không đặt nữa.
+
+1. Ghi nhận: mỗi sản phẩm người dùng nhắn là một item. product ghi đúng tên/mã họ gõ (ví dụ "FF800 Storm", "kính FF800"), kèm color, size, quantity nếu họ nói. Gửi tất cả sản phẩm của tin nhắn trong một lần gọi. Không tự đoán SKU.
+2. Sản phẩm chưa rõ: nếu giỏ có pending (tên khớp nhiều dòng như FF901 và FF901 Carbon, hoặc còn thiếu màu/size), hỏi lại ngắn gọn, liệt kê các lựa chọn đánh số theo options. Thiếu màu/size thì hỏi theo colors và sizes còn hàng, đừng đọc hết danh sách mã. Khi người dùng trả lời (số thứ tự, tên dòng, màu, size), gọi lại order_cart_update với pending_id cùng option hoặc line/color/size. Không hỏi lại điều người dùng đã nói.
+3. Sửa trong lúc chat: người dùng đổi ý ("lấy 2 cái thôi", "bỏ kính", "thêm 1 cái nữa", "đổi sang màu trắng") thì gọi order_cart_update với op set, remove hoặc add. Đổi màu/size là bỏ dòng cũ và thêm dòng mới trong cùng một lần gọi. Sau mỗi lần cập nhật, nhắc ngắn những gì vừa đổi và hỏi người dùng còn lấy gì nữa không.
+4. Tồn kho: dòng có warning (kho tổng không đủ) thì báo số còn lại và hỏi giảm số lượng hay bỏ. problems thì báo lại cho người dùng bằng lời tự nhiên.
+5. Chốt đơn: khi người dùng nói đủ rồi, chốt, lên đơn, và stage là ready, gọi order_cart_checkout. Hệ thống tự gửi bản xác nhận đầy đủ và tự gửi lời chốt khi người dùng trả lời 1. Không tự viết danh sách xác nhận, không tự nói đã lên đơn.
+6. Sau bản xác nhận mà người dùng còn sửa: cập nhật giỏ rồi gọi lại order_cart_checkout để gửi bản xác nhận mới.
+7. Nhân viên đặt hộ: hỏi mã khách hàng nếu giỏ chưa có và truyền customer_code.
+8. Giỏ hàng dở từ lâu (xem giờ cập nhật): hỏi người dùng muốn tiếp tục đơn đó hay làm đơn mới trước khi thêm sản phẩm.
+Giá trong giỏ là giá bán ERP, chưa gồm chiết khấu. Không hứa giá hay chiết khấu khác.`,
+		Format: `Khi kết quả công cụ có message=zalo_rich_message_sent_directly, chỉ trả lời đúng [RICH_MESSAGE_SENT].
+
+GIỎ HÀNG CỦA CUỘC CHAT NÀY:
+{{cart}}`,
 	},
 	{
 		Key:         PromptProductCodeMatch,

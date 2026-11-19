@@ -881,6 +881,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
 				intent = "IN_SCOPE"
 			}
+			if keepOrderConversation(ctx, matchedChannel.TenantID, workKey, intent) {
+				log.Printf("[worker] chat has an open order cart; treating %s reply as IN_SCOPE", intent)
+				intent = "IN_SCOPE"
+			}
 		}
 
 		if intent == "HANDOVER" {
@@ -980,6 +984,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// and into this conversation (group or 1:1), and land under workKey.
 		permCtx.ChannelID = matchedChannel.ID
 		permCtx.ZaloGroupID = matchedGroup.ZaloGroupID
+		systemPromptToUse = appendOrderCartContext(ctx, matchedChannel.TenantID, workKey, &permCtx, systemPromptToUse)
 
 		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
 		// presented numbered menu (inventory ten_dong_bo_web options). On a valid

@@ -87,7 +87,14 @@ func DeliverPending(ctx context.Context, database *gorm.DB, tenantID string, set
 		if ctx.Err() != nil {
 			break
 		}
-		status, note := deliverOne(ctx, tenantID, event, settings, sender, now)
+		var status, note string
+		if event.Kind == KindCreated && settings.NotifyEnabled && settings.NotifyKinds[event.Kind] && createdByChatbot(ctx, database, tenantID, event.OrderCode) {
+			// The customer ordered in the chat and already got the bot's
+			// closing message; a second "order created" notice is noise.
+			status, note = DeliverySkipped, "chatbot_order"
+		} else {
+			status, note = deliverOne(ctx, tenantID, event, settings, sender, now)
+		}
 		updates := map[string]any{"delivery_status": status, "delivery_note": truncate(note, 250), "attempts": event.Attempts + 1}
 		if status == DeliverySent {
 			updates["delivered_at"] = now
@@ -155,4 +162,19 @@ func retryOrFail(event models.CloudifyOrderEvent, note string) (string, string) 
 		return DeliveryFailed, note
 	}
 	return DeliveryPending, note
+}
+
+// createdByChatbot reports whether the order was written by a confirmed
+// chatbot order draft (orderactions: kind "create", status "done").
+func createdByChatbot(ctx context.Context, database *gorm.DB, tenantID, code string) bool {
+	if strings.TrimSpace(code) == "" {
+		return false
+	}
+	var count int64
+	if err := database.WithContext(ctx).Model(&models.OrderAction{}).
+		Where("tenant_id = ? AND kind = ? AND status = ? AND order_code = ?", tenantID, "create", "done", code).
+		Count(&count).Error; err != nil {
+		return false
+	}
+	return count > 0
 }
