@@ -174,7 +174,7 @@ func ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, 
 	}
 
 	var groupLinks []models.CRMGroupCustomer
-	if err := db.DB.Where("zalo_customer_id = ?", customer.ID).Find(&groupLinks).Error; err != nil || len(groupLinks) == 0 {
+	if err := db.DB.Where("zalo_customer_id = ? AND group_id IN (?)", customer.ID, db.ActiveCRMGroupIDs()).Find(&groupLinks).Error; err != nil || len(groupLinks) == 0 {
 		return ctx
 	}
 

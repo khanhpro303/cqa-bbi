@@ -55,6 +55,21 @@
       <!-- TAB 1: CRM GROUPS (GMF) -->
       <v-window-item value="groups" class="pt-2">
         <v-card :loading="loadingGroups">
+          <div class="d-flex align-center flex-wrap ga-3 px-3 pt-3">
+            <v-btn-toggle v-model="groupView" mandatory density="compact" color="primary" variant="outlined" divided>
+              <v-btn value="active" size="small">
+                <v-icon start size="16">mdi-account-group</v-icon>
+                Đang hoạt động
+              </v-btn>
+              <v-btn value="archived" size="small">
+                <v-icon start size="16">mdi-archive-outline</v-icon>
+                Đã lưu trữ
+              </v-btn>
+            </v-btn-toggle>
+            <span v-if="groupView === 'archived'" class="text-caption text-grey-darken-1">
+              Nhóm đã lưu trữ: bot không trả lời, lịch gửi chiến dịch tạm dừng. Thành viên, cấu hình và lịch sử chat, đơn hàng vẫn được giữ.
+            </span>
+          </div>
           <div class="crm-groups-table-container">
             <v-table density="comfortable" class="crm-groups-table">
               <thead>
@@ -62,12 +77,12 @@
                   <th scope="col" class="crm-col-name">Tên nhóm</th>
                   <th scope="col" class="crm-col-desc">Mô tả</th>
                   <th scope="col" class="crm-col-members">Thành viên</th>
-                  <th scope="col" class="crm-col-date">Ngày tạo</th>
+                  <th scope="col" class="crm-col-date">{{ groupView === 'archived' ? 'Ngày lưu trữ' : 'Ngày tạo' }}</th>
                   <th scope="col" class="crm-col-actions text-right">Hành động</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="g in groups" :key="g.id">
+                <tr v-for="g in tableGroups" :key="g.id">
                   <td class="crm-col-name py-2">
                     <div class="crm-group-title-row">
                       <span class="font-weight-bold text-primary crm-group-name">{{ g.name }}</span>
@@ -118,22 +133,26 @@
                       </v-chip>
                     </div>
                   </td>
-                  <td class="crm-col-date text-caption py-2">{{ new Date(g.created_at).toLocaleDateString() }}</td>
+                  <td class="crm-col-date text-caption py-2">{{ new Date(groupView === 'archived' && g.archived_at ? g.archived_at : g.created_at).toLocaleDateString() }}</td>
                   <td class="crm-col-actions py-2">
-                    <div class="crm-group-actions d-flex align-center justify-end flex-nowrap ga-1">
+                    <div v-if="groupView === 'archived'" class="crm-group-actions d-flex align-center justify-end flex-nowrap ga-1">
+                      <v-btn icon="mdi-archive-arrow-up-outline" size="small" density="comfortable" variant="text" color="success" :loading="groupBusyId === g.id" @click="restoreGroup(g)" title="Khôi phục nhóm" />
+                      <v-btn v-if="isOwner" icon="mdi-delete-forever" size="small" density="comfortable" variant="text" color="error" @click="openPurgeDialog(g)" title="Xoá vĩnh viễn" />
+                    </div>
+                    <div v-else class="crm-group-actions d-flex align-center justify-end flex-nowrap ga-1">
                       <v-btn v-if="g.zalo_group_link" icon="mdi-qrcode" size="small" density="comfortable" variant="text" color="success" @click="showGroupQR(g)" title="QR / Link nhóm Zalo" />
                       <v-btn icon="mdi-account-cog" size="small" density="comfortable" variant="text" color="teal" @click="openManageMembersDialog(g)" title="Quản lý thành viên" />
                       <v-btn icon="mdi-shield-lock-outline" size="small" density="comfortable" variant="text" color="indigo" @click="openGroupPermissionsDialog(g)" title="Phân quyền Endpoint & Sơ đồ live" />
                       <v-btn icon="mdi-pencil" size="small" density="comfortable" variant="text" color="blue" @click="openEditGroupDialog(g)" title="Sửa nhóm" />
                       <v-btn v-if="isOwner && g.zalo_group_id" icon="mdi-broom" size="small" density="comfortable" variant="text" color="orange-darken-2" :loading="clearingSessionId === g.id" @click="clearGroupSession(g)" title="Xoá sạch cache phiên chat của nhóm GMF" />
-                      <v-btn icon="mdi-delete" size="small" density="comfortable" variant="text" color="error" @click="deleteGroup(g.id)" title="Xóa nhóm" />
+                      <v-btn icon="mdi-archive-arrow-down-outline" size="small" density="comfortable" variant="text" color="error" :loading="groupBusyId === g.id" @click="archiveGroup(g)" title="Lưu trữ nhóm (thay cho xoá)" />
                     </div>
                   </td>
                 </tr>
-                <tr v-if="groups.length === 0 && !loadingGroups">
+                <tr v-if="tableGroups.length === 0 && !loadingGroups">
                   <td colspan="5" class="text-center py-8 text-grey text-body-2">
                     <v-icon size="40" color="grey-lighten-1" class="mb-2">mdi-account-group-outline</v-icon>
-                    <div>Chưa có nhóm CRM nào được tạo.</div>
+                    <div>{{ groupView === 'archived' ? 'Chưa có nhóm nào được lưu trữ.' : 'Chưa có nhóm CRM nào được tạo.' }}</div>
                   </td>
                 </tr>
               </tbody>
@@ -421,6 +440,29 @@
     </v-window>
 
     <!-- Dialog 1: Tạo/Sửa nhóm -->
+    <v-dialog v-model="purgeDialog" max-width="520">
+      <v-card v-if="purgeTarget">
+        <v-card-title class="text-h6">Xoá vĩnh viễn nhóm "{{ purgeTarget.name }}"</v-card-title>
+        <v-card-text class="text-body-2">
+          <p class="mb-2">Thao tác này xoá hẳn nhóm cùng liên kết thành viên, danh sách mã KH, phân quyền ERP và các lượt gửi chiến dịch của nhóm. Không khôi phục được.</p>
+          <p class="mb-2">Lịch sử chat, tóm tắt, hồ sơ khách và đơn hàng vẫn được giữ theo mã KH.</p>
+          <v-checkbox
+            v-if="purgeTarget.zalo_group_id"
+            v-model="purgeDissolveZalo"
+            color="error"
+            density="compact"
+            hide-details
+            label="Giải tán luôn nhóm Zalo thật (mọi thành viên bị đưa ra, không hoàn tác được)"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="purgeDialog = false">Huỷ</v-btn>
+          <v-btn color="error" variant="flat" :loading="groupBusyId === purgeTarget.id" @click="purgeGroup">Xoá vĩnh viễn</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-dialog v-model="groupDialog" max-width="500">
       <v-card>
         <v-card-title class="px-6 pt-6 pb-2 font-weight-bold">
@@ -1435,6 +1477,10 @@ async function fetchGroups() {
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups`)
     groups.value = data || []
+    if (groupView.value === 'archived') {
+      const res = await api.get(`/tenants/${tenantId.value}/crm/groups`, { params: { archived: 1 } })
+      archivedGroups.value = res.data || []
+    }
   } catch (err) {
     showSnack('Không thể tải danh sách nhóm CRM', 'error')
   } finally {
@@ -1641,14 +1687,71 @@ async function saveGroup() {
   }
 }
 
-async function deleteGroup(id: string) {
-  if (!confirm('Bạn có chắc chắn muốn xóa nhóm CRM này? Các liên kết thành viên sẽ bị gỡ bỏ.')) return
+// Archive replaces delete: the group leaves every bot lookup but keeps its
+// members, settings and history, and can be restored.
+const groupView = ref<'active' | 'archived'>('active')
+const archivedGroups = ref<any[]>([])
+// Pickers elsewhere on the page keep using `groups` (active only).
+const tableGroups = computed(() => (groupView.value === 'archived' ? archivedGroups.value : groups.value))
+const groupBusyId = ref<string | null>(null)
+const purgeDialog = ref(false)
+const purgeTarget = ref<any>(null)
+const purgeDissolveZalo = ref(false)
+
+watch(groupView, () => fetchGroups())
+
+function groupErrorText(err: any, fallback: string) {
+  return err?.response?.data?.details || err?.response?.data?.error || fallback
+}
+
+async function archiveGroup(g: any) {
+  if (!confirm(`Lưu trữ nhóm "${g.name}"?\n\nBot sẽ ngừng trả lời trong nhóm, lịch gửi chiến dịch của nhóm tạm dừng, giỏ hàng đang mở bị huỷ. Thành viên, cấu hình và lịch sử chat, đơn hàng được giữ nguyên; nhóm Zalo không bị giải tán. Có thể khôi phục bất cứ lúc nào.`)) return
+  groupBusyId.value = g.id
   try {
-    await api.delete(`/tenants/${tenantId.value}/crm/groups/${id}`)
-    showSnack('Đã xóa nhóm CRM thành công', 'success')
+    await api.post(`/tenants/${tenantId.value}/crm/groups/${g.id}/archive`)
+    showSnack('Đã lưu trữ nhóm', 'success')
     await fetchGroups()
-  } catch (err) {
-    showSnack('Lỗi khi xóa nhóm', 'error')
+  } catch (err: any) {
+    showSnack(groupErrorText(err, 'Lỗi khi lưu trữ nhóm'), 'error')
+  } finally {
+    groupBusyId.value = null
+  }
+}
+
+async function restoreGroup(g: any) {
+  groupBusyId.value = g.id
+  try {
+    await api.post(`/tenants/${tenantId.value}/crm/groups/${g.id}/restore`)
+    showSnack(`Đã khôi phục nhóm "${g.name}"`, 'success')
+    await fetchGroups()
+  } catch (err: any) {
+    showSnack(groupErrorText(err, 'Lỗi khi khôi phục nhóm'), 'error')
+  } finally {
+    groupBusyId.value = null
+  }
+}
+
+function openPurgeDialog(g: any) {
+  purgeTarget.value = g
+  purgeDissolveZalo.value = false
+  purgeDialog.value = true
+}
+
+async function purgeGroup() {
+  const g = purgeTarget.value
+  if (!g) return
+  groupBusyId.value = g.id
+  try {
+    await api.delete(`/tenants/${tenantId.value}/crm/groups/${g.id}`, {
+      params: purgeDissolveZalo.value ? { dissolve_zalo: 'true' } : undefined
+    })
+    showSnack(purgeDissolveZalo.value ? 'Đã xoá vĩnh viễn nhóm và giải tán nhóm Zalo' : 'Đã xoá vĩnh viễn nhóm', 'success')
+    purgeDialog.value = false
+    await fetchGroups()
+  } catch (err: any) {
+    showSnack(groupErrorText(err, 'Lỗi khi xoá nhóm'), 'error')
+  } finally {
+    groupBusyId.value = null
   }
 }
 

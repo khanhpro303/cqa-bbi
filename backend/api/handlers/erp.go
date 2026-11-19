@@ -986,7 +986,7 @@ func isResourcePermitted(tenantID, agentType, resource, zaloUserID string) bool 
 
 	// 2. Find groups that customer belongs to
 	var groupIDs []string
-	db.DB.Table("crm_group_customers").Where("zalo_customer_id = ?", customer.ID).Pluck("group_id", &groupIDs)
+	db.DB.Table("crm_group_customers").Where("zalo_customer_id = ? AND group_id IN (?)", customer.ID, db.ActiveCRMGroupIDs()).Pluck("group_id", &groupIDs)
 	if len(groupIDs) == 0 {
 		return false
 	}
@@ -1053,7 +1053,7 @@ func loadAllowedGroupsForCustomer(tenantID, zaloUserID, resource string) []strin
 
 	// 2. Find groups that customer belongs to
 	var groupIDs []string
-	db.DB.Table("crm_group_customers").Where("zalo_customer_id = ?", customer.ID).Pluck("group_id", &groupIDs)
+	db.DB.Table("crm_group_customers").Where("zalo_customer_id = ? AND group_id IN (?)", customer.ID, db.ActiveCRMGroupIDs()).Pluck("group_id", &groupIDs)
 	if len(groupIDs) == 0 {
 		return groups
 	}

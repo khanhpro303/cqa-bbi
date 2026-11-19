@@ -111,6 +111,7 @@ func (s *Service) Start(ctx context.Context) {
 			s.RunOnce(ctx)
 			if time.Since(lastRetention) > 24*time.Hour {
 				s.ApplyVectorRetention(ctx)
+				ApplyMessageRetention(ctx, s.cfg.ChatMemory.MessageRetentionDays)
 				lastRetention = time.Now()
 			}
 			select {
@@ -221,6 +222,13 @@ func (s *Service) SummarizeSession(ctx context.Context, sessionID string) error 
 	var profile models.ChatCustomerProfile
 	hasProfile := db.DB.WithContext(ctx).Where("tenant_id = ? AND channel_id = ? AND subject_type = ? AND subject_id = ?",
 		sess.TenantID, sess.ChannelID, sess.SubjectType, sess.SubjectID).First(&profile).Error == nil
+	if !hasProfile {
+		// A new Zalo group for a customer who had one before (the old CRM
+		// group was archived or deleted) starts from that customer's profile.
+		if seed, ok := profileByCustomerCode(ctx, sess.TenantID, sess.SubjectType, sess.CustomerCode, sess.ChannelID, sess.SubjectID); ok {
+			profile = seed
+		}
+	}
 
 	loc := tenantLocation(sess.TenantID)
 	input := BuildSummaryInput(sess, profile.Profile, msgs, loc)
@@ -597,17 +605,31 @@ func (s *Service) ApplyVectorRetention(ctx context.Context) {
 // PromptContext returns what the chatbot may know about this chat from past
 // sessions: the profile card and the latest session summary. Empty when
 // nothing is known.
-func PromptContext(ctx context.Context, tenantID, channelID, subjectType, subjectID string) string {
+//
+// customerCode is the chat's mã KH: a group chat with no memory of its own
+// inherits the profile and last summary of earlier groups of the same mã KH.
+func PromptContext(ctx context.Context, tenantID, channelID, subjectType, subjectID, customerCode string) string {
 	if db.DB == nil || subjectID == "" {
 		return ""
 	}
 	var p models.ChatCustomerProfile
 	hasCard := db.DB.WithContext(ctx).Where("tenant_id = ? AND channel_id = ? AND subject_type = ? AND subject_id = ?",
 		tenantID, channelID, subjectType, subjectID).First(&p).Error == nil && strings.TrimSpace(p.Card) != ""
+	since := time.Now().AddDate(0, 0, -promptContextMaxDays)
 	var last models.ChatSession
 	hasLast := db.DB.WithContext(ctx).Where("tenant_id = ? AND channel_id = ? AND subject_type = ? AND subject_id = ? AND status = 'summarized' AND summarized_at > ?",
-		tenantID, channelID, subjectType, subjectID, time.Now().AddDate(0, 0, -promptContextMaxDays)).
+		tenantID, channelID, subjectType, subjectID, since).
 		Order("last_activity_at DESC").First(&last).Error == nil
+	if !hasCard && !hasLast && inheritsByCustomerCode(subjectType, customerCode) {
+		// Nothing known about this Zalo group yet: fall back to what earlier
+		// groups of the same mã KH taught (e.g. after a group was recreated).
+		if seed, ok := profileByCustomerCode(ctx, tenantID, subjectType, customerCode, channelID, subjectID); ok && strings.TrimSpace(seed.Card) != "" {
+			p, hasCard = seed, true
+		}
+		hasLast = db.DB.WithContext(ctx).Where("tenant_id = ? AND subject_type = ? AND customer_code = ? AND status = 'summarized' AND summarized_at > ?",
+			tenantID, subjectType, strings.TrimSpace(customerCode), since).
+			Order("last_activity_at DESC").First(&last).Error == nil
+	}
 	if !hasCard && !hasLast {
 		return ""
 	}
@@ -724,4 +746,69 @@ func nonNilIssues(v []SummaryIssue) []SummaryIssue {
 		return []SummaryIssue{}
 	}
 	return v
+}
+
+// inheritsByCustomerCode limits mã KH inheritance to group chats: a group is
+// the customer's shop, so a new group for the same mã KH is the same
+// customer. 1:1 chats stay keyed on the person.
+func inheritsByCustomerCode(subjectType, customerCode string) bool {
+	return subjectType == "group" && strings.TrimSpace(customerCode) != ""
+}
+
+// profileByCustomerCode returns the most recently updated profile of another
+// chat (any channel) with the same mã KH, for a chat that has none yet.
+func profileByCustomerCode(ctx context.Context, tenantID, subjectType, customerCode, channelID, subjectID string) (models.ChatCustomerProfile, bool) {
+	var p models.ChatCustomerProfile
+	if db.DB == nil || !inheritsByCustomerCode(subjectType, customerCode) {
+		return p, false
+	}
+	err := db.DB.WithContext(ctx).
+		Where("tenant_id = ? AND subject_type = ? AND customer_code = ?", tenantID, subjectType, strings.TrimSpace(customerCode)).
+		Where("NOT (channel_id = ? AND subject_id = ?)", channelID, subjectID).
+		Order("last_session_at DESC").First(&p).Error
+	return p, err == nil
+}
+
+const messageDeleteBatch = 1000
+
+// ApplyMessageRetention deletes raw messages of Zalo OA chats older than
+// `days`, in small batches so the table is never locked for long. Only Zalo
+// OA conversations are touched (Facebook/other channels keep their own
+// rules). Session summaries, customer profiles, order records and the
+// conversation rows stay, so the customer's memory outlives the transcript.
+// Returns the number of messages deleted.
+func ApplyMessageRetention(ctx context.Context, days int) int {
+	if days <= 0 || db.DB == nil {
+		return 0
+	}
+	cutoff := time.Now().AddDate(0, 0, -days)
+	zaloConversations := db.DB.Model(&models.Conversation{}).Select("conversations.id").
+		Joins("JOIN channels ON channels.id = conversations.channel_id").
+		Where("channels.channel_type = ?", "zalo_oa")
+	total := 0
+	for ctx.Err() == nil {
+		var ids []string
+		if err := db.DB.WithContext(ctx).Model(&models.Message{}).
+			Where("sent_at < ? AND conversation_id IN (?)", cutoff, zaloConversations).
+			Limit(messageDeleteBatch).Pluck("id", &ids).Error; err != nil {
+			log.Printf("[chat-memory] message retention: %v", err)
+			break
+		}
+		if len(ids) == 0 {
+			break
+		}
+		res := db.DB.WithContext(ctx).Where("id IN ?", ids).Delete(&models.Message{})
+		if res.Error != nil {
+			log.Printf("[chat-memory] message retention delete: %v", res.Error)
+			break
+		}
+		total += int(res.RowsAffected)
+		if len(ids) < messageDeleteBatch {
+			break
+		}
+	}
+	if total > 0 {
+		log.Printf("[chat-memory] removed %d Zalo messages older than %d days", total, days)
+	}
+	return total
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/messengerjourney"
+	"gorm.io/gorm"
 )
 
 // A channel referenced by zalo_whitelists / crm_groups used to hit an FK
@@ -31,6 +32,8 @@ func TestMySQLDeleteChannelCascadeRemovesReferencedChannel(t *testing.T) {
 		&models.Message{ID: "msg-1", TenantID: "tenant-a", ConversationID: "conv-1", ExternalMessageID: "m-1", SenderType: "customer", Attachments: "[]", RawData: "{}", SentAt: now, CreatedAt: now},
 		&models.ZaloWhitelist{ID: "wl-1", TenantID: "tenant-a", ChannelID: "ch-bulldog", ZaloUserID: "u-1", Status: "active", CreatedAt: now, UpdatedAt: now},
 		&models.CRMGroup{ID: "grp-1", TenantID: "tenant-a", Name: "Nhóm A", ChannelID: "ch-bulldog", CreatedAt: now, UpdatedAt: now},
+		// An archived group still holds the channel FK and must be detached too.
+		&models.CRMGroup{ID: "grp-archived", TenantID: "tenant-a", Name: "Nhóm cũ", ChannelID: "ch-bulldog", CreatedAt: now, UpdatedAt: now, ArchivedAt: gorm.DeletedAt{Time: now, Valid: true}},
 		&models.CRMGroupEmployee{GroupID: "grp-1", ZaloWhitelistID: "wl-1"},
 		&models.MessengerIntakeAttribution{ID: "intake-1", TenantID: "tenant-a", ChannelID: "ch-bulldog", ConversationID: &conversationID, PageID: "page-1", PSID: "psid-order-only", AdID: "ad-1", RawReferral: `{"ad_id":"ad-1"}`, CapturedAt: now, CreatedAt: now, UpdatedAt: now},
 	}

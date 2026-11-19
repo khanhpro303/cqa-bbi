@@ -178,7 +178,7 @@ func TestPipelineMySQL(t *testing.T) {
 	if json.Unmarshal([]byte(prof.Profile), &p); p["address_form"] != "anh" || prof.SessionsCount != 1 {
 		t.Fatalf("profile = %+v", prof)
 	}
-	pc := PromptContext(context.Background(), tenantID, channelID, "user", userID)
+	pc := PromptContext(context.Background(), tenantID, channelID, "user", userID, "")
 	if !strings.Contains(pc, "Xưng anh") || !strings.Contains(pc, "12 thùng") || !strings.Contains(pc, "<ho_so_khach>") {
 		t.Fatalf("prompt context = %q", pc)
 	}
@@ -207,5 +207,83 @@ func TestPipelineMySQL(t *testing.T) {
 	db.DB.Where("id = ?", short.SessionID).First(&shortSess)
 	if shortSess.Status != "skipped" || gotInput != "" {
 		t.Fatalf("short session status = %s", shortSess.Status)
+	}
+}
+
+// A recreated Zalo group for the same mã KH inherits the earlier group's
+// memory; raw Zalo messages past retention are deleted, other channels kept.
+func TestGroupMemoryByCustomerCodeAndMessageRetentionMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	tenantID, zaloCh, fbCh := pkg.NewUUID(), pkg.NewUUID(), pkg.NewUUID()
+	now := time.Now()
+	code := "KH-" + tenantID[:6]
+	rows := []any{
+		&models.Tenant{ID: tenantID, Name: "t", Slug: "t-" + tenantID[:8], Settings: "{}", CreatedAt: now, UpdatedAt: now},
+		&models.Channel{ID: zaloCh, TenantID: tenantID, ChannelType: "zalo_oa", Name: "OA", CredentialsEncrypted: []byte("x"), Metadata: "{}", CreatedAt: now, UpdatedAt: now},
+		&models.Channel{ID: fbCh, TenantID: tenantID, ChannelType: "facebook", Name: "FB", CredentialsEncrypted: []byte("x"), Metadata: "{}", CreatedAt: now, UpdatedAt: now},
+		&models.ChatCustomerProfile{ID: pkg.NewUUID(), TenantID: tenantID, ChannelID: zaloCh, SubjectType: "group", SubjectID: "zg-old",
+			CustomerCode: code, Profile: "{}", Card: "Xưng chị Lan, hay hỏi hàng về", SessionsCount: 3, LastSessionAt: &now, CreatedAt: now, UpdatedAt: now},
+		&models.ChatSession{ID: pkg.NewUUID(), TenantID: tenantID, ChannelID: zaloCh, SubjectType: "group", SubjectID: "zg-old", CustomerCode: code,
+			StartedAt: now, LastActivityAt: now, SummarizedAt: &now, Status: "summarized", Summary: "Hỏi lô hàng tuần sau",
+			Intents: "[]", Products: "[]", Issues: "[]", CreatedAt: now, UpdatedAt: now},
+	}
+	for _, r := range rows {
+		if err := db.DB.Create(r).Error; err != nil {
+			t.Fatalf("seed %T: %v", r, err)
+		}
+	}
+
+	pc := PromptContext(context.Background(), tenantID, zaloCh, "group", "zg-new", code)
+	if !strings.Contains(pc, "chị Lan") || !strings.Contains(pc, "lô hàng tuần sau") {
+		t.Fatalf("new group did not inherit memory: %q", pc)
+	}
+	if pc := PromptContext(context.Background(), tenantID, zaloCh, "group", "zg-new", ""); pc != "" {
+		t.Fatalf("no mã KH must not inherit: %q", pc)
+	}
+	if pc := PromptContext(context.Background(), tenantID, zaloCh, "user", "zu-1", code); pc != "" {
+		t.Fatalf("1:1 chats must not inherit by mã KH: %q", pc)
+	}
+	if seed, ok := profileByCustomerCode(context.Background(), tenantID, "group", code, zaloCh, "zg-old"); ok {
+		t.Fatalf("a chat must not inherit from itself: %+v", seed)
+	}
+
+	old := now.AddDate(0, 0, -800)
+	convZ, convF := pkg.NewUUID(), pkg.NewUUID()
+	msgs := map[string]struct {
+		conv string
+		at   time.Time
+	}{"z-old": {convZ, old}, "z-new": {convZ, now}, "f-old": {convF, old}}
+	for _, c := range []models.Conversation{
+		{ID: convZ, TenantID: tenantID, ChannelID: zaloCh, ExternalConversationID: "zg-old", Metadata: "{}", CreatedAt: now, UpdatedAt: now},
+		{ID: convF, TenantID: tenantID, ChannelID: fbCh, ExternalConversationID: "fb-1", Metadata: "{}", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := db.DB.Create(&c).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := map[string]string{}
+	for name, m := range msgs {
+		id := pkg.NewUUID()
+		ids[name] = id
+		if err := db.DB.Create(&models.Message{ID: id, TenantID: tenantID, ConversationID: m.conv, ExternalMessageID: name, SenderType: "customer",
+			Content: name, Attachments: "[]", RawData: "{}", SentAt: m.at, CreatedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := ApplyMessageRetention(context.Background(), 0); n != 0 {
+		t.Fatalf("retention 0 must keep everything, deleted %d", n)
+	}
+	ApplyMessageRetention(context.Background(), 730)
+	for name, wantKept := range map[string]bool{"z-old": false, "z-new": true, "f-old": true} {
+		var n int64
+		db.DB.Model(&models.Message{}).Where("id = ?", ids[name]).Count(&n)
+		if (n == 1) != wantKept {
+			t.Errorf("message %s kept=%v, want %v", name, n == 1, wantKept)
+		}
+	}
+	var sessions int64
+	db.DB.Model(&models.ChatSession{}).Where("tenant_id = ?", tenantID).Count(&sessions)
+	if sessions != 1 {
+		t.Fatal("retention must keep session summaries")
 	}
 }

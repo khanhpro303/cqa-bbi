@@ -1,19 +1,30 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 type CRMGroup struct {
-	ID          string         `gorm:"type:char(36);primaryKey" json:"id"`
-	TenantID    string         `gorm:"type:char(36);not null;index" json:"tenant_id"`
-	Name        string         `gorm:"type:varchar(255);not null" json:"name"`
-	Description string         `gorm:"type:text" json:"description"`
-	ZaloGroupID   string         `gorm:"type:varchar(255)" json:"zalo_group_id,omitempty"`
-	ZaloGroupLink string         `gorm:"type:text" json:"zalo_group_link,omitempty"`
-	ZaloAssetID   string         `gorm:"type:varchar(255)" json:"zalo_asset_id,omitempty"`
-	ChannelID     string         `gorm:"type:char(36);index" json:"channel_id,omitempty"`
-	CustomerCode  string         `gorm:"type:varchar(50);index" json:"customer_code,omitempty"`
-	CreatedAt     time.Time      `gorm:"not null" json:"created_at"`
-	UpdatedAt     time.Time      `gorm:"not null" json:"updated_at"`
+	ID            string    `gorm:"type:char(36);primaryKey" json:"id"`
+	TenantID      string    `gorm:"type:char(36);not null;index" json:"tenant_id"`
+	Name          string    `gorm:"type:varchar(255);not null" json:"name"`
+	Description   string    `gorm:"type:text" json:"description"`
+	ZaloGroupID   string    `gorm:"type:varchar(255)" json:"zalo_group_id,omitempty"`
+	ZaloGroupLink string    `gorm:"type:text" json:"zalo_group_link,omitempty"`
+	ZaloAssetID   string    `gorm:"type:varchar(255)" json:"zalo_asset_id,omitempty"`
+	ChannelID     string    `gorm:"type:char(36);index" json:"channel_id,omitempty"`
+	CustomerCode  string    `gorm:"type:varchar(50);index" json:"customer_code,omitempty"`
+	CreatedAt     time.Time `gorm:"not null" json:"created_at"`
+	UpdatedAt     time.Time `gorm:"not null" json:"updated_at"`
+
+	// ArchivedAt is GORM's soft-delete column: archiving a group sets it, and
+	// every normal GORM query then skips the group, so the bot, campaigns,
+	// alerts, ERP scopes and order notifications treat it as gone while its
+	// links and history stay in place. Unscoped() sees archived groups
+	// (archive list, restore, permanent delete). Raw SQL does NOT filter it.
+	ArchivedAt gorm.DeletedAt `gorm:"column:archived_at;index" json:"archived_at,omitempty"`
 
 	// CustomerCodes is the full mã KH set the group serves (a group can serve
 	// several shops), populated by list handlers from crm_group_customer_codes.

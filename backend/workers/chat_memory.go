@@ -78,7 +78,7 @@ func appendChatMemoryContext(ctx context.Context, cfg *config.Config, channelMet
 		return systemPrompt
 	}
 	subjectType, subjectID := turn.Subject()
-	memo := chatmemory.PromptContext(ctx, turn.TenantID, turn.ChannelID, subjectType, subjectID)
+	memo := chatmemory.PromptContext(ctx, turn.TenantID, turn.ChannelID, subjectType, subjectID, turn.CustomerCode)
 	if memo == "" {
 		return systemPrompt
 	}
