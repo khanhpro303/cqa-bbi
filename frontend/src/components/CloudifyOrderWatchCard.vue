@@ -132,167 +132,167 @@
         Cấu hình chi tiết
       </v-btn>
     </div>
+  </v-card>
 
-    <!-- ===================== Side Panel: Detailed Config ===================== -->
-    <v-navigation-drawer
-      v-model="panelOpen"
-      location="right"
-      :width="540"
-      temporary
-      :scrim="false"
-      elevation="6"
-      class="border-s"
-      style="z-index: 1200;"
-    >
-      <div class="d-flex align-center pa-4 pb-2 border-b">
-        <v-icon start color="primary" class="mr-2">mdi-package-variant-closed</v-icon>
-        <div class="text-subtitle-1 font-weight-bold flex-grow-1">Cấu hình báo đơn hàng Cloudify</div>
-        <v-btn icon="mdi-close" variant="text" size="small" @click="panelOpen = false" />
-      </div>
+  <!-- Keep the drawer outside the card's stacking context. -->
+  <v-navigation-drawer
+    v-model="panelOpen"
+    location="right"
+    :width="540"
+    temporary
+    :scrim="false"
+    elevation="6"
+    class="border-s"
+    style="z-index: 1200;"
+  >
+    <div class="d-flex align-center pa-4 pb-2 border-b">
+      <v-icon start color="primary" class="mr-2">mdi-package-variant-closed</v-icon>
+      <div class="text-subtitle-1 font-weight-bold flex-grow-1">Cấu hình báo đơn hàng Cloudify</div>
+      <v-btn icon="mdi-close" variant="text" size="small" @click="panelOpen = false" />
+    </div>
 
-      <div class="pa-4 overflow-y-auto" style="max-height: calc(100vh - 120px);">
-        <!-- Basic info alert -->
-        <v-alert color="info" variant="tonal" density="compact" class="mb-4 text-caption">
-          Cloudify không có webhook, nên CQA quét đơn trong vài ngày gần đây theo chu kỳ để phát hiện đơn mới
-          hoặc đơn đổi trạng thái. Lần quét đầu tiên chỉ ghi nhận, không nhắn khách.
-        </v-alert>
+    <div class="pa-4 overflow-y-auto" style="max-height: calc(100vh - 120px);">
+      <!-- Basic info alert -->
+      <v-alert color="info" variant="tonal" density="compact" class="mb-4 text-caption">
+        Cloudify không có webhook, nên CQA quét đơn trong vài ngày gần đây theo chu kỳ để phát hiện đơn mới
+        hoặc đơn đổi trạng thái. Lần quét đầu tiên chỉ ghi nhận, không nhắn khách.
+      </v-alert>
 
-        <!-- Polling & Window settings -->
-        <div class="text-subtitle-2 font-weight-bold mb-3">1. Chu kỳ & Phạm vi quét</div>
-        <v-row dense class="mb-3">
-          <v-col cols="12" sm="6">
-            <v-text-field
-              v-model.number="form.poll_seconds"
-              type="number"
-              min="15"
-              max="3600"
-              label="Chu kỳ quét (giây)"
-              density="compact"
-              variant="outlined"
-            />
-          </v-col>
-          <v-col cols="12" sm="6">
-            <v-text-field
-              v-model.number="form.window_days"
-              type="number"
-              min="1"
-              max="60"
-              label="Quét đơn trong (ngày)"
-              density="compact"
-              variant="outlined"
-            />
-          </v-col>
-          <v-col cols="12">
-            <v-select
-              v-model="form.notify_kinds"
-              :items="kindItems"
-              multiple
-              chips
-              closable-chips
-              label="Sự kiện thông báo"
-              density="compact"
-              variant="outlined"
-            />
-          </v-col>
-        </v-row>
-
-        <v-divider class="my-4" />
-
-        <!-- Templates settings -->
-        <div class="text-subtitle-2 font-weight-bold mb-2">2. Mẫu tin nhắn Zalo</div>
-        <div class="text-caption text-grey mb-3">
-          Biến dùng được: <code v-pre>{ma_don}</code> <code v-pre>{khach_hang}</code> <code v-pre>{trang_thai}</code> <code v-pre>{trang_thai_cu}</code> <code v-pre>{tong_tien}</code> <code v-pre>{ngay}</code>. Để trống để dùng mẫu mặc định.
-        </div>
-
-        <v-textarea
-          v-model="form.template_created"
-          rows="2"
-          auto-grow
-          label="Mẫu tin: đơn mới"
-          density="compact"
-          variant="outlined"
-          class="mb-3"
-        />
-        <v-textarea
-          v-model="form.template_status_changed"
-          rows="2"
-          auto-grow
-          label="Mẫu tin: đổi trạng thái"
-          density="compact"
-          variant="outlined"
-          class="mb-3"
-        />
-        <v-textarea
-          v-model="form.template_updated"
-          rows="2"
-          auto-grow
-          label="Mẫu tin: đơn được sửa"
-          density="compact"
-          variant="outlined"
-          class="mb-3"
-        />
-
-        <div class="d-flex justify-end mb-4">
-          <v-btn color="primary" :loading="saving" @click="save" data-testid="save-watch">
-            Lưu cấu hình
-          </v-btn>
-        </div>
-
-        <v-divider class="my-4" />
-
-        <!-- Webhook optional setup -->
-        <div class="text-subtitle-2 font-weight-bold mb-1">3. Webhook (tuỳ chọn, để báo trong ~1 giây)</div>
-        <div class="text-caption text-grey mb-3">
-          Nếu Cloudify bật được "Automated Action → Send Webhook Notification" cho đơn bán hàng, dán URL này vào đó.
-          CQA sẽ đọc lại đơn ngay khi nhận tín hiệu thay vì đợi lượt quét.
-        </div>
-        <div class="d-flex align-center ga-2 mb-4">
+      <!-- Polling & Window settings -->
+      <div class="text-subtitle-2 font-weight-bold mb-3">1. Chu kỳ & Phạm vi quét</div>
+      <v-row dense class="mb-3">
+        <v-col cols="12" sm="6">
           <v-text-field
-            :model-value="webhookUrl || (data?.webhook.has_secret ? 'Đã tạo. Tạo lại để xem URL mới.' : 'Chưa tạo')"
-            readonly
+            v-model.number="form.poll_seconds"
+            type="number"
+            min="15"
+            max="3600"
+            label="Chu kỳ quét (giây)"
             density="compact"
             variant="outlined"
-            hide-details
-            :append-inner-icon="webhookUrl ? 'mdi-content-copy' : undefined"
-            @click:append-inner="copy"
           />
-          <v-btn variant="tonal" :loading="rotating" @click="rotate">
-            {{ data?.webhook.has_secret ? 'Tạo lại' : 'Tạo URL' }}
-          </v-btn>
-        </div>
+        </v-col>
+        <v-col cols="12" sm="6">
+          <v-text-field
+            v-model.number="form.window_days"
+            type="number"
+            min="1"
+            max="60"
+            label="Quét đơn trong (ngày)"
+            density="compact"
+            variant="outlined"
+          />
+        </v-col>
+        <v-col cols="12">
+          <v-select
+            v-model="form.notify_kinds"
+            :items="kindItems"
+            multiple
+            chips
+            closable-chips
+            label="Sự kiện thông báo"
+            density="compact"
+            variant="outlined"
+          />
+        </v-col>
+      </v-row>
 
-        <v-divider class="my-4" />
+      <v-divider class="my-4" />
 
-        <!-- Recent events table -->
-        <div class="text-subtitle-2 font-weight-bold mb-2">4. Thay đổi gần đây</div>
-        <v-table v-if="data?.events?.length" density="compact" data-testid="watch-events">
-          <thead>
-            <tr><th>Lúc</th><th>Đơn</th><th>Khách</th><th>Thay đổi</th><th>Gửi Zalo</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="e in data.events" :key="e.ID">
-              <td class="text-caption">{{ fmt(e.CreatedAt) }}</td>
-              <td>{{ e.OrderCode }}</td>
-              <td>{{ e.CustomerCode }}</td>
-              <td>{{ describe(e) }}</td>
-              <td class="text-caption">{{ deliveryLabel(e) }}</td>
-            </tr>
-          </tbody>
-        </v-table>
-        <div v-else class="text-caption text-grey">Chưa có thay đổi nào.</div>
-
-        <!-- Footer actions inside panel -->
-        <div class="d-flex justify-end ga-2 mt-6 pt-3 border-t">
-          <v-btn variant="tonal" color="grey" @click="panelOpen = false">
-            Đóng
-          </v-btn>
-          <v-btn color="primary" :loading="saving" @click="save">
-            Lưu cấu hình
-          </v-btn>
-        </div>
+      <!-- Templates settings -->
+      <div class="text-subtitle-2 font-weight-bold mb-2">2. Mẫu tin nhắn Zalo</div>
+      <div class="text-caption text-grey mb-3">
+        Biến dùng được: <code v-pre>{ma_don}</code> <code v-pre>{khach_hang}</code> <code v-pre>{trang_thai}</code> <code v-pre>{trang_thai_cu}</code> <code v-pre>{tong_tien}</code> <code v-pre>{ngay}</code>. Để trống để dùng mẫu mặc định.
       </div>
-    </v-navigation-drawer>
-  </v-card>
+
+      <v-textarea
+        v-model="form.template_created"
+        rows="2"
+        auto-grow
+        label="Mẫu tin: đơn mới"
+        density="compact"
+        variant="outlined"
+        class="mb-3"
+      />
+      <v-textarea
+        v-model="form.template_status_changed"
+        rows="2"
+        auto-grow
+        label="Mẫu tin: đổi trạng thái"
+        density="compact"
+        variant="outlined"
+        class="mb-3"
+      />
+      <v-textarea
+        v-model="form.template_updated"
+        rows="2"
+        auto-grow
+        label="Mẫu tin: đơn được sửa"
+        density="compact"
+        variant="outlined"
+        class="mb-3"
+      />
+
+      <div class="d-flex justify-end mb-4">
+        <v-btn color="primary" :loading="saving" @click="save" data-testid="save-watch">
+          Lưu cấu hình
+        </v-btn>
+      </div>
+
+      <v-divider class="my-4" />
+
+      <!-- Webhook optional setup -->
+      <div class="text-subtitle-2 font-weight-bold mb-1">3. Webhook (tuỳ chọn, để báo trong ~1 giây)</div>
+      <div class="text-caption text-grey mb-3">
+        Nếu Cloudify bật được "Automated Action → Send Webhook Notification" cho đơn bán hàng, dán URL này vào đó.
+        CQA sẽ đọc lại đơn ngay khi nhận tín hiệu thay vì đợi lượt quét.
+      </div>
+      <div class="d-flex align-center ga-2 mb-4">
+        <v-text-field
+          :model-value="webhookUrl || (data?.webhook.has_secret ? 'Đã tạo. Tạo lại để xem URL mới.' : 'Chưa tạo')"
+          readonly
+          density="compact"
+          variant="outlined"
+          hide-details
+          :append-inner-icon="webhookUrl ? 'mdi-content-copy' : undefined"
+          @click:append-inner="copy"
+        />
+        <v-btn variant="tonal" :loading="rotating" @click="rotate">
+          {{ data?.webhook.has_secret ? 'Tạo lại' : 'Tạo URL' }}
+        </v-btn>
+      </div>
+
+      <v-divider class="my-4" />
+
+      <!-- Recent events table -->
+      <div class="text-subtitle-2 font-weight-bold mb-2">4. Thay đổi gần đây</div>
+      <v-table v-if="data?.events?.length" density="compact" data-testid="watch-events">
+        <thead>
+          <tr><th>Lúc</th><th>Đơn</th><th>Khách</th><th>Thay đổi</th><th>Gửi Zalo</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="e in data.events" :key="e.ID">
+            <td class="text-caption">{{ fmt(e.CreatedAt) }}</td>
+            <td>{{ e.OrderCode }}</td>
+            <td>{{ e.CustomerCode }}</td>
+            <td>{{ describe(e) }}</td>
+            <td class="text-caption">{{ deliveryLabel(e) }}</td>
+          </tr>
+        </tbody>
+      </v-table>
+      <div v-else class="text-caption text-grey">Chưa có thay đổi nào.</div>
+
+      <!-- Footer actions inside panel -->
+      <div class="d-flex justify-end ga-2 mt-6 pt-3 border-t">
+        <v-btn variant="tonal" color="grey" @click="panelOpen = false">
+          Đóng
+        </v-btn>
+        <v-btn color="primary" :loading="saving" @click="save">
+          Lưu cấu hình
+        </v-btn>
+      </div>
+    </div>
+  </v-navigation-drawer>
 </template>
 
 <script setup lang="ts">
