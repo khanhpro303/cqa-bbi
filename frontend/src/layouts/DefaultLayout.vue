@@ -13,7 +13,7 @@
     :permanent="mdAndUp"
     :temporary="!mdAndUp"
     :color="isDark ? undefined : 'white'"
-    class="border-e"
+    class="app-sidebar border-e"
   >
     <!-- Logo -->
     <v-list-item :class="isRail ? 'px-2 py-3' : 'px-4 py-3'">
@@ -835,6 +835,33 @@ async function deleteGlobalCustomer(customerId: string) {
 </script>
 
 <style scoped>
+.app-sidebar :deep(.v-navigation-drawer__content) {
+  --sidebar-scroll-thumb: rgba(var(--v-theme-on-surface), 0.46);
+  scrollbar-width: thin;
+  scrollbar-color: var(--sidebar-scroll-thumb) transparent;
+}
+
+.app-sidebar :deep(.v-navigation-drawer__content:is(:hover, :focus-within)) {
+  --sidebar-scroll-thumb: rgba(var(--v-theme-on-surface), 0.64);
+}
+
+@supports not (scrollbar-color: red transparent) {
+  .app-sidebar :deep(.v-navigation-drawer__content::-webkit-scrollbar) {
+    width: 8px;
+  }
+
+  .app-sidebar :deep(.v-navigation-drawer__content::-webkit-scrollbar-track) {
+    background: transparent;
+  }
+
+  .app-sidebar :deep(.v-navigation-drawer__content::-webkit-scrollbar-thumb) {
+    background: var(--sidebar-scroll-thumb);
+    background-clip: padding-box;
+    border: 1px solid transparent;
+    border-radius: 8px;
+  }
+}
+
 .bell-ring-animation {
   animation: bell-ring 1.5s infinite;
   transform-origin: top center;
