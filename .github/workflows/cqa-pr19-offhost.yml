@@ -29,6 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: 9f52ecaba68dec8e1c057bb56cc584e9643a50b5
+          fetch-depth: 0
           persist-credentials: false
       - name: Reconstruct the exact tested merge tree
         run: |
