@@ -57,6 +57,12 @@ export interface GatewayAccountRecord {
   sessionData?: SessionData;
   lastError?: string;
   lastImportedAt?: string;
+  // Set when CQA rejects imports for this account's tenant/channel (the
+  // channel was deleted or is no longer a personal Zalo import channel).
+  // Scheduled sync skips the account until it is saved again (re-pointed by
+  // CQA) or a manual sync succeeds.
+  syncBlockedReason?: string;
+  syncBlockedAt?: string;
   createdAt: string;
   updatedAt: string;
   threads: Record<string, GatewayConversationRecord>;

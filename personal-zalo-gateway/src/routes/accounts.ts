@@ -88,6 +88,19 @@ export async function registerAccountRoutes(app: FastifyInstance, deps: AccountR
     return account;
   });
 
+  // Called by CQA when it deletes the channel an account imports into, so the
+  // account stops listening to Zalo and stops posting to a channel that no
+  // longer exists.
+  app.delete('/api/v1/accounts/:accountId', async (request, reply) => {
+    const { accountId } = request.params as { accountId: string };
+    deps.pool.disconnect(accountId);
+    const deleted = await deps.store.deleteAccount(accountId);
+    if (!deleted) {
+      return reply.status(404).send({ error: 'account_not_found' });
+    }
+    return { status: 'deleted' };
+  });
+
   app.post('/api/v1/accounts/:accountId/login/qr', async (request, reply) => {
     const { accountId } = request.params as { accountId: string };
     const account = await deps.store.getAccount(accountId);

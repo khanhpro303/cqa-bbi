@@ -10,6 +10,24 @@ export interface CQAImportResponse {
   messages_deduplicated: number;
 }
 
+export class CQAImportError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    body: string,
+  ) {
+    super(`cqa_import_failed:${status}:${body}`);
+    this.name = 'CQAImportError';
+  }
+
+  // CQA answers 401 invalid_internal_target when the batch's tenant/channel
+  // no longer resolves to a personal Zalo import channel (usually because
+  // the channel was deleted). Retrying the same batch can never succeed.
+  get targetGone(): boolean {
+    return this.status === 401 && this.code === 'invalid_internal_target';
+  }
+}
+
 export function buildSignedImportRequest(accountBatch: AccountSyncBatch): {
   url: string;
   requestId: string;
@@ -72,7 +90,13 @@ export async function sendImportBatch(
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`cqa_import_failed:${response.status}:${text}`);
+      let code = '';
+      try {
+        code = String((JSON.parse(text) as { error?: unknown }).error || '');
+      } catch {
+        code = '';
+      }
+      throw new CQAImportError(response.status, code, text);
     }
 
     return await response.json() as CQAImportResponse;
