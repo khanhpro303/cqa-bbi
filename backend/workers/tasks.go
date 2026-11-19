@@ -703,7 +703,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// Group assistant mode: the bot reads the whole customer group and
 		// answers only when needed (group_assistant.go).
-		groupAssistant := groupAssistantOn(meta, matchedGroup.ZaloGroupID)
+		groupAssistant := groupAssistantOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode)
 
 		// Concurrency control: sequential processing per lock key using a safe,
 		// owner-token Redis lock (engine.AcquireSessionLock / ReleaseSessionLock).

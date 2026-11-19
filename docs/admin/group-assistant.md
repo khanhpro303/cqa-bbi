@@ -1,13 +1,17 @@
 # Trợ lý trong nhóm khách
 
 Bật trong trang kênh Zalo OA: **Sửa kênh → Trợ lý trong nhóm khách**. Mặc định tắt.
-Chỉ áp dụng cho nhóm Zalo; chat 1:1 vẫn chạy theo phiên như cũ.
+Chỉ áp dụng cho nhóm khách: nhóm Zalo đã tạo trong CRM và có mã KH. Chat 1:1 và
+các nhóm khác của OA (nhóm nhân viên, nhóm cảnh báo, nhóm chưa gắn mã KH) vẫn chạy
+theo phiên có từ khoá như cũ.
 
 ## Bot làm gì khi bật
 
 - **Không cần từ khoá.** Tin đầu tiên trong nhóm mở phiên mà không gửi lời chào.
-  Hết thời gian chờ thì phiên đóng mà không nhắn gì. Từ khoá mở/kết thúc phiên
-  vẫn dùng được.
+  Hết thời gian chờ thì phiên đóng mà không nhắn gì. Từ khoá vẫn dùng được: gõ từ
+  khoá mở phiên khi chưa có phiên thì bot gửi lời chào như cũ; gõ từ khoá kết thúc
+  thì bot chào tạm biệt, đóng phiên và quên cuộc hội thoại chung, tin kế tiếp mở
+  phiên mới.
 - **Đọc cả nhóm, chỉ lên tiếng khi cần.** Mỗi tin trong nhóm đi qua bộ lọc
   "Trợ lý nhóm: khi nào bot lên tiếng" kèm khoảng 12 tin gần nhất. Mọi người nói
   chuyện với nhau thì bot im. Có người hỏi bot, hỏi tồn kho, giá, đơn, công nợ,

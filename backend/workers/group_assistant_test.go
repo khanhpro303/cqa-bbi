@@ -14,14 +14,24 @@ import (
 
 func TestGroupAssistantOn(t *testing.T) {
 	on := ChannelMetadata{GroupAssistant: true}
-	if !groupAssistantOn(on, "g1") {
-		t.Fatal("mode on in a group must be on")
+	tests := []struct {
+		name   string
+		meta   ChannelMetadata
+		group  string
+		crm    bool
+		code   string
+		wantOn bool
+	}{
+		{"customer group", on, "g1", true, "KH01", true},
+		{"1:1 chat", on, "", false, "", false},
+		{"mode off", ChannelMetadata{}, "g1", true, "KH01", false},
+		{"group not in CRM", on, "g1", false, "", false},
+		{"staff or alert group without customer code", on, "g1", true, "", false},
 	}
-	if groupAssistantOn(on, "") {
-		t.Fatal("1:1 chats never use group assistant mode")
-	}
-	if groupAssistantOn(ChannelMetadata{}, "g1") {
-		t.Fatal("mode is off unless the channel turns it on")
+	for _, tt := range tests {
+		if got := groupAssistantOn(tt.meta, tt.group, tt.crm, tt.code); got != tt.wantOn {
+			t.Errorf("%s: groupAssistantOn = %v, want %v", tt.name, got, tt.wantOn)
+		}
 	}
 }
 

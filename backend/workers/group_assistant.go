@@ -52,9 +52,12 @@ type groupLine struct {
 	Text string `json:"text"`
 }
 
-// groupAssistantOn reports whether this turn runs in group assistant mode.
-func groupAssistantOn(meta ChannelMetadata, zaloGroupID string) bool {
-	return meta.GroupAssistant && zaloGroupID != ""
+// groupAssistantOn reports whether this turn runs in group assistant mode:
+// the channel turned it on and the chat is a customer's CRM group (one with a
+// customer code). Other groups on the OA, such as staff or alert groups, keep
+// the keyword-activated sessions.
+func groupAssistantOn(meta ChannelMetadata, zaloGroupID string, isCRMGroup bool, groupCustomerCode string) bool {
+	return meta.GroupAssistant && zaloGroupID != "" && isCRMGroup && strings.TrimSpace(groupCustomerCode) != ""
 }
 
 // groupSpeaker labels the sender of a group message.
