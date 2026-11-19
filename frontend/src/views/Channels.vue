@@ -104,7 +104,7 @@
               {{ $t('test_connection') }}
             </v-btn>
             <v-spacer />
-            <v-btn icon="mdi-pencil" size="small" variant="text" color="primary" @click="openEdit(ch)" />
+            <v-btn icon="mdi-pencil" size="small" variant="text" color="primary" :aria-label="$t('edit_channel')" @click="openEdit(ch)" />
             <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="remove(ch.id)" />
           </div>
         </v-card>
@@ -264,14 +264,15 @@
         <v-card-title class="px-6 pt-6 pb-2">{{ $t('edit_channel') }}</v-card-title>
         
         <v-card-text class="px-6 py-2">
-          <v-tabs v-model="editTab" color="primary" class="mb-4">
-            <v-tab value="general">{{ $t('general_settings') }}</v-tab>
-            <v-tab value="chatbot" v-if="editChannelType === 'zalo_oa'">{{ $t('chatbot_session') }}</v-tab>
+          <v-tabs v-model="editTab" :aria-label="$t('edit_channel')" color="primary" class="mb-4" show-arrows>
+            <v-tab id="channel-edit-general-tab" value="general" aria-controls="channel-edit-general">{{ $t('general_settings') }}</v-tab>
+            <v-tab v-if="editChannelType === 'zalo_oa'" id="channel-edit-chatbot-tab" value="chatbot" aria-controls="channel-edit-chatbot">{{ $t('chatbot_session') }}</v-tab>
+            <v-tab v-if="editChannelType === 'zalo_oa'" id="channel-edit-groups-tab" value="groups" aria-controls="channel-edit-groups">{{ $t('zalo_group_settings_tab') }}</v-tab>
           </v-tabs>
 
           <div style="max-height: 60vh; overflow-y: auto;" class="px-1">
             <v-window v-model="editTab">
-              <v-window-item value="general" class="pt-3">
+              <v-window-item id="channel-edit-general" value="general" role="tabpanel" aria-labelledby="channel-edit-general-tab" class="pt-3">
                 <v-text-field v-model="editForm.name" :label="$t('channel_name')" class="mb-3" />
                 <v-switch v-model="editForm.is_active" :label="$t('active')" color="primary" density="compact" class="mb-3" />
                 <template v-if="editChannelType !== 'personal_zalo_import'">
@@ -289,32 +290,9 @@
                   </v-alert>
                   <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" color="primary" density="compact" :hint="$t('sync_files_hint_short')" persistent-hint />
                 </template>
-                <template v-if="editChannelType === 'zalo_oa'">
-                  <v-divider class="my-3" />
-                  <div class="text-body-2 font-weight-medium mb-1">{{ $t('campaign_alert_settings_title') }}</div>
-                  <v-switch
-                    v-model="editForm.campaign_alerts_enabled"
-                    :label="$t('campaign_alert_enable_switch')"
-                    density="compact"
-                    color="primary"
-                    class="mb-1"
-                  />
-                  <v-select
-                    v-if="editForm.campaign_alerts_enabled"
-                    v-model="editForm.campaign_alert_group_id"
-                    :items="alertGroupOptions"
-                    :loading="loadingAlertGroups"
-                    :no-data-text="loadingAlertGroups ? $t('loading') : $t('campaign_alert_no_groups')"
-                    :label="$t('campaign_alert_group_label')"
-                    density="compact"
-                    :hint="$t('campaign_alert_group_hint')"
-                    persistent-hint
-                  />
-                  <CampaignAlertOutputs v-if="editForm.campaign_alerts_enabled" v-model="editForm.campaign_alert_outputs" />
-                </template>
               </v-window-item>
               
-              <v-window-item value="chatbot" class="pt-3">
+              <v-window-item v-if="editChannelType === 'zalo_oa'" id="channel-edit-chatbot" value="chatbot" role="tabpanel" aria-labelledby="channel-edit-chatbot-tab" class="pt-3">
                 <div class="text-subtitle-2 mb-2">{{ $t('session_config') }}</div>
                 <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
                 <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
@@ -329,6 +307,15 @@
                 <v-alert v-if="hasLegacyLangflowOverride" type="warning" variant="tonal" density="compact" class="mb-3">
                   {{ $t('langflow_legacy_override_notice') }}
                 </v-alert>
+              </v-window-item>
+              <v-window-item v-if="editChannelType === 'zalo_oa'" id="channel-edit-groups" value="groups" role="tabpanel" aria-labelledby="channel-edit-groups-tab" class="pt-3">
+                <ZaloGroupSettings
+                  v-if="editDialog"
+                  :key="editChannelId"
+                  v-model="editGroupSettings"
+                  :tenant-id="tenantId"
+                  :channel-id="editChannelId"
+                />
               </v-window-item>
             </v-window>
           </div>
@@ -355,8 +342,9 @@ import { useChannelStore } from '../stores/channels'
 import { useChatbotStore } from '../stores/chatbot'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
-import CampaignAlertOutputs from '../components/channels/CampaignAlertOutputs.vue'
 import FacebookPageConnect from '../components/channels/FacebookPageConnect.vue'
+import ZaloGroupSettings from '../components/channels/ZaloGroupSettings.vue'
+import { readZaloGroupSettings, zaloGroupSettingsPatch } from '../components/channels/zaloGroupSettings'
 
 const route = useRoute()
 const router = useRouter()
@@ -638,33 +626,13 @@ const editChannelType = ref('')
 const editForm = reactive({
   name: '', is_active: true, sync_files: false, sync_interval: 15,
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
-  campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[]
 })
-// Original parsed metadata of the channel being edited — spread back on save so
-// keys this dialog doesn't manage (e.g. set in ChannelDetail) are never wiped.
+const editGroupSettings = ref(readZaloGroupSettings())
 const editOriginalMeta = ref<Record<string, unknown>>({})
-// Per-channel Langflow overrides are legacy: the backend now always prefers the
-// AI Engines config, and saving this dialog strips them.
 const LEGACY_LANGFLOW_META_KEYS = ['langflow_api_url', 'langflow_api_key', 'langflow_flow_id', 'langflow_public_flow_id']
 const hasLegacyLangflowOverride = computed(() =>
   LEGACY_LANGFLOW_META_KEYS.some((key) => Boolean(editOriginalMeta.value[key])),
 )
-const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
-const loadingAlertGroups = ref(false)
-
-async function loadAlertGroupOptions() {
-  loadingAlertGroups.value = true
-  try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups`)
-    alertGroupOptions.value = (Array.isArray(data) ? data : [])
-      .filter((g: any) => g.zalo_group_id && (!g.channel_id || g.channel_id === editChannelId.value))
-      .map((g: any) => ({ title: g.name, value: g.id }))
-  } catch {
-    alertGroupOptions.value = []
-  } finally {
-    loadingAlertGroups.value = false
-  }
-}
 const syncIntervalOptions = computed(() => [
   { title: t('sync_1m'), value: 1 },
   { title: t('sync_5m'), value: 5 },
@@ -692,9 +660,6 @@ function openEdit(ch: any) {
     editForm.session_welcome_message = meta.session_welcome_message || ''
     editForm.session_goodbye_message = meta.session_goodbye_message || ''
     editForm.session_timeout_minutes = meta.session_timeout_minutes || 0
-    editForm.campaign_alerts_enabled = meta.campaign_alerts_enabled || false
-    editForm.campaign_alert_group_id = meta.campaign_alert_group_id || ''
-    editForm.campaign_alert_outputs = Array.isArray(meta.campaign_alert_outputs) ? meta.campaign_alert_outputs : []
   } catch {
     editOriginalMeta.value = {}
     editForm.sync_files = false
@@ -704,11 +669,8 @@ function openEdit(ch: any) {
     editForm.session_welcome_message = ''
     editForm.session_goodbye_message = ''
     editForm.session_timeout_minutes = 0
-    editForm.campaign_alerts_enabled = false
-    editForm.campaign_alert_group_id = ''
-    editForm.campaign_alert_outputs = []
   }
-  if (ch.channel_type === 'zalo_oa') loadAlertGroupOptions()
+  editGroupSettings.value = readZaloGroupSettings(editOriginalMeta.value)
   editDialog.value = true
 }
 
@@ -720,25 +682,20 @@ async function saveEdit() {
       is_active: editForm.is_active,
     }
     if (editChannelType.value !== 'personal_zalo_import') {
-      // Start from the channel's existing metadata so keys this dialog doesn't
-      // manage (e.g. set in ChannelDetail) survive the save.
-      const metaToSave: any = {
-        ...editOriginalMeta.value,
+      // The API merges Zalo OA metadata. Other channels need the full object.
+      const isZaloOA = editChannelType.value === 'zalo_oa'
+      const metaToSave: Record<string, unknown> = {
+        ...(isZaloOA ? {} : editOriginalMeta.value),
         sync_files: editForm.sync_files,
         sync_interval: editForm.sync_interval,
       }
-      if (editChannelType.value === 'zalo_oa') {
+      if (isZaloOA) {
         metaToSave.session_keyword = editForm.session_keyword
         metaToSave.session_end_keyword = editForm.session_end_keyword
         metaToSave.session_welcome_message = editForm.session_welcome_message
         metaToSave.session_goodbye_message = editForm.session_goodbye_message
         metaToSave.session_timeout_minutes = editForm.session_timeout_minutes
-        // Langflow is configured only in AI Engines; drop legacy per-channel
-        // overrides so a stale key/flow can never shadow the tenant config.
-        for (const key of LEGACY_LANGFLOW_META_KEYS) delete metaToSave[key]
-        metaToSave.campaign_alerts_enabled = editForm.campaign_alerts_enabled
-        metaToSave.campaign_alert_group_id = editForm.campaign_alerts_enabled ? editForm.campaign_alert_group_id : ''
-        metaToSave.campaign_alert_outputs = editForm.campaign_alerts_enabled ? editForm.campaign_alert_outputs : []
+        Object.assign(metaToSave, zaloGroupSettingsPatch(editGroupSettings.value, editOriginalMeta.value))
       }
       payload.metadata = JSON.stringify(metaToSave)
     }

@@ -1,6 +1,8 @@
 # Trợ lý trong nhóm khách
 
-Bật trong trang kênh Zalo OA: **Sửa kênh → Trợ lý trong nhóm khách**. Mặc định tắt.
+Trong danh sách **Kênh chat**, bấm nút bút chì trên thẻ kênh Zalo OA. Mở tab
+**Nhóm Zalo**, bật **Bot là trợ lý trong nhóm Zalo của khách** và bấm **Lưu cài đặt**.
+Chế độ này mặc định tắt.
 Chỉ áp dụng cho nhóm khách: nhóm Zalo đã tạo trong CRM và có mã KH. Chat 1:1 và
 các nhóm khác của OA (nhóm nhân viên, nhóm cảnh báo, nhóm chưa gắn mã KH) vẫn chạy
 theo phiên có từ khoá như cũ.
