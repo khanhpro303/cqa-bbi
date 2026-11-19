@@ -22,7 +22,8 @@
         variant="text"
         color="primary"
         title="Cấu hình chi tiết"
-        @click="panelOpen = !panelOpen"
+        aria-haspopup="dialog"
+        @click="openPanel"
       />
     </div>
 
@@ -127,31 +128,34 @@
         variant="text"
         color="primary"
         append-icon="mdi-arrow-right"
-        @click="panelOpen = !panelOpen"
+        aria-haspopup="dialog"
+        @click="openPanel"
       >
         Cấu hình chi tiết
       </v-btn>
     </div>
   </v-card>
 
-  <!-- Keep the drawer outside the card's stacking context. -->
-  <v-navigation-drawer
+  <v-dialog
     v-model="panelOpen"
-    location="right"
     :width="540"
-    temporary
-    :scrim="false"
-    elevation="6"
-    class="border-s"
-    style="z-index: 1200;"
+    max-width="100%"
+    height="100%"
+    max-height="100%"
+    :opacity="0.12"
+    transition="slide-x-reverse-transition"
+    class="cloudify-settings-dialog justify-end"
+    content-class="cloudify-settings-panel border-s elevation-6"
+    aria-labelledby="cloudify-settings-title"
+    @after-leave="panelActivator?.focus({ preventScroll: true })"
   >
-    <div class="d-flex align-center pa-4 pb-2 border-b">
+    <div class="d-flex align-center flex-shrink-0 pa-4 pb-2 border-b">
       <v-icon start color="primary" class="mr-2">mdi-package-variant-closed</v-icon>
-      <div class="text-subtitle-1 font-weight-bold flex-grow-1">Cấu hình báo đơn hàng Cloudify</div>
-      <v-btn icon="mdi-close" variant="text" size="small" @click="panelOpen = false" />
+      <h2 id="cloudify-settings-title" class="text-subtitle-1 font-weight-bold flex-grow-1">Cấu hình báo đơn hàng Cloudify</h2>
+      <v-btn icon="mdi-close" variant="text" size="small" aria-label="Đóng cấu hình Cloudify" @click="panelOpen = false" />
     </div>
 
-    <div class="pa-4 overflow-y-auto" style="max-height: calc(100vh - 120px);">
+    <div class="cloudify-settings-body pa-4 flex-grow-1 overflow-y-auto">
       <!-- Basic info alert -->
       <v-alert color="info" variant="tonal" density="compact" class="mb-4 text-caption">
         Cloudify không có webhook, nên CQA quét đơn trong vài ngày gần đây theo chu kỳ để phát hiện đơn mới
@@ -292,11 +296,11 @@
         </v-btn>
       </div>
     </div>
-  </v-navigation-drawer>
+  </v-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, shallowRef, reactive, computed, onMounted } from 'vue'
 import api from '../api'
 
 const props = defineProps<{ tenantId: string }>()
@@ -334,6 +338,12 @@ const polling = ref(false)
 const rotating = ref(false)
 const webhookUrl = ref('')
 const panelOpen = ref(false)
+const panelActivator = shallowRef<HTMLElement>()
+
+function openPanel(event: MouseEvent) {
+  panelActivator.value = event.currentTarget as HTMLElement
+  panelOpen.value = true
+}
 
 const statusColor = computed(() => {
   if (!data.value?.settings.watch_enabled) return 'grey'
@@ -438,25 +448,21 @@ function copy() {
   if (webhookUrl.value) navigator.clipboard?.writeText(webhookUrl.value)
 }
 
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && panelOpen.value) {
-    panelOpen.value = false
-  }
-}
-
-onMounted(() => {
-  window.addEventListener('keydown', handleKeydown)
-  load()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeydown)
-})
+onMounted(load)
 
 defineExpose({ load })
 </script>
 
 <style scoped>
+.cloudify-settings-dialog :deep(.cloudify-settings-panel) {
+  background-color: rgb(var(--v-theme-surface));
+  margin: 0;
+}
+
+.cloudify-settings-body {
+  overscroll-behavior: contain;
+}
+
 .toggle-row {
   background-color: rgba(128, 128, 128, 0.05);
   transition: background-color 0.2s ease;
