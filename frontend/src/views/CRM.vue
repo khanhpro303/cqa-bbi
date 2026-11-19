@@ -56,16 +56,30 @@
       <v-window-item value="groups" class="pt-2">
         <v-card :loading="loadingGroups">
           <div class="d-flex align-center flex-wrap ga-3 px-3 pt-3">
-            <v-btn-toggle v-model="groupView" mandatory density="compact" color="primary" variant="outlined" divided>
-              <v-btn value="active" size="small">
-                <v-icon start size="16">mdi-account-group</v-icon>
+            <div class="d-flex flex-wrap ga-2" role="group" aria-label="Trạng thái nhóm CRM">
+              <v-btn
+                size="small"
+                variant="outlined"
+                active-color="primary"
+                prepend-icon="mdi-account-group"
+                :active="groupView === 'active'"
+                :aria-pressed="groupView === 'active'"
+                @click="groupView = 'active'"
+              >
                 Đang hoạt động
               </v-btn>
-              <v-btn value="archived" size="small">
-                <v-icon start size="16">mdi-archive-outline</v-icon>
+              <v-btn
+                size="small"
+                variant="outlined"
+                active-color="primary"
+                prepend-icon="mdi-archive-outline"
+                :active="groupView === 'archived'"
+                :aria-pressed="groupView === 'archived'"
+                @click="groupView = 'archived'"
+              >
                 Đã lưu trữ
               </v-btn>
-            </v-btn-toggle>
+            </div>
             <span v-if="groupView === 'archived'" class="text-caption text-grey-darken-1">
               Nhóm đã lưu trữ: bot không trả lời, lịch gửi chiến dịch tạm dừng. Thành viên, cấu hình và lịch sử chat, đơn hàng vẫn được giữ.
             </span>
