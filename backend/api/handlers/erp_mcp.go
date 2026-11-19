@@ -107,7 +107,7 @@ func ERPMCP(c *gin.Context) {
 	case "ping":
 		reply(gin.H{})
 	case "tools/list":
-		tools := append(append([]erpMCPTool{}, erpMCPTools...), erpMCPOrderTools...)
+		tools := append(append([]erpMCPTool{}, erpMCPTools...), listedOrderTools()...)
 		reply(gin.H{"tools": tools})
 	case "tools/call":
 		var params struct {
@@ -116,6 +116,10 @@ func ERPMCP(c *gin.Context) {
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			fail(-32602, "Invalid tool parameters")
+			return
+		}
+		if tool, ok := findCartTool(params.Name); ok {
+			reply(handleCartTool(c.Request.Context(), tenantID, resolveAgentType(tenantID, token), c.GetHeader("X-Permission-Token"), tool, params.Arguments))
 			return
 		}
 		if tool, ok := findOrderTool(params.Name); ok {

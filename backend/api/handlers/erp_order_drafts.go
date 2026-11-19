@@ -20,13 +20,11 @@ import (
 	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
-// Permission resources for the order write tools. They are off unless an
-// admin enables them for a CRM group or the private bot: unlike the read
-// resources, a private bot with no explicit configuration gets no write access.
+// Permission resources for the order write tools (see orderactions.WriteScope).
 const (
-	resourceOrderCreate = "order_create"
-	resourceOrderUpdate = "order_update"
-	resourceOrderCancel = "order_cancel"
+	resourceOrderCreate = orderactions.ResourceOrderCreate
+	resourceOrderUpdate = orderactions.ResourceOrderUpdate
+	resourceOrderCancel = orderactions.ResourceOrderCancel
 )
 
 const (
@@ -228,27 +226,9 @@ func handleOrderDraftTool(ctx context.Context, tenantID, agentType, permissionTo
 }
 
 // orderWriteScope reports whether a write resource is enabled and with which
-// scope. Customers (public bot) are always limited to their own codes.
+// scope.
 func orderWriteScope(permissions *engine.GroupPermissionContext, resource string) (bool, string) {
-	if permissions.AgentType == "private" {
-		for _, group := range permissions.Groups {
-			if group.GroupID != "private_bot" {
-				continue
-			}
-			for _, res := range group.Resources {
-				if res.Resource == resource && res.IsEnabled {
-					scope := res.ScopeType
-					if scope == "" {
-						scope = "all"
-					}
-					return true, scope
-				}
-			}
-		}
-		return false, ""
-	}
-	allowed, _, _ := permissions.IsResourceAllowed(resource)
-	return allowed, "own"
+	return orderactions.WriteScope(permissions, resource)
 }
 
 func buildOrderDraft(ctx context.Context, permissions *engine.GroupPermissionContext, tool erpMCPTool, args orderDraftArgs, deps orderDraftDeps) (*models.OrderAction, error) {

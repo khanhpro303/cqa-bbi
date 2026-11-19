@@ -44,7 +44,7 @@ func testDatabase(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	if err := database.AutoMigrate(&models.AppSetting{}, &models.CRMGroup{}, &models.CRMGroupCustomerCode{},
-		&models.CloudifyOrderWatch{}, &models.CloudifyOrderSnapshot{}, &models.CloudifyOrderEvent{}); err != nil {
+		&models.CloudifyOrderWatch{}, &models.CloudifyOrderSnapshot{}, &models.CloudifyOrderEvent{}, &models.OrderAction{}); err != nil {
 		t.Fatal(err)
 	}
 	return database
@@ -165,6 +165,8 @@ func TestDeliverPending(t *testing.T) {
 	mk(KindUpdated, "ĐH2", "KH1", now)                   // kind off by default
 	mk(KindCreated, "ĐH3", "KH9", now)                   // no group
 	mk(KindCreated, "ĐH4", "KH1", now.Add(-3*time.Hour)) // stale
+	mk(KindCreated, "CQA-261119-ABCDEF", "KH1", now)     // ordered in the chat
+	database.Create(&models.OrderAction{ID: pkg.NewUUID(), TenantID: tenant, Kind: "create", Status: "done", OrderCode: "CQA-261119-ABCDEF", ExpiresAt: now})
 	sender := &fakeSender{recipients: map[string][]Recipient{"KH1": {{GroupID: "g1", ChannelID: "c1", Name: "Shop"}}}}
 
 	off := ParseSettings(map[string]string{})
@@ -186,7 +188,8 @@ func TestDeliverPending(t *testing.T) {
 	for _, e := range events(t, database, tenant) {
 		notes[e.OrderCode] = e.DeliveryStatus + ":" + e.DeliveryNote
 	}
-	if notes["ĐH1"] != "sent:sent to 1 group(s)" || notes["ĐH2"] != "skipped:kind_off" || notes["ĐH3"] != "skipped:no_zalo_group" || notes["ĐH4"] != "skipped:stale" {
+	if notes["ĐH1"] != "sent:sent to 1 group(s)" || notes["ĐH2"] != "skipped:kind_off" || notes["ĐH3"] != "skipped:no_zalo_group" || notes["ĐH4"] != "skipped:stale" ||
+		notes["CQA-261119-ABCDEF"] != "skipped:chatbot_order" {
 		t.Fatalf("notes = %v", notes)
 	}
 	if len(sender.sent) != 1 || sender.sent[0].text != "Đơn hàng ĐH1 của quý khách đã chuyển sang trạng thái: Đang giao." {

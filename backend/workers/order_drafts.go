@@ -53,6 +53,9 @@ func handleOrderDraftReply(ctx context.Context, cfg *config.Config, adapter *cha
 			return false, nil
 		}
 		log.Printf("[order_draft] draft %s declined by %s", draft.ID, senderID)
+		if draft.CartID != "" {
+			return true, send(orderCartDeclinedMessage)
+		}
 		return true, send(orderDraftDeclinedMessage)
 	}
 

@@ -110,6 +110,7 @@ func AutoMigrate() error {
 		&models.CampaignSegment{},
 		&models.CampaignRun{},
 		&models.OrderAction{},
+		&models.OrderCart{},
 	)
 	if err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)

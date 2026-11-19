@@ -232,6 +232,7 @@ func Commit(ctx context.Context, id, zaloUserID string, writer Writer) (Outcome,
 		}
 	}
 	finish(writeCtx, action.ID, StatusDone, code, string(raw), "")
+	closeOrderedCart(writeCtx, action.CartID, code)
 	return Outcome{Status: StatusDone, OrderCode: code, Message: doneText(action, code)}, nil
 }
 
@@ -295,6 +296,9 @@ func kindLabel(kind string) string {
 func doneText(action models.OrderAction, code string) string {
 	switch action.Kind {
 	case KindCreate:
+		if action.CartID != "" {
+			return cartClosingText(action, code)
+		}
 		if code != "" {
 			return fmt.Sprintf("✅ Đã tạo đơn %s cho %s.", code, customerLabel(action))
 		}
@@ -305,7 +309,27 @@ func doneText(action models.OrderAction, code string) string {
 	return fmt.Sprintf("✅ Đã cập nhật đơn %s.", code)
 }
 
+// cartClosingText is the last message of a chat order: what was ordered and
+// what happens next. The order watcher reports later status changes.
+func cartClosingText(action models.OrderAction, code string) string {
+	lines, pieces, amount := payloadTotals(action.Payload)
+	var b strings.Builder
+	if code != "" {
+		fmt.Fprintf(&b, "✅ Đã lên đơn %s cho %s.\n", code, customerLabel(action))
+	} else {
+		fmt.Fprintf(&b, "✅ Đã lên đơn cho %s.\n", customerLabel(action))
+	}
+	if lines > 0 {
+		fmt.Fprintf(&b, "Đơn gồm %d sản phẩm (%s món), tạm tính %s.\n", lines, strconv.FormatFloat(pieces, 'f', -1, 64), FormatVND(amount))
+	}
+	b.WriteString("Đơn đã vào hệ thống, bên em sẽ xử lý và báo anh/chị khi đơn đổi trạng thái. Cảm ơn anh/chị đã đặt hàng!")
+	return b.String()
+}
+
 func failedText(action models.OrderAction) string {
+	if action.CartID != "" {
+		return "❌ Chưa lên đơn được: hệ thống ERP từ chối yêu cầu. Giỏ hàng vẫn được giữ nguyên, nhân viên sẽ kiểm tra lại giúp anh/chị."
+	}
 	return fmt.Sprintf("❌ Chưa %s được: hệ thống ERP từ chối yêu cầu. Nhân viên sẽ kiểm tra lại giúp bạn.", kindLabel(action.Kind))
 }
 

@@ -25,7 +25,10 @@ type OrderAction struct {
 	CustomerName string `gorm:"type:varchar(255);not null;default:''" json:"customer_name"`
 	// OrderID / OrderCode identify the Cloudify order. For create they are
 	// filled after the write succeeds.
-	OrderID   int64  `gorm:"not null;default:0" json:"order_id"`
+	OrderID int64 `gorm:"not null;default:0" json:"order_id"`
+	// CartID links a create draft to the chat cart it was built from, so the
+	// confirmation closes the cart.
+	CartID    string `gorm:"type:char(36);not null;default:'';index" json:"cart_id"`
 	OrderCode string `gorm:"type:varchar(64);not null;default:''" json:"order_code"`
 	// Payload is the exact JSON body sent to Cloudify on confirmation.
 	Payload string `gorm:"type:mediumtext" json:"payload"`
