@@ -81,6 +81,8 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *int) {
 			switch key {
 			case "ai_agent_erp_token_private":
 				result.ValuePlain = "fixture-agent-token"
+			case "ai_agent_erp_token_public":
+				result.ValuePlain = "fixture-public-token"
 			case "erp_private_active":
 				result.ValuePlain = "true"
 			case "erp_api_url":
@@ -89,6 +91,9 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *int) {
 				result.ValuePlain = "fixture-user"
 			case "erp_branch_name":
 				result.ValuePlain = "Fixture branch"
+			}
+			if strings.Contains(q.Statement.SQL.String(), "setting_key = 'erp_integration_active'") {
+				result.ValuePlain = "true"
 			}
 			if strings.Contains(q.Statement.SQL.String(), "setting_key = 'erp_api_password'") {
 				result.ValuePlain = os.Getenv("DB_PASSWORD")

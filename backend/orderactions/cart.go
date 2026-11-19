@@ -339,14 +339,14 @@ func RenderCart(cart *models.OrderCart, state CartState) string {
 		b.WriteString("\n")
 	}
 	for _, p := range state.Pending {
-		fmt.Fprintf(&b, "Chờ khách chọn [%s] \"%s\" × %d (%s):", p.ID, p.Request, p.Quantity, p.Need)
+		fmt.Fprintf(&b, "Chờ khách chọn [%s] <khach_go>%s</khach_go> × %d (%s):", p.ID, engine.UntrustedText(p.Request), p.Quantity, p.Need)
 		for _, o := range p.Options {
 			fmt.Fprintf(&b, " %d) %s;", o.Option, optionText(o))
 		}
 		b.WriteString("\n")
 	}
 	if cart.Note != "" {
-		fmt.Fprintf(&b, "Ghi chú: %s\n", cart.Note)
+		fmt.Fprintf(&b, "Ghi chú của khách: <khach_go>%s</khach_go>\n", engine.UntrustedText(cart.Note))
 	}
 	return strings.TrimSpace(b.String())
 }

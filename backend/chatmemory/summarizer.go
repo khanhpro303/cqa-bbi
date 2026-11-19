@@ -614,13 +614,17 @@ func PromptContext(ctx context.Context, tenantID, channelID, subjectType, subjec
 	var b strings.Builder
 	b.WriteString(engine.TaskPromptInstructions(tenantID, engine.PromptChatMemoryContext))
 	b.WriteString("\n")
+	// The card and summary are a model's notes on what the customer wrote, so
+	// a customer can steer them. Keep them inside one data tag, flattened.
+	b.WriteString("<ho_so_khach>\n")
 	if hasCard {
-		b.WriteString(truncate(p.Card, maxCardRunes))
+		b.WriteString(engine.UntrustedText(truncate(p.Card, maxCardRunes)))
 		b.WriteString("\n")
 	}
 	if hasLast {
-		b.WriteString(fmt.Sprintf("Lần gần nhất (%s): %s", last.LastActivityAt.In(tenantLocation(tenantID)).Format("02/01/2006"), truncate(last.Summary, 400)))
+		b.WriteString(fmt.Sprintf("Lần gần nhất (%s): %s\n", last.LastActivityAt.In(tenantLocation(tenantID)).Format("02/01/2006"), engine.UntrustedText(truncate(last.Summary, 400))))
 	}
+	b.WriteString("</ho_so_khach>")
 	return strings.TrimSpace(b.String())
 }
 

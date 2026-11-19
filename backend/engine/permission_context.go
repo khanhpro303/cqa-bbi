@@ -68,6 +68,17 @@ func resourcePermissionFromEndpoint(ep models.ERPEndpoint) ResourcePermission {
 	}
 }
 
+// customerGroupPermission is resourcePermissionFromEndpoint for a CRM (GMF)
+// group, the permissions the public bot runs with. The CRM page already saves
+// every group resource as scope "own"; forcing it here too means an older row
+// or a direct DB edit with "all" or "assigned" can never let a customer read
+// another customer's orders, debt or contact details.
+func customerGroupPermission(ep models.ERPEndpoint) ResourcePermission {
+	rp := resourcePermissionFromEndpoint(ep)
+	rp.ScopeType = "own"
+	return rp
+}
+
 // splitCSVLower splits a comma-separated string into trimmed, lowercased,
 // non-empty tokens.
 func splitCSVLower(csv string) []string {
@@ -118,7 +129,7 @@ func ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, 
 
 		var resources []ResourcePermission
 		for _, ep := range endpoints {
-			resources = append(resources, resourcePermissionFromEndpoint(ep))
+			resources = append(resources, customerGroupPermission(ep))
 		}
 
 		ctx.Groups = []GroupPermission{
@@ -184,7 +195,7 @@ func ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, 
 
 	groupEndpointMap := make(map[string][]ResourcePermission)
 	for _, ep := range endpoints {
-		groupEndpointMap[ep.GroupID] = append(groupEndpointMap[ep.GroupID], resourcePermissionFromEndpoint(ep))
+		groupEndpointMap[ep.GroupID] = append(groupEndpointMap[ep.GroupID], customerGroupPermission(ep))
 	}
 
 	for _, gid := range groupIDs {

@@ -388,3 +388,14 @@ func TestResolveBrandFilter(t *testing.T) {
 		})
 	}
 }
+
+// A CRM group row saved with "all" (older rows, direct DB edits) must still
+// run as "own" for the customer-facing bot.
+func TestCustomerGroupPermissionForcesOwnScope(t *testing.T) {
+	for _, scope := range []string{"all", "assigned", "own", ""} {
+		rp := customerGroupPermission(models.ERPEndpoint{Resource: "debt", IsEnabled: true, ScopeType: scope})
+		if rp.ScopeType != "own" || !rp.IsEnabled || rp.Resource != "debt" {
+			t.Errorf("scope %q → %+v, want enabled debt with scope own", scope, rp)
+		}
+	}
+}

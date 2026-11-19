@@ -384,6 +384,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// 1. Check for verification token command: "verify <token>"
 		if strings.HasPrefix(strings.ToLower(userText), "verify ") {
 			token := strings.TrimSpace(userText[7:])
+			if token != "" && verifyAttemptsExceeded(ctx, matchedChannel.TenantID, payload.Sender.ID) {
+				log.Printf("[verify] too many wrong codes from Zalo user %s (tenant %s); ignoring this attempt", payload.Sender.ID, matchedChannel.TenantID)
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, verifyLockedMessage)
+				return nil
+			}
 			if token != "" {
 				// Try to find a pending whitelist record for this tenant and channel with this token
 				var whitelistRec models.ZaloWhitelist
@@ -418,6 +423,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					// Not found in whitelist staff. Try ZaloCustomer!
 					var customerRec models.ZaloCustomer
 					if err := db.DB.Where("tenant_id = ? AND verify_token = ?", matchedChannel.TenantID, token).First(&customerRec).Error; err == nil {
+						// A code links ONE Zalo account. Without this check anyone who
+						// got hold of an approved customer's code could send it and take
+						// over that customer's identity (orders, debt, profile).
+						if customerRec.ZaloUserID != "" && customerRec.ZaloUserID != payload.Sender.ID {
+							recordVerifyFailure(ctx, matchedChannel.TenantID, payload.Sender.ID)
+							log.Printf("[verify] refused: customer %s is already linked to another Zalo account (attempt from %s)", customerRec.ID, payload.Sender.ID)
+							_ = adapter.SendMessage(ctx, payload.Sender.ID, verifyAlreadyLinkedMessage)
+							return nil
+						}
 						avatarURL := ""
 						if profile, err := adapter.FetchUserProfile(ctx, payload.Sender.ID); err == nil {
 							avatarURL = profile.Avatar
@@ -435,6 +449,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 						if customerRec.Status == "pending_verify" {
 							customerRec.Status = "pending_approval"
 						}
+						// Single use: the code that was just spent must not link again.
+						customerRec.VerifyToken = pkg.NewVerifyToken()
 						customerRec.UpdatedAt = time.Now()
 
 						if err := db.DB.Save(&customerRec).Error; err == nil {
@@ -460,12 +476,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 								successMsg := "Xác thực thành công! Yêu cầu liên kết tài khoản của bạn đã được gửi tới Ban quản trị để phê duyệt."
 								_ = adapter.SendMessage(ctx, payload.Sender.ID, successMsg)
 							}
-							log.Printf("[worker] successfully processed customer verification (token: %s, previous status: %s, current status: %s) for Zalo user %s", token, statusWas, customerRec.Status, payload.Sender.ID)
+							log.Printf("[worker] successfully processed customer verification (customer: %s, previous status: %s, current status: %s) for Zalo user %s", customerRec.ID, statusWas, customerRec.Status, payload.Sender.ID)
 							return nil
 						}
 					}
 
 					// Token invalid or expired
+					recordVerifyFailure(ctx, matchedChannel.TenantID, payload.Sender.ID)
 					errorMsg := "Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra lại."
 					_ = adapter.SendMessage(ctx, payload.Sender.ID, errorMsg)
 					return nil
@@ -618,6 +635,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			matchedGroup.ZaloGroupID = payload.Recipient.ID
 		}
 
+		// groupMember: the sender is a CRM member of this group (staff assigned
+		// to it, or one of its customers).
+		groupMember := false
 		if hasGroup {
 			// Verify membership
 			isMember := false
@@ -636,6 +656,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				}
 			}
 
+			groupMember = isMember
 			if isMember && matchedGroup.CustomerCode != "" {
 				// Group context narrows to the group's shop(s): a group serving
 				// multiple mã KH overrides the personal set with the group's full set.
@@ -976,7 +997,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
 		}
 
-		permCtx := engine.ResolvePermissionsWithGroup(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType, matchedGroup.ID)
+		// A customer who sits in someone else's Zalo group without being a CRM
+		// member of it keeps their own permissions. The group's permissions
+		// would let the ERP fall back to the group's customer codes when the
+		// sender has none, i.e. show them the group owner's orders and debt.
+		permGroupID := matchedGroup.ID
+		if hasGroup && !groupMember && isCustomer {
+			permGroupID = ""
+		}
+		permCtx := engine.ResolvePermissionsWithGroup(matchedChannel.TenantID, payload.Sender.ID, customerCode, agentType, permGroupID)
 		// Carry the full mã KH set (owners of multiple shops) into the signed token
 		// so scope="own" aggregates across shops. CustomerCode remains the primary.
 		permCtx.CustomerCodes = customerCodes

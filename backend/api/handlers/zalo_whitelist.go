@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"math/rand"
 	"net/http"
 	"time"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
 type ZaloWhitelistResponse struct {
@@ -165,12 +165,4 @@ func DeleteZaloWhitelist(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
-func generateVerifyToken() string {
-	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	rand.Seed(time.Now().UnixNano())
-	b := make([]byte, 6)
-	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
-	}
-	return string(b)
-}
+func generateVerifyToken() string { return pkg.NewVerifyToken() }
