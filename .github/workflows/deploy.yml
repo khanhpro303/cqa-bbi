@@ -122,6 +122,8 @@ jobs:
             -o BatchMode=yes
             -o IdentitiesOnly=yes
             -o ConnectTimeout=12
+            -o ConnectionAttempts=3
+            -o HostKeyAlias=cqa-vps-deployment
             -o StrictHostKeyChecking=yes
             -o UserKnownHostsFile="$ssh_dir/known_hosts"
             -i "$ssh_dir/key"
@@ -137,9 +139,10 @@ jobs:
           }
           trap cleanup EXIT
 
+          : "${VPS_HOST:?VPS_HOST is required}" "${VPS_USER:?VPS_USERNAME is required}" "${VPS_KEY:?VPS_SSH_KEY is required}"
           printf '%s\n' "$VPS_KEY" > "$ssh_dir/key"
-          ssh-keyscan -T 10 -t ed25519 "$VPS_HOST" > "$ssh_dir/known_hosts" 2>/dev/null
-          test "$(wc -l < "$ssh_dir/known_hosts")" -eq 1
+          # Public host key obtained independently from the existing SSH trust store.
+          printf '%s\n' 'cqa-vps-deployment ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIvNjedlYQMH0CGwjOgJjjR0FA0t0138x7NcjLPih5pI' > "$ssh_dir/known_hosts"
           test "$(ssh-keygen -lf "$ssh_dir/known_hosts" | awk '{print $2}')" = \
             'SHA256:RBKTIUlSdGXAXXTXwFfui52CWuYadrjGCgW4eL1aLkg'
 
@@ -162,7 +165,11 @@ jobs:
           printf '%s\n' "$stage"
           STAGE
           )
-          [[ "$stage" =~ ^/home/karien/\.cqa-image-stage\.${GITHUB_RUN_ID}\.[A-Za-z0-9]+$ ]]
+          if ! [[ "$stage" =~ ^/home/karien/\.cqa-image-stage\.${GITHUB_RUN_ID}\.[A-Za-z0-9]+$ ]]; then
+            echo "VPS did not return a valid staging directory." >&2
+            exit 1
+          fi
+          echo "SSH host verified and private staging directory prepared."
 
           tar -C "$bundle_dir" -cf - images.tar.gz SHA256SUMS |
             ssh "${ssh_options[@]}" -- "$VPS_HOST" \

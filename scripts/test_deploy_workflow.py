@@ -40,6 +40,9 @@ class DeployWorkflowTest(unittest.TestCase):
         self.assertIn("sha256sum images.tar.gz > SHA256SUMS", self.workflow)
         self.assertIn("sha256sum --check --strict SHA256SUMS", self.workflow)
         self.assertIn("StrictHostKeyChecking=yes", self.workflow)
+        self.assertIn("HostKeyAlias=cqa-vps-deployment", self.workflow)
+        self.assertIn("cqa-vps-deployment ssh-ed25519 ", self.workflow)
+        self.assertNotIn("ssh-keyscan", self.workflow)
         self.assertIn(
             "SHA256:RBKTIUlSdGXAXXTXwFfui52CWuYadrjGCgW4eL1aLkg",
             self.workflow,
