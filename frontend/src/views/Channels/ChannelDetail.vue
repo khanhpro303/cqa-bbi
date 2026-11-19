@@ -372,70 +372,12 @@
           </template>
           <template v-if="channel.channel_type === 'zalo_oa'">
             <v-divider class="my-3" />
-            <div class="text-body-2 font-weight-medium mb-1">{{ $t('campaign_alert_settings_title') }}</div>
-            <v-switch
-              v-model="editForm.campaign_alerts_enabled"
-              :label="$t('campaign_alert_enable_switch')"
-              density="compact"
-              color="primary"
-              class="mb-1"
-            />
-            <v-select
-              v-if="editForm.campaign_alerts_enabled"
-              v-model="editForm.campaign_alert_group_id"
-              :items="alertGroupOptions"
-              :loading="loadingAlertGroups"
-              :no-data-text="loadingAlertGroups ? $t('loading') : $t('campaign_alert_no_groups')"
-              :label="$t('campaign_alert_group_label')"
-              density="compact"
-              :hint="$t('campaign_alert_group_hint')"
-              persistent-hint
-            />
-            <CampaignAlertOutputs v-if="editForm.campaign_alerts_enabled" v-model="editForm.campaign_alert_outputs" />
-            <v-divider class="my-3" />
-            <div class="text-body-2 font-weight-medium mb-1">{{ $t('handover_alert_settings_title') }}</div>
-            <v-select
-              v-model="editForm.handover_alert_group_id"
-              :items="alertGroupOptions"
-              :loading="loadingAlertGroups"
-              :no-data-text="loadingAlertGroups ? $t('loading') : $t('campaign_alert_no_groups')"
-              :label="$t('handover_alert_group_label')"
-              density="compact"
-              clearable
-              :hint="$t('handover_alert_group_hint')"
-              persistent-hint
-            />
-            <v-divider class="my-3" />
-            <div class="text-body-2 font-weight-medium mb-1">{{ $t('chat_memory_settings_title') }}</div>
-            <v-switch
-              v-model="editForm.chat_memory_issue_alerts"
-              :label="$t('chat_memory_issue_alerts')"
-              :hint="$t('chat_memory_issue_alerts_hint')"
-              persistent-hint
-              density="compact"
-              color="primary"
-              class="mb-2"
-              data-testid="chat-memory-issue-alerts"
-            />
-            <v-switch
-              v-model="editForm.chat_memory_profile_in_prompt"
-              :label="$t('chat_memory_profile_in_prompt')"
-              :hint="$t('chat_memory_profile_in_prompt_hint')"
-              persistent-hint
-              density="compact"
-              color="primary"
-              data-testid="chat-memory-profile-in-prompt"
-            />
-            <v-divider class="my-3" />
-            <div class="text-body-2 font-weight-medium mb-1">{{ $t('group_assistant_settings_title') }}</div>
-            <v-switch
-              v-model="editForm.group_assistant_mode"
-              :label="$t('group_assistant_mode')"
-              :hint="$t('group_assistant_mode_hint')"
-              persistent-hint
-              density="compact"
-              color="primary"
-              data-testid="group-assistant-mode"
+            <ZaloGroupSettings
+              v-if="editDialog"
+              :key="channelId"
+              v-model="editGroupSettings"
+              :tenant-id="tenantId"
+              :channel-id="channelId"
             />
           </template>
           <template v-else>
@@ -499,8 +441,8 @@ import { useChannelStore } from '../../stores/channels'
 import type { PersonalZaloGatewayState } from '../../stores/channels'
 import { useAuthStore } from '../../stores/auth'
 import { useUserStore } from '../../stores/users'
-import api from '../../api'
-import CampaignAlertOutputs from '../../components/channels/CampaignAlertOutputs.vue'
+import ZaloGroupSettings from '../../components/channels/ZaloGroupSettings.vue'
+import { readZaloGroupSettings, zaloGroupSettingsPatch } from '../../components/channels/zaloGroupSettings'
 
 const route = useRoute()
 const router = useRouter()
@@ -556,25 +498,9 @@ const gatewayLoading = ref(false)
 const gatewayActionLoading = ref<'connect' | 'reconnect' | 'sync' | ''>('')
 let gatewayPollTimer: number | null = null
 
-const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all', campaign_alerts_enabled: false, campaign_alert_group_id: '', campaign_alert_outputs: [] as any[], handover_alert_group_id: '', chat_memory_profile_in_prompt: false, chat_memory_issue_alerts: true, group_assistant_mode: false })
-
-// Alert recipient options: this channel's GMF groups that have a linked Zalo group.
-const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
-const loadingAlertGroups = ref(false)
-
-async function loadAlertGroupOptions() {
-  loadingAlertGroups.value = true
-  try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups`)
-    alertGroupOptions.value = (Array.isArray(data) ? data : [])
-      .filter((g: any) => g.zalo_group_id && (!g.channel_id || g.channel_id === channelId.value))
-      .map((g: any) => ({ title: g.name, value: g.id }))
-  } catch {
-    alertGroupOptions.value = []
-  } finally {
-    loadingAlertGroups.value = false
-  }
-}
+const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all' })
+const editGroupSettings = ref(readZaloGroupSettings())
+const editGroupMetadata = ref<Record<string, unknown>>({})
 
 const syncIntervalOptions = computed(() => [
   { title: t('sync_1m'), value: 1 },
@@ -830,13 +756,7 @@ async function saveEdit() {
       payload.metadata = JSON.stringify({
         sync_interval: editForm.value.sync_interval,
         sync_files: editForm.value.sync_files,
-        campaign_alerts_enabled: editForm.value.campaign_alerts_enabled,
-        campaign_alert_group_id: editForm.value.campaign_alerts_enabled ? editForm.value.campaign_alert_group_id : '',
-        campaign_alert_outputs: editForm.value.campaign_alerts_enabled ? editForm.value.campaign_alert_outputs : [],
-        handover_alert_group_id: editForm.value.handover_alert_group_id || '',
-        chat_memory_profile_in_prompt: editForm.value.chat_memory_profile_in_prompt,
-        chat_memory_issue_alerts: editForm.value.chat_memory_issue_alerts,
-        group_assistant_mode: editForm.value.group_assistant_mode,
+        ...zaloGroupSettingsPatch(editGroupSettings.value, editGroupMetadata.value),
       })
     } else {
       payload.metadata = JSON.stringify({ sync_interval: editForm.value.sync_interval, sync_files: editForm.value.sync_files })
@@ -919,16 +839,10 @@ watch(editDialog, (v) => {
       sync_interval: metadata.value.sync_interval || 5,
       sync_files: metadata.value.sync_files || false,
       sync_scope: metadata.value.sync_scope || 'all',
-      campaign_alerts_enabled: metadata.value.campaign_alerts_enabled || false,
-      campaign_alert_group_id: metadata.value.campaign_alert_group_id || '',
-      campaign_alert_outputs: Array.isArray(metadata.value.campaign_alert_outputs) ? metadata.value.campaign_alert_outputs : [],
-      handover_alert_group_id: metadata.value.handover_alert_group_id || '',
-      chat_memory_profile_in_prompt: metadata.value.chat_memory_profile_in_prompt === true,
-      chat_memory_issue_alerts: metadata.value.chat_memory_issue_alerts !== false,
-      group_assistant_mode: metadata.value.group_assistant_mode === true,
     }
     if (channel.value.channel_type === 'zalo_oa') {
-      loadAlertGroupOptions()
+      editGroupMetadata.value = metadata.value
+      editGroupSettings.value = readZaloGroupSettings(editGroupMetadata.value)
     }
   }
 })

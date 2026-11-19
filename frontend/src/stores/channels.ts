@@ -72,8 +72,18 @@ export const useChannelStore = defineStore('channels', () => {
 
   async function updateChannel(tenantId: string, channelId: string, payload: Record<string, unknown>) {
     await api.put(`/tenants/${tenantId}/channels/${channelId}`, payload)
-    const idx = channels.value.findIndex((c) => c.id === channelId)
-    if (idx >= 0) Object.assign(channels.value[idx], payload)
+    const channel = channels.value.find((c) => c.id === channelId)
+    if (!channel) return
+
+    const changes = { ...payload }
+    if (channel.channel_type === 'zalo_oa' && typeof payload.metadata === 'string' && payload.metadata) {
+      try {
+        changes.metadata = JSON.stringify({ ...JSON.parse(channel.metadata || '{}'), ...JSON.parse(payload.metadata) })
+      } catch {
+        // The next fetch will refresh metadata if the cached value was malformed.
+      }
+    }
+    Object.assign(channel, changes)
   }
 
   async function deleteChannel(tenantId: string, channelId: string) {
