@@ -13,7 +13,7 @@ import (
 )
 
 // AppVersion is set from main.go at startup
-var AppVersion = "dev"
+var AppVersion = "v1"
 
 const (
 	githubReleasesURL = "https://api.github.com/repos/khanhpro303/cqa-bbi/releases/latest"
