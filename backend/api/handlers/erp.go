@@ -146,9 +146,15 @@ func ERPQuery(c *gin.Context) {
 			return
 		}
 	} else {
-		// Fallback: build permission context on-the-fly using DB configuration (legacy/direct calls compatibility)
-		resolved := engine.ResolvePermissions(tenantID, req.ZaloUserID, "", agentType)
-		permCtx = &resolved
+		// No signed token, no data. The old fallback rebuilt permissions from
+		// the caller-supplied zalo_user_id, so anyone holding an agent token
+		// (it sits in Langflow's MCP server config) could read any customer's
+		// orders and debt, and the private token opened everything.
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "forbidden_token",
+			"message": "Thiếu token phân quyền.",
+		})
+		return
 	}
 
 	switch req.Resource {
@@ -3060,6 +3066,18 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				}
 			}
 		} // end if !privateDebtResolved
+
+		// An empty DS_KHACH_HANG makes Cloudify return EVERY customer's ledger.
+		// A customer-facing (public) call must always name its own codes; with
+		// none resolved there is nothing they may see.
+		if permCtx.AgentType != "private" && len(targetCustomerCodes) == 0 {
+			writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusForbidden, 0, c.ClientIP())
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":   "forbidden_scope",
+				"message": "Tài khoản Zalo này chưa được gắn mã khách hàng nên chưa tra được công nợ. Vui lòng liên hệ nhân viên.",
+			})
+			return
+		}
 
 		tuNgay, denNgay, _ := parseDebtPeriodFromSearch(search)
 		if tuNgay == "" || denNgay == "" {

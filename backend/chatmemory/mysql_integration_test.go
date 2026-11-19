@@ -179,7 +179,7 @@ func TestPipelineMySQL(t *testing.T) {
 		t.Fatalf("profile = %+v", prof)
 	}
 	pc := PromptContext(context.Background(), tenantID, channelID, "user", userID)
-	if !strings.Contains(pc, "Xưng anh") || !strings.Contains(pc, "12 thùng") {
+	if !strings.Contains(pc, "Xưng anh") || !strings.Contains(pc, "12 thùng") || !strings.Contains(pc, "<ho_so_khach>") {
 		t.Fatalf("prompt context = %q", pc)
 	}
 

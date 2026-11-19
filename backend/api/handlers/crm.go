@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -1231,15 +1230,7 @@ func AssignCloudifyCustomerPhone(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-func crmGenerateVerifyToken() string {
-	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	rand.Seed(time.Now().UnixNano())
-	b := make([]byte, 6)
-	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
-	}
-	return string(b)
-}
+func crmGenerateVerifyToken() string { return pkg.NewVerifyToken() }
 
 func normalizeZaloWhitelistMemberUserIDs(staff []models.ZaloWhitelist, limit int) []string {
 	if limit <= 0 {

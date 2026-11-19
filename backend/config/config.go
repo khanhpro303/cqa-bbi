@@ -21,12 +21,18 @@ type Config struct {
 	DBName     string
 
 	// Security
-	JWTSecret               string
-	EncryptionKey           string // 32 bytes for AES-256-GCM
-	InternalImportSecret    string
-	ABZExportSecret         string
-	ABZExportTenantID       string
-	MessengerRelaySecret    string
+	JWTSecret            string
+	EncryptionKey        string // 32 bytes for AES-256-GCM
+	InternalImportSecret string
+	ABZExportSecret      string
+	ABZExportTenantID    string
+	MessengerRelaySecret string
+	// ZaloOAWebhookSecret is the "OA Secret Key" from the Zalo app's Webhook
+	// page. ZaloWebhookSignature is off, log or enforce: log checks every
+	// X-ZEvent-Signature and logs mismatches, enforce drops them. It defaults
+	// to log once a secret is set.
+	ZaloOAWebhookSecret     string
+	ZaloWebhookSignature    string
 	MessengerJourneyEnabled bool
 	// Pancake realtime listener (headless websocket replacing Pancake webhooks).
 	PancakeSocketEnabled bool
@@ -129,6 +135,8 @@ func Load() (*Config, error) {
 		ABZExportSecret:              getEnv("CQA_ABZ_EXPORT_SECRET", ""),
 		ABZExportTenantID:            getEnv("CQA_ABZ_EXPORT_TENANT_ID", ""),
 		MessengerRelaySecret:         getEnv("CQA_MESSENGER_RELAY_SECRET", ""),
+		ZaloOAWebhookSecret:          getEnv("ZALO_OA_SECRET_KEY", ""),
+		ZaloWebhookSignature:         strings.ToLower(strings.TrimSpace(getEnv("ZALO_WEBHOOK_SIGNATURE", ""))),
 		MessengerJourneyEnabled:      strings.EqualFold(getEnv("CQA_MESSENGER_JOURNEY_ENABLED", "false"), "true"),
 		PancakeSocketEnabled:         strings.EqualFold(getEnv("CQA_PANCAKE_SOCKET_ENABLED", "false"), "true"),
 		PancakeSocketURL:             getEnv("CQA_PANCAKE_SOCKET_URL", ""),

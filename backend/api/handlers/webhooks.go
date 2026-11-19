@@ -1,13 +1,17 @@
 package handlers
 
 import (
-	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -26,21 +30,46 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 	}
 
+	signatureMode := zaloSignatureMode(cfg)
+	switch {
+	case signatureMode == zaloSignatureOff:
+		log.Printf("[zalo-webhook] WARNING: webhook signatures are not checked (set ZALO_OA_SECRET_KEY). Anyone who knows the URL can send messages as any Zalo user.")
+	case signatureMode == zaloSignatureEnforce && cfg.ZaloOAWebhookSecret == "":
+		log.Printf("[zalo-webhook] ERROR: ZALO_WEBHOOK_SIGNATURE=enforce without ZALO_OA_SECRET_KEY: every Zalo webhook will be rejected")
+	}
+	var firstVerified sync.Once
+
 	return func(c *gin.Context) {
+		bodyBytes, err := io.ReadAll(io.LimitReader(c.Request.Body, zaloWebhookMaxBody))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+			return
+		}
 		// Raw-body logging is opt-in (ZALO_WEBHOOK_DEBUG=true): it dumps every
 		// customer message into the logs, and the old version also appended it to
 		// a developer-machine path that does not exist on the server.
 		if os.Getenv("ZALO_WEBHOOK_DEBUG") == "true" {
-			if bodyBytes, err := io.ReadAll(c.Request.Body); err == nil {
-				c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-				log.Printf("[debug-webhook] raw payload: %s", string(bodyBytes))
-			}
+			log.Printf("[debug-webhook] raw payload: %s", string(bodyBytes))
 		}
 
 		var payload workers.ZaloWebhookPayload
-		if err := c.ShouldBindJSON(&payload); err != nil {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
 			return
+		}
+
+		if signatureMode != zaloSignatureOff {
+			ok := verifyZaloSignature(c.GetHeader("X-ZEvent-Signature"), payload.AppID, bodyBytes, payload.Timestamp, cfg.ZaloOAWebhookSecret)
+			switch {
+			case ok:
+				firstVerified.Do(func() { log.Printf("[zalo-webhook] signature verified (mode=%s)", signatureMode) })
+			case signatureMode == zaloSignatureEnforce:
+				log.Printf("[zalo-drop] reason=bad_signature event=%s sender=%s ip=%s", payload.EventName, payload.Sender.ID, c.ClientIP())
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
+				return
+			default:
+				log.Printf("[zalo-webhook] signature mismatch (mode=log, not dropped) event=%s sender=%s ip=%s has_header=%t", payload.EventName, payload.Sender.ID, c.ClientIP(), c.GetHeader("X-ZEvent-Signature") != "")
+			}
 		}
 
 		// Always return 200 OK to Zalo quickly
@@ -91,4 +120,41 @@ func zaloTaskOptions(payload workers.ZaloWebhookPayload) []asynq.Option {
 		)
 	}
 	return opts
+}
+
+const zaloWebhookMaxBody = 1 << 20
+
+const (
+	zaloSignatureOff     = "off"
+	zaloSignatureLog     = "log"
+	zaloSignatureEnforce = "enforce"
+)
+
+// zaloSignatureMode picks how strictly Zalo webhook signatures are checked.
+// With no explicit mode, a configured secret turns on log mode, so a wrong
+// secret shows up in the logs before anyone switches to enforce.
+func zaloSignatureMode(cfg *config.Config) string {
+	switch cfg.ZaloWebhookSignature {
+	case zaloSignatureOff, zaloSignatureLog, zaloSignatureEnforce:
+		return cfg.ZaloWebhookSignature
+	}
+	if cfg.ZaloOAWebhookSecret != "" {
+		return zaloSignatureLog
+	}
+	return zaloSignatureOff
+}
+
+// verifyZaloSignature checks X-ZEvent-Signature, which Zalo sets to
+// "mac=" + hex(sha256(app_id + raw body + timestamp + OA secret key)).
+func verifyZaloSignature(header, appID string, body []byte, timestamp, secret string) bool {
+	if secret == "" || header == "" {
+		return false
+	}
+	got := strings.TrimSpace(header)
+	if i := strings.Index(got, "="); i >= 0 && strings.EqualFold(strings.TrimSpace(got[:i]), "mac") {
+		got = strings.TrimSpace(got[i+1:])
+	}
+	sum := sha256.Sum256([]byte(appID + string(body) + timestamp + secret))
+	want := hex.EncodeToString(sum[:])
+	return subtle.ConstantTimeCompare([]byte(strings.ToLower(got)), []byte(want)) == 1
 }
