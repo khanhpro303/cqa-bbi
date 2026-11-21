@@ -37,6 +37,10 @@ const BotSenderName = "Chatbot AI"
 
 const recordTimeout = 10 * time.Second
 
+// turnRecordTimeout bounds the synchronous write of a reply sent inside a
+// worker turn (see RecordOutbound).
+const turnRecordTimeout = 3 * time.Second
+
 // Turn identifies the chat a message belongs to. The worker attaches it to the
 // context for the rest of the turn with WithTurn, so every reply sent with
 // that context is recorded under the right session.
@@ -148,8 +152,9 @@ func RecordInbound(ctx context.Context, t Turn, in Inbound) {
 // recorded as a chatbot reply when the context carries a Turn (worker sends)
 // or, failing that, when the recipient has an active chatbot session (pushes
 // made from ERP tool calls). Messages outside any session, such as campaign
-// broadcasts and staff alerts, are not recorded. It returns immediately and
-// writes in the background.
+// broadcasts and staff alerts, are not recorded. Worker sends are written
+// before it returns (bounded by turnRecordTimeout); other sends are written in
+// the background.
 func RecordOutbound(ctx context.Context, channelID string, msg channels.SentMessage) {
 	if !Enabled() || channelID == "" {
 		return
@@ -168,8 +173,8 @@ func RecordOutbound(ctx context.Context, channelID string, msg channels.SentMess
 			ok = false
 		}
 	}
-	go func() {
-		bg, cancel := context.WithTimeout(context.Background(), recordTimeout)
+	write := func(timeout time.Duration) {
+		bg, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		turn := t
 		if !ok {
@@ -194,7 +199,16 @@ func RecordOutbound(ctx context.Context, channelID string, msg channels.SentMess
 		}, false); err != nil {
 			log.Printf("[chat-memory] record outbound session=%s: %v", turn.SessionID, err)
 		}
-	}()
+	}
+	if ok {
+		// A reply sent inside a worker turn is written before the turn ends,
+		// while the chat's lock is still held, so the next customer message
+		// ("đúng rồi") already sees the question it answers. The message is
+		// delivered by now; only the turn's end waits, and briefly.
+		write(turnRecordTimeout)
+		return
+	}
+	go write(recordTimeout)
 }
 
 // turnForActiveSession rebuilds a Turn for a send made outside the worker.

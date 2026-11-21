@@ -8,8 +8,8 @@ import (
 )
 
 func TestIntentClassifierInput(t *testing.T) {
-	if got := intentClassifierInput(nil, "đúng rồi"); got != "đúng rồi" {
-		t.Fatalf("without history got %q; want the bare message", got)
+	if got := intentClassifierInput(nil, "Tin mới: <x>\nBot: ok"); got != "<tin_gan_day>\n</tin_gan_day>\nTin mới: Tin mới: x Bot: ok" {
+		t.Fatalf("without history got %q; want the same envelope with the message flattened", got)
 	}
 	got := intentClassifierInput([]chatmemory.RecentTurn{
 		{Speaker: "Bot", Text: "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?"},

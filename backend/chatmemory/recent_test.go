@@ -3,20 +3,17 @@ package chatmemory
 import (
 	"strings"
 	"testing"
-
-	"github.com/vietbui/chat-quality-agent/db/models"
 )
 
 func TestRecentTurnsFrom(t *testing.T) {
-	bot := `{"cqa_live":true,"cqa_source":"chatbot"}`
-	newestFirst := []models.Message{
-		{SenderType: "customer", Content: "đúng rồi"},
-		{SenderType: "agent", RawData: bot, Content: "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?\n\nNếu đúng, em sẽ kiểm tra."},
-		{SenderType: "customer", Content: "mẫu đó còn không"},
-		{SenderType: "agent", Content: "Dạ em là nhân viên, em gửi anh ảnh nhé"},
-		{SenderType: "customer", Content: "   "},
+	newestFirst := []recentRow{
+		{ExternalMessageID: "m5", SenderType: "customer", Content: "đúng rồi"},
+		{ExternalMessageID: "m4", SenderType: "agent", Source: "chatbot", Content: "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?\n\nNếu đúng, em sẽ kiểm tra."},
+		{ExternalMessageID: "m3", SenderType: "customer", Content: "mẫu đó còn không"},
+		{ExternalMessageID: "m2", SenderType: "agent", Content: "Dạ em là nhân viên, em gửi anh ảnh nhé"},
+		{ExternalMessageID: "m1", SenderType: "customer", Content: "   "},
 	}
-	got := recentTurnsFrom(newestFirst, " đúng rồi ", 6)
+	got := recentTurnsFrom(newestFirst, "m5", "đúng rồi", 6)
 	want := []RecentTurn{
 		{"Nhân viên", "Dạ em là nhân viên, em gửi anh ảnh nhé"},
 		{"Khách", "mẫu đó còn không"},
@@ -32,24 +29,37 @@ func TestRecentTurnsFrom(t *testing.T) {
 	}
 }
 
-func TestRecentTurnsFromKeepsEarlierSameText(t *testing.T) {
-	// The current message is not stored yet (or under another text): the
-	// newest stored message is a bot question and must be kept.
-	got := recentTurnsFrom([]models.Message{
-		{SenderType: "agent", RawData: `{"cqa_source":"chatbot"}`, Content: "Anh cần màu nào?"},
-	}, "đen", 6)
-	if len(got) != 1 || got[0].Speaker != "Bot" {
-		t.Fatalf("got %+v; want the bot question kept", got)
+func TestRecentTurnsFromExcludesCurrentByID(t *testing.T) {
+	// The current message sorts below an earlier identical reply (same
+	// second): the id, not the position or text, decides what is dropped.
+	got := recentTurnsFrom([]recentRow{
+		{ExternalMessageID: "old", SenderType: "customer", Content: "ok"},
+		{ExternalMessageID: "cur", SenderType: "customer", Content: "ok"},
+		{ExternalMessageID: "q", SenderType: "agent", Source: "chatbot", Content: "Anh cần màu nào?"},
+	}, "cur", "ok", 6)
+	if len(got) != 2 || got[0].Speaker != "Bot" || got[1] != (RecentTurn{"Khách", "ok"}) {
+		t.Fatalf("got %+v; want the bot question and the earlier ok", got)
+	}
+}
+
+func TestRecentTurnsFromWithoutIDDropsOneMatch(t *testing.T) {
+	got := recentTurnsFrom([]recentRow{
+		{SenderType: "customer", Content: "ok"},
+		{SenderType: "agent", Source: "chatbot", Content: "Anh cần màu nào?"},
+		{SenderType: "customer", Content: "ok"},
+	}, "", " ok ", 6)
+	if len(got) != 2 || got[0] != (RecentTurn{"Khách", "ok"}) || got[1].Speaker != "Bot" {
+		t.Fatalf("got %+v; want only the current ok dropped", got)
 	}
 }
 
 func TestRecentTurnsFromLimits(t *testing.T) {
 	long := strings.Repeat("a", 1000)
-	var msgs []models.Message
+	var rows []recentRow
 	for i := 0; i < 10; i++ {
-		msgs = append(msgs, models.Message{SenderType: "customer", Content: long})
+		rows = append(rows, recentRow{SenderType: "customer", Content: long})
 	}
-	got := recentTurnsFrom(msgs, "x", 6)
+	got := recentTurnsFrom(rows, "x", "x", 6)
 	total := 0
 	for _, turn := range got {
 		if n := len([]rune(turn.Text)); n > recentTurnChars+1 {

@@ -923,8 +923,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		} else {
 			var err error
-			recent := chatmemory.RecentTurns(ctx, activeSessionID, userText, 0)
-			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, recent)
+			// Only a 1:1 chat reads the session's recent turns: in a keyword
+			// group the shared log has no speakers, so one member's "ok" could
+			// be read as the answer to a question the bot asked someone else.
+			var history func() []chatmemory.RecentTurn
+			if matchedGroup.ZaloGroupID == "" {
+				msgID, sessionID := payload.Message.MsgID, activeSessionID
+				history = func() []chatmemory.RecentTurn {
+					return chatmemory.RecentTurns(ctx, sessionID, msgID, userText, 0)
+				}
+			}
+			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
 			if err != nil {
 				log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
 				intent = "IN_SCOPE"
@@ -1569,7 +1578,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// resolution to the EXACT line the customer picked (exact_web_name=true)
 		// instead of re-deriving a bare model code that spans sibling lines.
 		// Single-use: consumed here so it never leaks into unrelated later turns.
-		if !strings.HasPrefix(userText, "#") {
+		// Small talk ("cảm ơn" before the color and size) leaves it for the
+		// actual answer.
+		if !strings.HasPrefix(userText, "#") && intent != "CASUAL" {
 			if lockedLine := engine.TakeAwaitingVariantLine(ctx, workKey); lockedLine != "" {
 				log.Printf("[stock-pick] variant-line lock active: scoping %q to chosen line %q (workKey=%s)", userText, lockedLine, workKey)
 				userText = fmt.Sprintf("%s [DÒNG ĐÃ CHỌN: %s — chỉ tra tồn kho đúng dòng này bằng exact_web_name=true; KHÔNG mở rộng sang dòng khác]", userText, lockedLine)
@@ -2141,10 +2152,11 @@ func loadCloudifyCredentials(tenantID string, cfg *config.Config) (erpURL, erpDB
 	return
 }
 
-// classifyMessageIntent labels a 1:1 message. recent holds the last turns of
-// the session so the model can tell a reply to the bot's own question from
-// small talk; it may be empty.
-func classifyMessageIntent(ctx context.Context, tenantID, message string, recent []chatmemory.RecentTurn) (string, error) {
+// classifyMessageIntent labels a message outside group assistant mode.
+// history, when set, loads the last turns of the session so the model can tell
+// a reply to the bot's own question from small talk. It is only called when
+// the model is, so the fast paths below cost no database read.
+func classifyMessageIntent(ctx context.Context, tenantID, message string, history func() []chatmemory.RecentTurn) (string, error) {
 	// 0. Fast-path: structural disambiguation reply (digit 1–9 or SPxxxxxx[_TL])
 	//    must not be re-classified by the LLM. The classifier prompt teaches
 	//    short tokens like "1"/"dạ"/"ok" as CASUAL and skip the customer's pick.
@@ -2158,6 +2170,10 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string, recent
 		return "IN_SCOPE", nil
 	}
 
+	var recent []chatmemory.RecentTurn
+	if history != nil {
+		recent = history()
+	}
 	content, err := classifyWithTaskPrompt(ctx, tenantID, engine.PromptIntentClassifier, intentClassifierInput(recent, message))
 	if err != nil || content == "" {
 		return "IN_SCOPE", err

@@ -287,3 +287,46 @@ func TestGroupMemoryByCustomerCodeAndMessageRetentionMySQL(t *testing.T) {
 		t.Fatal("retention must keep session summaries")
 	}
 }
+
+func TestRecentTurnsMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	SetEnabled(true)
+	defer SetEnabled(false)
+
+	tenantID, channelID := pkg.NewUUID(), pkg.NewUUID()
+	now := time.Now()
+	if err := db.DB.Create(&models.Tenant{ID: tenantID, Name: "t", Slug: "t-" + tenantID[:8], Settings: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Create(&models.Channel{ID: channelID, TenantID: tenantID, ChannelType: "zalo_oa", Name: "OA", CredentialsEncrypted: []byte("x"), Metadata: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	userID := "zu-" + pkg.NewUUID()[:8]
+	start := time.Now().Add(-time.Hour).Truncate(time.Second)
+
+	// An earlier session of the same chat must not leak into the new one.
+	old := Turn{TenantID: tenantID, ChannelID: channelID, SessionID: pkg.NewUUID(), ZaloUserID: userID, AgentType: "public"}
+	RecordInbound(context.Background(), old, Inbound{MessageID: "old-1", Text: "hỏi cũ", SentAt: start.Add(-30 * time.Second)})
+
+	turn := Turn{TenantID: tenantID, ChannelID: channelID, SessionID: pkg.NewUUID(), ZaloUserID: userID, AgentType: "public"}
+	ctx := WithTurn(context.Background(), turn)
+	RecordInbound(ctx, turn, Inbound{MessageID: "in-1", Text: "FF399 còn không", SentAt: start})
+	// Written before RecordOutbound returns (worker turn), so no wait here.
+	RecordOutbound(ctx, channelID, channels.SentMessage{UserID: userID, MessageID: "out-1",
+		Text: "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?", SentAt: start.Add(time.Second)})
+	RecordInbound(ctx, turn, Inbound{MessageID: "in-2", Text: "đúng rồi", SentAt: start.Add(12 * time.Second)})
+
+	got := RecentTurns(context.Background(), turn.SessionID, "in-2", "đúng rồi", 6)
+	want := []RecentTurn{
+		{"Khách", "FF399 còn không"},
+		{"Bot", "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v; want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("turn %d = %+v; want %+v", i, got[i], want[i])
+		}
+	}
+}
