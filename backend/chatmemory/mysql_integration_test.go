@@ -287,3 +287,92 @@ func TestGroupMemoryByCustomerCodeAndMessageRetentionMySQL(t *testing.T) {
 		t.Fatal("retention must keep session summaries")
 	}
 }
+
+func TestRecentTurnsMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	SetEnabled(true)
+	defer SetEnabled(false)
+
+	tenantID, channelID := pkg.NewUUID(), pkg.NewUUID()
+	now := time.Now()
+	if err := db.DB.Create(&models.Tenant{ID: tenantID, Name: "t", Slug: "t-" + tenantID[:8], Settings: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Create(&models.Channel{ID: channelID, TenantID: tenantID, ChannelType: "zalo_oa", Name: "OA", CredentialsEncrypted: []byte("x"), Metadata: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	userID := "zu-" + pkg.NewUUID()[:8]
+	start := time.Now().Add(-time.Hour).Truncate(time.Second)
+	pause := func() { time.Sleep(5 * time.Millisecond) } // distinct created_at
+
+	// An earlier session of the same chat must not leak into the new one.
+	old := Turn{TenantID: tenantID, ChannelID: channelID, SessionID: pkg.NewUUID(), ZaloUserID: userID, AgentType: "public"}
+	RecordInbound(context.Background(), old, Inbound{MessageID: "old-1", Text: "hỏi cũ", SentAt: start.Add(-30 * time.Second)})
+	pause()
+
+	turn := Turn{TenantID: tenantID, ChannelID: channelID, SessionID: pkg.NewUUID(), ZaloUserID: userID, AgentType: "public"}
+	ctx := WithTurn(context.Background(), turn)
+	RecordInbound(ctx, turn, Inbound{MessageID: "in-1", Text: "FF399 còn không", SentAt: start})
+	pause()
+	// Our clock runs ahead of Zalo's: the bot question carries a later
+	// sent_at than the customer's answer. It is written first, so it counts.
+	// Written before RecordOutbound returns (1:1 worker turn), so no wait.
+	RecordOutbound(ctx, channelID, channels.SentMessage{UserID: userID, MessageID: "out-1",
+		Text: "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?", SentAt: start.Add(time.Minute)})
+	pause()
+	RecordInbound(ctx, turn, Inbound{MessageID: "in-2", Text: "đúng rồi", SentAt: start.Add(12 * time.Second)})
+	pause()
+	// Rows written after the current message (a retried task) are not read,
+	// even when they would crowd out the turns before it.
+	for i := 0; i < 8; i++ {
+		RecordInbound(ctx, turn, Inbound{MessageID: "later-" + string(rune('a'+i)), Text: "sau", SentAt: start.Add(12 * time.Second)})
+	}
+
+	got := RecentTurns(context.Background(), turn.SessionID, "in-2", "đúng rồi", 6)
+	want := []RecentTurn{
+		{"Khách", "FF399 còn không"},
+		{"Bot", "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v; want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("turn %d = %+v; want %+v", i, got[i], want[i])
+		}
+	}
+
+	// The bot question and the answer written in the same millisecond: the
+	// question is still kept.
+	var cur models.Message
+	if err := db.DB.Where("tenant_id = ? AND external_message_id = ?", tenantID, "in-2").Take(&cur).Error; err != nil {
+		t.Fatal(err)
+	}
+	res := db.DB.Model(&models.Message{}).Where("tenant_id = ? AND external_message_id = ?", tenantID, "out-1").Update("created_at", cur.CreatedAt)
+	if res.Error != nil || res.RowsAffected != 1 {
+		t.Fatalf("set timestamp tie: err=%v rows=%d", res.Error, res.RowsAffected)
+	}
+	got = RecentTurns(context.Background(), turn.SessionID, "in-2", "đúng rồi", 6)
+	if len(got) != 2 || got[1].Speaker != "Bot" {
+		t.Fatalf("same-millisecond bot question lost: %+v", got)
+	}
+}
+
+func TestEnsureConversationHonoursDeadlineMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	turn := Turn{TenantID: pkg.NewUUID(), ChannelID: pkg.NewUUID(), SessionID: pkg.NewUUID(), ZaloUserID: "zu-lock"}
+	key := turn.TenantID + "|" + turn.ChannelID + "|" + turn.ZaloUserID
+	lock, _ := convLocks.LoadOrStore(key, make(chan struct{}, 1))
+	lock.(chan struct{}) <- struct{}{} // another writer holds the chat
+	defer func() { <-lock.(chan struct{}) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	if _, err := ensureConversation(db.DB.WithContext(ctx), turn, time.Now()); err == nil {
+		t.Fatal("got no error while the chat lock was held")
+	}
+	if waited := time.Since(began); waited > time.Second {
+		t.Fatalf("waited %v for a held lock; want the 50ms deadline", waited)
+	}
+}
