@@ -18,6 +18,9 @@ const (
 	recentTurnChars     = 400
 	recentTurnsMaxChars = 2000
 	recentTurnsTimeout  = 2 * time.Second
+	// recentClockSlack widens the sent_at range below the session start:
+	// customer rows carry Zalo's clock, bot rows ours.
+	recentClockSlack = 5 * time.Minute
 )
 
 // RecentTurn is one message of the running session, labelled by speaker.
@@ -42,8 +45,9 @@ type recentRow struct {
 // written, not by sent_at: the customer's sent_at is Zalo's clock and the
 // bot's is ours, so comparing them could hide the bot question a quick
 // "đúng rồi" answers. The current message (stored by RecordInbound before
-// classification) is the cursor when its Zalo id is known, so a retried task
-// does not see what was written after it; without an id the cursor is now and
+// classification) is the cursor when its Zalo id is known (rows written in the
+// same millisecond are kept), so a retried task does not see what was written
+// after it; without an id the cursor is now and
 // the current message is dropped by its text. It returns nil when chat memory
 // is off or nothing is found; callers then classify without context.
 func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText string, limit int) []RecentTurn {
@@ -66,21 +70,27 @@ func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText strin
 		}
 		return nil
 	}
+	// sent_at bounds the scan to the session's span on idx_msg_conv_time
+	// (both clocks are within a minute or two of each other); the cut and the
+	// order use created_at.
 	q := db.DB.WithContext(ctx).Model(&models.Message{}).
-		Where("tenant_id = ? AND conversation_id = ?", sess.TenantID, sess.ConversationID).
+		Where("tenant_id = ? AND conversation_id = ? AND sent_at >= ?",
+			sess.TenantID, sess.ConversationID, sess.StartedAt.Add(-recentClockSlack)).
 		Where("JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_session_id')) = ?", sessionID)
 	var current models.Message
 	if currentMsgID != "" && db.DB.WithContext(ctx).Select("id, created_at").
 		Where("tenant_id = ? AND conversation_id = ? AND external_message_id = ?", sess.TenantID, sess.ConversationID, currentMsgID).
 		Take(&current).Error == nil {
-		q = q.Where("created_at < ?", current.CreatedAt)
+		// Inclusive: a bot question written in the same millisecond is kept;
+		// the current message itself is dropped by its id below.
+		q = q.Where("created_at <= ?", current.CreatedAt)
 	} else {
 		q = q.Where("created_at <= ?", time.Now())
 	}
 	var rows []recentRow
 	err := q.Select("external_message_id, sender_type, content, " +
 		"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_source')), '') AS source").
-		Order("created_at DESC, id DESC").Limit(limit + 1).Scan(&rows).Error
+		Order("created_at DESC, sent_at DESC").Limit(limit + 1).Scan(&rows).Error
 	if err != nil {
 		log.Printf("[chat-memory] recent turns: session %s: %v", sessionID, err)
 		return nil
