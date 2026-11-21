@@ -78,15 +78,11 @@ var sessionStateSuffixes = []string{
 	AwaitingDebtCustomerSuffix,
 	PromptDeliveredSuffix,
 	PromptUndeliveredSuffix,
-	CasualWarningSuffix,
 }
-
-// CasualWarningSuffix remembers who received the last small-talk warning.
-const CasualWarningSuffix = ":casual_warning"
 
 // ClearSessionState deletes the base session key AND every sidecar flow-state
 // key hung off it, in a single Redis round-trip. Call this anywhere a session is
-// torn down (end keyword, HANDOVER, CASUAL, idle timeout) and defensively before
+// torn down (end keyword, HANDOVER, idle timeout) and defensively before
 // opening a fresh session so a prior unclean teardown cannot bleed stale state
 // into the new conversation. No-op (nil) when Redis is unavailable. Returns the
 // Redis DEL error, if any, so timeout/teardown callers can log it.
