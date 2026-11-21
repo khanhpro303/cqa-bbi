@@ -348,7 +348,10 @@ func TestRecentTurnsMySQL(t *testing.T) {
 	if err := db.DB.Where("tenant_id = ? AND external_message_id = ?", tenantID, "in-2").Take(&cur).Error; err != nil {
 		t.Fatal(err)
 	}
-	db.DB.Model(&models.Message{}).Where("tenant_id = ? AND external_message_id = ?", tenantID, "out-1").Update("created_at", cur.CreatedAt)
+	res := db.DB.Model(&models.Message{}).Where("tenant_id = ? AND external_message_id = ?", tenantID, "out-1").Update("created_at", cur.CreatedAt)
+	if res.Error != nil || res.RowsAffected != 1 {
+		t.Fatalf("set timestamp tie: err=%v rows=%d", res.Error, res.RowsAffected)
+	}
 	got = RecentTurns(context.Background(), turn.SessionID, "in-2", "đúng rồi", 6)
 	if len(got) != 2 || got[1].Speaker != "Bot" {
 		t.Fatalf("same-millisecond bot question lost: %+v", got)
