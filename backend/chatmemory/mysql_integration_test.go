@@ -316,7 +316,13 @@ func TestRecentTurnsMySQL(t *testing.T) {
 		Text: "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?", SentAt: start.Add(time.Second)})
 	RecordInbound(ctx, turn, Inbound{MessageID: "in-2", Text: "đúng rồi", SentAt: start.Add(12 * time.Second)})
 
-	got := RecentTurns(context.Background(), turn.SessionID, "in-2", "đúng rồi", 6)
+	// A later message is already stored (delayed or retried webhook): it must
+	// not crowd out the turns before the current one.
+	for i := 0; i < 8; i++ {
+		RecordInbound(ctx, turn, Inbound{MessageID: "later-" + string(rune('a'+i)), Text: "sau", SentAt: start.Add(time.Duration(20+i) * time.Second)})
+	}
+
+	got := RecentTurns(context.Background(), turn.SessionID, "in-2", "đúng rồi", start.Add(12*time.Second), 6)
 	want := []RecentTurn{
 		{"Khách", "FF399 còn không"},
 		{"Bot", "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?"},
@@ -328,5 +334,24 @@ func TestRecentTurnsMySQL(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("turn %d = %+v; want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+func TestEnsureConversationHonoursDeadlineMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	turn := Turn{TenantID: pkg.NewUUID(), ChannelID: pkg.NewUUID(), SessionID: pkg.NewUUID(), ZaloUserID: "zu-lock"}
+	key := turn.TenantID + "|" + turn.ChannelID + "|" + turn.ZaloUserID
+	lock, _ := convLocks.LoadOrStore(key, make(chan struct{}, 1))
+	lock.(chan struct{}) <- struct{}{} // another writer holds the chat
+	defer func() { <-lock.(chan struct{}) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	if _, err := ensureConversation(db.DB.WithContext(ctx), turn, time.Now()); err == nil {
+		t.Fatal("got no error while the chat lock was held")
+	}
+	if waited := time.Since(began); waited > time.Second {
+		t.Fatalf("waited %v for a held lock; want the 50ms deadline", waited)
 	}
 }

@@ -37,16 +37,21 @@ type recentRow struct {
 // RecentTurns returns the last messages of the session before the message
 // being handled now, oldest first. Only messages recorded live under this
 // session id are read, so a previous session of the same chat never leaks in.
-// The current message (stored by RecordInbound before classification) is left
-// out by its Zalo id, or by its text when Zalo gave no id. It returns nil when
+// Messages after the current one (sentAt, its webhook time) are never read,
+// so a delayed or retried webhook sees what came before it. The current
+// message (stored by RecordInbound before classification) is left out by its
+// Zalo id, or by its text when Zalo gave no id. It returns nil when
 // chat memory is off or nothing is found; callers then classify without
 // context, as before.
-func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText string, limit int) []RecentTurn {
+func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText string, sentAt time.Time, limit int) []RecentTurn {
 	if !Enabled() || db.DB == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
 	if limit <= 0 {
 		limit = recentTurnsDefault
+	}
+	if sentAt.IsZero() {
+		sentAt = time.Now()
 	}
 	ctx, cancel := context.WithTimeout(ctx, recentTurnsTimeout)
 	defer cancel()
@@ -65,8 +70,8 @@ func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText strin
 	err := db.DB.WithContext(ctx).Model(&models.Message{}).
 		Select("external_message_id, sender_type, content, "+
 			"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_source')), '') AS source").
-		Where("tenant_id = ? AND conversation_id = ? AND sent_at >= ?",
-			sess.TenantID, sess.ConversationID, sess.StartedAt).
+		Where("tenant_id = ? AND conversation_id = ? AND sent_at >= ? AND sent_at <= ?",
+			sess.TenantID, sess.ConversationID, sess.StartedAt, sentAt).
 		Where("JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_session_id')) = ?", sessionID).
 		Order("sent_at DESC, created_at DESC").Limit(limit + 1).Scan(&rows).Error
 	if err != nil {

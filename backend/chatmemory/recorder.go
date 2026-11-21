@@ -152,7 +152,7 @@ func RecordInbound(ctx context.Context, t Turn, in Inbound) {
 // recorded as a chatbot reply when the context carries a Turn (worker sends)
 // or, failing that, when the recipient has an active chatbot session (pushes
 // made from ERP tool calls). Messages outside any session, such as campaign
-// broadcasts and staff alerts, are not recorded. Worker sends are written
+// broadcasts and staff alerts, are not recorded. 1:1 worker sends are written
 // before it returns (bounded by turnRecordTimeout); other sends are written in
 // the background.
 func RecordOutbound(ctx context.Context, channelID string, msg channels.SentMessage) {
@@ -200,8 +200,8 @@ func RecordOutbound(ctx context.Context, channelID string, msg channels.SentMess
 			log.Printf("[chat-memory] record outbound session=%s: %v", turn.SessionID, err)
 		}
 	}
-	if ok {
-		// A reply sent inside a worker turn is written before the turn ends,
+	if ok && t.ZaloGroupID == "" {
+		// A 1:1 reply sent inside a worker turn is written before the turn ends,
 		// while the chat's lock is still held, so the next customer message
 		// ("đúng rồi") already sees the question it answers. The message is
 		// delivered by now; only the turn's end waits, and briefly.
@@ -243,7 +243,8 @@ type recordedMessage struct {
 	Raw         map[string]interface{}
 }
 
-// convLocks serialises conversation creation per chat inside this process;
+// convLocks serialises conversation creation per chat inside this process
+// (one buffered channel per chat, used as a lock that honours contexts);
 // the unique index on conversations covers other processes.
 var convLocks sync.Map
 
@@ -283,9 +284,21 @@ func ensureConversation(tx *gorm.DB, t Turn, at time.Time) (string, error) {
 		return "", errors.New("chat has neither user nor group id")
 	}
 	lockKey := t.TenantID + "|" + t.ChannelID + "|" + extID
-	mu, _ := convLocks.LoadOrStore(lockKey, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
-	defer mu.(*sync.Mutex).Unlock()
+	lock, _ := convLocks.LoadOrStore(lockKey, make(chan struct{}, 1))
+	ch := lock.(chan struct{})
+	ctx := tx.Statement.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// A channel instead of a mutex so the wait honours the caller's
+	// deadline: a reply recorded inside a worker turn must not hold the turn
+	// past turnRecordTimeout.
+	select {
+	case ch <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	defer func() { <-ch }()
 
 	var conv models.Conversation
 	err := tx.Where("tenant_id = ? AND channel_id = ? AND external_conversation_id = ?", t.TenantID, t.ChannelID, extID).First(&conv).Error

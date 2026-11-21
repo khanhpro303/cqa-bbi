@@ -128,7 +128,7 @@ Nhiệm vụ của bạn là phân loại tin nhắn của khách hàng thành m
    - Câu hỏi KIẾN THỨC / THÔNG SỐ / CẤU TẠO / CÔNG DỤNG / HƯỚNG DẪN sử dụng sản phẩm, kể cả khi không gắn với một giao dịch cụ thể. Ví dụ: "mũ bảo hiểm có bao nhiêu bộ phận", "sản phẩm này làm bằng chất liệu gì", "size áo tương ứng cân nặng bao nhiêu", "cách bảo quản giày".
    Luôn chọn IN_SCOPE cho câu hỏi về sản phẩm, kể cả khi chưa rõ bot có dữ liệu hoặc quyền tra cứu. Ví dụ: "bên mình có mũ nguyên đầu không", "có loại nửa đầu nào". Quyền truy cập và dữ liệu do công cụ tra cứu xác định.
 2. "HANDOVER": Tin nhắn phàn nàn về chất lượng dịch vụ, sản phẩm lỗi, chậm giao hàng, thái độ phục vụ, yêu cầu gặp nhân viên hoặc các vấn đề nghiêm trọng cần con người giải quyết.
-3. "CASUAL": Tin nhắn chỉ chào hỏi, cảm ơn hoặc trò chuyện xã giao, không trả lời câu nào bot vừa hỏi và không có câu hỏi hay yêu cầu cần hỗ trợ. Ví dụ: "cảm ơn em" sau khi bot đã trả lời xong, "hello", "hi".
+3. "CASUAL": Tin nhắn chỉ chào hỏi, cảm ơn hoặc trò chuyện xã giao, không trả lời câu nào bot vừa hỏi và không có câu hỏi hay yêu cầu cần hỗ trợ. Ví dụ: "ok", "dạ", "cảm ơn" khi bot không vừa hỏi gì, "hello", "hi".
 4. "OUT_OF_SCOPE": Câu hỏi hoặc yêu cầu rõ ràng không liên quan đến sản phẩm, ngành hàng hay nghiệp vụ BBI, ví dụ hỏi dự báo thời tiết hoặc yêu cầu giải bài toán trường học.
 
 Đọc tin mới cùng các tin gần đây trong cuộc chat. Một câu ngắn như "đúng rồi", "ok", "dạ", "có", "không", "2", "cái đó" là IN_SCOPE khi nó trả lời, xác nhận hoặc chọn theo câu bot vừa hỏi hay đề xuất (ví dụ bot hỏi "có phải anh hỏi tồn kho mẫu FF399 không?" và khách đáp "đúng rồi"). Câu hỏi tiếp nối chủ đề đang nói cũng là IN_SCOPE.

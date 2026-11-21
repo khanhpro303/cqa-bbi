@@ -910,13 +910,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// answer ("tháng này", "quý 2", "3 ngày", a tapped option) is ordinary
 		// short text the classifier could mislabel CASUAL and skip. The marker
 		// is single-use, so only this continuation turn bypasses classification.
-		var intent string
+		// classified keeps the classifier's own label: the open-cart override
+		// below routes small talk to the agent as IN_SCOPE, but small talk
+		// must still not consume the variant-line lock further down.
+		var intent, classified string
 		if engine.TakeAwaitingFollowup(ctx, workKey) {
 			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
 			intent = "IN_SCOPE"
 		} else if groupAssistant {
 			intent = classifyGroupMessage(ctx, matchedChannel.TenantID, workKey, recentGroupLines(ctx, sessionKey), groupName, groupRole, userText)
 			log.Printf("[group-assistant] group %s sender %s: %s", matchedGroup.ZaloGroupID, payload.Sender.ID, intent)
+			classified = intent
 			if keepOrderConversation(ctx, matchedChannel.TenantID, workKey, intent) {
 				log.Printf("[worker] chat has an open order cart; treating %s reply as IN_SCOPE", intent)
 				intent = "IN_SCOPE"
@@ -928,9 +932,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// be read as the answer to a question the bot asked someone else.
 			var history func() []chatmemory.RecentTurn
 			if matchedGroup.ZaloGroupID == "" {
-				msgID, sessionID := payload.Message.MsgID, activeSessionID
+				msgID, sessionID, sentAt := payload.Message.MsgID, activeSessionID, webhookTime(payload.Timestamp)
 				history = func() []chatmemory.RecentTurn {
-					return chatmemory.RecentTurns(ctx, sessionID, msgID, userText, 0)
+					return chatmemory.RecentTurns(ctx, sessionID, msgID, userText, sentAt, 0)
 				}
 			}
 			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
@@ -938,6 +942,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
 				intent = "IN_SCOPE"
 			}
+			classified = intent
 			if keepOrderConversation(ctx, matchedChannel.TenantID, workKey, intent) {
 				log.Printf("[worker] chat has an open order cart; treating %s reply as IN_SCOPE", intent)
 				intent = "IN_SCOPE"
@@ -1580,7 +1585,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Single-use: consumed here so it never leaks into unrelated later turns.
 		// Small talk ("cảm ơn" before the color and size) leaves it for the
 		// actual answer.
-		if !strings.HasPrefix(userText, "#") && intent != "CASUAL" {
+		if !strings.HasPrefix(userText, "#") && classified != "CASUAL" {
 			if lockedLine := engine.TakeAwaitingVariantLine(ctx, workKey); lockedLine != "" {
 				log.Printf("[stock-pick] variant-line lock active: scoping %q to chosen line %q (workKey=%s)", userText, lockedLine, workKey)
 				userText = fmt.Sprintf("%s [DÒNG ĐÃ CHỌN: %s — chỉ tra tồn kho đúng dòng này bằng exact_web_name=true; KHÔNG mở rộng sang dòng khác]", userText, lockedLine)
