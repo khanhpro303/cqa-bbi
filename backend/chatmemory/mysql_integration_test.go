@@ -303,26 +303,32 @@ func TestRecentTurnsMySQL(t *testing.T) {
 	}
 	userID := "zu-" + pkg.NewUUID()[:8]
 	start := time.Now().Add(-time.Hour).Truncate(time.Second)
+	pause := func() { time.Sleep(5 * time.Millisecond) } // distinct created_at
 
 	// An earlier session of the same chat must not leak into the new one.
 	old := Turn{TenantID: tenantID, ChannelID: channelID, SessionID: pkg.NewUUID(), ZaloUserID: userID, AgentType: "public"}
 	RecordInbound(context.Background(), old, Inbound{MessageID: "old-1", Text: "hỏi cũ", SentAt: start.Add(-30 * time.Second)})
+	pause()
 
 	turn := Turn{TenantID: tenantID, ChannelID: channelID, SessionID: pkg.NewUUID(), ZaloUserID: userID, AgentType: "public"}
 	ctx := WithTurn(context.Background(), turn)
 	RecordInbound(ctx, turn, Inbound{MessageID: "in-1", Text: "FF399 còn không", SentAt: start})
-	// Written before RecordOutbound returns (worker turn), so no wait here.
+	pause()
+	// Our clock runs ahead of Zalo's: the bot question carries a later
+	// sent_at than the customer's answer. It is written first, so it counts.
+	// Written before RecordOutbound returns (1:1 worker turn), so no wait.
 	RecordOutbound(ctx, channelID, channels.SentMessage{UserID: userID, MessageID: "out-1",
-		Text: "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?", SentAt: start.Add(time.Second)})
+		Text: "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?", SentAt: start.Add(time.Minute)})
+	pause()
 	RecordInbound(ctx, turn, Inbound{MessageID: "in-2", Text: "đúng rồi", SentAt: start.Add(12 * time.Second)})
-
-	// A later message is already stored (delayed or retried webhook): it must
-	// not crowd out the turns before the current one.
+	pause()
+	// Rows written after the current message (a retried task) are not read,
+	// even when they would crowd out the turns before it.
 	for i := 0; i < 8; i++ {
-		RecordInbound(ctx, turn, Inbound{MessageID: "later-" + string(rune('a'+i)), Text: "sau", SentAt: start.Add(time.Duration(20+i) * time.Second)})
+		RecordInbound(ctx, turn, Inbound{MessageID: "later-" + string(rune('a'+i)), Text: "sau", SentAt: start.Add(12 * time.Second)})
 	}
 
-	got := RecentTurns(context.Background(), turn.SessionID, "in-2", "đúng rồi", start.Add(12*time.Second), 6)
+	got := RecentTurns(context.Background(), turn.SessionID, "in-2", "đúng rồi", 6)
 	want := []RecentTurn{
 		{"Khách", "FF399 còn không"},
 		{"Bot", "Anh/chị đang hỏi tồn kho của mẫu FF399 đúng không?"},

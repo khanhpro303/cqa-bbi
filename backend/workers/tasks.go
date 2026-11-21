@@ -932,9 +932,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// be read as the answer to a question the bot asked someone else.
 			var history func() []chatmemory.RecentTurn
 			if matchedGroup.ZaloGroupID == "" {
-				msgID, sessionID, sentAt := payload.Message.MsgID, activeSessionID, webhookTime(payload.Timestamp)
+				msgID, sessionID := payload.Message.MsgID, activeSessionID
 				history = func() []chatmemory.RecentTurn {
-					return chatmemory.RecentTurns(ctx, sessionID, msgID, userText, sentAt, 0)
+					return chatmemory.RecentTurns(ctx, sessionID, msgID, userText, 0)
 				}
 			}
 			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)

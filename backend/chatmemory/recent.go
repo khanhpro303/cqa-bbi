@@ -37,21 +37,21 @@ type recentRow struct {
 // RecentTurns returns the last messages of the session before the message
 // being handled now, oldest first. Only messages recorded live under this
 // session id are read, so a previous session of the same chat never leaks in.
-// Messages after the current one (sentAt, its webhook time) are never read,
-// so a delayed or retried webhook sees what came before it. The current
-// message (stored by RecordInbound before classification) is left out by its
-// Zalo id, or by its text when Zalo gave no id. It returns nil when
-// chat memory is off or nothing is found; callers then classify without
-// context, as before.
-func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText string, sentAt time.Time, limit int) []RecentTurn {
+//
+// "Before" is decided by created_at, the server clock at which each row was
+// written, not by sent_at: the customer's sent_at is Zalo's clock and the
+// bot's is ours, so comparing them could hide the bot question a quick
+// "đúng rồi" answers. The current message (stored by RecordInbound before
+// classification) is the cursor when its Zalo id is known, so a retried task
+// does not see what was written after it; without an id the cursor is now and
+// the current message is dropped by its text. It returns nil when chat memory
+// is off or nothing is found; callers then classify without context.
+func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText string, limit int) []RecentTurn {
 	if !Enabled() || db.DB == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
 	if limit <= 0 {
 		limit = recentTurnsDefault
-	}
-	if sentAt.IsZero() {
-		sentAt = time.Now()
 	}
 	ctx, cancel := context.WithTimeout(ctx, recentTurnsTimeout)
 	defer cancel()
@@ -66,14 +66,21 @@ func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText strin
 		}
 		return nil
 	}
+	q := db.DB.WithContext(ctx).Model(&models.Message{}).
+		Where("tenant_id = ? AND conversation_id = ?", sess.TenantID, sess.ConversationID).
+		Where("JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_session_id')) = ?", sessionID)
+	var current models.Message
+	if currentMsgID != "" && db.DB.WithContext(ctx).Select("id, created_at").
+		Where("tenant_id = ? AND conversation_id = ? AND external_message_id = ?", sess.TenantID, sess.ConversationID, currentMsgID).
+		Take(&current).Error == nil {
+		q = q.Where("created_at < ?", current.CreatedAt)
+	} else {
+		q = q.Where("created_at <= ?", time.Now())
+	}
 	var rows []recentRow
-	err := db.DB.WithContext(ctx).Model(&models.Message{}).
-		Select("external_message_id, sender_type, content, "+
-			"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_source')), '') AS source").
-		Where("tenant_id = ? AND conversation_id = ? AND sent_at >= ? AND sent_at <= ?",
-			sess.TenantID, sess.ConversationID, sess.StartedAt, sentAt).
-		Where("JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_session_id')) = ?", sessionID).
-		Order("sent_at DESC, created_at DESC").Limit(limit + 1).Scan(&rows).Error
+	err := q.Select("external_message_id, sender_type, content, " +
+		"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_source')), '') AS source").
+		Order("created_at DESC, id DESC").Limit(limit + 1).Scan(&rows).Error
 	if err != nil {
 		log.Printf("[chat-memory] recent turns: session %s: %v", sessionID, err)
 		return nil
