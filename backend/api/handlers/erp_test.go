@@ -1266,12 +1266,25 @@ func TestPriceExactWebLineFF399(t *testing.T) {
 		})
 	}
 
-	// The SQL sorts by ma_cha, so parent codes come out in the same order as
-	// the keyword path's RankProductWebGroups: the priced parent first.
+	// The "_DK" copies hold stock but are hidden from the catalog view, so
+	// the agent is never handed SP000557_DK to list colours or sizes from.
 	sorted := append(append([]map[string]interface{}{}, real...), dk...)
 	filtered, _ := priceExactWebLine(context.Background(), sorted, nil, nil, true)
-	if got := collectParentCodesFromProducts(filtered); len(got) != 2 || got[0] != "SP000557" || got[1] != "SP000557_DK" {
-		t.Fatalf("parent_codes = %#v; want [SP000557 SP000557_DK]", got)
+	if got := collectParentCodesFromProducts(filtered); len(got) != 1 || got[0] != "SP000557" {
+		t.Fatalf("parent_codes = %#v; want [SP000557]", got)
+	}
+}
+
+func TestWithoutDKCopies(t *testing.T) {
+	rows := []map[string]interface{}{
+		{"MA": "SP000557", "MA_CHA": "SP000557"},
+		{"MA": "SP000556_DK", "MA_CHA": "SP000557_DK"},
+		{"ma": "5039910980050_DK", "ma_cha": "SP000557"},
+		{"MA": "SP001435", "MA_CHA": "SP000557"},
+	}
+	got := withoutDKCopies(rows)
+	if len(got) != 2 || got[0]["MA"] != "SP000557" || got[1]["MA"] != "SP001435" {
+		t.Fatalf("withoutDKCopies = %#v; want the two real SKUs", got)
 	}
 }
 

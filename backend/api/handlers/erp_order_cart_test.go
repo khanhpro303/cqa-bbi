@@ -318,3 +318,15 @@ func TestBuildCartDraft(t *testing.T) {
 		return map[string]float64{"SP462694": 1, "KINH01": 5}, true
 	}}, "Kho tổng không đủ: LS2 FF818 Black XL (SKU SP462694) đặt 2, kho tổng còn 1")
 }
+
+func TestGroupCartLinesSkipsDKCopies(t *testing.T) {
+	rows := []models.CachedProduct{
+		{MA: "SP000557", MA_CHA: "SP000557", TEN_DONG_BO_WEB: "LS2 FF399", THUOC_TINH_1: "Solid Matt Black", DON_GIA_BAN: 5800000},
+		{MA: "SP000556_DK", MA_CHA: "SP000557_DK", TEN_DONG_BO_WEB: "LS2 FF399", THUOC_TINH_1: "false"},
+		{MA: "SP900_DK", MA_CHA: "SP900_DK", TEN_DONG_BO_WEB: "Only DK line", THUOC_TINH_1: "false"},
+	}
+	lines := groupCartLines(rows)
+	if len(lines) != 1 || lines[0].Name != "LS2 FF399" || len(lines[0].Variants) != 1 || lines[0].Variants[0].MA != "SP000557" {
+		t.Fatalf("lines = %#v; want one LS2 FF399 line with only SP000557", lines)
+	}
+}

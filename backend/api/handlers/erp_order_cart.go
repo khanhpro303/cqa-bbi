@@ -647,6 +647,7 @@ func liveCartCatalog(tenantID string, stockClient *pkg.CloudifyClient) cartCatal
 				}
 			}
 			_, maCha, _ := resolveMaChaFuzzy(ctx, tenantID, text)
+			maCha = engine.RealParentOf(maCha)
 			if maCha == "" {
 				return nil, false, nil
 			}
@@ -685,11 +686,15 @@ func liveCartCatalog(tenantID string, stockClient *pkg.CloudifyClient) cartCatal
 }
 
 // groupCartLines buckets cache rows by web name (or parent code when a row
-// has none).
+// has none). ERP "_DK" copy rows are left out: unpriced, colour/size
+// "false", never orderable. Lookups by exact SKU (bySKU) still see them.
 func groupCartLines(rows []models.CachedProduct) []cartProductLine {
 	index := map[string]int{}
 	var lines []cartProductLine
 	for _, row := range rows {
+		if engine.IsDKCopy(row.MA, row.MA_CHA) {
+			continue
+		}
 		name := strings.TrimSpace(row.TEN_DONG_BO_WEB)
 		if name == "" {
 			name = strings.TrimSpace(row.MA_CHA)

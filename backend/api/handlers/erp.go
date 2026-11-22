@@ -395,6 +395,8 @@ func ERPQuery(c *gin.Context) {
 				// for a variant PRICE query the pivot below (shouldPivotToVariant) takes
 				// resolvedParent and re-resolves the exact SKU via product_variants.
 				_, matchedMaCha, _ := resolveMaChaFuzzy(c.Request.Context(), tenantID, req.Search)
+				// The embedding index may still point at a "_DK" copy line.
+				matchedMaCha = engine.RealParentOf(matchedMaCha)
 				if matchedMaCha != "" {
 					resolvedParent = matchedMaCha
 					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, matchedMaCha)
@@ -459,7 +461,7 @@ func ERPQuery(c *gin.Context) {
 			}(req.Search, cachedData)
 		}
 
-		filteredCached := filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands)
+		filteredCached := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands))
 		filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, brandFilter, allBrands, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
 			return getProductsByMaChaFromCache(ctx, tenantID, maCha)
 		})
@@ -774,7 +776,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 		return nil, err
 	}
 
-	filtered := filterProductsByBrands(filterProductsByGroups(variants, productGroups), allowedBrands, allBrands)
+	filtered := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(variants, productGroups), allowedBrands, allBrands))
 	slim := slimVariantsForLLM(filtered)
 
 	response := gin.H{
@@ -808,7 +810,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 			if resolvedErr != nil {
 				log.Printf("[erp_query] variant search after parent resolve error: %v", resolvedErr)
 			} else {
-				resolvedSlim := slimVariantsForLLM(filterProductsByBrands(filterProductsByGroups(resolvedVariants, productGroups), allowedBrands, allBrands))
+				resolvedSlim := slimVariantsForLLM(withoutDKCopies(filterProductsByBrands(filterProductsByGroups(resolvedVariants, productGroups), allowedBrands, allBrands)))
 				if len(resolvedSlim) > 0 {
 					slim = resolvedSlim
 					response["data"] = resolvedSlim
@@ -826,7 +828,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 	//     The hybrid index ("FF901 — Gloss White — L") handles both.
 	if len(slim) == 0 && (strings.TrimSpace(color) != "" || strings.TrimSpace(size) != "" || strings.TrimSpace(brand) != "") {
 		if hybridRows := hybridMatchVariant(ctx, tenantID, parentCode, effectiveParent, color, size, brand); len(hybridRows) > 0 {
-			hybridSlim := slimVariantsForLLM(filterProductsByBrands(filterProductsByGroups(hybridRows, productGroups), allowedBrands, allBrands))
+			hybridSlim := slimVariantsForLLM(withoutDKCopies(filterProductsByBrands(filterProductsByGroups(hybridRows, productGroups), allowedBrands, allBrands)))
 			if len(hybridSlim) > 0 {
 				slim = hybridSlim
 				response["data"] = hybridSlim
@@ -849,7 +851,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 		if allErr != nil {
 			log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
 		} else {
-			allowed := filterProductsByBrands(filterProductsByGroups(allVariants, productGroups), allowedBrands, allBrands)
+			allowed := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(allVariants, productGroups), allowedBrands, allBrands))
 			availColors, availSizes, availBrands := collectAvailableAttributes(allowed)
 
 			matchedColor, matchedSize, matchedBrand, matchErr := fuzzyMatchAttributesWithLLM(
@@ -885,7 +887,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 				if retryErr != nil {
 					log.Printf("[erp_query] variant retry after bilingual match error: %v", retryErr)
 				} else {
-					retryFiltered := filterProductsByBrands(filterProductsByGroups(retryVariants, productGroups), allowedBrands, allBrands)
+					retryFiltered := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(retryVariants, productGroups), allowedBrands, allBrands))
 					retrySlim := slimVariantsForLLM(retryFiltered)
 					if len(retrySlim) > 0 {
 						slim = retrySlim
@@ -1189,6 +1191,20 @@ func searchProductsFromCache(ctx context.Context, tenantID, search string, limit
 	return results, nil
 }
 
+// withoutDKCopies drops ERP "_DK" copy rows (engine.IsDKCopy) from rows the
+// bot shows as a catalog: prices, colour/size lists, search results. Stock
+// sums read the cache directly and keep them, since they hold real stock.
+func withoutDKCopies(rows []map[string]interface{}) []map[string]interface{} {
+	kept := make([]map[string]interface{}, 0, len(rows))
+	for _, r := range rows {
+		if engine.IsDKCopy(getMapString(r, "MA", "ma", "ma_hang"), getMapString(r, "MA_CHA", "ma_cha")) {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept
+}
+
 // exactWebNameLineRowCap bounds the products exact web-name read, which must
 // see every row of the line to price it. A line has at most a few hundred
 // rows (LS2 FF399: 74 across two parent codes).
@@ -1201,7 +1217,7 @@ const exactWebNameLineRowCap = 1000
 // worker's priceRangeReplyByWebName, which prices a web name over its rows.
 // Returns the filtered, enriched rows and their slim LLM view.
 func priceExactWebLine(ctx context.Context, rows []map[string]interface{}, productGroups []string, brandFilter []string, allBrands bool) ([]map[string]interface{}, []map[string]interface{}) {
-	filtered := filterProductsByBrands(filterProductsByGroups(rows, productGroups), brandFilter, allBrands)
+	filtered := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(rows, productGroups), brandFilter, allBrands))
 	byParent := make(map[string][]map[string]interface{})
 	for _, r := range filtered {
 		if maCha := getMapString(r, "MA_CHA", "ma_cha"); maCha != "" {
@@ -1309,7 +1325,7 @@ func searchProductWebGroupsFromCache(ctx context.Context, tenantID, search strin
 		})
 	}
 
-	filtered := filterProductsByBrands(filterProductsByGroups(candidates, allowedGroups), allowedBrands, allBrands)
+	filtered := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(candidates, allowedGroups), allowedBrands, allBrands))
 	return engine.RankProductWebGroups(filtered), nil
 }
 
