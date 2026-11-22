@@ -920,6 +920,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// below routes small talk to the agent as IN_SCOPE, but small talk
 		// must still not consume the variant-line lock further down.
 		var intent, classified string
+		// handoffRetry: this task already ran and the small-talk model sent
+		// the turn to the main bot, which reset the streak then. Do not reset
+		// it again: newer small-talk turns may have started a new run since.
+		var handoffRetry bool
 		// Recent session turns of a 1:1 chat, read at most once: for the
 		// classifier and, on a long small-talk run, for the short reply.
 		var history func() []chatmemory.RecentTurn
@@ -949,7 +953,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if matchedGroup.ZaloGroupID == "" && engine.WasCasualHandoff(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID)) {
 				// A retry of a turn the small-talk model already sent to the
 				// main bot: keep that route instead of classifying again.
-				intent = "IN_SCOPE"
+				intent, handoffRetry = "IN_SCOPE", true
 			} else {
 				intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
 			}
@@ -1021,7 +1025,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if matchedGroup.ZaloGroupID == "" {
 			switch intent {
 			case "IN_SCOPE", "OUT_OF_SCOPE":
-				engine.ResetCasualStreak(ctx, workKey)
+				if !handoffRetry {
+					engine.ResetCasualStreak(ctx, workKey)
+				}
 			case "CASUAL":
 				turnID := casualTurnID(ctx, payload.Message.MsgID)
 				streak := engine.BumpCasualStreak(ctx, workKey, turnID, meta.SessionTimeout)
