@@ -1352,29 +1352,49 @@ func collectParentCodesFromProducts(products []map[string]interface{}) []string 
 
 func slimProductsForLLM(products []map[string]interface{}) []map[string]interface{} {
 	slim := make([]map[string]interface{}, 0, len(products))
-	seen := make(map[string]struct{}, len(products))
+	type lineSpan struct {
+		row      map[string]interface{}
+		min, max float64
+	}
+	byName := make(map[string]*lineSpan, len(products))
 
 	for _, p := range products {
 		name := getFirstNonEmptyMapString(p, "TEN_DONG_BO_WEB", "ten_dong_bo_web", "TEN", "ten", "name")
 		if name == "" {
 			continue
 		}
-		if _, dup := seen[name]; dup {
+		minP := getMapFloat(p, "price_min")
+		maxP := getMapFloat(p, "price_max")
+		if span, dup := byName[name]; dup {
+			// Rows of one web name can belong to different parents (or include
+			// the unpriced parent record). The line's price is the span over all
+			// of them, not whichever row the query happened to return first —
+			// otherwise the same line answers "Liên hệ" or a range depending on
+			// row order (FF399, 22/11).
+			if minP > 0 && (span.min == 0 || minP < span.min) {
+				span.min = minP
+			}
+			if maxP > span.max {
+				span.max = maxP
+			}
+			if span.min > 0 && span.max > 0 {
+				span.row["price_range"] = engine.FormatPriceRange(span.min, span.max)
+			}
 			continue
 		}
-		seen[name] = struct{}{}
+		if len(slim) >= slimProductsForLLMLimit {
+			continue
+		}
 
-		slim = append(slim, map[string]interface{}{
+		row := map[string]interface{}{
 			"name":               name,
 			"price_range":        getFirstNonEmptyMapString(p, "price_range"),
 			"nhan_hieu_name":     getFirstNonEmptyMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name"),
 			"list_ten_nhom_vthh": getFirstNonEmptyMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
 			"dvt":                getFirstNonEmptyMapString(p, "DVT", "dvt_chinh_id", "unit"),
-		})
-
-		if len(slim) >= slimProductsForLLMLimit {
-			break
 		}
+		byName[name] = &lineSpan{row: row, min: minP, max: maxP}
+		slim = append(slim, row)
 	}
 
 	return slim
@@ -1431,20 +1451,37 @@ func enrichProductsWithPriceRanges(ctx context.Context, products []map[string]in
 
 	for _, product := range products {
 		maCha := getMapString(product, "MA_CHA", "ma_cha")
+		// A row with no MA_CHA may itself be the parent of a line (the ERP
+		// parent record, usually priced 0). Its price lives on the children
+		// whose MA_CHA is this row's MA, so look those up instead of pricing
+		// the bare parent row as "Liên hệ". A standalone product with no
+		// children falls back to its own price below, as before.
+		lineCode := maCha
+		isParentRow := false
+		if lineCode == "" {
+			lineCode = getMapString(product, "MA", "ma", "ma_hang")
+			isParentRow = lineCode != ""
+		}
 		var priceRange productPriceRange
 
-		if maCha == "" {
+		if lineCode == "" {
 			priceRange = calculateProductPriceRange([]map[string]interface{}{product})
 		} else {
 			var ok bool
-			priceRange, ok = priceRangeByMaCha[maCha]
+			priceRange, ok = priceRangeByMaCha[lineCode]
 			if !ok {
 				var variants []map[string]interface{}
 				var err error
 				if loadVariants != nil {
-					variants, err = loadVariants(ctx, maCha)
+					variants, err = loadVariants(ctx, lineCode)
 				}
-				if err != nil || len(variants) == 0 {
+				if err != nil {
+					variants = nil
+				}
+				if isParentRow {
+					variants = append(variants, product)
+				}
+				if len(variants) == 0 {
 					variants = []map[string]interface{}{product}
 				}
 
@@ -1454,7 +1491,7 @@ func enrichProductsWithPriceRanges(ctx context.Context, products []map[string]in
 				}
 
 				priceRange = calculateProductPriceRange(variants)
-				priceRangeByMaCha[maCha] = priceRange
+				priceRangeByMaCha[lineCode] = priceRange
 			}
 		}
 

@@ -1232,3 +1232,55 @@ func TestHybridMatchVariantEmptyKeyword(t *testing.T) {
 		t.Fatalf("hybridMatchVariant with empty keyword = %v; want nil", got)
 	}
 }
+
+// FF399 (22/11): the exact-web lookup returned the unpriced ERP parent record
+// (no MA_CHA, DON_GIA_BAN 0) first, so the line answered "Liên hệ" while the
+// keyword path, which only reads the children, answered a real range.
+func TestEnrichProductsWithPriceRangesPricesParentRowFromChildren(t *testing.T) {
+	products := []map[string]interface{}{
+		{"MA": "SP900", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 0.0},
+		{"MA": "SP901", "MA_CHA": "SP900", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 5800000.0},
+	}
+	loadVariants := func(ctx context.Context, code string) ([]map[string]interface{}, error) {
+		if code != "SP900" {
+			return nil, nil
+		}
+		return []map[string]interface{}{
+			{"MA": "SP901", "MA_CHA": "SP900", "DON_GIA_BAN": 5800000.0},
+			{"MA": "SP902", "MA_CHA": "SP900", "DON_GIA_BAN": 6200000.0},
+		}, nil
+	}
+
+	enriched := enrichProductsWithPriceRanges(context.Background(), products, nil, nil, true, loadVariants)
+	for i, row := range enriched {
+		if row["price_range"] != "5.800.000đ - 6.200.000đ" {
+			t.Errorf("row %d price_range = %#v; want the children's range", i, row["price_range"])
+		}
+	}
+	slim := slimProductsForLLM(enriched)
+	if len(slim) != 1 || slim[0]["price_range"] != "5.800.000đ - 6.200.000đ" {
+		t.Fatalf("slim = %#v; want one LS2 FF399 row with the children's range", slim)
+	}
+}
+
+func TestEnrichProductsWithPriceRangesStandaloneRowKeepsOwnPrice(t *testing.T) {
+	products := []map[string]interface{}{{"MA": "SP777", "DON_GIA_BAN": 450000.0}}
+	loadVariants := func(ctx context.Context, code string) ([]map[string]interface{}, error) { return nil, nil }
+
+	enriched := enrichProductsWithPriceRanges(context.Background(), products, nil, nil, true, loadVariants)
+	if enriched[0]["price_range"] != "450.000đ" {
+		t.Fatalf("price_range = %#v; want own price", enriched[0]["price_range"])
+	}
+}
+
+func TestSlimProductsForLLMMergesPriceSpanAcrossRowsOfOneLine(t *testing.T) {
+	in := []map[string]interface{}{
+		{"TEN_DONG_BO_WEB": "LS2 FF399", "price_range": "Liên hệ", "price_min": 0.0, "price_max": 0.0},
+		{"TEN_DONG_BO_WEB": "LS2 FF399", "price_range": "5.800.000đ - 6.000.000đ", "price_min": 5800000.0, "price_max": 6000000.0},
+		{"TEN_DONG_BO_WEB": "LS2 FF399", "price_range": "6.200.000đ", "price_min": 6200000.0, "price_max": 6200000.0},
+	}
+	got := slimProductsForLLM(in)
+	if len(got) != 1 || got[0]["price_range"] != "5.800.000đ - 6.200.000đ" {
+		t.Fatalf("slim = %#v; want one row spanning every priced row", got)
+	}
+}
