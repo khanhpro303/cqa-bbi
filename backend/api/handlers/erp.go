@@ -237,18 +237,24 @@ func ERPQuery(c *gin.Context) {
 				cachedData = []map[string]interface{}{}
 			}
 
-			if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
-				go func(s string, payload []map[string]interface{}) {
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancel()
-					pushFallbackPayloadToZaloOA(ctx, tenantID, "exact_web", s, payload, permCtx)
-				}(search, cachedData)
-			}
-
 			if len(cachedData) >= exactWebNameLineRowCap {
 				log.Printf("[erp_query] exact web-name %q hit the %d-row cap; price range may be partial", search, exactWebNameLineRowCap)
 			}
 			filteredCached, slim := priceExactWebLine(c.Request.Context(), cachedData, productGroups, brandFilter, allBrands)
+
+			// The debug push gets only rows the caller may see, capped at the
+			// caller's limit: the read above takes the whole line for pricing.
+			if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
+				debugRows := filteredCached
+				if len(debugRows) > req.Limit {
+					debugRows = debugRows[:req.Limit]
+				}
+				go func(s string, payload []map[string]interface{}) {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					pushFallbackPayloadToZaloOA(ctx, tenantID, "exact_web", s, payload, permCtx)
+				}(search, debugRows)
+			}
 			// Surface the line's parent SKU(s) so the agent can chain to
 			// product_variants. slimProductsForLLM collapses by web name and drops
 			// ma_cha, but the STOCK-pick continuation (system prompt "KHÓA ĐÚNG
