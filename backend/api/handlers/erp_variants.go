@@ -10,6 +10,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"gorm.io/gorm"
 )
 
 // searchVariantsByAttributes returns child variants under a parent SKU
@@ -22,7 +23,7 @@ import (
 //
 // tenantID is always enforced as the first WHERE clause so the LLM agent
 // cannot leak data across tenants by manipulating other arguments.
-func searchVariantsByAttributes(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int) ([]map[string]interface{}, error) {
+func searchVariantsByAttributes(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, scopes ...func(*gorm.DB) *gorm.DB) ([]map[string]interface{}, error) {
 	parentCode = strings.TrimSpace(parentCode)
 	if parentCode == "" {
 		return nil, fmt.Errorf("parent_code is required for variant attribute search")
@@ -31,7 +32,7 @@ func searchVariantsByAttributes(ctx context.Context, tenantID, parentCode, color
 		limit = 20
 	}
 
-	query := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
+	query := db.DB.WithContext(ctx).Scopes(append([]func(*gorm.DB) *gorm.DB{engine.ExcludeDKCopies}, scopes...)...).
 		Where("tenant_id = ?", tenantID).
 		Where("ma_cha = ?", parentCode)
 	if c := strings.TrimSpace(color); c != "" {

@@ -2512,7 +2512,7 @@ func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (stri
 		Ten          string `gorm:"column:ten"`
 	}
 	var candidates []maChaCandidate
-	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
+	err := db.DB.WithContext(ctx).
 		Table((&models.CachedProduct{}).TableName()).
 		Select("ma_cha, MAX(ten_dong_bo_web) AS ten_dong_bo_web, MAX(ten) AS ten").
 		Where("tenant_id = ? AND ma_cha != ''", tenantID).
@@ -2624,7 +2624,9 @@ func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string)
 func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
-	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
+	// No _DK filter here: this lookup only feeds the stock picker, and _DK
+	// SKUs hold real stock.
+	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
 		Limit(100).
 		Find(&products).Error
@@ -2640,7 +2642,7 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 		} else if matchedMaCha != "" {
 			log.Printf("[worker] LLM fuzzy matched keyword '%s' to ma_cha '%s'", keyword, matchedMaCha)
 			// Query again using the matched parent product code
-			err = db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
+			err = db.DB.WithContext(ctx).
 				Where("tenant_id = ? AND ma_cha = ?", tenantID, matchedMaCha).
 				Limit(100).
 				Find(&products).Error

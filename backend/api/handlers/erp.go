@@ -438,7 +438,15 @@ func ERPQuery(c *gin.Context) {
 			// bug). Re-resolve the exact SKU with the SAME engine the
 			// product_variants resource uses, so both routes agree on price.
 			if shouldPivotToVariant(req.Intent, req.Color, req.Size, req.Brand, resolvedParent) {
-				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands)
+				var lineScopes []func(*gorm.DB) *gorm.DB
+				if lineWebName != "" {
+					// Stay on the matched web line before LIMIT: the parent may
+					// carry sibling lines with the same colour/size.
+					lineScopes = append(lineScopes, func(tx *gorm.DB) *gorm.DB {
+						return tx.Where("ten_dong_bo_web = ?", lineWebName)
+					})
+				}
+				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands, lineScopes...)
 				if vErr != nil {
 					log.Printf("[erp_query] variant price-pivot from products failed parent=%s: %v", resolvedParent, vErr)
 				} else if vResp != nil && keepVariantsOfLine(vResp, lineWebName) {
@@ -827,10 +835,12 @@ func selectUniqueVariantMatch(groups []engine.WebGroupMatch, resolve func(parent
 //
 // Returns (nil, err) only when the initial cache lookup hard-fails; every
 // downstream fallback tolerates its own errors by logging and pressing on.
-func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool) (gin.H, error) {
+//
+// scopes narrow every cache read (e.g. to one web line) before LIMIT applies.
+func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool, scopes ...func(*gorm.DB) *gorm.DB) (gin.H, error) {
 	// A "_DK" copy parent has no visible variants; read its real line.
 	parentCode = engine.RealParentOf(parentCode)
-	variants, err := searchVariantsByAttributes(ctx, tenantID, parentCode, color, size, brand, limit)
+	variants, err := searchVariantsByAttributes(ctx, tenantID, parentCode, color, size, brand, limit, scopes...)
 	if err != nil {
 		return nil, err
 	}
@@ -865,7 +875,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 		if resolved := engine.RealParentOf(resolveParentMaCha(ctx, tenantID, parentCode, brand)); resolved != "" && !strings.EqualFold(resolved, parentCode) {
 			effectiveParent = resolved
 			response["resolved_parent"] = resolved
-			resolvedVariants, resolvedErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, color, size, brand, limit)
+			resolvedVariants, resolvedErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, color, size, brand, limit, scopes...)
 			if resolvedErr != nil {
 				log.Printf("[erp_query] variant search after parent resolve error: %v", resolvedErr)
 			} else {
@@ -906,7 +916,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 	//  (2) If still zero, surface available_* lists so the agent can ask the
 	//      customer to pick a real combination.
 	if len(slim) == 0 && (strings.TrimSpace(color) != "" || strings.TrimSpace(size) != "" || strings.TrimSpace(brand) != "") {
-		allVariants, allErr := getProductsByMaChaFromCache(ctx, tenantID, effectiveParent, engine.ExcludeDKCopies)
+		allVariants, allErr := getProductsByMaChaFromCache(ctx, tenantID, effectiveParent, append([]func(*gorm.DB) *gorm.DB{engine.ExcludeDKCopies}, scopes...)...)
 		if allErr != nil {
 			log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
 		} else {
@@ -942,7 +952,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 					retryBrand = brand
 				}
 
-				retryVariants, retryErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, retryColor, retrySize, retryBrand, limit)
+				retryVariants, retryErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, retryColor, retrySize, retryBrand, limit, scopes...)
 				if retryErr != nil {
 					log.Printf("[erp_query] variant retry after bilingual match error: %v", retryErr)
 				} else {
