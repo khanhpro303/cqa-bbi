@@ -907,7 +907,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if handled, err := handleOrderDraftReply(ctx, cfg, adapter, matchedChannel.TenantID, workKey, payload.Sender.ID, matchedGroup.ZaloGroupID, userText); handled {
 			// Confirming or cancelling an order is business: end any
 			// small-talk run (casual_budget.go).
-			engine.ResetCasualStreakOnce(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID), meta.SessionTimeout)
+			if casualBudgetActive(ctx) {
+				engine.ResetCasualStreak(ctx, workKey)
+			}
 			return err
 		}
 
@@ -946,13 +948,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// nil in a group): in a keyword group the shared log has no
 			// speakers, so one member's "ok" could be read as the answer to a
 			// question the bot asked someone else.
-			if matchedGroup.ZaloGroupID == "" && engine.WasCasualHandoff(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID)) {
-				// A retry of a turn the small-talk model already sent to the
-				// main bot: keep that route instead of classifying again.
-				intent = "IN_SCOPE"
-			} else {
-				intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
-			}
+			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
 			if err != nil {
 				log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
 				intent = "IN_SCOPE"
@@ -1018,22 +1014,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// which a canned refusal from a classifier that reads one message
 		// cannot do. How it answers small talk is up to the system prompt.
 		// A long run of small talk is answered more cheaply (casual_budget.go).
-		if matchedGroup.ZaloGroupID == "" {
+		// Only a task's first attempt applies the budget: a retry answers as
+		// before this feature, so it can never skew or wipe a newer run.
+		if matchedGroup.ZaloGroupID == "" && casualBudgetActive(ctx) {
 			switch intent {
 			case "IN_SCOPE", "OUT_OF_SCOPE":
-				// Only a message's first attempt ends the run: a retry
-				// (after a failed main-bot call, or of a handed-off turn)
-				// must not wipe small talk that arrived since.
-				engine.ResetCasualStreakOnce(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID), meta.SessionTimeout)
+				engine.ResetCasualStreak(ctx, workKey)
 			case "CASUAL":
 				turnID := casualTurnID(ctx, payload.Message.MsgID)
 				streak := engine.BumpCasualStreak(ctx, workKey, turnID, meta.SessionTimeout)
-				if streak == engine.CasualHandedOff {
-					// A retry of a turn the small-talk model already sent to
-					// the main bot: go straight there, as business.
-					intent, classified = "IN_SCOPE", "IN_SCOPE"
-					break
-				}
 				budget := casualBudgetFrom(matchedChannel.Metadata)
 				route := routeCasualTurn(streak, budget)
 				if route == casualToAgent {
@@ -1064,7 +1053,6 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					// business from here on, including the variant-line lock.
 					log.Printf("[casual-budget] sender %s: small-talk model handed turn %d to the main bot", payload.Sender.ID, streak)
 					engine.ResetCasualStreak(ctx, workKey)
-					engine.MarkCasualHandoff(ctx, workKey, turnID)
 					intent, classified = "IN_SCOPE", "IN_SCOPE"
 				case route == casualToQuiet && reply.Outcome == casualQuietAck:
 					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row (quiet after %d); no reply", payload.Sender.ID, streak, budget.QuietAfter)

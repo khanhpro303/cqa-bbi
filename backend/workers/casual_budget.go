@@ -116,9 +116,19 @@ func casualModeFor(route casualRoute, streak int, b casualBudget) casualTurnMode
 	return casualReplyNormal
 }
 
+// casualBudgetActive reports whether this run of the task is its first
+// attempt. The budget (count, reset, short reply, quiet) applies only then:
+// a retry runs after a failure, possibly after newer turns or a new session,
+// so it answers the plain way (main bot) and leaves the count alone. Outside
+// the queue (tests) it is active.
+func casualBudgetActive(ctx context.Context) bool {
+	retried, ok := asynq.GetRetryCount(ctx)
+	return !ok || retried == 0
+}
+
 // casualTurnID identifies the message for the streak count: the Zalo message
-// id, or else the queue task id, which a retry keeps. "" means no stable id;
-// the count is then skipped and the turn goes to the main bot.
+// id, or else the queue task id. "" means no id; the count is then skipped
+// and the turn goes to the main bot.
 func casualTurnID(ctx context.Context, msgID string) string {
 	if strings.TrimSpace(msgID) != "" {
 		return msgID

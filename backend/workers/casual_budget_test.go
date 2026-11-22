@@ -189,3 +189,10 @@ func TestOnceTurnsLoadsOnce(t *testing.T) {
 		t.Fatalf("calls=%d turns=%v", calls, got)
 	}
 }
+
+func TestCasualBudgetActiveOutsideQueue(t *testing.T) {
+	// Outside asynq there is no retry count: treat it as a first attempt.
+	if !casualBudgetActive(context.Background()) {
+		t.Fatal("budget should apply outside the queue")
+	}
+}
