@@ -441,7 +441,7 @@ func ERPQuery(c *gin.Context) {
 				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands)
 				if vErr != nil {
 					log.Printf("[erp_query] variant price-pivot from products failed parent=%s: %v", resolvedParent, vErr)
-				} else if vResp != nil {
+				} else if vResp != nil && keepVariantsOfLine(vResp, lineWebName) {
 					cnt, _ := vResp["count"].(int)
 					// Tag so the agent component renders this as a variant answer even
 					// though the request resource was "products".
@@ -682,6 +682,34 @@ func ERPQuery(c *gin.Context) {
 
 	// ── 10. Execute live Cloudify call with filters ───────────────────────
 	respondWithLiveDataV2(c, client, req.Resource, req.Search, req.ParentCode, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx, req.ExactWebName, req.Color, req.Size, req.Brand)
+}
+
+// keepVariantsOfLine narrows a variant response to the web line the keyword
+// matched: one parent code can carry several web lines, and a colour/size may
+// exist on a sibling line with another price. With no line name it keeps the
+// response as is. It reports false when the response had variants but none
+// belong to the line, so the caller answers with the line's own price range
+// instead of a sibling's SKU.
+func keepVariantsOfLine(vResp gin.H, lineWebName string) bool {
+	if lineWebName == "" {
+		return true
+	}
+	rows, ok := vResp["data"].([]map[string]interface{})
+	if !ok || len(rows) == 0 {
+		return true
+	}
+	kept := make([]map[string]interface{}, 0, len(rows))
+	for _, r := range rows {
+		if getMapString(r, "name") == lineWebName {
+			kept = append(kept, r)
+		}
+	}
+	if len(kept) == 0 {
+		return false
+	}
+	vResp["data"] = kept
+	vResp["count"] = len(kept)
+	return true
 }
 
 // shouldPivotToVariant decides whether a products query must be re-resolved as a

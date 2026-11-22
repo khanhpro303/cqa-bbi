@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/engine"
 )
 
@@ -1318,5 +1319,29 @@ func TestSlimProductsForLLMMergesPriceSpanAcrossRowsOfOneLine(t *testing.T) {
 	got := slimProductsForLLM(in)
 	if len(got) != 1 || got[0]["price_range"] != "5.800.000đ - 6.200.000đ" {
 		t.Fatalf("slim = %#v; want one row spanning every priced row", got)
+	}
+}
+
+func TestKeepVariantsOfLine(t *testing.T) {
+	resp := func() gin.H {
+		return gin.H{"count": 2, "data": []map[string]interface{}{
+			{"ma": "A1", "name": "LS2 FF399", "price": 5800000.0},
+			{"ma": "B1", "name": "LS2 FF399 Carbon", "price": 9900000.0},
+		}}
+	}
+	r := resp()
+	if !keepVariantsOfLine(r, "LS2 FF399") || r["count"] != 1 || r["data"].([]map[string]interface{})[0]["ma"] != "A1" {
+		t.Fatalf("line filter = %#v; want only A1", r)
+	}
+	r = resp()
+	if !keepVariantsOfLine(r, "") || r["count"] != 2 {
+		t.Fatalf("no line name must keep the response: %#v", r)
+	}
+	if keepVariantsOfLine(resp(), "LS2 FF800") {
+		t.Fatal("a response with only sibling-line variants must be rejected")
+	}
+	empty := gin.H{"count": 0, "data": []map[string]interface{}{}, "available_colors": []string{"Black"}}
+	if !keepVariantsOfLine(empty, "LS2 FF399") {
+		t.Fatal("a zero-result hint response must pass through")
 	}
 }

@@ -70,7 +70,7 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *int) {
 			}
 		case *int64:
 			// isParentProductCode: SP457204 is the parent of two SKUs.
-			if vars := q.Statement.Vars; strings.Contains(q.Statement.SQL.String(), "ma_cha =") && len(vars) == 2 && vars[1] == "SP457204" {
+			if vars := q.Statement.Vars; strings.Contains(q.Statement.SQL.String(), "ma_cha IN") && len(vars) == 3 && vars[1] == "SP457204" && vars[2] == "SP457204_DK" {
 				*result = 2
 				q.RowsAffected = 1 // gorm's Count keeps the scanned value only when one row came back
 			}

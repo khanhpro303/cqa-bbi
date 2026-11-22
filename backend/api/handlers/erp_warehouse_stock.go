@@ -33,9 +33,11 @@ func isParentProductCode(ctx context.Context, tenantID, code string) bool {
 	if code == "" {
 		return false
 	}
+	// Its "_DK" copy parent's SKUs belong to the same line: a parent with one
+	// regular SKU plus copies is still a line, not a single variant.
 	var count int64
 	db.DB.WithContext(ctx).Model(&models.CachedProduct{}).
-		Where("tenant_id = ? AND ma_cha = ?", tenantID, code).Count(&count)
+		Where("tenant_id = ? AND ma_cha IN ?", tenantID, []string{code, engine.DKCopyParentOf(code)}).Count(&count)
 	return count > 1
 }
 
