@@ -14,9 +14,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
+	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/knowledge"
+	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
 // ListKnowledgeDocuments lists the tenant's chatbot documents. ?view=archived
@@ -35,10 +37,16 @@ func ListKnowledgeDocuments(c *gin.Context) {
 		return
 	}
 	svc := knowledge.Default()
+	parser := tenantParser(tenantID)
+	parserName := knowledge.ParserLocal
+	if parser.Enabled() {
+		parserName = knowledge.ParserUnstructured
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"documents":            docs,
 		"vector_store":         svc.IndexName(),
-		"supported_extensions": knowledge.SupportedExtensions,
+		"parser":               parserName,
+		"supported_extensions": knowledge.AcceptedExtensions(parser),
 		"max_upload_mb":        knowledge.MaxUploadBytes >> 20,
 	})
 }
@@ -69,31 +77,29 @@ func UploadKnowledgeDocument(c *gin.Context) {
 		return
 	}
 	name := filepath.Base(fh.Filename)
-	text, err := knowledge.ExtractText(name, data)
-	if errors.Is(err, knowledge.ErrUnsupportedType) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_type", "supported": knowledge.SupportedExtensions})
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "extract_failed", "message": err.Error()})
+	parser := tenantParser(tenantID)
+	if !knowledge.SupportsExtension(parser, name) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_type", "supported": knowledge.AcceptedExtensions(parser)})
 		return
 	}
 	title := strings.TrimSpace(c.PostForm("title"))
 	if title == "" {
 		title = strings.TrimSuffix(name, filepath.Ext(name))
 	}
-	doc, err := knowledge.Default().CreateDocument(knowledge.NewDocumentInput{
+	// Reading (Unstructured can take minutes on a scanned PDF), chunking and
+	// indexing run in the background; the page polls the status.
+	doc, err := knowledge.Default().CreateFromFile(knowledge.NewDocumentInput{
 		TenantID: tenantID, Title: title, FileName: name, MimeType: fh.Header.Get("Content-Type"),
 		Source: "upload", SizeBytes: int64(len(data)), Audience: c.PostForm("audience"),
-		CreatedBy: middleware.GetUserEmail(c), Text: text,
-	})
+		CreatedBy: middleware.GetUserEmail(c),
+	}, data, parser)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "save_failed", "message": err.Error()})
 		return
 	}
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "knowledge.document_uploaded", "knowledge_document", doc.ID,
-		fmt.Sprintf("%s (%d đoạn, %s)", doc.Title, doc.ChunkCount, doc.Audience), "", c.ClientIP())
-	c.JSON(http.StatusCreated, doc)
+		fmt.Sprintf("%s (%s, %d bytes)", doc.Title, doc.Audience, doc.SizeBytes), "", c.ClientIP())
+	c.JSON(http.StatusAccepted, doc)
 }
 
 // CreateKnowledgeText adds a document typed in the page.
@@ -358,4 +364,103 @@ func ImportKnowledgeFromAstra(c *gin.Context) {
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "knowledge.astra_imported", "knowledge_document", "",
 		req.Collection+": "+strconv.Itoa(res.Documents)+" tài liệu, "+strconv.Itoa(res.Chunks)+" đoạn", "", c.ClientIP())
 	c.JSON(http.StatusOK, res)
+}
+
+func tenantParser(tenantID string) knowledge.ParserSettings {
+	cfg, _ := config.Load()
+	key := ""
+	if cfg != nil {
+		key = cfg.EncryptionKey
+	}
+	return knowledge.LoadParserSettings(tenantID, key)
+}
+
+// GetKnowledgeParser returns the tenant's Unstructured setup (the key is
+// never returned, only whether one is set).
+func GetKnowledgeParser(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	p := tenantParser(tenantID)
+	var keyRow models.AppSetting
+	tenantKey := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, knowledge.SettingUnstructuredKey).First(&keyRow).Error == nil
+	c.JSON(http.StatusOK, gin.H{
+		"api_url":         getPlainSetting(tenantID, knowledge.SettingUnstructuredURL),
+		"default_api_url": knowledge.DefaultUnstructuredURL,
+		"strategy":        p.Strategy,
+		"languages":       p.Languages,
+		"has_key":         tenantKey,
+		"env_configured":  !tenantKey && p.APIKey != "",
+		"enabled":         p.Enabled(),
+	})
+}
+
+// SaveKnowledgeParser stores the tenant's Unstructured setup. An empty
+// api_key keeps the stored key; clear_key removes it.
+func SaveKnowledgeParser(c *gin.Context) {
+	tenantID := middleware.GetTenantID(c)
+	var req struct {
+		APIURL    string `json:"api_url"`
+		APIKey    string `json:"api_key"`
+		ClearKey  bool   `json:"clear_key"`
+		Strategy  string `json:"strategy"`
+		Languages string `json:"languages"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_body"})
+		return
+	}
+	req.APIURL = strings.TrimSpace(req.APIURL)
+	if err := knowledge.ValidateUnstructuredURL(req.APIURL); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_url", "message": err.Error()})
+		return
+	}
+	switch req.Strategy {
+	case "", "auto", "fast", "hi_res", "ocr_only":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_strategy"})
+		return
+	}
+	setOrClear := func(key, value string) {
+		if value != "" {
+			upsertSetting(tenantID, key, value, nil)
+		} else {
+			db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).Delete(&models.AppSetting{})
+		}
+	}
+	setOrClear(knowledge.SettingUnstructuredURL, req.APIURL)
+	setOrClear(knowledge.SettingUnstructuredStrategy, req.Strategy)
+	setOrClear(knowledge.SettingUnstructuredLanguages, strings.TrimSpace(req.Languages))
+	if req.ClearKey {
+		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, knowledge.SettingUnstructuredKey).Delete(&models.AppSetting{})
+	} else if k := strings.TrimSpace(req.APIKey); k != "" && !isMaskedSecret(k) {
+		cfg, _ := config.Load()
+		if cfg == nil || cfg.EncryptionKey == "" {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "encryption_unavailable"})
+			return
+		}
+		enc, err := pkg.Encrypt([]byte(k), cfg.EncryptionKey)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "encryption_failed"})
+			return
+		}
+		upsertSetting(tenantID, knowledge.SettingUnstructuredKey, "", enc)
+	}
+	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "knowledge.parser_updated", "settings", "knowledge_unstructured", "", "", c.ClientIP())
+	GetKnowledgeParser(c)
+}
+
+// TestKnowledgeParser sends a tiny text file to Unstructured.
+func TestKnowledgeParser(c *gin.Context) {
+	p := tenantParser(middleware.GetTenantID(c))
+	if !p.Enabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "not_configured"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	defer cancel()
+	text, err := knowledge.UnstructuredExtract(ctx, p, "cqa-test.txt", []byte("Kiểm tra kết nối Unstructured từ CQA."))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "text": text})
 }

@@ -20,8 +20,13 @@ type KnowledgeDocument struct {
 	Audience string `gorm:"type:varchar(20);not null;default:'public'" json:"audience"`
 	Enabled  bool   `gorm:"not null;default:true" json:"enabled"`
 	// Status: processing | ready | failed | archived.
-	Status     string     `gorm:"type:varchar(20);not null;default:'processing';index:idx_kbdoc_tenant_status,priority:2" json:"status"`
-	Error      string     `gorm:"type:text" json:"error,omitempty"`
+	Status string `gorm:"type:varchar(20);not null;default:'processing';index:idx_kbdoc_tenant_status,priority:2" json:"status"`
+	// Error is why the document failed, or a notice on a ready document
+	// (for example "read with the built-in reader because Unstructured
+	// failed").
+	Error string `gorm:"type:text" json:"error,omitempty"`
+	// Parser is how the file was read: "unstructured" or "local".
+	Parser     string     `gorm:"type:varchar(20)" json:"parser"`
 	CharCount  int        `json:"char_count"`
 	ChunkCount int        `json:"chunk_count"`
 	IndexedAt  *time.Time `json:"indexed_at"`

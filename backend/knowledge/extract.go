@@ -271,5 +271,10 @@ func htmlText(data []byte) (string, error) {
 		}
 	}
 	walk(doc)
-	return b.String(), nil
+	lines := strings.Split(b.String(), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSuffix(strings.TrimSpace(l), " |")
+		lines[i] = strings.TrimSuffix(lines[i], "|")
+	}
+	return strings.Join(lines, "\n"), nil
 }

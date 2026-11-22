@@ -67,6 +67,7 @@ func main() {
 	}
 
 	// Chatbot knowledge base: finish indexing that a restart interrupted.
+	knowledge.SetEnvDefaults(cfg.ChatMemory.UnstructuredAPIURL, cfg.ChatMemory.UnstructuredAPIKey)
 	knowledge.Default().ResumePending()
 
 	// Start scheduler

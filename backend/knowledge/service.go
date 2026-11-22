@@ -137,27 +137,78 @@ type NewDocumentInput struct {
 // CreateDocument stores the document and its chunks, then indexes it in the
 // background. The returned document is in status processing.
 func (s *Service) CreateDocument(in NewDocumentInput) (*models.KnowledgeDocument, error) {
-	chunks := in.Chunks
-	if len(chunks) == 0 {
-		chunks = SplitChunks(in.Text, ChunkTargetChars, ChunkOverlapChars)
-	} else {
-		var split []string
-		for _, c := range chunks {
-			c = NormalizeText(c)
-			if c == "" {
-				continue
-			}
-			if utf8.RuneCountInString(c) > 3*ChunkTargetChars {
-				split = append(split, SplitChunks(c, ChunkTargetChars, ChunkOverlapChars)...)
-			} else {
-				split = append(split, c)
-			}
-		}
-		chunks = split
-	}
+	chunks := prepareChunks(in)
 	if len(chunks) == 0 {
 		return nil, errors.New("document has no text")
 	}
+	doc := newDocument(in)
+	if err := saveDocument(doc, chunks); err != nil {
+		return nil, err
+	}
+	s.IndexAsync(doc.ID)
+	return doc, nil
+}
+
+// CreateFromFile stores the document at once (status processing) and reads,
+// chunks and indexes the file in the background, so a slow parser (a long
+// scanned PDF through Unstructured) does not hold the upload request.
+func (s *Service) CreateFromFile(in NewDocumentInput, data []byte, parser ParserSettings) (*models.KnowledgeDocument, error) {
+	doc := newDocument(in)
+	if err := db.DB.Create(doc).Error; err != nil {
+		return nil, err
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		text, used, notice, err := ExtractDocument(ctx, parser, in.FileName, data)
+		if err != nil {
+			s.fail(doc, err)
+			return
+		}
+		in.Text, in.Chunks = text, nil
+		chunks := prepareChunks(in)
+		if len(chunks) == 0 {
+			s.fail(doc, errors.New("document has no text"))
+			return
+		}
+		if err := insertChunks(doc, chunks); err != nil {
+			s.fail(doc, err)
+			return
+		}
+		db.DB.Model(&models.KnowledgeDocument{}).Where("id = ?", doc.ID).Updates(map[string]interface{}{
+			"parser": used, "char_count": doc.CharCount, "chunk_count": doc.ChunkCount, "updated_at": time.Now(),
+		})
+		if err := s.IndexDocument(ctx, doc.ID); err != nil {
+			log.Printf("[knowledge] index document %s: %v", doc.ID, err)
+			return
+		}
+		if notice != "" {
+			db.DB.Model(&models.KnowledgeDocument{}).Where("id = ? AND status = ?", doc.ID, StatusReady).Update("error", notice)
+		}
+	}()
+	return doc, nil
+}
+
+func prepareChunks(in NewDocumentInput) []string {
+	if len(in.Chunks) == 0 {
+		return SplitChunks(in.Text, ChunkTargetChars, ChunkOverlapChars)
+	}
+	var split []string
+	for _, c := range in.Chunks {
+		c = NormalizeText(c)
+		if c == "" {
+			continue
+		}
+		if utf8.RuneCountInString(c) > 3*ChunkTargetChars {
+			split = append(split, SplitChunks(c, ChunkTargetChars, ChunkOverlapChars)...)
+		} else {
+			split = append(split, c)
+		}
+	}
+	return split
+}
+
+func newDocument(in NewDocumentInput) *models.KnowledgeDocument {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		title = strings.TrimSpace(in.FileName)
@@ -170,37 +221,45 @@ func (s *Service) CreateDocument(in NewDocumentInput) (*models.KnowledgeDocument
 		source = "upload"
 	}
 	now := time.Now()
-	chars := 0
-	for _, c := range chunks {
-		chars += utf8.RuneCountInString(c)
-	}
-	doc := &models.KnowledgeDocument{
+	return &models.KnowledgeDocument{
 		ID: pkg.NewUUID(), TenantID: in.TenantID, Title: truncateRunes(title, 250),
 		FileName: truncateRunes(in.FileName, 250), MimeType: truncateRunes(in.MimeType, 100),
 		Source: source, SizeBytes: in.SizeBytes, Audience: NormalizeAudience(in.Audience),
-		Enabled: true, Status: StatusProcessing, CharCount: chars, ChunkCount: len(chunks),
-		CreatedBy: truncateRunes(in.CreatedBy, 250), CreatedAt: now, UpdatedAt: now,
+		Enabled: true, Status: StatusProcessing, CreatedBy: truncateRunes(in.CreatedBy, 250),
+		CreatedAt: now, UpdatedAt: now,
 	}
+}
+
+func chunkRows(doc *models.KnowledgeDocument, chunks []string) []models.KnowledgeChunk {
+	now := time.Now()
 	rows := make([]models.KnowledgeChunk, 0, len(chunks))
+	chars := 0
 	for i, c := range chunks {
+		chars += utf8.RuneCountInString(c)
 		rows = append(rows, models.KnowledgeChunk{
-			ID: pkg.NewUUID(), TenantID: in.TenantID, DocumentID: doc.ID, Position: i, Content: c, CreatedAt: now,
+			ID: pkg.NewUUID(), TenantID: doc.TenantID, DocumentID: doc.ID, Position: i, Content: c, CreatedAt: now,
 		})
 	}
+	doc.CharCount, doc.ChunkCount = chars, len(chunks)
+	return rows
+}
+
+func saveDocument(doc *models.KnowledgeDocument, chunks []string) error {
+	rows := chunkRows(doc, chunks)
 	tx := db.DB.Begin()
 	if err := tx.Create(doc).Error; err != nil {
 		tx.Rollback()
-		return nil, err
+		return err
 	}
 	if err := tx.CreateInBatches(rows, 200).Error; err != nil {
 		tx.Rollback()
-		return nil, err
+		return err
 	}
-	if err := tx.Commit().Error; err != nil {
-		return nil, err
-	}
-	s.IndexAsync(doc.ID)
-	return doc, nil
+	return tx.Commit().Error
+}
+
+func insertChunks(doc *models.KnowledgeDocument, chunks []string) error {
+	return db.DB.CreateInBatches(chunkRows(doc, chunks), 200).Error
 }
 
 // IndexAsync indexes a document in the background.
@@ -317,12 +376,18 @@ func (s *Service) Reindex(ctx context.Context, docID string) error {
 	return nil
 }
 
-// ResumePending restarts indexing that a restart interrupted.
+// ResumePending restarts indexing that a restart interrupted. A file that
+// was still being read is gone with the old process: it is marked failed so
+// staff upload it again.
 func (s *Service) ResumePending() {
-	var ids []string
-	db.DB.Model(&models.KnowledgeDocument{}).Where("status = ? AND enabled = ?", StatusProcessing, true).Pluck("id", &ids)
-	for _, id := range ids {
-		s.IndexAsync(id)
+	var docs []models.KnowledgeDocument
+	db.DB.Where("status = ? AND enabled = ?", StatusProcessing, true).Find(&docs)
+	for i := range docs {
+		if docs[i].ChunkCount == 0 {
+			s.fail(&docs[i], errors.New("máy chủ khởi động lại khi đang đọc tệp; hãy tải lại tệp này"))
+			continue
+		}
+		s.IndexAsync(docs[i].ID)
 	}
 }
 

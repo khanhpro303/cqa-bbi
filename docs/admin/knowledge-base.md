@@ -43,6 +43,34 @@ trong AI Engine cũng cần làm mới như vậy.
 - Không có kho vector: bot vẫn tra được bằng tìm theo từ khoá trong MySQL (trang
   hiện cảnh báo).
 
+## Đọc tài liệu: Unstructured
+
+Giống flow cũ, tệp tải lên được đọc bằng **Unstructured** (partition API) khi
+đã cấu hình ở AI Engine → thẻ "Đọc tài liệu (Unstructured)": API URL (để trống
+= API hosted `https://api.unstructuredapp.io/general/v0/general`, hoặc URL bản
+tự host), API key (lưu mã hoá), chiến lược (`auto`, `hi_res`, `fast`,
+`ocr_only`) và ngôn ngữ OCR (mặc định `vie,eng`). Có nút kiểm tra kết nối.
+Biến môi trường `UNSTRUCTURED_API_URL` / `UNSTRUCTURED_API_KEY` là giá trị dự
+phòng khi tenant chưa nhập.
+
+- Có Unstructured: đọc được PDF scan, ảnh (PNG/JPG/TIFF...), DOC/PPT/PPTX/XLS,
+  EPUB, email; bảng được giữ thành dòng `a | b`; bỏ header/footer/số trang.
+- Unstructured lỗi (hết quota, mạng) với loại tệp mà thư viện nội bộ đọc được:
+  tự đọc bằng thư viện nội bộ và ghi chú trên tài liệu.
+- Chưa cấu hình: thư viện nội bộ (Go) chỉ đọc lớp chữ của PDF/DOCX/XLSX/TXT/
+  MD/CSV/HTML, không OCR.
+- Việc đọc, chia đoạn và nhúng chạy nền sau khi tải lên; trang tự cập nhật
+  trạng thái. Nếu máy chủ khởi động lại giữa chừng, tài liệu chuyển "Lỗi" và
+  cần tải lại.
+
+## Chia đoạn và nhúng
+
+- Chia đoạn: không dùng model. Cắt theo đoạn văn, ~1.200 ký tự, gối 200 ký tự,
+  đoạn dài cắt ở cuối câu.
+- Nhúng: dùng cấu hình embedding của trí nhớ khách (`CHAT_MEMORY_EMBEDDING_MODEL`,
+  mặc định OpenAI `text-embedding-3-small`, 1536 chiều; key OpenAI của tenant).
+  Mỗi đoạn được nhúng kèm tiêu đề tài liệu.
+
 ## Thao tác trên trang
 
 - **Tải tài liệu**: PDF (có lớp chữ, PDF scan cần OCR trước), DOCX, XLSX, TXT,

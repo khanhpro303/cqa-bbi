@@ -3,6 +3,10 @@
     <h1 class="text-h5 font-weight-bold mb-2">{{ $t('nav_knowledge') }}</h1>
     <div class="text-grey-darken-1 mb-4">{{ $t('kb_page_desc') }}</div>
 
+    <v-alert v-if="parser === 'local'" type="info" variant="tonal" density="compact" class="mb-4" data-testid="kb-local-parser">
+      {{ $t('kb_parser_local') }} <router-link :to="`/${tenantId}/ai-engines`">{{ $t('nav_ai_engines') }}</router-link>.
+    </v-alert>
+
     <v-alert v-if="vectorStore === 'none'" type="warning" variant="tonal" density="compact" class="mb-4" data-testid="kb-keyword-warning">
       {{ $t('kb_keyword_only') }}
     </v-alert>
@@ -60,7 +64,9 @@
           <tr v-for="d in documents" :key="d.id">
             <td class="cursor-pointer" @click="openDoc(d)">
               <div class="font-weight-medium">{{ d.title }}</div>
-              <div class="text-caption text-medium-emphasis">{{ d.file_name || sourceLabel(d.source) }}</div>
+              <div class="text-caption text-medium-emphasis">
+                {{ d.file_name || sourceLabel(d.source) }}<span v-if="d.parser"> · {{ d.parser === 'unstructured' ? 'Unstructured' : $t('kb_parser_builtin') }}</span>
+              </div>
             </td>
             <td>
               <v-chip size="small" :color="d.audience === 'internal' ? 'deep-purple' : 'teal'" variant="tonal">
@@ -69,7 +75,7 @@
             </td>
             <td>
               <v-chip size="small" :color="statusColor(d.status)" variant="tonal">{{ $t('kb_status_' + d.status) }}</v-chip>
-              <div v-if="d.status === 'failed' && d.error" class="text-caption text-error error-cell">{{ d.error }}</div>
+              <div v-if="d.error" class="text-caption error-cell" :class="d.status === 'failed' ? 'text-error' : 'text-warning'">{{ d.error }}</div>
             </td>
             <td class="text-right">{{ d.chunk_count }}</td>
             <td>
@@ -224,6 +230,7 @@ export interface KnowledgeDoc {
   enabled: boolean
   status: 'processing' | 'ready' | 'failed' | 'archived'
   error?: string
+  parser?: string
   char_count: number
   chunk_count: number
   created_by: string
@@ -244,6 +251,7 @@ const view = ref<'active' | 'archived'>('active')
 const documents = ref<KnowledgeDoc[]>([])
 const loading = ref(false)
 const vectorStore = ref('')
+const parser = ref('')
 const supported = ref<string[]>(['.pdf', '.docx', '.xlsx', '.txt', '.md', '.csv', '.html'])
 const maxUploadMb = ref(20)
 const acceptTypes = computed(() => supported.value.join(','))
@@ -276,6 +284,7 @@ async function load() {
     const { data } = await api.get(base.value, { params: { view: view.value } })
     documents.value = data?.documents || []
     vectorStore.value = data?.vector_store || ''
+    parser.value = data?.parser || ''
     if (data?.supported_extensions?.length) supported.value = data.supported_extensions
     if (data?.max_upload_mb) maxUploadMb.value = data.max_upload_mb
   } finally {
@@ -497,7 +506,7 @@ function formatDateTime(v: string) {
   return new Date(v).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' })
 }
 
-defineExpose({ load, documents, upload, uploadFiles, runSearch, tryQuery, tryAgent, hits, patchDoc, archive, vectorStore })
+defineExpose({ load, documents, parser, upload, uploadFiles, runSearch, tryQuery, tryAgent, hits, patchDoc, archive, vectorStore })
 </script>
 
 <style scoped>

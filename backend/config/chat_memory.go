@@ -38,6 +38,11 @@ type ChatMemoryConfig struct {
 	// tenant_id and audience.
 	KnowledgeAstraCollection string
 	KnowledgeVectorizeIndex  string
+	// Unstructured partition API used to read uploaded documents when a
+	// tenant has not set its own in AI Engine (UNSTRUCTURED_API_URL /
+	// UNSTRUCTURED_API_KEY).
+	UnstructuredAPIURL string
+	UnstructuredAPIKey string
 
 	VectorizeAccountID string
 	VectorizeAPIToken  string
@@ -64,6 +69,8 @@ func loadChatMemoryConfig() ChatMemoryConfig {
 		AstraCollection:          getEnv("CHAT_MEMORY_ASTRA_COLLECTION", "zalo_session_summaries"),
 		KnowledgeAstraCollection: getEnv("KNOWLEDGE_ASTRA_COLLECTION", "cqa_knowledge"),
 		KnowledgeVectorizeIndex:  getEnv("KNOWLEDGE_VECTORIZE_INDEX", "cqa-knowledge"),
+		UnstructuredAPIURL:       getEnv("UNSTRUCTURED_API_URL", ""),
+		UnstructuredAPIKey:       getEnv("UNSTRUCTURED_API_KEY", ""),
 		VectorizeAccountID:       getEnv("CHAT_MEMORY_VECTORIZE_ACCOUNT_ID", ""),
 		VectorizeAPIToken:        getEnv("CHAT_MEMORY_VECTORIZE_API_TOKEN", ""),
 		VectorizeIndex:           getEnv("CHAT_MEMORY_VECTORIZE_INDEX", "zalo-session-summaries"),

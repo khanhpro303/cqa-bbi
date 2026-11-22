@@ -215,3 +215,37 @@ func TestIndexDoesNotResurrectArchivedDocMySQL(t *testing.T) {
 		t.Fatalf("archived doc became %s", d.Status)
 	}
 }
+
+func TestCreateFromFileReadsInBackgroundMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	srv, _ := fakeUnstructured(t, 200, []map[string]any{
+		{"type": "Title", "text": "Giao hàng"},
+		{"type": "NarrativeText", "text": "Miễn phí giao hàng đơn từ 2 triệu."},
+	})
+	svc := NewService(&memIndex{docs: map[string]chatmemory.VectorDoc{}}, bowEmbed)
+	tenant := pkg.NewUUID()
+	doc, err := svc.CreateFromFile(NewDocumentInput{TenantID: tenant, Title: "Giao hàng", FileName: "scan.png"}, []byte{0x89, 0x50}, ParserSettings{APIURL: srv.URL, APIKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, doc.ID, StatusReady)
+	var d models.KnowledgeDocument
+	db.DB.First(&d, "id = ?", doc.ID)
+	if d.Parser != ParserUnstructured || d.ChunkCount != 1 || d.Error != "" {
+		t.Fatalf("doc after read: %+v", d)
+	}
+	hits, _ := svc.Search(context.Background(), tenant, "public", "phí giao hàng", 3)
+	if len(hits) == 0 || !strings.Contains(hits[0].Content, "2 triệu") {
+		t.Fatalf("search after upload: %+v", hits)
+	}
+
+	// A read cut off by a restart is marked failed, not left processing.
+	stuck := newDocument(NewDocumentInput{TenantID: tenant, Title: "Dở dang", FileName: "a.pdf"})
+	db.DB.Create(stuck)
+	svc.ResumePending()
+	var after models.KnowledgeDocument
+	db.DB.First(&after, "id = ?", stuck.ID)
+	if after.Status != StatusFailed {
+		t.Fatalf("interrupted read status %s", after.Status)
+	}
+}
