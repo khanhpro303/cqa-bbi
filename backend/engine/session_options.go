@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/db"
 )
@@ -242,32 +244,31 @@ func TakeAwaitingVariantLine(ctx context.Context, sessionKey string) string {
 
 // CasualStreakSuffix is appended to a session key to count the small-talk
 // turns in a row since the chat last asked something the bot works on. The
-// key is a Redis set of message ids, so a retried task does not count the
-// same message twice. A business turn deletes it; so does session teardown.
+// key is a Redis sorted set of message ids scored by first arrival, so a
+// retried task keeps the position it had the first time instead of taking
+// the current count. A business turn deletes it; so does session teardown.
 const CasualStreakSuffix = ":casual_streak"
 
-// BumpCasualStreak counts msgID as one more small-talk turn in a row and
-// returns the new count. It returns 0 when Redis is unavailable or fails, so
-// callers fall back to the normal (full agent) reply.
+// BumpCasualStreak records msgID as a small-talk turn and returns its
+// position in the current run (1 for the first). A retry of the same msgID
+// gets the same position. It returns 0 when Redis is unavailable, fails or
+// msgID is empty, so callers fall back to the normal (full agent) reply.
 func BumpCasualStreak(ctx context.Context, sessionKey, msgID string, timeoutMinutes int) int {
-	if db.RedisClient == nil {
+	if db.RedisClient == nil || strings.TrimSpace(msgID) == "" {
 		return 0
-	}
-	if strings.TrimSpace(msgID) == "" {
-		msgID = fmt.Sprintf("t%d", time.Now().UnixNano())
 	}
 	if timeoutMinutes <= 0 {
 		timeoutMinutes = 30
 	}
 	key := sessionKey + CasualStreakSuffix
 	pipe := db.RedisClient.TxPipeline()
-	pipe.SAdd(ctx, key, msgID)
+	pipe.ZAddNX(ctx, key, redis.Z{Score: float64(time.Now().UnixMicro()), Member: msgID})
 	pipe.Expire(ctx, key, time.Duration(timeoutMinutes)*time.Minute+time.Minute)
-	card := pipe.SCard(ctx, key)
+	rank := pipe.ZRank(ctx, key, msgID)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return 0
 	}
-	return int(card.Val())
+	return int(rank.Val()) + 1
 }
 
 // ResetCasualStreak ends the small-talk run: the chat is back on business.

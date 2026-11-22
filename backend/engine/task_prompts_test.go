@@ -57,7 +57,7 @@ func TestCasualReplyPromptKeepsHandoffMarker(t *testing.T) {
 	if !strings.Contains(p.Format, CasualReplyHandoff) || strings.Contains(p.Instructions, CasualReplyHandoff) {
 		t.Fatalf("handoff marker must live in the fixed format only:\n%s\n---\n%s", p.Instructions, p.Format)
 	}
-	for _, want := range []string{"<nguoi_nhan>", "<luot_cuoi>", "<tin_gan_day>", "Tin mới:"} {
+	for _, want := range []string{"<nguoi_nhan>", "<luot_cuoi>", "<im_lang>", "<tin_gan_day>", "Tin mới:"} {
 		if !strings.Contains(p.Format, want) {
 			t.Fatalf("format does not describe %s:\n%s", want, p.Format)
 		}

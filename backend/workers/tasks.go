@@ -1011,36 +1011,45 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			case "IN_SCOPE":
 				engine.ResetCasualStreak(ctx, workKey)
 			case "CASUAL":
-				streak := engine.BumpCasualStreak(ctx, workKey, payload.Message.MsgID, meta.SessionTimeout)
+				streak := engine.BumpCasualStreak(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID), meta.SessionTimeout)
 				budget := casualBudgetFrom(matchedChannel.Metadata)
-				switch routeCasualTurn(streak, budget) {
-				case casualToQuiet:
-					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row (quiet after %d); no reply", payload.Sender.ID, streak, budget.QuietAfter)
+				route := routeCasualTurn(streak, budget)
+				if route == casualToAgent {
+					break
+				}
+				var recent []chatmemory.RecentTurn
+				if history != nil {
+					recent = history()
+				}
+				reply, err := replyToCasualTurn(ctx, matchedChannel.TenantID, recent, userText, isWhitelisted, casualModeFor(route, streak, budget))
+				if err == nil && reply.Result.HasUsage {
+					casualAgentType := "public"
+					if isWhitelisted {
+						casualAgentType = "private"
+					}
+					go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, casualAgentType, "", reply.Result, reply.Prompt, reply.Text)
+				}
+				switch {
+				case err == nil && reply.Handoff:
+					// The second look says this needs the main bot after all
+					// (a lookup, a reply to the bot's question): treat it as
+					// business from here on, including the variant-line lock.
+					log.Printf("[casual-budget] sender %s: small-talk model handed turn %d to the main bot", payload.Sender.ID, streak)
+					engine.ResetCasualStreak(ctx, workKey)
+					intent, classified = "IN_SCOPE", "IN_SCOPE"
+				case route == casualToQuiet:
+					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row (quiet after %d); no reply (check err=%v)", payload.Sender.ID, streak, budget.QuietAfter, err)
 					return nil
-				case casualToLite:
-					var recent []chatmemory.RecentTurn
-					if history != nil {
-						recent = history()
+				case err != nil:
+					log.Printf("[casual-budget] sender %s: short reply failed (%v); using the main bot", payload.Sender.ID, err)
+				default:
+					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row answered with the short prompt", payload.Sender.ID, streak)
+					// Always as plain text: never let model output become a
+					// Zalo message template.
+					if err := adapter.SendTextMessage(ctx, payload.Sender.ID, reply.Text); err != nil {
+						return fmt.Errorf("failed to send small-talk reply to Zalo: %w", err)
 					}
-					reply, err := replyToCasualTurn(ctx, matchedChannel.TenantID, recent, userText, isWhitelisted, lastCasualReply(streak, budget))
-					switch {
-					case err != nil:
-						log.Printf("[casual-budget] sender %s: short reply failed (%v); using the main bot", payload.Sender.ID, err)
-					case reply.Handoff:
-						log.Printf("[casual-budget] sender %s: short-reply model handed turn %d to the main bot", payload.Sender.ID, streak)
-						engine.ResetCasualStreak(ctx, workKey)
-					default:
-						casualAgentType := "public"
-						if isWhitelisted {
-							casualAgentType = "private"
-						}
-						go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, casualAgentType, "", reply.Result, reply.Prompt, reply.Text)
-						log.Printf("[casual-budget] sender %s: small-talk turn %d in a row answered with the short prompt", payload.Sender.ID, streak)
-						if err := sendChatReply(ctx, adapter, "", payload.Sender.ID, reply.Text); err != nil {
-							return fmt.Errorf("failed to send small-talk reply to Zalo: %w", err)
-						}
-						return nil
-					}
+					return nil
 				}
 			}
 		}

@@ -3,9 +3,12 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hibiken/asynq"
 
 	"github.com/vietbui/chat-quality-agent/chatmemory"
 	"github.com/vietbui/chat-quality-agent/config"
@@ -43,21 +46,34 @@ type casualBudget struct {
 	QuietAfter int
 }
 
-// casualBudgetFrom reads the budget from channel metadata JSON. A missing or
-// negative value uses the default.
+// casualBudgetFrom reads the budget from channel metadata JSON. A missing,
+// negative or fractional value uses the default. A quiet cutoff at or below
+// the main-bot turns is moved to the turn after them, so the bot never goes
+// quiet before the short reply that tells the customer it will.
 func casualBudgetFrom(metadata string) casualBudget {
 	out := casualBudget{FullAgentTurns: defaultCasualFullAgentTurns, QuietAfter: defaultCasualQuietAfter}
 	var m map[string]interface{}
-	if json.Unmarshal([]byte(metadata), &m) != nil {
-		return out
+	if json.Unmarshal([]byte(metadata), &m) == nil {
+		if v, ok := casualSetting(m[metaCasualFullAgentTurns]); ok {
+			out.FullAgentTurns = v
+		}
+		if v, ok := casualSetting(m[metaCasualQuietAfter]); ok {
+			out.QuietAfter = v
+		}
 	}
-	if v, ok := m[metaCasualFullAgentTurns].(float64); ok && v >= 0 {
-		out.FullAgentTurns = int(v)
-	}
-	if v, ok := m[metaCasualQuietAfter].(float64); ok && v >= 0 {
-		out.QuietAfter = int(v)
+	if out.QuietAfter > 0 && out.QuietAfter <= out.FullAgentTurns {
+		out.QuietAfter = out.FullAgentTurns + 1
 	}
 	return out
+}
+
+// casualSetting accepts a whole, non-negative JSON number.
+func casualSetting(v interface{}) (int, bool) {
+	f, ok := v.(float64)
+	if !ok || f < 0 || f != math.Trunc(f) || f > 1e6 {
+		return 0, false
+	}
+	return int(f), true
 }
 
 type casualRoute int
@@ -82,16 +98,46 @@ func routeCasualTurn(streak int, b casualBudget) casualRoute {
 	return casualToAgent
 }
 
-// lastCasualReply reports whether the streak-th turn is the last small-talk
-// turn the bot answers before going quiet, so the reply can say so.
-func lastCasualReply(streak int, b casualBudget) bool {
-	return b.QuietAfter > 0 && streak == b.QuietAfter
+// casualModeFor is what the small-talk model is asked for on a lite or quiet
+// turn. Quiet turns still pass through it (a cheap call, no reply sent) so a
+// business follow-up the classifier mislabelled CASUAL reaches the main bot
+// instead of being dropped.
+func casualModeFor(route casualRoute, streak int, b casualBudget) casualTurnMode {
+	switch {
+	case route == casualToQuiet:
+		return casualReplyQuiet
+	case b.QuietAfter > 0 && streak == b.QuietAfter:
+		return casualReplyLast
+	}
+	return casualReplyNormal
 }
+
+// casualTurnID identifies the message for the streak count: the Zalo message
+// id, or else the queue task id, which a retry keeps. "" means no stable id;
+// the count is then skipped and the turn goes to the main bot.
+func casualTurnID(ctx context.Context, msgID string) string {
+	if strings.TrimSpace(msgID) != "" {
+		return msgID
+	}
+	if id, ok := asynq.GetTaskID(ctx); ok && id != "" {
+		return "task:" + id
+	}
+	return ""
+}
+
+// casualTurnMode says what the small-talk model is asked for.
+type casualTurnMode int
+
+const (
+	casualReplyNormal casualTurnMode = iota // reply
+	casualReplyLast                         // reply, and say this is the last small-talk reply
+	casualReplyQuiet                        // only check whether the main bot is needed
+)
 
 // casualReplyInput is the small-talk model's input, in the shape the fixed
 // part of the task prompt describes. Chat text is flattened like the
 // classifier's, so a message cannot fake a speaker or a block.
-func casualReplyInput(recent []chatmemory.RecentTurn, message string, staff, last bool) string {
+func casualReplyInput(recent []chatmemory.RecentTurn, message string, staff bool, mode casualTurnMode) string {
 	var b strings.Builder
 	b.WriteString("<nguoi_nhan>")
 	if staff {
@@ -100,15 +146,28 @@ func casualReplyInput(recent []chatmemory.RecentTurn, message string, staff, las
 		b.WriteString("khách hàng")
 	}
 	b.WriteString("</nguoi_nhan>\n<luot_cuoi>")
-	if last {
-		b.WriteString("có")
-	} else {
-		b.WriteString("không")
-	}
-	b.WriteString("</luot_cuoi>\n")
+	b.WriteString(yesNo(mode == casualReplyLast))
+	b.WriteString("</luot_cuoi>\n<im_lang>")
+	b.WriteString(yesNo(mode == casualReplyQuiet))
+	b.WriteString("</im_lang>\n")
 	b.WriteString(intentClassifierInput(recent, message))
 	return b.String()
 }
+
+func yesNo(v bool) string {
+	if v {
+		return "có"
+	}
+	return "không"
+}
+
+// casualReplyMaxRunes caps a small-talk reply; the prompt asks for 1-2 short
+// sentences, so anything longer is cut rather than sent whole.
+const casualReplyMaxRunes = 600
+
+// casualReplyTimeout keeps classifier (15s) + this call + a main-bot fallback
+// (60s) inside the 90s session lock.
+const casualReplyTimeout = 8 * time.Second
 
 // casualReply is the small-talk model's answer for one turn.
 type casualReply struct {
@@ -119,11 +178,20 @@ type casualReply struct {
 }
 
 // parseCasualReply reads the model's answer. An empty answer or the handoff
-// marker sends the turn to the main bot.
+// marker sends the turn to the main bot. So does an answer shaped like a JSON
+// object: the Zalo sender would post that as a raw message template (links,
+// buttons) instead of text. The quiet marker is returned as is; the caller
+// sends nothing in quiet mode anyway.
 func parseCasualReply(content string) (string, bool) {
 	text := strings.TrimSpace(content)
 	if text == "" || strings.Contains(text, engine.CasualReplyHandoff) {
 		return "", true
+	}
+	if strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}") {
+		return "", true
+	}
+	if r := []rune(text); len(r) > casualReplyMaxRunes {
+		text = strings.TrimSpace(string(r[:casualReplyMaxRunes])) + "…"
 	}
 	return text, false
 }
@@ -131,7 +199,7 @@ func parseCasualReply(content string) (string, bool) {
 // replyToCasualTurn answers a small-talk turn with the tenant's AI model and
 // the editable small-talk prompt. An error means no provider or a failed
 // call: the caller then uses the main bot.
-func replyToCasualTurn(ctx context.Context, tenantID string, recent []chatmemory.RecentTurn, message string, staff, last bool) (casualReply, error) {
+func replyToCasualTurn(ctx context.Context, tenantID string, recent []chatmemory.RecentTurn, message string, staff bool, mode casualTurnMode) (casualReply, error) {
 	cfg, _ := config.Load()
 	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
 	if err != nil {
@@ -141,9 +209,9 @@ func replyToCasualTurn(ctx context.Context, tenantID string, recent []chatmemory
 		return casualReply{}, errNoTenantAIProvider
 	}
 	systemPrompt := engine.BuildTaskPrompt(tenantID, engine.PromptCasualReply, nil)
-	input := casualReplyInput(recent, message, staff, last)
+	input := casualReplyInput(recent, message, staff, mode)
 
-	callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, casualReplyTimeout)
 	defer cancel()
 	resp, err := resolved.Client.AnalyzeChat(callCtx, systemPrompt, input)
 	if err != nil {
