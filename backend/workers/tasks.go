@@ -2685,6 +2685,8 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 // Only this call site adds the copy: the by-web-name sum already reads every
 // parent of the web name, copy included.
 func sumInventoryByParentWithDKCopy(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string) (float64, []string, error) {
+	// One warehouse report serves both parents.
+	ctx = engine.WithWarehouseStock(ctx, tenantID)
 	stock, details, err := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, maCha, "")
 	if err != nil {
 		return 0, nil, err

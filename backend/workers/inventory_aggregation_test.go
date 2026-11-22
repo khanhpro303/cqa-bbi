@@ -72,9 +72,11 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 
 	originalTransport := http.DefaultTransport
 	failSibling := false
+	reports := 0
 	http.DefaultTransport = stockTestTransport(func(req *http.Request) (*http.Response, error) {
 		status, body := http.StatusOK, `{"result":{"uid":1,"session_id":"fixture"}}`
 		if req.URL.Path != "/web/session/authenticate" {
+			reports++
 			if req.Method != http.MethodPost || req.URL.Path != "/rest_api/private/tong_hop_ton_kho/search" {
 				t.Errorf("unexpected stock request: %s %s", req.Method, req.URL.Path)
 			}
@@ -107,8 +109,12 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 	// A parent-code pick (no web name) also counts its "_DK" copy's stock,
 	// once: the plain sum above must not add it (the by-web loop sums the
 	// copy parent itself).
+	reports = 0
 	if got, _, err := sumInventoryByParentWithDKCopy(context.Background(), "fixture-tenant", permissions, "fixture-parent"); err != nil || got != 388 {
 		t.Errorf("parent + _DK copy stock: got %g, %v; want 388", got, err)
+	}
+	if reports != 1 {
+		t.Errorf("parent + copy read the warehouse report %d times; want 1", reports)
 	}
 	failSibling = true
 	got, _, err := sumInventoryByMaChaAndWebName(context.Background(), "fixture-tenant", permissions, "fixture-parent", "")
