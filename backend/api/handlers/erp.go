@@ -443,7 +443,7 @@ func ERPQuery(c *gin.Context) {
 				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands, lineWebName)
 				if vErr != nil {
 					log.Printf("[erp_query] variant price-pivot from products failed parent=%s: %v", resolvedParent, vErr)
-				} else if vResp != nil && keepVariantsOfLine(vResp, lineWebName) {
+				} else if vResp != nil {
 					cnt, _ := vResp["count"].(int)
 					// Tag so the agent component renders this as a variant answer even
 					// though the request resource was "products".
@@ -686,34 +686,6 @@ func ERPQuery(c *gin.Context) {
 	respondWithLiveDataV2(c, client, req.Resource, req.Search, req.ParentCode, partnerFilterID, req.Limit, productGroups, scopeType, tenantID, permCtx, req.ExactWebName, req.Color, req.Size, req.Brand)
 }
 
-// keepVariantsOfLine narrows a variant response to the web line the keyword
-// matched: one parent code can carry several web lines, and a colour/size may
-// exist on a sibling line with another price. With no line name it keeps the
-// response as is. It reports false when the response had variants but none
-// belong to the line, so the caller answers with the line's own price range
-// instead of a sibling's SKU.
-func keepVariantsOfLine(vResp gin.H, lineWebName string) bool {
-	if lineWebName == "" {
-		return true
-	}
-	rows, ok := vResp["data"].([]map[string]interface{})
-	if !ok || len(rows) == 0 {
-		return true
-	}
-	kept := make([]map[string]interface{}, 0, len(rows))
-	for _, r := range rows {
-		if getMapString(r, "name") == lineWebName {
-			kept = append(kept, r)
-		}
-	}
-	if len(kept) == 0 {
-		return false
-	}
-	vResp["data"] = kept
-	vResp["count"] = len(kept)
-	return true
-}
-
 // shouldPivotToVariant decides whether a products query must be re-resolved as a
 // specific variant before answering. It fires only for a PRICE question
 // (intent=price) that named a concrete attribute (color/size/brand) and resolved
@@ -830,15 +802,14 @@ func selectUniqueVariantMatch(groups []engine.WebGroupMatch, resolve func(parent
 // Returns (nil, err) only when the initial cache lookup hard-fails; every
 // downstream fallback tolerates its own errors by logging and pressing on.
 //
-// lineWebName, when set, keeps every read on that web line (ten_dong_bo_web):
-// cache reads are narrowed in SQL before LIMIT, and Astra hybrid hits from a
-// sibling line are dropped so the bilingual fallback still runs.
+// lineWebName, when set, keeps every read off sibling web lines of the parent
+// (see webLineScope): cache reads are narrowed in SQL before LIMIT, and Astra
+// hybrid hits from a sibling line are dropped so the bilingual fallback still
+// runs.
 func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool, lineWebName string) (gin.H, error) {
 	var scopes []func(*gorm.DB) *gorm.DB
 	if lineWebName != "" {
-		scopes = append(scopes, func(tx *gorm.DB) *gorm.DB {
-			return tx.Where("ten_dong_bo_web = ?", lineWebName)
-		})
+		scopes = append(scopes, webLineScope(lineWebName))
 	}
 	// A "_DK" copy parent has no visible variants; read its real line.
 	parentCode = engine.RealParentOf(parentCode)
@@ -1262,24 +1233,32 @@ func searchProductsFromCache(ctx context.Context, tenantID, search string, limit
 	return results, nil
 }
 
-// withoutDKCopies drops ERP "_DK" copy rows (engine.IsDKCopy) from rows the
-// bot shows as a catalog: prices, colour/size lists, search results. Stock
-// sums read the cache directly and keep them, since they hold real stock.
-// rowsOfWebLine keeps cache rows whose ten_dong_bo_web is lineWebName; an
-// empty lineWebName keeps every row.
+// webLineScope keeps a parent's SKUs on one web line, plus its SKUs whose
+// web name is not synced yet (blank), which belong to no sibling line.
+func webLineScope(lineWebName string) func(*gorm.DB) *gorm.DB {
+	return func(tx *gorm.DB) *gorm.DB {
+		return tx.Where("(ten_dong_bo_web = ? OR TRIM(COALESCE(ten_dong_bo_web, '')) = '')", lineWebName)
+	}
+}
+
+// rowsOfWebLine is webLineScope for rows already read: it keeps rows on
+// lineWebName or with a blank web name. An empty lineWebName keeps every row.
 func rowsOfWebLine(rows []map[string]interface{}, lineWebName string) []map[string]interface{} {
 	if lineWebName == "" {
 		return rows
 	}
 	kept := make([]map[string]interface{}, 0, len(rows))
 	for _, r := range rows {
-		if getMapString(r, "TEN_DONG_BO_WEB", "ten_dong_bo_web") == lineWebName {
+		if name := getMapString(r, "TEN_DONG_BO_WEB", "ten_dong_bo_web"); name == lineWebName || strings.TrimSpace(name) == "" {
 			kept = append(kept, r)
 		}
 	}
 	return kept
 }
 
+// withoutDKCopies drops ERP "_DK" copy rows (engine.IsDKCopy) from rows the
+// bot shows as a catalog: prices, colour/size lists, search results. Stock
+// sums read the cache directly and keep them, since they hold real stock.
 func withoutDKCopies(rows []map[string]interface{}) []map[string]interface{} {
 	kept := make([]map[string]interface{}, 0, len(rows))
 	for _, r := range rows {

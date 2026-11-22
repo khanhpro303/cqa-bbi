@@ -32,11 +32,11 @@ func TestSearchVariantsByAttributesAppliesLineScopeBeforeLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	line := func(tx *gorm.DB) *gorm.DB { return tx.Where("ten_dong_bo_web = ?", "LS2 FF399") }
+	line := webLineScope("LS2 FF399")
 	if _, err := searchVariantsByAttributes(context.Background(), "t", "SP000557", "Black", "L", "", 1, line); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"ten_dong_bo_web = ?", "NOT LIKE ? ESCAPE '!'", "LIMIT"} {
+	for _, want := range []string{"(ten_dong_bo_web = ? OR TRIM(COALESCE(ten_dong_bo_web, '')) = '')", "NOT LIKE ? ESCAPE '!'", "LIMIT"} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("variant SQL %q lacks %q", sql, want)
 		}
