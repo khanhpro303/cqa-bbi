@@ -907,7 +907,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if handled, err := handleOrderDraftReply(ctx, cfg, adapter, matchedChannel.TenantID, workKey, payload.Sender.ID, matchedGroup.ZaloGroupID, userText); handled {
 			// Confirming or cancelling an order is business: end any
 			// small-talk run (casual_budget.go).
-			engine.ResetCasualStreak(ctx, workKey)
+			engine.ResetCasualStreakOnce(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID), meta.SessionTimeout)
 			return err
 		}
 
@@ -920,10 +920,6 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// below routes small talk to the agent as IN_SCOPE, but small talk
 		// must still not consume the variant-line lock further down.
 		var intent, classified string
-		// handoffRetry: this task already ran and the small-talk model sent
-		// the turn to the main bot, which reset the streak then. Do not reset
-		// it again: newer small-talk turns may have started a new run since.
-		var handoffRetry bool
 		// Recent session turns of a 1:1 chat, read at most once: for the
 		// classifier and, on a long small-talk run, for the short reply.
 		var history func() []chatmemory.RecentTurn
@@ -953,7 +949,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if matchedGroup.ZaloGroupID == "" && engine.WasCasualHandoff(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID)) {
 				// A retry of a turn the small-talk model already sent to the
 				// main bot: keep that route instead of classifying again.
-				intent, handoffRetry = "IN_SCOPE", true
+				intent = "IN_SCOPE"
 			} else {
 				intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
 			}
@@ -1025,9 +1021,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if matchedGroup.ZaloGroupID == "" {
 			switch intent {
 			case "IN_SCOPE", "OUT_OF_SCOPE":
-				if !handoffRetry {
-					engine.ResetCasualStreak(ctx, workKey)
-				}
+				// Only a message's first attempt ends the run: a retry
+				// (after a failed main-bot call, or of a handed-off turn)
+				// must not wipe small talk that arrived since.
+				engine.ResetCasualStreakOnce(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID), meta.SessionTimeout)
 			case "CASUAL":
 				turnID := casualTurnID(ctx, payload.Message.MsgID)
 				streak := engine.BumpCasualStreak(ctx, workKey, turnID, meta.SessionTimeout)

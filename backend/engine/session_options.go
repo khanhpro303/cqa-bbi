@@ -316,6 +316,41 @@ func MarkCasualHandoff(ctx context.Context, sessionKey, msgID string) {
 	db.RedisClient.HSet(ctx, sessionKey+CasualPositionSuffix, msgID, CasualHandedOff)
 }
 
+// resetCasualStreakOnceScript ends the small-talk run for a business message
+// only on its first attempt: the message id is recorded in the position hash
+// (position 0), and an id already there (a retry, or a turn that was handed
+// off) leaves the run alone. KEYS: streak set, position hash. ARGV: msg id,
+// ttl secs. Returns 1 when it reset.
+var resetCasualStreakOnceScript = redis.NewScript(`
+if redis.call("HEXISTS", KEYS[2], ARGV[1]) == 1 then
+	return 0
+end
+redis.call("HSET", KEYS[2], ARGV[1], 0)
+redis.call("EXPIRE", KEYS[2], ARGV[2])
+redis.call("DEL", KEYS[1])
+return 1
+`)
+
+// ResetCasualStreakOnce ends the small-talk run for business message msgID,
+// unless an earlier attempt of the same message already did: a retry that
+// runs after newer small-talk turns must not wipe their run. Without a
+// stable msgID it resets unconditionally.
+func ResetCasualStreakOnce(ctx context.Context, sessionKey, msgID string, timeoutMinutes int) {
+	if db.RedisClient == nil {
+		return
+	}
+	if strings.TrimSpace(msgID) == "" {
+		ResetCasualStreak(ctx, sessionKey)
+		return
+	}
+	if timeoutMinutes <= 0 {
+		timeoutMinutes = 30
+	}
+	ttl := int((time.Duration(timeoutMinutes)*time.Minute + time.Minute) / time.Second)
+	_ = resetCasualStreakOnceScript.Run(ctx, db.RedisClient,
+		[]string{sessionKey + CasualStreakSuffix, sessionKey + CasualPositionSuffix}, msgID, ttl).Err()
+}
+
 // ResetCasualStreak ends the small-talk run: the chat is back on business.
 func ResetCasualStreak(ctx context.Context, sessionKey string) {
 	if db.RedisClient == nil {
