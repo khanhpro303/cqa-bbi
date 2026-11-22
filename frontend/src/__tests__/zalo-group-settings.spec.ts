@@ -49,4 +49,19 @@ describe('Zalo group settings', () => {
       campaign_alert_outputs: [],
     })
   })
+
+  it('treats a missing staff switch as on and only saves staff settings the user changed', () => {
+    const original = { session_keyword: 'Chào Bull' }
+    const settings = readZaloGroupSettings(original)
+    expect(settings.group_staff_call_only).toBe(true)
+    expect(settings.group_bot_names).toBe('')
+    expect(zaloGroupSettingsPatch(settings, original)).toEqual({})
+
+    settings.group_bot_names = 'Bull;bot'
+    settings.group_staff_call_only = false
+    expect(zaloGroupSettingsPatch(settings, original)).toEqual({
+      group_staff_call_only: false,
+      group_bot_names: 'Bull;bot',
+    })
+  })
 })
