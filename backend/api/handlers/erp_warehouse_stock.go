@@ -28,16 +28,23 @@ const (
 // than one cached SKU. Cloudify often reuses the first variant's SKU as the
 // parent code (LS2 FF818: ma_cha SP462693 is also the SKU of P.White M), so an
 // exact-SKU match alone must not decide that the agent asked for one variant.
-func isParentProductCode(ctx context.Context, tenantID, code string) bool {
+//
+// withCopies also counts the SKUs of its "_DK" copy parent, which belong to
+// the same line: a parent with one regular SKU plus copies is then a line.
+// An explicit SKU request passes false, so a code that is both a SKU and the
+// parent of only itself still answers that one SKU.
+func isParentProductCode(ctx context.Context, tenantID, code string, withCopies bool) bool {
 	code = strings.TrimSpace(code)
 	if code == "" {
 		return false
 	}
-	// Its "_DK" copy parent's SKUs belong to the same line: a parent with one
-	// regular SKU plus copies is still a line, not a single variant.
+	parents := []string{code}
+	if withCopies {
+		parents = append(parents, engine.DKCopyParentOf(code))
+	}
 	var count int64
 	db.DB.WithContext(ctx).Model(&models.CachedProduct{}).
-		Where("tenant_id = ? AND ma_cha IN ?", tenantID, []string{code, engine.DKCopyParentOf(code)}).Count(&count)
+		Where("tenant_id = ? AND ma_cha IN ?", tenantID, parents).Count(&count)
 	return count > 1
 }
 

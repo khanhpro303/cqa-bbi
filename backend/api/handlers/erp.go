@@ -658,7 +658,7 @@ func ERPQuery(c *gin.Context) {
 			if code == "" {
 				code = strings.TrimSpace(req.ParentCode)
 			}
-			if !hasVariantAttribute(req.Color, req.Size, req.Brand) && isParentProductCode(c.Request.Context(), tenantID, code) {
+			if !hasVariantAttribute(req.Color, req.Size, req.Brand) && isParentProductCode(c.Request.Context(), tenantID, code, !req.ExactSKU) {
 				respondWithWarehouseStock(c, client, permCtx, scopeType, productGroups, code, warehouseByParent)
 				return
 			}
