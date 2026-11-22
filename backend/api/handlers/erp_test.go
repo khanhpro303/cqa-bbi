@@ -1235,36 +1235,64 @@ func TestHybridMatchVariantEmptyKeyword(t *testing.T) {
 
 // FF399 (22/11): "LS2 FF399" has 37 priced variants under SP000557 and 37
 // unpriced "_DK" copies under SP000557_DK. The exact web-name lookup met a _DK
-// row first, and the line answered "Liên hệ" while the keyword path, which
-// reads SP000557 first, answered 5.800.000đ - 6.200.000đ. Both orders must
-// now give the same range.
-func TestExactAndKeywordPathsPriceFF399Alike(t *testing.T) {
-	variants := map[string][]map[string]interface{}{
-		"SP000557": {
-			{"MA": "SP000557", "MA_CHA": "SP000557", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 5800000.0},
-			{"MA": "SP001435", "MA_CHA": "SP000557", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 6000000.0},
-			{"MA": "SP001436", "MA_CHA": "SP000557", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 6200000.0},
-		},
-		"SP000557_DK": {
-			{"MA": "SP000556_DK", "MA_CHA": "SP000557_DK", "TEN_DONG_BO_WEB": "LS2 FF399", "THUOC_TINH_1": "false", "DON_GIA_BAN": 0.0},
-			{"MA": "SP000557_DK", "MA_CHA": "SP000557_DK", "TEN_DONG_BO_WEB": "LS2 FF399", "THUOC_TINH_1": "false", "DON_GIA_BAN": 0.0},
-		},
+// row first and the line answered "Liên hệ", while the keyword path answered
+// 5.800.000đ - 6.200.000đ. The exact path must price over every row it read,
+// in any row order, and only over rows the caller may see.
+func TestPriceExactWebLineFF399(t *testing.T) {
+	row := func(ma, maCha, brand string, price float64) map[string]interface{} {
+		return map[string]interface{}{"MA": ma, "MA_CHA": maCha, "TEN_DONG_BO_WEB": "LS2 FF399", "NHAN_HIEU_NAME": brand, "DON_GIA_BAN": price}
 	}
-	loadVariants := func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
-		return variants[maCha], nil
-	}
+	dk := []map[string]interface{}{row("SP000556_DK", "SP000557_DK", "LS2", 0), row("SP000557_DK", "SP000557_DK", "LS2", 0)}
+	real := []map[string]interface{}{row("SP000557", "SP000557", "LS2", 5800000), row("SP001435", "SP000557", "LS2", 6000000), row("SP001436", "SP000557", "LS2", 6200000)}
+	// Same parent, other brand: the caller may not see it, so its price must
+	// not stretch the range.
+	hidden := row("SP009999", "SP000557", "Other", 9900000)
+
 	orders := map[string][]map[string]interface{}{
-		"_DK row first (exact path, 22/11)": {variants["SP000557_DK"][0], variants["SP000557"][0]},
-		"priced row first (keyword path)":   {variants["SP000557"][0], variants["SP000557_DK"][0]},
+		"_DK rows first (22/11 storage order)": append(append(append([]map[string]interface{}{}, dk...), hidden), real...),
+		"priced rows first (ORDER BY ma_cha)":  append(append(append([]map[string]interface{}{}, real...), hidden), dk...),
 	}
 	for name, rows := range orders {
 		t.Run(name, func(t *testing.T) {
-			enriched := enrichProductsWithPriceRanges(context.Background(), rows, nil, nil, true, loadVariants)
-			slim := slimProductsForLLM(enriched)
+			filtered, slim := priceExactWebLine(context.Background(), rows, nil, []string{"LS2"}, false)
 			if len(slim) != 1 || slim[0]["price_range"] != "5.800.000đ - 6.200.000đ" {
 				t.Fatalf("slim = %#v; want one LS2 FF399 row priced 5.800.000đ - 6.200.000đ", slim)
 			}
+			for _, r := range filtered {
+				if r["MA"] == "SP009999" {
+					t.Fatalf("brand-filtered SKU leaked into the result: %#v", r)
+				}
+			}
 		})
+	}
+
+	// The SQL sorts by ma_cha, so parent codes come out in the same order as
+	// the keyword path's RankProductWebGroups: the priced parent first.
+	sorted := append(append([]map[string]interface{}{}, real...), dk...)
+	filtered, _ := priceExactWebLine(context.Background(), sorted, nil, nil, true)
+	if got := collectParentCodesFromProducts(filtered); len(got) != 2 || got[0] != "SP000557" || got[1] != "SP000557_DK" {
+		t.Fatalf("parent_codes = %#v; want [SP000557 SP000557_DK]", got)
+	}
+}
+
+func TestSlimProductsForLLMMergesLateDuplicateAfterCap(t *testing.T) {
+	in := []map[string]interface{}{
+		{"name": "p1", "price_range": "Liên hệ"},
+		{"name": "p2"}, {"name": "p3"}, {"name": "p4"}, {"name": "p5"},
+		{"name": "p6", "price_range": "6đ", "price_min": 6.0, "price_max": 6.0},
+		{"name": "p1", "price_range": "100đ", "price_min": 100.0, "price_max": 100.0},
+	}
+	got := slimProductsForLLM(in)
+	if len(got) != slimProductsForLLMLimit {
+		t.Fatalf("len = %d; want %d", len(got), slimProductsForLLMLimit)
+	}
+	for i, want := range []string{"p1", "p2", "p3", "p4", "p5"} {
+		if got[i]["name"] != want {
+			t.Fatalf("row %d = %v; want first-seen order p1..p5", i, got[i]["name"])
+		}
+	}
+	if got[0]["price_range"] != "100đ" {
+		t.Fatalf("p1 price_range = %v; want the late duplicate's price merged in", got[0]["price_range"])
 	}
 }
 

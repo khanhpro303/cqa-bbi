@@ -223,7 +223,7 @@ func ERPQuery(c *gin.Context) {
 		// and pivot to the exact SKU + price.
 		if req.ExactWebName && strings.TrimSpace(req.Search) != "" && !isVariantPriceIntent(req.Intent, req.Color, req.Size, req.Brand) {
 			search := strings.TrimSpace(req.Search)
-			cachedData, err := searchProductsByExactWebNameFromCache(c.Request.Context(), tenantID, search, req.Limit)
+			cachedData, err := searchProductsByExactWebNameFromCache(c.Request.Context(), tenantID, search, exactWebNameLineRowCap)
 			if err != nil {
 				log.Printf("[erp_query] exact web-name search error: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{
@@ -245,11 +245,10 @@ func ERPQuery(c *gin.Context) {
 				}(search, cachedData)
 			}
 
-			filteredCached := filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands)
-			filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, brandFilter, allBrands, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
-				return getProductsByMaChaFromCache(ctx, tenantID, maCha)
-			})
-			slim := slimProductsForLLM(filteredCached)
+			if len(cachedData) >= exactWebNameLineRowCap {
+				log.Printf("[erp_query] exact web-name %q hit the %d-row cap; price range may be partial", search, exactWebNameLineRowCap)
+			}
+			filteredCached, slim := priceExactWebLine(c.Request.Context(), cachedData, productGroups, brandFilter, allBrands)
 			// Surface the line's parent SKU(s) so the agent can chain to
 			// product_variants. slimProductsForLLM collapses by web name and drops
 			// ma_cha, but the STOCK-pick continuation (system prompt "KHÓA ĐÚNG
@@ -1184,9 +1183,30 @@ func searchProductsFromCache(ctx context.Context, tenantID, search string, limit
 	return results, nil
 }
 
-// exactWebNameRowCap bounds the exact web-name read. One line has at most a
-// few hundred variants (LS2 FF399: 74 rows across two parent codes).
-const exactWebNameRowCap = 500
+// exactWebNameLineRowCap bounds the products exact web-name read, which must
+// see every row of the line to price it. A line has at most a few hundred
+// rows (LS2 FF399: 74 across two parent codes).
+const exactWebNameLineRowCap = 1000
+
+// priceExactWebLine filters the rows of one exact web name by product group
+// and brand, then prices each parent code over those same rows, so the range
+// covers exactly the SKUs the caller may see, with no second per-parent query
+// (whose own LIMIT could drop the cheapest or dearest SKU). This matches the
+// worker's priceRangeReplyByWebName, which prices a web name over its rows.
+// Returns the filtered, enriched rows and their slim LLM view.
+func priceExactWebLine(ctx context.Context, rows []map[string]interface{}, productGroups []string, brandFilter []string, allBrands bool) ([]map[string]interface{}, []map[string]interface{}) {
+	filtered := filterProductsByBrands(filterProductsByGroups(rows, productGroups), brandFilter, allBrands)
+	byParent := make(map[string][]map[string]interface{})
+	for _, r := range filtered {
+		if maCha := getMapString(r, "MA_CHA", "ma_cha"); maCha != "" {
+			byParent[maCha] = append(byParent[maCha], r)
+		}
+	}
+	enriched := enrichProductsWithPriceRanges(ctx, filtered, productGroups, brandFilter, allBrands, func(_ context.Context, maCha string) ([]map[string]interface{}, error) {
+		return byParent[maCha], nil
+	})
+	return enriched, slimProductsForLLM(enriched)
+}
 
 // searchProductsByExactWebNameFromCache queries the local MySQL cache for
 // products whose ten_dong_bo_web equals webName exactly. Used by the agent's
@@ -1195,13 +1215,10 @@ const exactWebNameRowCap = 500
 // prefix-overlapping web names (e.g. "FF901" matching "FF901 Carbon").
 func searchProductsByExactWebNameFromCache(ctx context.Context, tenantID, webName string, limit int) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	// Read every row of the line, in a fixed order. With the caller's small
-	// limit and no ORDER BY, MySQL returned whichever rows it met first; for
-	// "LS2 FF399" that was the unpriced "_DK" copies, so the line answered
-	// "Liên hệ" while the keyword path answered the real range.
-	if limit < exactWebNameRowCap {
-		limit = exactWebNameRowCap
-	}
+	// Fixed order: without ORDER BY, MySQL returned whichever rows it met
+	// first; for "LS2 FF399" that was the unpriced "_DK" copies. Sorting by
+	// ma_cha also lists parent codes in the same order as the keyword path
+	// (RankProductWebGroups sorts them).
 	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
 		Order("ma_cha, ma").
