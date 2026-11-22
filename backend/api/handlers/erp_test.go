@@ -1233,43 +1233,38 @@ func TestHybridMatchVariantEmptyKeyword(t *testing.T) {
 	}
 }
 
-// FF399 (22/11): the exact-web lookup returned the unpriced ERP parent record
-// (no MA_CHA, DON_GIA_BAN 0) first, so the line answered "Liên hệ" while the
-// keyword path, which only reads the children, answered a real range.
-func TestEnrichProductsWithPriceRangesPricesParentRowFromChildren(t *testing.T) {
-	products := []map[string]interface{}{
-		{"MA": "SP900", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 0.0},
-		{"MA": "SP901", "MA_CHA": "SP900", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 5800000.0},
+// FF399 (22/11): "LS2 FF399" has 37 priced variants under SP000557 and 37
+// unpriced "_DK" copies under SP000557_DK. The exact web-name lookup met a _DK
+// row first, and the line answered "Liên hệ" while the keyword path, which
+// reads SP000557 first, answered 5.800.000đ - 6.200.000đ. Both orders must
+// now give the same range.
+func TestExactAndKeywordPathsPriceFF399Alike(t *testing.T) {
+	variants := map[string][]map[string]interface{}{
+		"SP000557": {
+			{"MA": "SP000557", "MA_CHA": "SP000557", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 5800000.0},
+			{"MA": "SP001435", "MA_CHA": "SP000557", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 6000000.0},
+			{"MA": "SP001436", "MA_CHA": "SP000557", "TEN_DONG_BO_WEB": "LS2 FF399", "DON_GIA_BAN": 6200000.0},
+		},
+		"SP000557_DK": {
+			{"MA": "SP000556_DK", "MA_CHA": "SP000557_DK", "TEN_DONG_BO_WEB": "LS2 FF399", "THUOC_TINH_1": "false", "DON_GIA_BAN": 0.0},
+			{"MA": "SP000557_DK", "MA_CHA": "SP000557_DK", "TEN_DONG_BO_WEB": "LS2 FF399", "THUOC_TINH_1": "false", "DON_GIA_BAN": 0.0},
+		},
 	}
-	loadVariants := func(ctx context.Context, code string) ([]map[string]interface{}, error) {
-		if code != "SP900" {
-			return nil, nil
-		}
-		return []map[string]interface{}{
-			{"MA": "SP901", "MA_CHA": "SP900", "DON_GIA_BAN": 5800000.0},
-			{"MA": "SP902", "MA_CHA": "SP900", "DON_GIA_BAN": 6200000.0},
-		}, nil
+	loadVariants := func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
+		return variants[maCha], nil
 	}
-
-	enriched := enrichProductsWithPriceRanges(context.Background(), products, nil, nil, true, loadVariants)
-	for i, row := range enriched {
-		if row["price_range"] != "5.800.000đ - 6.200.000đ" {
-			t.Errorf("row %d price_range = %#v; want the children's range", i, row["price_range"])
-		}
+	orders := map[string][]map[string]interface{}{
+		"_DK row first (exact path, 22/11)": {variants["SP000557_DK"][0], variants["SP000557"][0]},
+		"priced row first (keyword path)":   {variants["SP000557"][0], variants["SP000557_DK"][0]},
 	}
-	slim := slimProductsForLLM(enriched)
-	if len(slim) != 1 || slim[0]["price_range"] != "5.800.000đ - 6.200.000đ" {
-		t.Fatalf("slim = %#v; want one LS2 FF399 row with the children's range", slim)
-	}
-}
-
-func TestEnrichProductsWithPriceRangesStandaloneRowKeepsOwnPrice(t *testing.T) {
-	products := []map[string]interface{}{{"MA": "SP777", "DON_GIA_BAN": 450000.0}}
-	loadVariants := func(ctx context.Context, code string) ([]map[string]interface{}, error) { return nil, nil }
-
-	enriched := enrichProductsWithPriceRanges(context.Background(), products, nil, nil, true, loadVariants)
-	if enriched[0]["price_range"] != "450.000đ" {
-		t.Fatalf("price_range = %#v; want own price", enriched[0]["price_range"])
+	for name, rows := range orders {
+		t.Run(name, func(t *testing.T) {
+			enriched := enrichProductsWithPriceRanges(context.Background(), rows, nil, nil, true, loadVariants)
+			slim := slimProductsForLLM(enriched)
+			if len(slim) != 1 || slim[0]["price_range"] != "5.800.000đ - 6.200.000đ" {
+				t.Fatalf("slim = %#v; want one LS2 FF399 row priced 5.800.000đ - 6.200.000đ", slim)
+			}
+		})
 	}
 }
 

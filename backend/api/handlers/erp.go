@@ -1184,6 +1184,10 @@ func searchProductsFromCache(ctx context.Context, tenantID, search string, limit
 	return results, nil
 }
 
+// exactWebNameRowCap bounds the exact web-name read. One line has at most a
+// few hundred variants (LS2 FF399: 74 rows across two parent codes).
+const exactWebNameRowCap = 500
+
 // searchProductsByExactWebNameFromCache queries the local MySQL cache for
 // products whose ten_dong_bo_web equals webName exactly. Used by the agent's
 // disambiguation-resolution path to skip the LIKE-based fuzzy lookup that
@@ -1191,8 +1195,16 @@ func searchProductsFromCache(ctx context.Context, tenantID, search string, limit
 // prefix-overlapping web names (e.g. "FF901" matching "FF901 Carbon").
 func searchProductsByExactWebNameFromCache(ctx context.Context, tenantID, webName string, limit int) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
+	// Read every row of the line, in a fixed order. With the caller's small
+	// limit and no ORDER BY, MySQL returned whichever rows it met first; for
+	// "LS2 FF399" that was the unpriced "_DK" copies, so the line answered
+	// "Liên hệ" while the keyword path answered the real range.
+	if limit < exactWebNameRowCap {
+		limit = exactWebNameRowCap
+	}
 	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
+		Order("ma_cha, ma").
 		Limit(limit).
 		Find(&products).Error
 	if err != nil {
@@ -1366,11 +1378,10 @@ func slimProductsForLLM(products []map[string]interface{}) []map[string]interfac
 		minP := getMapFloat(p, "price_min")
 		maxP := getMapFloat(p, "price_max")
 		if span, dup := byName[name]; dup {
-			// Rows of one web name can belong to different parents (or include
-			// the unpriced parent record). The line's price is the span over all
-			// of them, not whichever row the query happened to return first —
-			// otherwise the same line answers "Liên hệ" or a range depending on
-			// row order (FF399, 22/11).
+			// Rows of one web name can belong to several parent codes, some
+			// unpriced (FF399: SP000557 priced, SP000557_DK all 0). The line's
+			// price is the span over all of them, not the first row's, or the
+			// same line answers "Liên hệ" or a range depending on row order.
 			if minP > 0 && (span.min == 0 || minP < span.min) {
 				span.min = minP
 			}
@@ -1451,37 +1462,20 @@ func enrichProductsWithPriceRanges(ctx context.Context, products []map[string]in
 
 	for _, product := range products {
 		maCha := getMapString(product, "MA_CHA", "ma_cha")
-		// A row with no MA_CHA may itself be the parent of a line (the ERP
-		// parent record, usually priced 0). Its price lives on the children
-		// whose MA_CHA is this row's MA, so look those up instead of pricing
-		// the bare parent row as "Liên hệ". A standalone product with no
-		// children falls back to its own price below, as before.
-		lineCode := maCha
-		isParentRow := false
-		if lineCode == "" {
-			lineCode = getMapString(product, "MA", "ma", "ma_hang")
-			isParentRow = lineCode != ""
-		}
 		var priceRange productPriceRange
 
-		if lineCode == "" {
+		if maCha == "" {
 			priceRange = calculateProductPriceRange([]map[string]interface{}{product})
 		} else {
 			var ok bool
-			priceRange, ok = priceRangeByMaCha[lineCode]
+			priceRange, ok = priceRangeByMaCha[maCha]
 			if !ok {
 				var variants []map[string]interface{}
 				var err error
 				if loadVariants != nil {
-					variants, err = loadVariants(ctx, lineCode)
+					variants, err = loadVariants(ctx, maCha)
 				}
-				if err != nil {
-					variants = nil
-				}
-				if isParentRow {
-					variants = append(variants, product)
-				}
-				if len(variants) == 0 {
+				if err != nil || len(variants) == 0 {
 					variants = []map[string]interface{}{product}
 				}
 
@@ -1491,7 +1485,7 @@ func enrichProductsWithPriceRanges(ctx context.Context, products []map[string]in
 				}
 
 				priceRange = calculateProductPriceRange(variants)
-				priceRangeByMaCha[lineCode] = priceRange
+				priceRangeByMaCha[maCha] = priceRange
 			}
 		}
 
