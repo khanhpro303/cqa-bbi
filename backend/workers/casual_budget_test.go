@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vietbui/chat-quality-agent/chatmemory"
 	"github.com/vietbui/chat-quality-agent/engine"
@@ -20,6 +21,7 @@ func TestCasualBudgetFromMetadata(t *testing.T) {
 		{"set", `{"casual_full_agent_turns":1,"casual_quiet_after":10}`, casualBudget{1, 10}},
 		{"zero means lite at once and never quiet", `{"casual_full_agent_turns":0,"casual_quiet_after":0}`, casualBudget{0, 0}},
 		{"negative and wrong type use defaults", `{"casual_full_agent_turns":-1,"casual_quiet_after":"5"}`, casualBudget{defaultCasualFullAgentTurns, defaultCasualQuietAfter}},
+		{"above the bound uses default", `{"casual_full_agent_turns":1001,"casual_quiet_after":0}`, casualBudget{defaultCasualFullAgentTurns, 0}},
 		{"fractional uses default", `{"casual_full_agent_turns":2.5,"casual_quiet_after":7.1}`, casualBudget{defaultCasualFullAgentTurns, defaultCasualQuietAfter}},
 		{"quiet below main-bot turns moves after them", `{"casual_full_agent_turns":20,"casual_quiet_after":5}`, casualBudget{20, 21}},
 		{"equal thresholds keep one short last reply", `{"casual_full_agent_turns":4,"casual_quiet_after":4}`, casualBudget{4, 5}},
@@ -74,22 +76,66 @@ func TestCasualModeFor(t *testing.T) {
 }
 
 func TestParseCasualReply(t *testing.T) {
-	if text, handoff := parseCasualReply("  Dạ không có gì ạ 😊 \n"); handoff || text != "Dạ không có gì ạ 😊" {
-		t.Fatalf("plain reply: %q %v", text, handoff)
+	if text, out := parseCasualReply("  Dạ không có gì ạ 😊 \n"); out != casualSend || text != "Dạ không có gì ạ 😊" {
+		t.Fatalf("plain reply: %q %v", text, out)
 	}
-	// A JSON object would be posted as a Zalo template; hand it off instead.
-	tpl := `{"message":{"attachment":{"type":"template","payload":{"buttons":[{"url":"https://x"}]}}}}`
-	for _, in := range []string{"", "   ", engine.CasualReplyHandoff, "Dạ " + engine.CasualReplyHandoff, tpl, " " + tpl + "\n"} {
-		if text, handoff := parseCasualReply(in); !handoff || text != "" {
-			t.Fatalf("%q should hand off, got %q %v", in, text, handoff)
+	for _, in := range []string{engine.CasualReplyHandoff, "Dạ " + engine.CasualReplyHandoff} {
+		if text, out := parseCasualReply(in); out != casualHandoff || text != "" {
+			t.Fatalf("%q should hand off, got %q %v", in, text, out)
 		}
+	}
+	if _, out := parseCasualReply(" " + engine.CasualReplyQuiet + "\n"); out != casualQuietAck {
+		t.Fatalf("quiet marker: %v", out)
+	}
+	// Empty or JSON-shaped answers are unusable, not a handoff: the turn
+	// stays small talk (a JSON object would be posted as a Zalo template).
+	tpl := `{"message":{"attachment":{"type":"template","payload":{"buttons":[{"url":"https://x"}]}}}}`
+	for _, in := range []string{"", "   ", tpl, " " + tpl + "\n"} {
+		if text, out := parseCasualReply(in); out != casualUnusable || text != "" {
+			t.Fatalf("%q should be unusable, got %q %v", in, text, out)
+		}
+	}
+	// Text around the quiet marker is not the marker.
+	if _, out := parseCasualReply("Dạ " + engine.CasualReplyQuiet); out != casualSend {
+		t.Fatalf("marker inside text: %v", out)
 	}
 }
 
 func TestParseCasualReplyCapsLength(t *testing.T) {
-	text, handoff := parseCasualReply(strings.Repeat("ạ", casualReplyMaxRunes+50))
-	if handoff || len([]rune(text)) != casualReplyMaxRunes+1 || !strings.HasSuffix(text, "…") {
-		t.Fatalf("long reply: %d runes, handoff=%v", len([]rune(text)), handoff)
+	text, out := parseCasualReply(strings.Repeat("ạ", casualReplyMaxRunes+50))
+	if out != casualSend || len([]rune(text)) != casualReplyMaxRunes || !strings.HasSuffix(text, "…") {
+		t.Fatalf("long reply: %d runes, outcome=%v", len([]rune(text)), out)
+	}
+	exact := strings.Repeat("ạ", casualReplyMaxRunes)
+	if text, _ := parseCasualReply(exact); text != exact {
+		t.Fatal("a reply at the cap is sent whole")
+	}
+}
+
+func TestCasualCallDeadline(t *testing.T) {
+	start := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	// Early in the turn: the per-call timeout applies.
+	if got := casualCallDeadline(start, start.Add(2*time.Second)); !got.Equal(start.Add(2*time.Second + casualReplyTimeout)) {
+		t.Fatalf("early: %v", got)
+	}
+	// Late: cut so the main bot still fits in the lock.
+	lockLimit := start.Add(engine.SessionLockTTL - casualLockReserve)
+	if got := casualCallDeadline(start, lockLimit.Add(-3*time.Second)); !got.Equal(lockLimit) {
+		t.Fatalf("late: %v want %v", got, lockLimit)
+	}
+	// No time left: skip the call.
+	if got := casualCallDeadline(start, lockLimit); !got.IsZero() {
+		t.Fatalf("no time: %v", got)
+	}
+	// The call plus the reserve never outlasts the lock.
+	if engine.SessionLockTTL-casualLockReserve <= 0 || casualLockReserve < 60*time.Second {
+		t.Fatal("reserve must cover the 60s main-bot call and leave room for the small-talk call")
+	}
+}
+
+func TestReplyToCasualTurnSkipsWithoutTime(t *testing.T) {
+	if _, err := replyToCasualTurn(context.Background(), "t", nil, "haha", false, casualReplyNormal, time.Time{}); err != errNoTimeForCasualReply {
+		t.Fatalf("err = %v", err)
 	}
 }
 

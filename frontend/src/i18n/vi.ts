@@ -962,7 +962,7 @@ export default {
   casual_budget_desc: "Chỉ áp dụng cho chat riêng 1-1. Khi khách nói chuyện xã giao nhiều lượt liền, bot vẫn trả lời nhưng tốn ít token hơn. Khách hỏi lại việc (sản phẩm, đơn, công nợ...) là bot chính trả lời và đếm lại từ đầu. Sửa cách trả lời ở trang AI Engine, mục \"Trả lời tán gẫu\".",
   casual_full_agent_turns: "Số lượt tán gẫu bot chính trả lời",
   casual_full_agent_turns_hint: "Mặc định 3. Từ lượt sau, bot trả lời bằng model AI của tenant với prompt ngắn, không chạy system prompt dài, công cụ và RAG. Đặt 0 để dùng prompt ngắn ngay từ lượt đầu.",
-  casual_setting_whole_number: "Nhập số nguyên từ 0 trở lên.",
+  casual_setting_whole_number: "Nhập số nguyên từ 0 đến 1000.",
   casual_quiet_after_too_low: "Phải lớn hơn số lượt bot chính trả lời (hoặc 0 để không bao giờ im).",
   casual_quiet_after: "Ngừng trả lời tán gẫu sau lượt thứ",
   casual_quiet_after_hint: "Mặc định 20. Lượt này bot nhắc nhẹ rằng sẽ trả lời khi khách cần hỏi việc, sau đó im cho tới khi khách hỏi việc. Đặt 0 để không bao giờ im.",

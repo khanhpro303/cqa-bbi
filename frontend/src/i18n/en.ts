@@ -962,7 +962,7 @@ export default {
   casual_budget_desc: "1:1 chats only. When a customer keeps making small talk, the bot still replies but spends fewer tokens. A business question (products, orders, debt...) goes back to the main bot and restarts the count. Edit the replies on the AI Engine page, \"Trả lời tán gẫu\".",
   casual_full_agent_turns: "Small-talk turns answered by the main bot",
   casual_full_agent_turns_hint: "Default 3. Later turns are answered by the tenant's AI model with a short prompt, without the long system prompt, tools and RAG. Set 0 to use the short prompt from the first turn.",
-  casual_setting_whole_number: "Enter a whole number, 0 or more.",
+  casual_setting_whole_number: "Enter a whole number from 0 to 1000.",
   casual_quiet_after_too_low: "Must be greater than the main-bot turns (or 0 to never go quiet).",
   casual_quiet_after: "Stop answering small talk after turn",
   casual_quiet_after_hint: "Default 20. On this turn the bot says it will answer when the customer needs help, then stays quiet until they ask something. Set 0 to never go quiet.",

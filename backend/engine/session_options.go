@@ -81,6 +81,7 @@ var sessionStateSuffixes = []string{
 	PromptDeliveredSuffix,
 	PromptUndeliveredSuffix,
 	CasualStreakSuffix,
+	CasualPositionSuffix,
 }
 
 // ClearSessionState deletes the base session key AND every sidecar flow-state
@@ -244,15 +245,20 @@ func TakeAwaitingVariantLine(ctx context.Context, sessionKey string) string {
 
 // CasualStreakSuffix is appended to a session key to count the small-talk
 // turns in a row since the chat last asked something the bot works on. The
-// key is a Redis sorted set of message ids scored by first arrival, so a
-// retried task keeps the position it had the first time instead of taking
-// the current count. A business turn deletes it; so does session teardown.
+// key is a Redis sorted set of message ids scored by first arrival. A business
+// turn deletes it; so does session teardown.
 const CasualStreakSuffix = ":casual_streak"
 
+// CasualPositionSuffix holds, per message id, the position BumpCasualStreak
+// gave it. A business turn does not clear it, so a retry that runs after the
+// streak was reset keeps the route it had the first time.
+const CasualPositionSuffix = ":casual_position"
+
 // BumpCasualStreak records msgID as a small-talk turn and returns its
-// position in the current run (1 for the first). A retry of the same msgID
-// gets the same position. It returns 0 when Redis is unavailable, fails or
-// msgID is empty, so callers fall back to the normal (full agent) reply.
+// position in the run (1 for the first). A retry of the same msgID gets the
+// position it got the first time, even across a reset. It returns 0 when
+// Redis is unavailable, fails or msgID is empty, so callers fall back to the
+// normal (full agent) reply. Callers hold the session lock.
 func BumpCasualStreak(ctx context.Context, sessionKey, msgID string, timeoutMinutes int) int {
 	if db.RedisClient == nil || strings.TrimSpace(msgID) == "" {
 		return 0
@@ -260,15 +266,25 @@ func BumpCasualStreak(ctx context.Context, sessionKey, msgID string, timeoutMinu
 	if timeoutMinutes <= 0 {
 		timeoutMinutes = 30
 	}
+	ttl := time.Duration(timeoutMinutes)*time.Minute + time.Minute
+	posKey := sessionKey + CasualPositionSuffix
+	if v, err := db.RedisClient.HGet(ctx, posKey, msgID).Int(); err == nil && v > 0 {
+		return v
+	}
 	key := sessionKey + CasualStreakSuffix
 	pipe := db.RedisClient.TxPipeline()
 	pipe.ZAddNX(ctx, key, redis.Z{Score: float64(time.Now().UnixMicro()), Member: msgID})
-	pipe.Expire(ctx, key, time.Duration(timeoutMinutes)*time.Minute+time.Minute)
+	pipe.Expire(ctx, key, ttl)
 	rank := pipe.ZRank(ctx, key, msgID)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return 0
 	}
-	return int(rank.Val()) + 1
+	pos := int(rank.Val()) + 1
+	pipe = db.RedisClient.TxPipeline()
+	pipe.HSetNX(ctx, posKey, msgID, pos)
+	pipe.Expire(ctx, posKey, ttl)
+	_, _ = pipe.Exec(ctx)
+	return pos
 }
 
 // ResetCasualStreak ends the small-talk run: the chat is back on business.

@@ -304,10 +304,10 @@
                 <div class="text-caption text-medium-emphasis mb-3">{{ $t('casual_budget_desc') }}</div>
                 <v-row dense>
                   <v-col cols="12" sm="6">
-                    <v-text-field v-model.number="editForm.casual_full_agent_turns" :label="$t('casual_full_agent_turns')" :hint="$t('casual_full_agent_turns_hint')" persistent-hint type="number" min="0" step="1" :rules="[casualWholeRule]" density="compact" class="mb-3" data-testid="casual-full-agent-turns" />
+                    <v-text-field v-model.number="editForm.casual_full_agent_turns" :label="$t('casual_full_agent_turns')" :hint="$t('casual_full_agent_turns_hint')" persistent-hint type="number" min="0" max="1000" step="1" :rules="[casualWholeRule]" density="compact" class="mb-3" data-testid="casual-full-agent-turns" />
                   </v-col>
                   <v-col cols="12" sm="6">
-                    <v-text-field v-model.number="editForm.casual_quiet_after" :label="$t('casual_quiet_after')" :hint="$t('casual_quiet_after_hint')" persistent-hint type="number" min="0" step="1" :rules="[casualWholeRule, casualQuietRule]" density="compact" class="mb-3" data-testid="casual-quiet-after" />
+                    <v-text-field v-model.number="editForm.casual_quiet_after" :label="$t('casual_quiet_after')" :hint="$t('casual_quiet_after_hint')" persistent-hint type="number" min="0" max="1000" step="1" :rules="[casualWholeRule, casualQuietRule]" density="compact" class="mb-3" data-testid="casual-quiet-after" />
                   </v-col>
                 </v-row>
                 <v-divider class="my-4" />
@@ -632,9 +632,10 @@ function channelLabel(channelType: string) {
 // backend uses when the channel has no value.
 const CASUAL_FULL_AGENT_TURNS_DEFAULT = 3
 const CASUAL_QUIET_AFTER_DEFAULT = 20
+const CASUAL_SETTING_MAX = 1000 // same bound as casualSettingMax in the backend
 function parseCasualSetting(value: unknown): number | null {
   const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value
-  return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : null
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= CASUAL_SETTING_MAX ? n : null
 }
 function readCasualSetting(value: unknown, fallback: number): number {
   return parseCasualSetting(value) ?? fallback

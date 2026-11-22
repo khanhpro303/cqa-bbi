@@ -713,6 +713,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 			defer engine.ReleaseSessionLock(ctx, lockKey, lockToken)
 		}
+		// turnStart is when this turn took the session lock; the small-talk
+		// call is bounded from it so a main-bot fallback still fits.
+		turnStart := time.Now()
 
 		// Display name of the sender for chat memory.
 		memSenderName := ""
@@ -1008,7 +1011,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// A long run of small talk is answered more cheaply (casual_budget.go).
 		if matchedGroup.ZaloGroupID == "" {
 			switch intent {
-			case "IN_SCOPE":
+			case "IN_SCOPE", "OUT_OF_SCOPE":
 				engine.ResetCasualStreak(ctx, workKey)
 			case "CASUAL":
 				streak := engine.BumpCasualStreak(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID), meta.SessionTimeout)
@@ -1021,7 +1024,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				if history != nil {
 					recent = history()
 				}
-				reply, err := replyToCasualTurn(ctx, matchedChannel.TenantID, recent, userText, isWhitelisted, casualModeFor(route, streak, budget))
+				reply, err := replyToCasualTurn(ctx, matchedChannel.TenantID, recent, userText, isWhitelisted,
+					casualModeFor(route, streak, budget), casualCallDeadline(turnStart, time.Now()))
 				if err == nil && reply.Result.HasUsage {
 					casualAgentType := "public"
 					if isWhitelisted {
@@ -1030,19 +1034,22 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, casualAgentType, "", reply.Result, reply.Prompt, reply.Text)
 				}
 				switch {
-				case err == nil && reply.Handoff:
+				case err != nil:
+					// No answer (no provider, timeout, no time left): the main
+					// bot answers, in quiet mode too, so a business turn the
+					// classifier mislabelled is never dropped unchecked.
+					log.Printf("[casual-budget] sender %s: small-talk call failed on turn %d (%v); using the main bot", payload.Sender.ID, streak, err)
+				case reply.Outcome == casualHandoff:
 					// The second look says this needs the main bot after all
 					// (a lookup, a reply to the bot's question): treat it as
 					// business from here on, including the variant-line lock.
 					log.Printf("[casual-budget] sender %s: small-talk model handed turn %d to the main bot", payload.Sender.ID, streak)
 					engine.ResetCasualStreak(ctx, workKey)
 					intent, classified = "IN_SCOPE", "IN_SCOPE"
-				case route == casualToQuiet:
-					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row (quiet after %d); no reply (check err=%v)", payload.Sender.ID, streak, budget.QuietAfter, err)
+				case route == casualToQuiet && reply.Outcome == casualQuietAck:
+					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row (quiet after %d); no reply", payload.Sender.ID, streak, budget.QuietAfter)
 					return nil
-				case err != nil:
-					log.Printf("[casual-budget] sender %s: short reply failed (%v); using the main bot", payload.Sender.ID, err)
-				default:
+				case route == casualToLite && reply.Outcome == casualSend:
 					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row answered with the short prompt", payload.Sender.ID, streak)
 					// Always as plain text: never let model output become a
 					// Zalo message template.
@@ -1050,6 +1057,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 						return fmt.Errorf("failed to send small-talk reply to Zalo: %w", err)
 					}
 					return nil
+				default:
+					// Unusable or off-format answer: the main bot answers,
+					// still as small talk (no variant-line lock, no reset).
+					log.Printf("[casual-budget] sender %s: small-talk model answer unusable on turn %d (outcome %d); using the main bot", payload.Sender.ID, streak, reply.Outcome)
 				}
 			}
 		}

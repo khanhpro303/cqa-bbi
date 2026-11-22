@@ -24,6 +24,7 @@ func TestClearSessionStateCoversAllSidecars(t *testing.T) {
 		PromptDeliveredSuffix,
 		PromptUndeliveredSuffix,
 		CasualStreakSuffix,
+		CasualPositionSuffix,
 	}
 
 	if len(sessionStateSuffixes) != len(allSuffixes) {

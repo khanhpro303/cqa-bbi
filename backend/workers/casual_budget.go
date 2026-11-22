@@ -67,10 +67,14 @@ func casualBudgetFrom(metadata string) casualBudget {
 	return out
 }
 
-// casualSetting accepts a whole, non-negative JSON number.
+// casualSettingMax is the largest turn count either setting accepts (the
+// channel form uses the same bound).
+const casualSettingMax = 1000
+
+// casualSetting accepts a whole JSON number from 0 to casualSettingMax.
 func casualSetting(v interface{}) (int, bool) {
 	f, ok := v.(float64)
-	if !ok || f < 0 || f != math.Trunc(f) || f > 1e6 {
+	if !ok || f < 0 || f != math.Trunc(f) || f > casualSettingMax {
 		return 0, false
 	}
 	return int(f), true
@@ -161,45 +165,77 @@ func yesNo(v bool) string {
 	return "không"
 }
 
-// casualReplyMaxRunes caps a small-talk reply; the prompt asks for 1-2 short
-// sentences, so anything longer is cut rather than sent whole.
+// casualReplyMaxRunes caps a small-talk reply, ellipsis included; the prompt
+// asks for 1-2 short sentences, so anything longer is cut.
 const casualReplyMaxRunes = 600
 
-// casualReplyTimeout keeps classifier (15s) + this call + a main-bot fallback
-// (60s) inside the 90s session lock.
+// casualReplyTimeout bounds one small-talk model call. casualCallDeadline
+// shortens it further so the main-bot fallback still fits in the lock.
 const casualReplyTimeout = 8 * time.Second
+
+// casualLockReserve is the part of the session lock kept for what may run
+// after the small-talk call: the main bot (60s Langflow timeout) and the
+// Zalo send, with headroom.
+const casualLockReserve = 70 * time.Second
+
+// casualCallDeadline is the latest a small-talk call may end, counted from
+// when the turn took the session lock. A zero result means no time is left:
+// the caller skips the call and uses the main bot.
+func casualCallDeadline(turnStart, now time.Time) time.Time {
+	deadline := turnStart.Add(engine.SessionLockTTL - casualLockReserve)
+	if limit := now.Add(casualReplyTimeout); limit.Before(deadline) {
+		deadline = limit
+	}
+	if !deadline.After(now.Add(time.Second)) {
+		return time.Time{}
+	}
+	return deadline
+}
+
+// casualOutcome is what the small-talk model's answer means.
+type casualOutcome int
+
+const (
+	casualSend     casualOutcome = iota // send Text to the customer
+	casualHandoff                       // the model says the main bot is needed
+	casualQuietAck                      // the model confirms no reply is needed (quiet mode)
+	casualUnusable                      // empty or not sendable as text: use the main bot, keep CASUAL
+)
 
 // casualReply is the small-talk model's answer for one turn.
 type casualReply struct {
 	Text    string
-	Handoff bool // the model says the main bot should answer
+	Outcome casualOutcome
 	Result  engine.LangflowResult
 	Prompt  string // system prompt + input, for cost estimates
 }
 
-// parseCasualReply reads the model's answer. An empty answer or the handoff
-// marker sends the turn to the main bot. So does an answer shaped like a JSON
-// object: the Zalo sender would post that as a raw message template (links,
-// buttons) instead of text. The quiet marker is returned as is; the caller
-// sends nothing in quiet mode anyway.
-func parseCasualReply(content string) (string, bool) {
+// parseCasualReply reads the model's answer. A JSON-object answer is
+// unusable: the Zalo sender would post it as a raw message template (links,
+// buttons) instead of text.
+func parseCasualReply(content string) (string, casualOutcome) {
 	text := strings.TrimSpace(content)
-	if text == "" || strings.Contains(text, engine.CasualReplyHandoff) {
-		return "", true
-	}
-	if strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}") {
-		return "", true
+	switch {
+	case strings.Contains(text, engine.CasualReplyHandoff):
+		return "", casualHandoff
+	case text == engine.CasualReplyQuiet:
+		return "", casualQuietAck
+	case text == "", strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}"):
+		return "", casualUnusable
 	}
 	if r := []rune(text); len(r) > casualReplyMaxRunes {
-		text = strings.TrimSpace(string(r[:casualReplyMaxRunes])) + "…"
+		text = strings.TrimSpace(string(r[:casualReplyMaxRunes-1])) + "…"
 	}
-	return text, false
+	return text, casualSend
 }
 
 // replyToCasualTurn answers a small-talk turn with the tenant's AI model and
-// the editable small-talk prompt. An error means no provider or a failed
-// call: the caller then uses the main bot.
-func replyToCasualTurn(ctx context.Context, tenantID string, recent []chatmemory.RecentTurn, message string, staff bool, mode casualTurnMode) (casualReply, error) {
+// the editable small-talk prompt, finishing by deadline. An error means no
+// provider, no time left or a failed call: the caller then uses the main bot.
+func replyToCasualTurn(ctx context.Context, tenantID string, recent []chatmemory.RecentTurn, message string, staff bool, mode casualTurnMode, deadline time.Time) (casualReply, error) {
+	if deadline.IsZero() {
+		return casualReply{}, errNoTimeForCasualReply
+	}
 	cfg, _ := config.Load()
 	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
 	if err != nil {
@@ -211,16 +247,16 @@ func replyToCasualTurn(ctx context.Context, tenantID string, recent []chatmemory
 	systemPrompt := engine.BuildTaskPrompt(tenantID, engine.PromptCasualReply, nil)
 	input := casualReplyInput(recent, message, staff, mode)
 
-	callCtx, cancel := context.WithTimeout(ctx, casualReplyTimeout)
+	callCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	resp, err := resolved.Client.AnalyzeChat(callCtx, systemPrompt, input)
 	if err != nil {
 		return casualReply{}, err
 	}
-	text, handoff := parseCasualReply(resp.Content)
+	text, outcome := parseCasualReply(resp.Content)
 	return casualReply{
 		Text:    text,
-		Handoff: handoff,
+		Outcome: outcome,
 		Prompt:  systemPrompt + "\n" + input,
 		Result: engine.LangflowResult{
 			Text:         text,
@@ -237,7 +273,10 @@ type casualBudgetError string
 
 func (e casualBudgetError) Error() string { return string(e) }
 
-const errNoTenantAIProvider = casualBudgetError("no AI provider configured for small-talk replies")
+const (
+	errNoTenantAIProvider   = casualBudgetError("no AI provider configured for small-talk replies")
+	errNoTimeForCasualReply = casualBudgetError("no time left in the session lock for a small-talk call")
+)
 
 // onceTurns wraps a recent-turns loader so the classifier and the small-talk
 // reply share one database read.
