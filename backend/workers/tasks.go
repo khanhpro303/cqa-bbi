@@ -1993,7 +1993,7 @@ func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string, sc
 
 func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAdapter, tenantID, sku, zaloGroupID, senderID string) {
 	var p models.CachedProduct
-	if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma = ?", tenantID, sku).First(&p).Error; err != nil {
+	if err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).Where("tenant_id = ? AND ma = ?", tenantID, sku).First(&p).Error; err != nil {
 		log.Printf("[worker] error finding cached product details: %v", err)
 		_ = adapter.SendMessage(ctx, senderID, "Không tìm thấy thông tin chi tiết cho mã SKU: "+sku)
 		return
@@ -2687,6 +2687,24 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	err := q.Find(&products).Error
 	if err != nil {
 		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+	}
+	// A line picked by parent code (no web name) also owns the stock of its
+	// "_DK" copy parent, which the picker no longer lists on its own.
+	if dkParent := engine.DKCopyParentOf(maCha); webName == "" && dkParent != strings.TrimSpace(maCha) {
+		var copies []models.CachedProduct
+		if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma_cha = ?", tenantID, dkParent).Find(&copies).Error; err != nil {
+			return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+		}
+		seen := make(map[string]struct{}, len(products))
+		for _, p := range products {
+			seen[p.MA] = struct{}{}
+		}
+		for _, p := range copies {
+			if _, dup := seen[p.MA]; !dup {
+				seen[p.MA] = struct{}{}
+				products = append(products, p)
+			}
+		}
 	}
 	if webName == "" && len(products) == 0 {
 		return 0, nil, fmt.Errorf("no cached SKUs for ma_cha=%s", maCha)

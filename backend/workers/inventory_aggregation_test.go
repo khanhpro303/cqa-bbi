@@ -43,11 +43,15 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 		switch result := query.Statement.Dest.(type) {
 		case *[]models.CachedProduct:
 			*result = []models.CachedProduct{{MA: "fixture-visible"}}
+			if vars := query.Statement.Vars; len(vars) >= 2 && vars[1] == "fixture-parent_DK" {
+				// The line's "_DK" copy parent holds stock of its own.
+				*result = []models.CachedProduct{{MA: "fixture-copy", MA_CHA: "fixture-parent_DK"}}
+			}
 			sql := query.Statement.SQL.String()
 			if !strings.Contains(sql, "tenant_id = ? AND ma_cha = ?") {
 				t.Errorf("catalog lookup lacks tenant or parent scope: %s", sql)
 			}
-			if !strings.Contains(sql, "ten_dong_bo_web = ?") && !strings.Contains(sql, "LIMIT") {
+			if !strings.Contains(sql, "ten_dong_bo_web = ?") && !strings.Contains(sql, "LIMIT") && (*result)[0].MA != "fixture-copy" {
 				*result = append(*result, models.CachedProduct{MA: "fixture-sibling"})
 			}
 		case *models.AppSetting:
@@ -74,7 +78,7 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 				values.Get("TU_NGAY") == "" || values.Get("TU_NGAY") != values.Get("DEN_NGAY") {
 				t.Errorf("unexpected warehouse parameters: %v", values)
 			}
-			body = `[{"MA_HANG":"fixture-visible","SO_LUONG_CUOI_KY":5},{"MA_HANG":"fixture-sibling","SO_LUONG_CUOI_KY":376}]`
+			body = `[{"MA_HANG":"fixture-visible","SO_LUONG_CUOI_KY":5},{"MA_HANG":"fixture-sibling","SO_LUONG_CUOI_KY":376},{"MA_HANG":"fixture-copy","SO_LUONG_CUOI_KY":7}]`
 			if failSibling {
 				status, body = http.StatusServiceUnavailable, "fixture inventory unavailable"
 			}
@@ -87,7 +91,8 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 	})
 
 	permissions := &engine.GroupPermissionContext{AgentType: "private"}
-	for webName, want := range map[string]float64{"Bulldog DOGO": 5, "": 381} {
+	// A parent-code pick (no web name) also counts its "_DK" copy's stock.
+	for webName, want := range map[string]float64{"Bulldog DOGO": 5, "": 388} {
 		got, _, err := sumInventoryByMaChaAndWebName(context.Background(), "fixture-tenant", permissions, "fixture-parent", webName)
 		if err != nil || got != want {
 			t.Errorf("stock for web filter %q: got %g, %v; want %g", webName, got, err, want)

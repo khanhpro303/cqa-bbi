@@ -289,6 +289,9 @@ func ERPQuery(c *gin.Context) {
 		// down — set by the LIKE single-group path or the fuzzy fallback. It
 		// feeds the variant price-pivot below (shouldPivotToVariant).
 		var resolvedParent string
+		// lineWebName is set when the keyword matched exactly one web line;
+		// that line is then priced like the exact web-name path.
+		var lineWebName string
 		search := strings.TrimSpace(req.Search)
 
 		if search != "" {
@@ -365,13 +368,26 @@ func ERPQuery(c *gin.Context) {
 				if len(webGroups[0].ParentCodes) == 1 {
 					resolvedParent = webGroups[0].ParentCodes[0]
 				}
-				for _, pc := range webGroups[0].ParentCodes {
-					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, pc, engine.ExcludeDKCopies)
+				if !webGroups[0].IsFallback {
+					// One web line matched: read and price exactly that line, the
+					// same way the exact web-name path does, so "ff399" and
+					// "LS2 FF399" can never quote different prices (a parent can
+					// also carry other web lines, which must not widen the range).
+					lineWebName = webGroups[0].WebName
+					rows, fetchErr := searchProductsByExactWebNameFromCache(c.Request.Context(), tenantID, lineWebName, exactWebNameLineRowCap, engine.ExcludeDKCopies)
 					if fetchErr != nil {
-						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", pc, fetchErr)
-						continue
+						log.Printf("[erp_query] fetch by web name=%s failed: %v", lineWebName, fetchErr)
 					}
-					cachedData = append(cachedData, rows...)
+					cachedData = rows
+				} else {
+					for _, pc := range webGroups[0].ParentCodes {
+						rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, pc, engine.ExcludeDKCopies)
+						if fetchErr != nil {
+							log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", pc, fetchErr)
+							continue
+						}
+						cachedData = append(cachedData, rows...)
+					}
 				}
 			} else {
 				// B proved LIKE returns nothing. Resolve the product *family*
@@ -453,7 +469,16 @@ func ERPQuery(c *gin.Context) {
 			cachedData = []map[string]interface{}{}
 		}
 
-		filteredCached := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands))
+		var filteredCached, slim []map[string]interface{}
+		if lineWebName != "" {
+			filteredCached, slim = priceExactWebLine(c.Request.Context(), cachedData, productGroups, brandFilter, allBrands)
+		} else {
+			filteredCached = withoutDKCopies(filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands))
+			filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, brandFilter, allBrands, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
+				return getProductsByMaChaFromCache(ctx, tenantID, maCha, engine.ExcludeDKCopies)
+			})
+			slim = slimProductsForLLM(filteredCached)
+		}
 
 		// Debug push: only rows the caller may see, capped at their limit.
 		if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
@@ -467,11 +492,6 @@ func ERPQuery(c *gin.Context) {
 				pushFallbackPayloadToZaloOA(ctx, tenantID, "raw_like", search, payload, permCtx)
 			}(req.Search, debugRows)
 		}
-		filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, brandFilter, allBrands, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
-			return getProductsByMaChaFromCache(ctx, tenantID, maCha, engine.ExcludeDKCopies)
-		})
-
-		slim := slimProductsForLLM(filteredCached)
 
 		if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
 			go func(search string, payload []map[string]interface{}) {

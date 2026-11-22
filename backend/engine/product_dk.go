@@ -33,12 +33,23 @@ func RealParentOf(maCha string) string {
 	return code
 }
 
+// DKCopyParentOf returns the "_DK" copy parent code of a real parent
+// (SP000557 -> SP000557_DK); a code that already is a copy comes back as is.
+func DKCopyParentOf(maCha string) string {
+	code := strings.TrimSpace(maCha)
+	if code == "" || hasDKSuffix(code) {
+		return code
+	}
+	return code + dkCopySuffix
+}
+
 // ExcludeDKCopies is a GORM scope that keeps "_DK" copy rows out of a
 // cached_products catalog query, so they neither show up nor use up the
 // query's LIMIT or decide whether a search pass "matched". Stock queries must
-// not use it. ESCAPE keeps "_" literal whatever the server's sql_mode.
+// not use it. ESCAPE keeps "_" literal whatever the server's sql_mode;
+// UPPER(TRIM()) matches IsDKCopy's case- and padding-insensitive check.
 func ExcludeDKCopies(tx *gorm.DB) *gorm.DB {
-	return tx.Where("ma NOT LIKE ? ESCAPE '!' AND COALESCE(ma_cha, '') NOT LIKE ? ESCAPE '!'", dkLikePattern, dkLikePattern)
+	return tx.Where("UPPER(TRIM(COALESCE(ma, ''))) NOT LIKE ? ESCAPE '!' AND UPPER(TRIM(COALESCE(ma_cha, ''))) NOT LIKE ? ESCAPE '!'", dkLikePattern, dkLikePattern)
 }
 
 const dkLikePattern = "%!" + dkCopySuffix

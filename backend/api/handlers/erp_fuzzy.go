@@ -100,7 +100,9 @@ func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (stri
 		Ten          string `gorm:"column:ten"`
 	}
 	var candidates []maChaCandidate
-	err := db.DB.WithContext(ctx).
+	// "_DK" copy parents are not offered: they would take candidate slots
+	// from real lines and are hidden from the catalog anyway.
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Table((&models.CachedProduct{}).TableName()).
 		Select("ma_cha, MAX(ten_dong_bo_web) AS ten_dong_bo_web, MAX(ten) AS ten").
 		Where("tenant_id = ? AND ma_cha != ''", tenantID).

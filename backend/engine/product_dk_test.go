@@ -36,6 +36,14 @@ func TestRealParentOf(t *testing.T) {
 	}
 }
 
+func TestDKCopyParentOf(t *testing.T) {
+	for in, want := range map[string]string{"SP000557": "SP000557_DK", " SP000557 ": "SP000557_DK", "SP000557_DK": "SP000557_DK", "": ""} {
+		if got := DKCopyParentOf(in); got != want {
+			t.Errorf("DKCopyParentOf(%q) = %q; want %q", in, got, want)
+		}
+	}
+}
+
 func TestExcludeDKCopiesSQL(t *testing.T) {
 	gdb, err := gorm.Open(mysql.New(mysql.Config{DSN: "u:p@tcp(127.0.0.1:1)/x", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
 	if err != nil {
@@ -44,7 +52,7 @@ func TestExcludeDKCopiesSQL(t *testing.T) {
 	var rows []models.CachedProduct
 	stmt := gdb.Scopes(ExcludeDKCopies).Where("tenant_id = ?", "t").Limit(10).Find(&rows).Statement
 	sql := stmt.SQL.String()
-	want := "ma NOT LIKE ? ESCAPE '!' AND COALESCE(ma_cha, '') NOT LIKE ? ESCAPE '!'"
+	want := "UPPER(TRIM(COALESCE(ma, ''))) NOT LIKE ? ESCAPE '!' AND UPPER(TRIM(COALESCE(ma_cha, ''))) NOT LIKE ? ESCAPE '!'"
 	if !strings.Contains(sql, want) {
 		t.Fatalf("SQL = %s; want it to contain %s", sql, want)
 	}
