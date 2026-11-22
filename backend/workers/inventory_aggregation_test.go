@@ -54,6 +54,11 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 			if !strings.Contains(sql, "ten_dong_bo_web = ?") && !strings.Contains(sql, "LIMIT") && (*result)[0].MA != "fixture-copy" {
 				*result = append(*result, models.CachedProduct{MA: "fixture-sibling"})
 			}
+		case *int64:
+			if vars := query.Statement.Vars; len(vars) >= 2 && vars[1] == "fixture-parent_DK" {
+				*result = 1
+				query.RowsAffected = 1 // gorm's Count keeps the value only for one row
+			}
 		case *models.AppSetting:
 			if strings.Contains(query.Statement.SQL.String(), "setting_key = ?") &&
 				len(query.Statement.Vars) >= 2 && query.Statement.Vars[1] == "erp_api_url" {
@@ -91,12 +96,17 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 	})
 
 	permissions := &engine.GroupPermissionContext{AgentType: "private"}
-	// A parent-code pick (no web name) also counts its "_DK" copy's stock.
-	for webName, want := range map[string]float64{"Bulldog DOGO": 5, "": 388} {
+	for webName, want := range map[string]float64{"Bulldog DOGO": 5, "": 381} {
 		got, _, err := sumInventoryByMaChaAndWebName(context.Background(), "fixture-tenant", permissions, "fixture-parent", webName)
 		if err != nil || got != want {
 			t.Errorf("stock for web filter %q: got %g, %v; want %g", webName, got, err, want)
 		}
+	}
+	// A parent-code pick (no web name) also counts its "_DK" copy's stock,
+	// once: the plain sum above must not add it (the by-web loop sums the
+	// copy parent itself).
+	if got, _, err := sumInventoryByParentWithDKCopy(context.Background(), "fixture-tenant", permissions, "fixture-parent"); err != nil || got != 388 {
+		t.Errorf("parent + _DK copy stock: got %g, %v; want 388", got, err)
 	}
 	failSibling = true
 	got, _, err := sumInventoryByMaChaAndWebName(context.Background(), "fixture-tenant", permissions, "fixture-parent", "")

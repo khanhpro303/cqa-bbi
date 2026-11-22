@@ -1237,7 +1237,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			if len(webNames) == 0 {
 				// No web names found, perform direct realtime inventory lookup for this MA_CHA
-				stock, details, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, maCha, "")
+				stock, details, err := sumInventoryByParentWithDKCopy(ctx, matchedChannel.TenantID, &permCtx, maCha)
 				if err != nil {
 					_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi truy vấn tồn kho dòng sản phẩm.")
 					return nil
@@ -2677,6 +2677,34 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 	return results, nil
 }
 
+// sumInventoryByParentWithDKCopy sums a line picked by parent code (no web
+// name) together with its "_DK" copy parent. The picker hides the copy as a
+// line of its own, but its SKUs hold real stock that belongs to this line.
+// Only this call site adds the copy: the by-web-name sum already reads every
+// parent of the web name, copy included.
+func sumInventoryByParentWithDKCopy(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string) (float64, []string, error) {
+	stock, details, err := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, maCha, "")
+	if err != nil {
+		return 0, nil, err
+	}
+	dkParent := engine.DKCopyParentOf(maCha)
+	if dkParent == strings.TrimSpace(maCha) {
+		return stock, details, nil
+	}
+	var copies int64
+	if err := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).Where("tenant_id = ? AND ma_cha = ?", tenantID, dkParent).Count(&copies).Error; err != nil {
+		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+	}
+	if copies == 0 {
+		return stock, details, nil
+	}
+	copyStock, copyDetails, err := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, dkParent, "")
+	if err != nil {
+		return 0, nil, err
+	}
+	return stock + copyStock, append(details, copyDetails...), nil
+}
+
 // sumInventoryByMaChaAndWebName aggregates realtime inventory by MA_CHA and optionally WEB_NAME
 func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string, webName string) (float64, []string, error) {
 	var products []models.CachedProduct
@@ -2687,27 +2715,6 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	err := q.Find(&products).Error
 	if err != nil {
 		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
-	}
-	// A line picked by parent code (no web name) also owns the stock of its
-	// "_DK" copy parent, which the picker no longer lists on its own.
-	if dkParent := engine.DKCopyParentOf(maCha); webName == "" && dkParent != strings.TrimSpace(maCha) {
-		var copies []models.CachedProduct
-		if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma_cha = ?", tenantID, dkParent).Find(&copies).Error; err != nil {
-			return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
-		}
-		seen := make(map[string]struct{}, len(products))
-		for _, p := range products {
-			seen[p.MA] = struct{}{}
-		}
-		for _, p := range copies {
-			if _, dup := seen[p.MA]; !dup {
-				seen[p.MA] = struct{}{}
-				products = append(products, p)
-			}
-		}
-	}
-	if webName == "" && len(products) == 0 {
-		return 0, nil, fmt.Errorf("no cached SKUs for ma_cha=%s", maCha)
 	}
 
 	childProducts := make([]map[string]interface{}, len(products))

@@ -1269,7 +1269,9 @@ func searchProductsByExactWebNameFromCache(ctx context.Context, tenantID, webNam
 	// ma_cha also lists parent codes in the same order as the keyword path
 	// (RankProductWebGroups sorts them).
 	err := db.DB.WithContext(ctx).Scopes(scopes...).
-		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
+		// TRIM: web-group search trims names, so a line it found must be
+		// readable here even if the stored name carries stray spaces.
+		Where("tenant_id = ? AND TRIM(ten_dong_bo_web) = ?", tenantID, strings.TrimSpace(webName)).
 		Order("ma_cha, ma").
 		Limit(limit).
 		Find(&products).Error
