@@ -56,6 +56,17 @@ func NewService(cfg *config.Config) *Service {
 // NewVectorIndex returns the configured summary index, or nil.
 func NewVectorIndex(cfg *config.Config) VectorIndex {
 	mc := cfg.ChatMemory
+	return NewNamedVectorIndex(cfg, mc.AstraCollection, mc.VectorizeIndex)
+}
+
+// NewNamedVectorIndex returns an index on the configured vector store
+// (CHAT_MEMORY_VECTOR_STORE) for one collection: astraCollection when the
+// store is Astra, vectorizeIndex when it is Cloudflare Vectorize. Other
+// features (the chatbot knowledge base) use it to keep their vectors apart
+// from the session summaries while sharing credentials and the embedding
+// model.
+func NewNamedVectorIndex(cfg *config.Config, astraCollection, vectorizeIndex string) VectorIndex {
+	mc := cfg.ChatMemory
 	store := mc.VectorStore
 	if store == "" {
 		if cfg.AstraDBAPIEndpoint != "" && cfg.AstraDBToken != "" {
@@ -72,14 +83,14 @@ func NewVectorIndex(cfg *config.Config) VectorIndex {
 		}
 		return &AstraIndex{
 			Endpoint: cfg.AstraDBAPIEndpoint, Token: cfg.AstraDBToken, Keyspace: cfg.AstraDBKeyspace,
-			Collection: mc.AstraCollection, Dimensions: mc.EmbeddingDimensions,
+			Collection: astraCollection, Dimensions: mc.EmbeddingDimensions,
 		}
 	case "vectorize":
-		if mc.VectorizeAccountID == "" || mc.VectorizeAPIToken == "" || mc.VectorizeIndex == "" {
+		if mc.VectorizeAccountID == "" || mc.VectorizeAPIToken == "" || vectorizeIndex == "" {
 			log.Printf("[chat-memory] vector store vectorize selected but CHAT_MEMORY_VECTORIZE_* is incomplete; index disabled")
 			return nil
 		}
-		return &VectorizeIndex{AccountID: mc.VectorizeAccountID, APIToken: mc.VectorizeAPIToken, Index: mc.VectorizeIndex}
+		return &VectorizeIndex{AccountID: mc.VectorizeAccountID, APIToken: mc.VectorizeAPIToken, Index: vectorizeIndex}
 	case "none":
 		return nil
 	default:
@@ -677,7 +688,15 @@ func (s *Service) callTenantLLM(ctx context.Context, tenantID, system, input str
 }
 
 func (s *Service) embedText(ctx context.Context, tenantID, text string) ([]float32, error) {
-	mc := s.cfg.ChatMemory
+	return EmbedText(ctx, s.cfg, tenantID, text)
+}
+
+// EmbedText embeds text with the chat-memory embedding settings
+// (CHAT_MEMORY_EMBEDDING_*, else the tenant OpenAI key) and checks the
+// dimensions against CHAT_MEMORY_EMBEDDING_DIMENSIONS. Every index built by
+// NewNamedVectorIndex expects vectors from this function.
+func EmbedText(ctx context.Context, cfg *config.Config, tenantID, text string) ([]float32, error) {
+	mc := cfg.ChatMemory
 	key := mc.EmbeddingAPIKey
 	if key == "" && strings.Contains(mc.EmbeddingBaseURL, "cloudflare.com") {
 		key = mc.VectorizeAPIToken
@@ -687,10 +706,10 @@ func (s *Service) embedText(ctx context.Context, tenantID, text string) ([]float
 		client = ai.NewEmbeddingsClient(key, mc.EmbeddingModel, mc.EmbeddingBaseURL)
 	} else {
 		client = engine.BuildTenantEmbedder(tenantID, engine.EmbeddingConfig{
-			FallbackAPIKey: s.cfg.LangflowEmbeddingAPIKey,
+			FallbackAPIKey: cfg.LangflowEmbeddingAPIKey,
 			Model:          mc.EmbeddingModel,
 			BaseURL:        mc.EmbeddingBaseURL,
-			EncryptionKey:  s.cfg.EncryptionKey,
+			EncryptionKey:  cfg.EncryptionKey,
 		})
 	}
 	if client == nil {

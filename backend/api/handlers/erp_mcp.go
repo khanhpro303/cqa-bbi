@@ -108,6 +108,7 @@ func ERPMCP(c *gin.Context) {
 		reply(gin.H{})
 	case "tools/list":
 		tools := append(append([]erpMCPTool{}, erpMCPTools...), listedOrderTools()...)
+		tools = append(tools, knowledgeMCPTool(tenantID))
 		reply(gin.H{"tools": tools})
 	case "tools/call":
 		var params struct {
@@ -116,6 +117,10 @@ func ERPMCP(c *gin.Context) {
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			fail(-32602, "Invalid tool parameters")
+			return
+		}
+		if params.Name == knowledgeMCPToolName {
+			reply(handleKnowledgeTool(c.Request.Context(), tenantID, resolveAgentType(tenantID, token), params.Arguments))
 			return
 		}
 		if tool, ok := findCartTool(params.Name); ok {
