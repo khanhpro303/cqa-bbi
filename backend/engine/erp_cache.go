@@ -459,6 +459,18 @@ func getStringVal(m map[string]interface{}, key string) string {
 	return ""
 }
 
+// dkCopySuffix marks the ERP "_DK" copies of real product lines: every SKU
+// under such a parent (e.g. SP000557_DK beside SP000557) has DON_GIA_BAN 0 and
+// colour/size "false". Left in the AI cache they priced real lines as
+// "Liên hệ" (LS2 FF399, 22/11: 37 real rows + 37 _DK copies). The user chose
+// to keep them out of the bot's data; erp_raw_products still holds them.
+const dkCopySuffix = "_DK"
+
+// IsDKCopyParent reports whether a parent code is an ERP "_DK" copy line.
+func IsDKCopyParent(maCha string) bool {
+	return strings.HasSuffix(strings.ToUpper(strings.TrimSpace(maCha)), dkCopySuffix)
+}
+
 // RebuildCachedProductsFromRaw rewrites the AI-facing cached_products table
 // for a tenant by streaming erp_raw_products and skipping rows whose MA_CHA
 // appears in erp_parent_sku_exclusions. Returns the number of cached rows
@@ -495,12 +507,17 @@ func RebuildCachedProductsFromRaw(tenantID string) (int, error) {
 		return nil
 	}
 
+	skippedDK := 0
 	var rawBatch []models.ERPRawProduct
 	err := db.DB.Where("tenant_id = ?", tenantID).
 		FindInBatches(&rawBatch, 500, func(_ *gorm.DB, _ int) error {
 			now := time.Now()
 			for _, r := range rawBatch {
 				if _, skip := excludedSet[strings.TrimSpace(r.MA_CHA)]; skip {
+					continue
+				}
+				if IsDKCopyParent(r.MA_CHA) {
+					skippedDK++
 					continue
 				}
 				buffer = append(buffer, models.CachedProduct{
@@ -534,6 +551,9 @@ func RebuildCachedProductsFromRaw(tenantID string) (int, error) {
 	}
 	if err := flush(); err != nil {
 		return inserted, err
+	}
+	if skippedDK > 0 {
+		log.Printf("[erp_cache] tenant=%s skipped %d _DK copy rows from cached_products", tenantID, skippedDK)
 	}
 	return inserted, nil
 }
