@@ -210,8 +210,13 @@ type casualReply struct {
 	Prompt  string // system prompt + input, for cost estimates
 }
 
-// looksLikeJSON reports an answer wrapped like a JSON object or array.
+// looksLikeJSON reports an answer wrapped like a JSON object or array, or in
+// a Markdown code fence.
 func looksLikeJSON(text string) bool {
+	if strings.HasPrefix(text, "```") {
+		// A fenced block (```json ...) is never a chat reply.
+		return true
+	}
 	return (strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}")) ||
 		(strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]") && !strings.HasPrefix(text, "[CAN_") && !strings.HasPrefix(text, "[IM_"))
 }

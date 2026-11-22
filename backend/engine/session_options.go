@@ -275,6 +275,16 @@ return rank
 // sent to the main bot. A retry of it goes straight to the main bot.
 const CasualHandedOff = -1
 
+// WasCasualHandoff reports whether msgID was already handed to the main bot
+// by the small-talk model (an earlier attempt of this task).
+func WasCasualHandoff(ctx context.Context, sessionKey, msgID string) bool {
+	if db.RedisClient == nil || strings.TrimSpace(msgID) == "" {
+		return false
+	}
+	v, err := db.RedisClient.HGet(ctx, sessionKey+CasualPositionSuffix, msgID).Int()
+	return err == nil && v == CasualHandedOff
+}
+
 // BumpCasualStreak records msgID as a small-talk turn and returns its
 // position in the run (1 for the first). A retry of the same msgID gets the
 // position it got the first time, even across a reset, or CasualHandedOff.

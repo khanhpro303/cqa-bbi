@@ -946,7 +946,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// nil in a group): in a keyword group the shared log has no
 			// speakers, so one member's "ok" could be read as the answer to a
 			// question the bot asked someone else.
-			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
+			if matchedGroup.ZaloGroupID == "" && engine.WasCasualHandoff(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID)) {
+				// A retry of a turn the small-talk model already sent to the
+				// main bot: keep that route instead of classifying again.
+				intent = "IN_SCOPE"
+			} else {
+				intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
+			}
 			if err != nil {
 				log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
 				intent = "IN_SCOPE"
