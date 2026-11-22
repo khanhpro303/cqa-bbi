@@ -1,6 +1,10 @@
 package engine
 
-import "strings"
+import (
+	"strings"
+
+	"gorm.io/gorm"
+)
 
 // dkCopySuffix marks the ERP "_DK" copies of real product lines: SKUs such as
 // SP000556_DK under parent SP000557_DK sit beside the real SP000557 line with
@@ -28,3 +32,13 @@ func RealParentOf(maCha string) string {
 	}
 	return code
 }
+
+// ExcludeDKCopies is a GORM scope that keeps "_DK" copy rows out of a
+// cached_products catalog query, so they neither show up nor use up the
+// query's LIMIT or decide whether a search pass "matched". Stock queries must
+// not use it. ESCAPE keeps "_" literal whatever the server's sql_mode.
+func ExcludeDKCopies(tx *gorm.DB) *gorm.DB {
+	return tx.Where("ma NOT LIKE ? ESCAPE '!' AND COALESCE(ma_cha, '') NOT LIKE ? ESCAPE '!'", dkLikePattern, dkLikePattern)
+}
+
+const dkLikePattern = "%!" + dkCopySuffix

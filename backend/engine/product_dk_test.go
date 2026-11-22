@@ -1,6 +1,13 @@
 package engine
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/vietbui/chat-quality-agent/db/models"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+)
 
 func TestIsDKCopy(t *testing.T) {
 	cases := []struct {
@@ -26,5 +33,28 @@ func TestRealParentOf(t *testing.T) {
 		if got := RealParentOf(in); got != want {
 			t.Errorf("RealParentOf(%q) = %q; want %q", in, got, want)
 		}
+	}
+}
+
+func TestExcludeDKCopiesSQL(t *testing.T) {
+	gdb, err := gorm.Open(mysql.New(mysql.Config{DSN: "u:p@tcp(127.0.0.1:1)/x", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatalf("open dry-run db: %v", err)
+	}
+	var rows []models.CachedProduct
+	stmt := gdb.Scopes(ExcludeDKCopies).Where("tenant_id = ?", "t").Limit(10).Find(&rows).Statement
+	sql := stmt.SQL.String()
+	want := "ma NOT LIKE ? ESCAPE '!' AND COALESCE(ma_cha, '') NOT LIKE ? ESCAPE '!'"
+	if !strings.Contains(sql, want) {
+		t.Fatalf("SQL = %s; want it to contain %s", sql, want)
+	}
+	n := 0
+	for _, v := range stmt.Vars {
+		if v == "%!_DK" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("vars = %#v; want the escaped _DK pattern twice", stmt.Vars)
 	}
 }

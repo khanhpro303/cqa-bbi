@@ -31,7 +31,7 @@ func searchVariantsByAttributes(ctx context.Context, tenantID, parentCode, color
 		limit = 20
 	}
 
-	query := db.DB.WithContext(ctx).
+	query := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Where("tenant_id = ?", tenantID).
 		Where("ma_cha = ?", parentCode)
 	if c := strings.TrimSpace(color); c != "" {

@@ -23,6 +23,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"github.com/vietbui/chat-quality-agent/realtime"
+	"gorm.io/gorm"
 )
 
 // disambiguationReplyPattern matches the short replies the Langflow agent's
@@ -1459,8 +1460,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// 3. Show Product Variants Selection (#show_product_variants:<MA_CHA>)
 		if strings.HasPrefix(userText, "#show_product_variants:") {
-			maCha := strings.TrimPrefix(userText, "#show_product_variants:")
-			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha)
+			maCha := engine.RealParentOf(strings.TrimPrefix(userText, "#show_product_variants:"))
+			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha, engine.ExcludeDKCopies)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Không tìm thấy thông tin chi tiết của dòng sản phẩm.")
 				return nil
@@ -1953,9 +1954,9 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 	return totalStock, nil
 }
 
-func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
+func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string, scopes ...func(*gorm.DB) *gorm.DB) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(scopes...).
 		Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha).
 		Limit(100).
 		Find(&products).Error
@@ -2043,7 +2044,7 @@ func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAda
 // instead of sending an empty or misleading reply.
 func priceRangeReplyByWebName(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, webName string) (string, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
 		Limit(200).Find(&products).Error
 	if err != nil {
@@ -2511,7 +2512,7 @@ func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (stri
 		Ten          string `gorm:"column:ten"`
 	}
 	var candidates []maChaCandidate
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Table((&models.CachedProduct{}).TableName()).
 		Select("ma_cha, MAX(ten_dong_bo_web) AS ten_dong_bo_web, MAX(ten) AS ten").
 		Where("tenant_id = ? AND ma_cha != ''", tenantID).
@@ -2623,7 +2624,7 @@ func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string)
 func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
 		Limit(100).
 		Find(&products).Error
@@ -2639,7 +2640,7 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 		} else if matchedMaCha != "" {
 			log.Printf("[worker] LLM fuzzy matched keyword '%s' to ma_cha '%s'", keyword, matchedMaCha)
 			// Query again using the matched parent product code
-			err = db.DB.WithContext(ctx).
+			err = db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 				Where("tenant_id = ? AND ma_cha = ?", tenantID, matchedMaCha).
 				Limit(100).
 				Find(&products).Error
@@ -2794,7 +2795,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 // MA_CHA list / variant SKUs.
 func getProductsByWebNameFromCache(ctx context.Context, tenantID, webName string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
 		Limit(100).
 		Find(&products).Error
