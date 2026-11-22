@@ -62,7 +62,8 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *int) {
 				*result = products
 			case len(vars) == 2 && vars[0] == stockFixtureTenant && vars[1] == "SP457996":
 				*result = products[:1]
-			case strings.Contains(sql, "ma_cha =") && len(vars) == 2 && vars[0] == stockFixtureTenant && vars[1] == "SP457204":
+			case strings.Contains(sql, "ma_cha IN") && len(vars) == 3 && vars[0] == stockFixtureTenant && vars[1] == "SP457204" && vars[2] == "SP457204_DK":
+				// Parent stock reads the parent and its "_DK" copy parent.
 				*result = products[:2]
 			default:
 				t.Errorf("unexpected catalog query: %s %v", sql, vars)

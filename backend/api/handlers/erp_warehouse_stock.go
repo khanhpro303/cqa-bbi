@@ -51,7 +51,9 @@ func respondWithWarehouseStock(c *gin.Context, client *pkg.CloudifyClient, permi
 			Where("tenant_id = ? AND ten_dong_bo_web = ? AND ma_cha <> ''", tenantID, term).Distinct("ma_cha")
 		query = query.Where("ma_cha IN (?)", parents)
 	case warehouseByParent:
-		query = query.Where("ma_cha = ?", term)
+		// A parent's line also owns the stock of its "_DK" copy parent, which
+		// the catalog no longer lists separately.
+		query = query.Where("ma_cha IN ?", []string{term, engine.DKCopyParentOf(term)})
 	default:
 		query = query.Where("ma = ?", term)
 	}

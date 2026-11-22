@@ -96,7 +96,9 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 	})
 
 	permissions := &engine.GroupPermissionContext{AgentType: "private"}
-	for webName, want := range map[string]float64{"Bulldog DOGO": 5, "": 381} {
+	// Within one web line the parent's "_DK" copy rows count too (5 + 7);
+	// with no web name the plain sum stays on the parent alone.
+	for webName, want := range map[string]float64{"Bulldog DOGO": 12, "": 381} {
 		got, _, err := sumInventoryByMaChaAndWebName(context.Background(), "fixture-tenant", permissions, "fixture-parent", webName)
 		if err != nil || got != want {
 			t.Errorf("stock for web filter %q: got %g, %v; want %g", webName, got, err, want)

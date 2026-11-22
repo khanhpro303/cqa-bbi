@@ -2716,6 +2716,31 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	if err != nil {
 		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
 	}
+	// A parent picked within one web line also owns that line's SKUs under
+	// its "_DK" copy parent, which pickers no longer list on their own. The
+	// no-web-name case is left to its callers: the by-web postback already
+	// sums every parent of the line, and sumInventoryByParentWithDKCopy adds
+	// the copy for a bare parent pick.
+	if dkParent := engine.DKCopyParentOf(maCha); webName != "" && dkParent != strings.TrimSpace(maCha) {
+		var copies []models.CachedProduct
+		if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma_cha = ?", tenantID, dkParent).
+			Where("ten_dong_bo_web = ?", webName).Limit(100).Find(&copies).Error; err != nil {
+			return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+		}
+		seen := make(map[string]struct{}, len(products))
+		for _, p := range products {
+			seen[p.MA] = struct{}{}
+		}
+		for _, p := range copies {
+			if _, dup := seen[p.MA]; !dup {
+				seen[p.MA] = struct{}{}
+				products = append(products, p)
+			}
+		}
+	}
+	if webName == "" && len(products) == 0 {
+		return 0, nil, fmt.Errorf("no cached SKUs for ma_cha=%s", maCha)
+	}
 
 	childProducts := make([]map[string]interface{}, len(products))
 	for i, p := range products {

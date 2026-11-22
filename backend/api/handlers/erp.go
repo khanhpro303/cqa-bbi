@@ -379,7 +379,11 @@ func ERPQuery(c *gin.Context) {
 						log.Printf("[erp_query] fetch by web name=%s failed: %v", lineWebName, fetchErr)
 					}
 					cachedData = rows
-				} else {
+				}
+				// The grouped name is trimmed; if the stored name is not, the exact
+				// read finds nothing. Fall back to the line's parent codes.
+				if len(cachedData) == 0 {
+					lineWebName = ""
 					for _, pc := range webGroups[0].ParentCodes {
 						rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, pc, engine.ExcludeDKCopies)
 						if fetchErr != nil {
@@ -1269,9 +1273,7 @@ func searchProductsByExactWebNameFromCache(ctx context.Context, tenantID, webNam
 	// ma_cha also lists parent codes in the same order as the keyword path
 	// (RankProductWebGroups sorts them).
 	err := db.DB.WithContext(ctx).Scopes(scopes...).
-		// TRIM: web-group search trims names, so a line it found must be
-		// readable here even if the stored name carries stray spaces.
-		Where("tenant_id = ? AND TRIM(ten_dong_bo_web) = ?", tenantID, strings.TrimSpace(webName)).
+		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
 		Order("ma_cha, ma").
 		Limit(limit).
 		Find(&products).Error
