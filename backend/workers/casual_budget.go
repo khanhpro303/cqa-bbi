@@ -210,18 +210,25 @@ type casualReply struct {
 	Prompt  string // system prompt + input, for cost estimates
 }
 
-// parseCasualReply reads the model's answer. A JSON-object answer is
-// unusable: the Zalo sender would post it as a raw message template (links,
-// buttons) instead of text.
+// looksLikeJSON reports an answer wrapped like a JSON object or array.
+func looksLikeJSON(text string) bool {
+	return (strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}")) ||
+		(strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]") && !strings.HasPrefix(text, "[CAN_") && !strings.HasPrefix(text, "[IM_"))
+}
+
+// parseCasualReply reads the model's answer. A JSON-shaped answer is
+// unusable: the Zalo sender would post an object as a raw message template
+// (links, buttons), and neither is a reply a customer should see.
 func parseCasualReply(content string) (string, casualOutcome) {
 	text := strings.TrimSpace(content)
 	switch {
+	case text == "", looksLikeJSON(text):
+		// Checked first: a marker inside JSON is still off-format.
+		return "", casualUnusable
 	case strings.Contains(text, engine.CasualReplyHandoff):
 		return "", casualHandoff
 	case text == engine.CasualReplyQuiet:
 		return "", casualQuietAck
-	case text == "", strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}"):
-		return "", casualUnusable
 	}
 	if r := []rune(text); len(r) > casualReplyMaxRunes {
 		text = strings.TrimSpace(string(r[:casualReplyMaxRunes-1])) + "…"
@@ -246,6 +253,10 @@ func replyToCasualTurn(ctx context.Context, tenantID string, recent []chatmemory
 	}
 	systemPrompt := engine.BuildTaskPrompt(tenantID, engine.PromptCasualReply, nil)
 	input := casualReplyInput(recent, message, staff, mode)
+	// Settings reads above count against the same deadline.
+	if time.Until(deadline) < time.Second {
+		return casualReply{}, errNoTimeForCasualReply
+	}
 
 	callCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()

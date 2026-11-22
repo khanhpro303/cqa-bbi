@@ -254,11 +254,32 @@ const CasualStreakSuffix = ":casual_streak"
 // streak was reset keeps the route it had the first time.
 const CasualPositionSuffix = ":casual_position"
 
+// bumpCasualStreakScript gives a message its position in the small-talk run
+// atomically: an id that already has a position (from an earlier attempt,
+// even across a reset) keeps it; otherwise it joins the run and the position
+// is stored. KEYS: streak set, position hash. ARGV: msg id, score, ttl secs.
+var bumpCasualStreakScript = redis.NewScript(`
+local pos = redis.call("HGET", KEYS[2], ARGV[1])
+if pos then
+	return tonumber(pos)
+end
+redis.call("ZADD", KEYS[1], "NX", ARGV[2], ARGV[1])
+redis.call("EXPIRE", KEYS[1], ARGV[3])
+local rank = redis.call("ZRANK", KEYS[1], ARGV[1]) + 1
+redis.call("HSET", KEYS[2], ARGV[1], rank)
+redis.call("EXPIRE", KEYS[2], ARGV[3])
+return rank
+`)
+
+// CasualHandedOff is the position stored for a message the small-talk model
+// sent to the main bot. A retry of it goes straight to the main bot.
+const CasualHandedOff = -1
+
 // BumpCasualStreak records msgID as a small-talk turn and returns its
 // position in the run (1 for the first). A retry of the same msgID gets the
-// position it got the first time, even across a reset. It returns 0 when
-// Redis is unavailable, fails or msgID is empty, so callers fall back to the
-// normal (full agent) reply. Callers hold the session lock.
+// position it got the first time, even across a reset, or CasualHandedOff.
+// It returns 0 when Redis is unavailable, fails or msgID is empty. Callers
+// send any result below 1 to the main bot.
 func BumpCasualStreak(ctx context.Context, sessionKey, msgID string, timeoutMinutes int) int {
 	if db.RedisClient == nil || strings.TrimSpace(msgID) == "" {
 		return 0
@@ -266,25 +287,23 @@ func BumpCasualStreak(ctx context.Context, sessionKey, msgID string, timeoutMinu
 	if timeoutMinutes <= 0 {
 		timeoutMinutes = 30
 	}
-	ttl := time.Duration(timeoutMinutes)*time.Minute + time.Minute
-	posKey := sessionKey + CasualPositionSuffix
-	if v, err := db.RedisClient.HGet(ctx, posKey, msgID).Int(); err == nil && v > 0 {
-		return v
-	}
-	key := sessionKey + CasualStreakSuffix
-	pipe := db.RedisClient.TxPipeline()
-	pipe.ZAddNX(ctx, key, redis.Z{Score: float64(time.Now().UnixMicro()), Member: msgID})
-	pipe.Expire(ctx, key, ttl)
-	rank := pipe.ZRank(ctx, key, msgID)
-	if _, err := pipe.Exec(ctx); err != nil {
+	ttl := int((time.Duration(timeoutMinutes)*time.Minute + time.Minute) / time.Second)
+	pos, err := bumpCasualStreakScript.Run(ctx, db.RedisClient,
+		[]string{sessionKey + CasualStreakSuffix, sessionKey + CasualPositionSuffix},
+		msgID, time.Now().UnixMicro(), ttl).Int()
+	if err != nil {
 		return 0
 	}
-	pos := int(rank.Val()) + 1
-	pipe = db.RedisClient.TxPipeline()
-	pipe.HSetNX(ctx, posKey, msgID, pos)
-	pipe.Expire(ctx, posKey, ttl)
-	_, _ = pipe.Exec(ctx)
 	return pos
+}
+
+// MarkCasualHandoff records that msgID was handed to the main bot, so a retry
+// (after a failed main-bot call) does not ask the small-talk model again.
+func MarkCasualHandoff(ctx context.Context, sessionKey, msgID string) {
+	if db.RedisClient == nil || strings.TrimSpace(msgID) == "" {
+		return
+	}
+	db.RedisClient.HSet(ctx, sessionKey+CasualPositionSuffix, msgID, CasualHandedOff)
 }
 
 // ResetCasualStreak ends the small-talk run: the chat is back on business.

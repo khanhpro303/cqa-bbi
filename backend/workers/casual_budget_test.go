@@ -90,7 +90,7 @@ func TestParseCasualReply(t *testing.T) {
 	// Empty or JSON-shaped answers are unusable, not a handoff: the turn
 	// stays small talk (a JSON object would be posted as a Zalo template).
 	tpl := `{"message":{"attachment":{"type":"template","payload":{"buttons":[{"url":"https://x"}]}}}}`
-	for _, in := range []string{"", "   ", tpl, " " + tpl + "\n"} {
+	for _, in := range []string{"", "   ", tpl, " " + tpl + "\n", `["Cảm ơn"]`, `{"reply":"` + engine.CasualReplyHandoff + `"}`, `["` + engine.CasualReplyQuiet + `"]`} {
 		if text, out := parseCasualReply(in); out != casualUnusable || text != "" {
 			t.Fatalf("%q should be unusable, got %q %v", in, text, out)
 		}

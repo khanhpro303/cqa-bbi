@@ -905,6 +905,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// A pending order draft waits for this sender's "1"/"2". Settle it here,
 		// before the intent classifier, which would read "ok" as small talk.
 		if handled, err := handleOrderDraftReply(ctx, cfg, adapter, matchedChannel.TenantID, workKey, payload.Sender.ID, matchedGroup.ZaloGroupID, userText); handled {
+			// Confirming or cancelling an order is business: end any
+			// small-talk run (casual_budget.go).
+			engine.ResetCasualStreak(ctx, workKey)
 			return err
 		}
 
@@ -1014,7 +1017,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			case "IN_SCOPE", "OUT_OF_SCOPE":
 				engine.ResetCasualStreak(ctx, workKey)
 			case "CASUAL":
-				streak := engine.BumpCasualStreak(ctx, workKey, casualTurnID(ctx, payload.Message.MsgID), meta.SessionTimeout)
+				turnID := casualTurnID(ctx, payload.Message.MsgID)
+				streak := engine.BumpCasualStreak(ctx, workKey, turnID, meta.SessionTimeout)
+				if streak == engine.CasualHandedOff {
+					// A retry of a turn the small-talk model already sent to
+					// the main bot: go straight there, as business.
+					intent, classified = "IN_SCOPE", "IN_SCOPE"
+					break
+				}
 				budget := casualBudgetFrom(matchedChannel.Metadata)
 				route := routeCasualTurn(streak, budget)
 				if route == casualToAgent {
@@ -1045,6 +1055,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					// business from here on, including the variant-line lock.
 					log.Printf("[casual-budget] sender %s: small-talk model handed turn %d to the main bot", payload.Sender.ID, streak)
 					engine.ResetCasualStreak(ctx, workKey)
+					engine.MarkCasualHandoff(ctx, workKey, turnID)
 					intent, classified = "IN_SCOPE", "IN_SCOPE"
 				case route == casualToQuiet && reply.Outcome == casualQuietAck:
 					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row (quiet after %d); no reply", payload.Sender.ID, streak, budget.QuietAfter)
