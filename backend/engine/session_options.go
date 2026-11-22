@@ -78,6 +78,7 @@ var sessionStateSuffixes = []string{
 	AwaitingDebtCustomerSuffix,
 	PromptDeliveredSuffix,
 	PromptUndeliveredSuffix,
+	CasualStreakSuffix,
 }
 
 // ClearSessionState deletes the base session key AND every sidecar flow-state
@@ -238,6 +239,44 @@ func TakeAwaitingVariantLine(ctx context.Context, sessionKey string) string {
 // engine.BuildStockPickPendingButtons / ParseStockPickWeb), so the numeric pick
 // replays the captured intent verbatim — a single source of truth in the Agent,
 // not a second keyword classifier in the worker.
+
+// CasualStreakSuffix is appended to a session key to count the small-talk
+// turns in a row since the chat last asked something the bot works on. The
+// key is a Redis set of message ids, so a retried task does not count the
+// same message twice. A business turn deletes it; so does session teardown.
+const CasualStreakSuffix = ":casual_streak"
+
+// BumpCasualStreak counts msgID as one more small-talk turn in a row and
+// returns the new count. It returns 0 when Redis is unavailable or fails, so
+// callers fall back to the normal (full agent) reply.
+func BumpCasualStreak(ctx context.Context, sessionKey, msgID string, timeoutMinutes int) int {
+	if db.RedisClient == nil {
+		return 0
+	}
+	if strings.TrimSpace(msgID) == "" {
+		msgID = fmt.Sprintf("t%d", time.Now().UnixNano())
+	}
+	if timeoutMinutes <= 0 {
+		timeoutMinutes = 30
+	}
+	key := sessionKey + CasualStreakSuffix
+	pipe := db.RedisClient.TxPipeline()
+	pipe.SAdd(ctx, key, msgID)
+	pipe.Expire(ctx, key, time.Duration(timeoutMinutes)*time.Minute+time.Minute)
+	card := pipe.SCard(ctx, key)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0
+	}
+	return int(card.Val())
+}
+
+// ResetCasualStreak ends the small-talk run: the chat is back on business.
+func ResetCasualStreak(ctx context.Context, sessionKey string) {
+	if db.RedisClient == nil {
+		return
+	}
+	db.RedisClient.Del(ctx, sessionKey+CasualStreakSuffix)
+}
 
 // AwaitingFollowupSuffix is appended to a session key to mark that the backend
 // just pushed a Zalo prompt that expects the customer's next message as an
