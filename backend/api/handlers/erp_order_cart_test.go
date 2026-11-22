@@ -330,3 +330,26 @@ func TestGroupCartLinesSkipsDKCopies(t *testing.T) {
 		t.Fatalf("lines = %#v; want one LS2 FF399 line with only SP000557", lines)
 	}
 }
+
+// Hiding "_DK" copies can leave one visible SKU; it is added only when the
+// asked colour fits it (or the line has no colour/size at all).
+func TestPickVariantSoleSKUChecksAttributes(t *testing.T) {
+	r := &cartResolver{allowed: func(models.CachedProduct) bool { return true }}
+	ctx := context.Background()
+	red := models.CachedProduct{MA: "SP1", MA_CHA: "SP1", THUOC_TINH_1: "Red", THUOC_TINH_2: "L", DON_GIA_BAN: 100}
+	line := cartProductLine{Name: "Line", Variants: []models.CachedProduct{red}}
+
+	if res := r.pickVariant(ctx, line, cartSpec{color: "Black"}); res.line != nil || res.pending == nil {
+		t.Fatalf("sole Red SKU must not be added for Black: %#v", res)
+	}
+	if res := r.pickVariant(ctx, line, cartSpec{color: "Red"}); res.line == nil {
+		t.Fatalf("sole Red SKU should be added for Red: %#v", res)
+	}
+	if res := r.pickVariant(ctx, line, cartSpec{}); res.line == nil {
+		t.Fatalf("sole SKU should be added when nothing was asked: %#v", res)
+	}
+	plain := cartProductLine{Name: "Plain", Variants: []models.CachedProduct{{MA: "SP2", MA_CHA: "SP2", DON_GIA_BAN: 100}}}
+	if res := r.pickVariant(ctx, plain, cartSpec{color: "Black"}); res.line == nil {
+		t.Fatalf("a line without colour/size should still add its SKU: %#v", res)
+	}
+}

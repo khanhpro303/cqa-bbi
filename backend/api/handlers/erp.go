@@ -414,7 +414,7 @@ func ERPQuery(c *gin.Context) {
 				// a SKU. For a vague/stock query the family price_range is the answer;
 				// for a variant PRICE query the pivot below (shouldPivotToVariant) takes
 				// resolvedParent and re-resolves the exact SKU via product_variants.
-				_, matchedMaCha, _ := resolveMaChaFuzzy(c.Request.Context(), tenantID, req.Search)
+				_, matchedMaCha, _ := resolveMaChaFuzzy(c.Request.Context(), tenantID, req.Search, engine.ExcludeDKCopies)
 				// The embedding index may still point at a "_DK" copy line.
 				matchedMaCha = engine.RealParentOf(matchedMaCha)
 				if matchedMaCha != "" {
@@ -438,15 +438,9 @@ func ERPQuery(c *gin.Context) {
 			// bug). Re-resolve the exact SKU with the SAME engine the
 			// product_variants resource uses, so both routes agree on price.
 			if shouldPivotToVariant(req.Intent, req.Color, req.Size, req.Brand, resolvedParent) {
-				var lineScopes []func(*gorm.DB) *gorm.DB
-				if lineWebName != "" {
-					// Stay on the matched web line before LIMIT: the parent may
-					// carry sibling lines with the same colour/size.
-					lineScopes = append(lineScopes, func(tx *gorm.DB) *gorm.DB {
-						return tx.Where("ten_dong_bo_web = ?", lineWebName)
-					})
-				}
-				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands, lineScopes...)
+				// Stay on the matched web line: the parent may carry sibling
+				// lines with the same colour/size.
+				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands, lineWebName)
 				if vErr != nil {
 					log.Printf("[erp_query] variant price-pivot from products failed parent=%s: %v", resolvedParent, vErr)
 				} else if vResp != nil && keepVariantsOfLine(vResp, lineWebName) {
@@ -547,7 +541,7 @@ func ERPQuery(c *gin.Context) {
 			return
 		}
 
-		response, err := buildVariantResponse(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands)
+		response, err := buildVariantResponse(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands, "")
 		if err != nil {
 			log.Printf("[erp_query] variant attribute search error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -766,7 +760,7 @@ func isVariantPriceIntent(intent, color, size, brand string) bool {
 // out into an unbounded number of variant lookups before we just ask the user.
 func pivotVariantAcrossGroups(ctx context.Context, tenantID string, groups []engine.WebGroupMatch, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool) (gin.H, bool) {
 	return selectUniqueVariantMatch(groups, func(parentCode string) (gin.H, bool) {
-		vResp, vErr := buildVariantResponse(ctx, tenantID, parentCode, color, size, brand, limit, productGroups, allowedBrands, allBrands)
+		vResp, vErr := buildVariantResponse(ctx, tenantID, parentCode, color, size, brand, limit, productGroups, allowedBrands, allBrands, "")
 		if vErr != nil {
 			log.Printf("[erp_query] cross-group variant pivot parent=%s failed: %v", parentCode, vErr)
 			return nil, false
@@ -836,8 +830,16 @@ func selectUniqueVariantMatch(groups []engine.WebGroupMatch, resolve func(parent
 // Returns (nil, err) only when the initial cache lookup hard-fails; every
 // downstream fallback tolerates its own errors by logging and pressing on.
 //
-// scopes narrow every cache read (e.g. to one web line) before LIMIT applies.
-func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool, scopes ...func(*gorm.DB) *gorm.DB) (gin.H, error) {
+// lineWebName, when set, keeps every read on that web line (ten_dong_bo_web):
+// cache reads are narrowed in SQL before LIMIT, and Astra hybrid hits from a
+// sibling line are dropped so the bilingual fallback still runs.
+func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool, lineWebName string) (gin.H, error) {
+	var scopes []func(*gorm.DB) *gorm.DB
+	if lineWebName != "" {
+		scopes = append(scopes, func(tx *gorm.DB) *gorm.DB {
+			return tx.Where("ten_dong_bo_web = ?", lineWebName)
+		})
+	}
 	// A "_DK" copy parent has no visible variants; read its real line.
 	parentCode = engine.RealParentOf(parentCode)
 	variants, err := searchVariantsByAttributes(ctx, tenantID, parentCode, color, size, brand, limit, scopes...)
@@ -897,7 +899,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 	//     The hybrid index ("FF901 — Gloss White — L") handles both.
 	if len(slim) == 0 && (strings.TrimSpace(color) != "" || strings.TrimSpace(size) != "" || strings.TrimSpace(brand) != "") {
 		if hybridRows := hybridMatchVariant(ctx, tenantID, parentCode, effectiveParent, color, size, brand); len(hybridRows) > 0 {
-			hybridSlim := slimVariantsForLLM(withoutDKCopies(filterProductsByBrands(filterProductsByGroups(hybridRows, productGroups), allowedBrands, allBrands)))
+			hybridSlim := slimVariantsForLLM(rowsOfWebLine(withoutDKCopies(filterProductsByBrands(filterProductsByGroups(hybridRows, productGroups), allowedBrands, allBrands)), lineWebName))
 			if len(hybridSlim) > 0 {
 				slim = hybridSlim
 				response["data"] = hybridSlim
@@ -1263,6 +1265,21 @@ func searchProductsFromCache(ctx context.Context, tenantID, search string, limit
 // withoutDKCopies drops ERP "_DK" copy rows (engine.IsDKCopy) from rows the
 // bot shows as a catalog: prices, colour/size lists, search results. Stock
 // sums read the cache directly and keep them, since they hold real stock.
+// rowsOfWebLine keeps cache rows whose ten_dong_bo_web is lineWebName; an
+// empty lineWebName keeps every row.
+func rowsOfWebLine(rows []map[string]interface{}, lineWebName string) []map[string]interface{} {
+	if lineWebName == "" {
+		return rows
+	}
+	kept := make([]map[string]interface{}, 0, len(rows))
+	for _, r := range rows {
+		if getMapString(r, "TEN_DONG_BO_WEB", "ten_dong_bo_web") == lineWebName {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
 func withoutDKCopies(rows []map[string]interface{}) []map[string]interface{} {
 	kept := make([]map[string]interface{}, 0, len(rows))
 	for _, r := range rows {
@@ -3888,7 +3905,10 @@ func classifyDominantMaCha(ctx context.Context, tenantID string, rows []map[stri
 // always answers at the family level so price_range covers the whole line),
 // while the inventory resource honours it to read one SKU's live stock instead
 // of collapsing an already-resolved SKU back into a whole-line query.
-func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) (ma, maCha string, specific bool) {
+//
+// candidateScopes narrow the LLM stage's parent candidates (catalog callers
+// pass engine.ExcludeDKCopies; the inventory caller keeps "_DK" stock parents).
+func resolveMaChaFuzzy(ctx context.Context, tenantID, search string, candidateScopes ...func(*gorm.DB) *gorm.DB) (ma, maCha string, specific bool) {
 	appCfg, cfgErr := config.Load()
 	if cfgErr != nil {
 		log.Printf("[resolve_macha_fuzzy] embedding fuzzy config load error: %v", cfgErr)
@@ -3905,7 +3925,7 @@ func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) (ma, maCha 
 		}
 	}
 
-	m, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search)
+	m, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search, candidateScopes...)
 	if llmErr != nil {
 		log.Printf("[resolve_macha_fuzzy] LLM fuzzy match failed for '%s': %v", search, llmErr)
 	} else if m != "" {

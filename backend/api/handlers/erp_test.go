@@ -1345,3 +1345,19 @@ func TestKeepVariantsOfLine(t *testing.T) {
 		t.Fatal("a zero-result hint response must pass through")
 	}
 }
+
+func TestRowsOfWebLine(t *testing.T) {
+	rows := []map[string]interface{}{
+		{"MA": "A", "TEN_DONG_BO_WEB": "LS2 FF399"},
+		{"MA": "B", "ten_dong_bo_web": "LS2 FF399 Valiant"},
+	}
+	if got := rowsOfWebLine(rows, ""); len(got) != 2 {
+		t.Fatalf("empty line keeps all rows, got %d", len(got))
+	}
+	if got := rowsOfWebLine(rows, "LS2 FF399"); len(got) != 1 || got[0]["MA"] != "A" {
+		t.Fatalf("got %#v", got)
+	}
+	if got := rowsOfWebLine(rows, "Other"); len(got) != 0 {
+		t.Fatalf("sibling hits must be dropped, got %#v", got)
+	}
+}

@@ -446,8 +446,16 @@ func (r *cartResolver) pickVariant(ctx context.Context, line cartProductLine, sp
 	if len(variants) == 0 {
 		return cartResolution{problem: fmt.Sprintf("Dòng \"%s\" không có mã nào được đặt.", line.Name)}
 	}
-	if len(variants) == 1 {
+	if len(variants) == 1 && spec.color == "" && spec.size == "" {
 		return r.resolved(ctx, variants[0])
+	}
+	if len(variants) == 1 {
+		// The sole SKU is added only when the asked colour/size fits it, or
+		// when the line has no colour/size at all: hiding "_DK" copies can
+		// leave one visible SKU of a different colour.
+		if colors, sizes := variantAttributes(variants); len(colors) == 0 && len(sizes) == 0 {
+			return r.resolved(ctx, variants[0])
+		}
 	}
 	color, size := spec.color, spec.size
 	matched := filterCartVariants(variants, color, size)
@@ -646,7 +654,7 @@ func liveCartCatalog(tenantID string, stockClient *pkg.CloudifyClient) cartCatal
 					return lines, false, nil
 				}
 			}
-			_, maCha, _ := resolveMaChaFuzzy(ctx, tenantID, text)
+			_, maCha, _ := resolveMaChaFuzzy(ctx, tenantID, text, engine.ExcludeDKCopies)
 			maCha = engine.RealParentOf(maCha)
 			if maCha == "" {
 				return nil, false, nil
