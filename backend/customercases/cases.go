@@ -91,14 +91,14 @@ type Report struct {
 	SubjectOnly bool
 	// Retry: the turn is a retried message. If it already recorded a
 	// report, that report stands and nothing new is written.
-	Retry bool
-	Source      string
-	Type        string
-	Severity    string
-	Title       string
-	Detail      string
-	Evidence    string
-	Images      []models.CaseImage
+	Retry    bool
+	Source   string
+	Type     string
+	Severity string
+	Title    string
+	Detail   string
+	Evidence string
+	Images   []models.CaseImage
 }
 
 // Outcome is what Report did.
