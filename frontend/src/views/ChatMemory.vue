@@ -4,9 +4,15 @@
     <div class="text-grey-darken-1 mb-4">{{ $t('cm_page_desc') }}</div>
 
     <v-tabs v-model="tab" class="mb-4" color="primary">
+      <v-tab value="cases" data-testid="tab-cases">{{ $t('cm_tab_cases') }}</v-tab>
       <v-tab value="profiles" data-testid="tab-profiles">{{ $t('cm_tab_profiles') }}</v-tab>
       <v-tab value="sessions" data-testid="tab-sessions">{{ $t('cm_tab_sessions') }}</v-tab>
     </v-tabs>
+
+    <!-- Complaint cases -->
+    <v-card v-if="tab === 'cases'" class="pa-4">
+      <CasesPanel :tenant-id="tenantId" @open-session="openSessionById" />
+    </v-card>
 
     <!-- Profiles -->
     <v-card v-if="tab === 'profiles'" class="pa-4">
@@ -102,6 +108,16 @@
               </tr>
             </tbody>
           </v-table>
+          <div class="text-subtitle-2 mb-1">{{ $t('cc_customer_cases') }}</div>
+          <CasesPanel
+            :tenant-id="tenantId"
+            compact
+            :subject-type="selectedProfile.subject_type"
+            :subject-id="selectedProfile.subject_id"
+            :customer-code="selectedProfile.customer_code"
+            class="mb-4"
+            @open-session="openSessionById"
+          />
           <div class="text-subtitle-2 mb-1">{{ $t('cm_recent_sessions') }}</div>
           <SessionTable :sessions="profileSessions" :loading="loadingProfileSessions" compact @open="openSession" />
         </v-card-text>
@@ -197,6 +213,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import SessionTable from '../components/chat-memory/SessionTable.vue'
+import CasesPanel from '../components/chat-memory/CasesPanel.vue'
 import {
   type ChatProfile, type ChatSession, type TranscriptLine,
   parseIssues, parseList, issueTypeLabelKey, severityColor, sentimentColor, profileFieldKeys,
@@ -207,7 +224,9 @@ const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
 const perPage = 20
 
-const tab = ref<'profiles' | 'sessions'>(route.query.tab === 'sessions' ? 'sessions' : 'profiles')
+const tab = ref<'cases' | 'profiles' | 'sessions'>(
+  route.query.tab === 'sessions' ? 'sessions' : route.query.tab === 'profiles' ? 'profiles' : 'cases',
+)
 
 const profiles = ref<ChatProfile[]>([])
 const profileTotal = ref(0)
@@ -349,6 +368,17 @@ async function openSession(s: ChatSession) {
   }
 }
 
+async function openSessionById(id: string) {
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/chat-memory/sessions`, { params: { id } })
+    const s = (data?.data || [])[0] as ChatSession | undefined
+    if (s) await openSession(s)
+    else notify(t('cm_load_failed'), 'error')
+  } catch {
+    notify(t('cm_load_failed'), 'error')
+  }
+}
+
 async function resummarize() {
   if (!selectedSession.value) return
   resummarizing.value = true
@@ -397,10 +427,16 @@ function formatTime(v: string) {
   return new Date(v).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
 }
 
-watch(tab, v => { if (v === 'sessions' && sessions.value.length === 0) loadSessions(1) })
-onMounted(() => { if (tab.value === 'sessions') loadSessions(1); else loadProfiles(1) })
+watch(tab, v => {
+  if (v === 'sessions' && sessions.value.length === 0) loadSessions(1)
+  if (v === 'profiles' && profiles.value.length === 0) loadProfiles(1)
+})
+onMounted(() => {
+  if (tab.value === 'sessions') loadSessions(1)
+  else if (tab.value === 'profiles') loadProfiles(1)
+})
 
-defineExpose({ loadProfiles, loadSessions, profileRows, openSession, sessions, profiles, issueFilter })
+defineExpose({ loadProfiles, loadSessions, profileRows, openSession, openSessionById, sessions, profiles, issueFilter, tab })
 </script>
 
 <style scoped>

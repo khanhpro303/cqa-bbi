@@ -202,6 +202,11 @@ func (o *OpenAIProvider) analyzeWithChatCompletions(ctx context.Context, systemP
 		return AIResponse{}, err
 	}
 
+	return parseChatCompletion(body, o.model)
+}
+
+// parseChatCompletion reads a Chat Completions response.
+func parseChatCompletion(body []byte, fallbackModel string) (AIResponse, error) {
 	var parsed struct {
 		Model   string `json:"model"`
 		Choices []struct {
@@ -223,7 +228,7 @@ func (o *OpenAIProvider) analyzeWithChatCompletions(ctx context.Context, systemP
 
 	model := parsed.Model
 	if model == "" {
-		model = o.model
+		model = fallbackModel
 	}
 
 	return AIResponse{

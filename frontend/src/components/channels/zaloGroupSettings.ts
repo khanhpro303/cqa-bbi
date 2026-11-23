@@ -13,6 +13,7 @@ export function readZaloGroupSettings(metadata: Record<string, unknown> = {}) {
     handover_alert_group_id: typeof metadata.handover_alert_group_id === 'string' ? metadata.handover_alert_group_id : '',
     chat_memory_issue_alerts: metadata.chat_memory_issue_alerts !== false,
     chat_memory_profile_in_prompt: metadata.chat_memory_profile_in_prompt === true,
+    complaint_cases: metadata.complaint_cases === true,
   }
 }
 

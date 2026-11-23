@@ -33,6 +33,20 @@ type GroupPermissionContext struct {
 	// Omitted from old tokens → handlers fall back to legacy guessing.
 	ChannelID   string `json:"channel_id,omitempty"`
 	ZaloGroupID string `json:"zalo_group_id,omitempty"`
+	// GroupGuest: the sender is in a group chat without being a CRM member of
+	// it. Their complaints are their own, not the group's: complaint tools use
+	// the sender's chat and customer code, never the group's.
+	GroupGuest bool `json:"group_guest,omitempty"`
+	// TurnID identifies the chat turn the token was signed for; complaint
+	// reports carry it so the worker can tell what this turn recorded.
+	TurnID string `json:"turn_id,omitempty"`
+	// Complaints: complaint handling is on for this turn (channel switch and
+	// a system prompt carrying the complaint guide). complaint_record refuses
+	// tokens without it.
+	Complaints bool `json:"complaints,omitempty"`
+	// Retry: the worker is processing this message again (an earlier attempt
+	// failed after the bot may have recorded complaints).
+	Retry bool `json:"retry,omitempty"`
 	Groups        []GroupPermission `json:"groups"`
 }
 

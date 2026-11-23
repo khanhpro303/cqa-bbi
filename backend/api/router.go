@@ -368,6 +368,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.GET("/chat-memory/sessions", middleware.RequirePermission("messages", "r"), handlers.ListChatSessions)
 			tenant.GET("/chat-memory/sessions/:sessionId/messages", middleware.RequirePermission("messages", "r"), handlers.GetChatSessionMessages)
 			tenant.POST("/chat-memory/sessions/:sessionId/resummarize", middleware.RequirePermission("messages", "w"), handlers.ResummarizeChatSession)
+			// Complaint cases (Insights khách → Khiếu nại).
+			tenant.GET("/customer-cases", middleware.RequirePermission("messages", "r"), handlers.ListCustomerCases)
+			tenant.GET("/customer-cases/:caseId", middleware.RequirePermission("messages", "r"), handlers.GetCustomerCase)
+			tenant.PATCH("/customer-cases/:caseId", middleware.RequirePermission("messages", "w"), handlers.UpdateCustomerCase)
 			tenant.GET("/chatbot/health", middleware.RequirePermission("settings", "r"), handlers.GetChatbotHealth)
 			tenant.PUT("/settings/analysis", middleware.RequirePermission("settings", "w"), handlers.SaveAnalysisSettings)
 			tenant.POST("/settings/ai/test", middleware.RequirePermission("settings", "w"), handlers.TestAIKey)
