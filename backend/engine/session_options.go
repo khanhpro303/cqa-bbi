@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/db"
 )
@@ -78,6 +80,7 @@ var sessionStateSuffixes = []string{
 	AwaitingDebtCustomerSuffix,
 	PromptDeliveredSuffix,
 	PromptUndeliveredSuffix,
+	CasualStreakSuffix,
 }
 
 // ClearSessionState deletes the base session key AND every sidecar flow-state
@@ -238,6 +241,42 @@ func TakeAwaitingVariantLine(ctx context.Context, sessionKey string) string {
 // engine.BuildStockPickPendingButtons / ParseStockPickWeb), so the numeric pick
 // replays the captured intent verbatim — a single source of truth in the Agent,
 // not a second keyword classifier in the worker.
+
+// CasualStreakSuffix is appended to a session key to count the small-talk
+// turns in a row since the chat last asked something the bot works on. The
+// key is a Redis sorted set of message ids scored by arrival. A business turn
+// deletes it; so does session teardown. Only a task's first attempt touches
+// it (see casualBudgetActive in the worker), so retries cannot skew it.
+const CasualStreakSuffix = ":casual_streak"
+
+// BumpCasualStreak records msgID as a small-talk turn and returns its
+// position in the run (1 for the first). It returns 0 when Redis is
+// unavailable, fails or msgID is empty; callers then use the main bot.
+func BumpCasualStreak(ctx context.Context, sessionKey, msgID string, timeoutMinutes int) int {
+	if db.RedisClient == nil || strings.TrimSpace(msgID) == "" {
+		return 0
+	}
+	if timeoutMinutes <= 0 {
+		timeoutMinutes = 30
+	}
+	key := sessionKey + CasualStreakSuffix
+	pipe := db.RedisClient.TxPipeline()
+	pipe.ZAddNX(ctx, key, redis.Z{Score: float64(time.Now().UnixMicro()), Member: msgID})
+	pipe.Expire(ctx, key, time.Duration(timeoutMinutes)*time.Minute+time.Minute)
+	rank := pipe.ZRank(ctx, key, msgID)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0
+	}
+	return int(rank.Val()) + 1
+}
+
+// ResetCasualStreak ends the small-talk run: the chat is back on business.
+func ResetCasualStreak(ctx context.Context, sessionKey string) {
+	if db.RedisClient == nil {
+		return
+	}
+	db.RedisClient.Del(ctx, sessionKey+CasualStreakSuffix)
+}
 
 // AwaitingFollowupSuffix is appended to a session key to mark that the backend
 // just pushed a Zalo prompt that expects the customer's next message as an

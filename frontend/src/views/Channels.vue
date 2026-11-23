@@ -300,6 +300,17 @@
                 <v-text-field v-model="editForm.session_goodbye_message" :label="$t('session_goodbye')" :hint="$t('session_goodbye_hint')" persistent-hint density="compact" class="mb-3" />
                 <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
                 <v-divider class="my-4" />
+                <div class="text-subtitle-2 mb-1">{{ $t('casual_budget_title') }}</div>
+                <div class="text-caption text-medium-emphasis mb-3">{{ $t('casual_budget_desc') }}</div>
+                <v-row dense>
+                  <v-col cols="12" sm="6">
+                    <v-text-field v-model.number="editForm.casual_full_agent_turns" :label="$t('casual_full_agent_turns')" :hint="$t('casual_full_agent_turns_hint')" persistent-hint type="number" min="0" max="1000" step="1" :rules="[casualWholeRule]" density="compact" class="mb-3" data-testid="casual-full-agent-turns" />
+                  </v-col>
+                  <v-col cols="12" sm="6">
+                    <v-text-field v-model.number="editForm.casual_quiet_after" :label="$t('casual_quiet_after')" :hint="$t('casual_quiet_after_hint')" persistent-hint type="number" min="0" max="1000" step="1" :rules="[casualWholeRule, casualQuietRule]" density="compact" class="mb-3" data-testid="casual-quiet-after" />
+                  </v-col>
+                </v-row>
+                <v-divider class="my-4" />
                 <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
                 <v-alert type="info" variant="tonal" density="compact" class="mb-3">
                   {{ $t('langflow_managed_in_ai_engines') }}
@@ -617,6 +628,25 @@ function channelLabel(channelType: string) {
 
 
 
+// Small-talk budget (backend/workers/casual_budget.go). Same defaults as the
+// backend uses when the channel has no value.
+const CASUAL_FULL_AGENT_TURNS_DEFAULT = 3
+const CASUAL_QUIET_AFTER_DEFAULT = 20
+const CASUAL_SETTING_MAX = 1000 // same bound as casualSettingMax in the backend
+function parseCasualSetting(value: unknown): number | null {
+  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= CASUAL_SETTING_MAX ? n : null
+}
+function readCasualSetting(value: unknown, fallback: number): number {
+  return parseCasualSetting(value) ?? fallback
+}
+const casualWholeRule = (v: unknown) => parseCasualSetting(v) !== null || t('casual_setting_whole_number')
+const casualQuietRule = (v: unknown) => {
+  const quiet = parseCasualSetting(v)
+  const full = parseCasualSetting(editForm.casual_full_agent_turns)
+  return quiet === null || full === null || quiet === 0 || quiet > full || t('casual_quiet_after_too_low')
+}
+
 // Edit channel
 const editDialog = ref(false)
 const savingEdit = ref(false)
@@ -626,6 +656,7 @@ const editChannelType = ref('')
 const editForm = reactive({
   name: '', is_active: true, sync_files: false, sync_interval: 15,
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
+  casual_full_agent_turns: CASUAL_FULL_AGENT_TURNS_DEFAULT as number | string, casual_quiet_after: CASUAL_QUIET_AFTER_DEFAULT as number | string,
 })
 const editGroupSettings = ref(readZaloGroupSettings())
 const editOriginalMeta = ref<Record<string, unknown>>({})
@@ -660,6 +691,8 @@ function openEdit(ch: any) {
     editForm.session_welcome_message = meta.session_welcome_message || ''
     editForm.session_goodbye_message = meta.session_goodbye_message || ''
     editForm.session_timeout_minutes = meta.session_timeout_minutes || 0
+    editForm.casual_full_agent_turns = readCasualSetting(meta.casual_full_agent_turns, CASUAL_FULL_AGENT_TURNS_DEFAULT)
+    editForm.casual_quiet_after = readCasualSetting(meta.casual_quiet_after, CASUAL_QUIET_AFTER_DEFAULT)
   } catch {
     editOriginalMeta.value = {}
     editForm.sync_files = false
@@ -669,12 +702,23 @@ function openEdit(ch: any) {
     editForm.session_welcome_message = ''
     editForm.session_goodbye_message = ''
     editForm.session_timeout_minutes = 0
+    editForm.casual_full_agent_turns = CASUAL_FULL_AGENT_TURNS_DEFAULT
+    editForm.casual_quiet_after = CASUAL_QUIET_AFTER_DEFAULT
   }
   editGroupSettings.value = readZaloGroupSettings(editOriginalMeta.value)
   editDialog.value = true
 }
 
 async function saveEdit() {
+  if (editChannelType.value === 'zalo_oa') {
+    const problem = [casualWholeRule(editForm.casual_full_agent_turns), casualWholeRule(editForm.casual_quiet_after), casualQuietRule(editForm.casual_quiet_after)]
+      .find((r) => r !== true)
+    if (problem) {
+      editTab.value = 'chatbot'
+      showSnack(String(problem), 'error')
+      return
+    }
+  }
   savingEdit.value = true
   try {
     const payload: Record<string, unknown> = {
@@ -695,6 +739,8 @@ async function saveEdit() {
         metaToSave.session_welcome_message = editForm.session_welcome_message
         metaToSave.session_goodbye_message = editForm.session_goodbye_message
         metaToSave.session_timeout_minutes = editForm.session_timeout_minutes
+        metaToSave.casual_full_agent_turns = parseCasualSetting(editForm.casual_full_agent_turns)
+        metaToSave.casual_quiet_after = parseCasualSetting(editForm.casual_quiet_after)
         Object.assign(metaToSave, zaloGroupSettingsPatch(editGroupSettings.value, editOriginalMeta.value))
       }
       payload.metadata = JSON.stringify(metaToSave)
