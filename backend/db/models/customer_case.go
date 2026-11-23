@@ -75,12 +75,17 @@ type CustomerCaseEvent struct {
 	// assign | edit.
 	Kind string `gorm:"type:varchar(20);not null" json:"kind"`
 	// Actor: bot | summary | staff.
-	Actor     string    `gorm:"type:varchar(20);not null" json:"actor"`
-	ActorName string    `gorm:"type:varchar(255);not null;default:''" json:"actor_name"`
-	SessionID string    `gorm:"type:varchar(100);not null;default:''" json:"session_id"`
-	Text      string    `gorm:"type:text" json:"text"`
-	Images    string    `gorm:"type:json" json:"images"`
-	CreatedAt time.Time `gorm:"not null;index:idx_ccevent_case_time,priority:2" json:"created_at"`
+	Actor     string `gorm:"type:varchar(20);not null" json:"actor"`
+	ActorName string `gorm:"type:varchar(255);not null;default:''" json:"actor_name"`
+	SessionID string `gorm:"type:varchar(100);not null;default:''" json:"session_id"`
+	// ZaloUserID: who reported it (bot and summary events).
+	ZaloUserID string `gorm:"type:varchar(100);not null;default:''" json:"zalo_user_id"`
+	// StaffNotified: staff were alerted about this report, or about the case
+	// recently enough that no new alert was needed.
+	StaffNotified bool      `gorm:"not null;default:false" json:"staff_notified"`
+	Text          string    `gorm:"type:text" json:"text"`
+	Images        string    `gorm:"type:json" json:"images"`
+	CreatedAt     time.Time `gorm:"not null;index:idx_ccevent_case_time,priority:2" json:"created_at"`
 }
 
 func (CustomerCaseEvent) TableName() string { return "customer_case_events" }

@@ -33,6 +33,10 @@ type GroupPermissionContext struct {
 	// Omitted from old tokens → handlers fall back to legacy guessing.
 	ChannelID   string `json:"channel_id,omitempty"`
 	ZaloGroupID string `json:"zalo_group_id,omitempty"`
+	// GroupGuest: the sender is in a group chat without being a CRM member of
+	// it. Their complaints are their own, not the group's: complaint tools use
+	// the sender's chat and customer code, never the group's.
+	GroupGuest bool `json:"group_guest,omitempty"`
 	Groups        []GroupPermission `json:"groups"`
 }
 

@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/vietbui/chat-quality-agent/ai"
@@ -23,11 +24,6 @@ const (
 	imageMaxBytes      = 8 << 20
 	imageMaxPerMessage = 4
 )
-
-// imageHostSuffixes are the hosts Zalo serves customer images from. Only
-// these are downloaded: the URL comes from the webhook, and the server must
-// not be made to fetch arbitrary addresses.
-var imageHostSuffixes = []string{"zdn.vn", "zadn.vn", "zalo.me", "zaloapp.com", "zalo.vn"}
 
 // inboundImage is one image a customer sent and what the AI read in it.
 type inboundImage struct {
@@ -46,7 +42,9 @@ func imageURLs(atts []ZaloWebhookAttachment) []string {
 		if u == "" {
 			u = strings.TrimSpace(att.Payload.Thumbnail)
 		}
-		if u != "" && len(out) < imageMaxPerMessage {
+		// Only Zalo CDN URLs are kept: anything else is neither fetched nor
+		// stored (staff browsers would load it from the case page).
+		if u != "" && allowedImageURL(u) && len(out) < imageMaxPerMessage {
 			out = append(out, u)
 		}
 	}
@@ -54,25 +52,46 @@ func imageURLs(atts []ZaloWebhookAttachment) []string {
 }
 
 // allowedImageURL reports whether u is an https URL on a Zalo image host.
-func allowedImageURL(u string) bool {
-	parsed, err := url.Parse(u)
-	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
-		return false
-	}
-	host := strings.ToLower(parsed.Hostname())
-	if parsed.Port() != "" && parsed.Port() != "443" {
-		return false
-	}
-	for _, suffix := range imageHostSuffixes {
-		if host == suffix || strings.HasSuffix(host, "."+suffix) {
-			return true
+func allowedImageURL(u string) bool { return customercases.AllowedImageURL(u) }
+
+// publicAddress reports whether ip is a public unicast address: the image
+// host's name may resolve anywhere, so the connection itself is checked.
+func publicAddress(ip net.IP) bool {
+	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() &&
+		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsInterfaceLocalMulticast() &&
+		!ip.IsMulticast() && !cgnat.Contains(ip)
+}
+
+var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// imageDialer refuses connections to non-public addresses, checked on the
+// address actually dialled (after DNS), so a Zalo-looking host name that
+// resolves to the server's own network is not reachable.
+var imageDialer = &net.Dialer{
+	Timeout: 10 * time.Second,
+	Control: func(network, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
 		}
-	}
-	return false
+		if !publicAddress(net.ParseIP(host)) {
+			return fmt.Errorf("image host resolves to a non-public address %s", host)
+		}
+		return nil
+	},
 }
 
 var imageHTTPClient = &http.Client{
 	Timeout: 15 * time.Second,
+	// No proxy: the dialer's address check must see the image host itself.
+	Transport: &http.Transport{
+		Proxy:                 nil,
+		DialContext:           imageDialer.DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       60 * time.Second,
+	},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 3 || !allowedImageURL(req.URL.String()) {
 			return errors.New("redirect to a non-Zalo host refused")

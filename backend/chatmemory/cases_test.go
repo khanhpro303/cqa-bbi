@@ -19,15 +19,18 @@ func TestSessionAlertIssuesSkipsCaseIssues(t *testing.T) {
 		{Type: "bot_failure", Severity: "high", Detail: "bot trả lời sai giá", NeedsCase: true},
 		{Type: "price", Severity: "medium", Detail: "hỏi giá"},
 	}}
-	got := sessionAlertIssues(models.ChatSession{AgentType: "public"}, r, true)
+	// The defect's case reached staff: it is not alerted again.
+	got := sessionAlertIssues(r, map[int]bool{0: true})
 	if len(got) != 1 || got[0].Type != "bot_failure" {
-		t.Fatalf("with cases on: %+v", got)
+		t.Fatalf("case notified: %+v", got)
 	}
-	if got := sessionAlertIssues(models.ChatSession{AgentType: "public"}, r, false); len(got) != 2 {
+	// Its case was written but the alert failed (or the write failed): the
+	// session alert still carries it.
+	if got := sessionAlertIssues(r, map[int]bool{0: false}); len(got) != 2 {
+		t.Fatalf("case not notified, issue must stay in the session alert: %+v", got)
+	}
+	if got := sessionAlertIssues(r, nil); len(got) != 2 {
 		t.Fatalf("with cases off every high issue is a session alert: %+v", got)
-	}
-	if got := sessionAlertIssues(models.ChatSession{AgentType: "private"}, r, true); len(got) != 2 {
-		t.Fatalf("staff-bot sessions do not open cases, so they keep the session alert: %+v", got)
 	}
 }
 
@@ -49,7 +52,7 @@ func TestSessionIssuesBecomeCasesMySQL(t *testing.T) {
 	if err := db.DB.Create(&models.Tenant{ID: tenantID, Name: "t", Slug: "t-" + tenantID[:8], Settings: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DB.Create(&models.Channel{ID: channelID, TenantID: tenantID, ChannelType: "zalo_oa", Name: "OA", CredentialsEncrypted: []byte("x"), Metadata: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+	if err := db.DB.Create(&models.Channel{ID: channelID, TenantID: tenantID, ChannelType: "zalo_oa", Name: "OA", CredentialsEncrypted: []byte("x"), Metadata: `{"complaint_cases":true}`, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	userID, sessionID := "zu-"+pkg.NewUUID()[:8], pkg.NewUUID()

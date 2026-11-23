@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -11,8 +12,8 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 )
 
-// RenderForBot lists cases for the bot's system prompt. It shows no ids or
-// numbers the bot could repeat to the customer.
+// RenderForBot lists cases for the bot's system prompt. It shows no ids, and
+// ticket numbers written into the text are stripped (StripRefs).
 func RenderForBot(cases []models.CustomerCase, loc *time.Location) string {
 	if len(cases) == 0 {
 		return "(không có)"
@@ -22,12 +23,12 @@ func RenderForBot(cases []models.CustomerCase, loc *time.Location) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "- %s: %s (báo lúc %s; %s", TypeLabel(c.Type), oneLine(c.Title), c.CreatedAt.In(loc).Format("15:04 02/01"), StatusLabel(c.Status))
+		fmt.Fprintf(&b, "- %s: %s (báo lúc %s; %s", TypeLabel(c.Type), oneLine(StripRefs(c.Title)), c.CreatedAt.In(loc).Format("15:04 02/01"), StatusLabel(c.Status))
 		if c.FollowupCount > 0 {
 			fmt.Fprintf(&b, "; khách đã hỏi lại %d lần", c.FollowupCount)
 		}
 		b.WriteString(")")
-		if u := strings.TrimSpace(c.CustomerUpdate); u != "" {
+		if u := StripRefs(strings.TrimSpace(c.CustomerUpdate)); u != "" {
 			fmt.Fprintf(&b, "\n  Nhân viên cho phép báo khách: %s", oneLine(truncate(u, 400)))
 		}
 	}
@@ -56,11 +57,34 @@ type BotView struct {
 // customer must never be given one.
 func ViewForBot(c models.CustomerCase) BotView {
 	return BotView{
-		Title: c.Title, Type: TypeLabel(c.Type), Status: StatusLabel(c.Status),
+		Title: StripRefs(c.Title), Type: TypeLabel(c.Type), Status: StatusLabel(c.Status),
 		ReportedAt:    c.CreatedAt.In(location(c.TenantID)).Format("15:04 02/01/2006"),
-		FollowupCount: c.FollowupCount, CustomerUpdate: strings.TrimSpace(c.CustomerUpdate),
+		FollowupCount: c.FollowupCount, CustomerUpdate: StripRefs(strings.TrimSpace(c.CustomerUpdate)),
 		Images: len(parseImages(c.Images)),
 	}
+}
+
+// imageHostSuffixes are the hosts Zalo serves customer images from. Only
+// images on these hosts are downloaded, stored on messages and cases, and
+// shown to staff: the URL comes from the webhook.
+var imageHostSuffixes = []string{"zdn.vn", "zadn.vn", "zalo.me", "zaloapp.com", "zalo.vn"}
+
+// AllowedImageURL reports whether u is an https URL on a Zalo image host.
+func AllowedImageURL(u string) bool {
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
+		return false
+	}
+	if parsed.Port() != "" && parsed.Port() != "443" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, suffix := range imageHostSuffixes {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ImageAttachment is how an inbound image is stored in messages.attachments.
@@ -111,7 +135,7 @@ func conversationImages(ctx context.Context, tenantID, conversationID, senderID 
 			continue
 		}
 		for _, a := range atts {
-			if a.Type == "image" && a.URL != "" {
+			if a.Type == "image" && AllowedImageURL(a.URL) {
 				out = append(out, models.CaseImage{URL: a.URL, Description: a.Description, At: m.SentAt})
 			}
 		}

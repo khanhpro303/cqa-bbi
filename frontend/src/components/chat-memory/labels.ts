@@ -144,10 +144,25 @@ export interface CaseEvent {
 export const caseTypes = ['complaint', 'delivery', 'product_defect', 'price', 'payment', 'staff_request', 'other']
 export const caseStatuses = ['open', 'in_progress', 'resolved', 'cancelled']
 
+// Customer images come from Zalo's CDN. Anything else is not shown, so
+// opening a case never makes the browser load an arbitrary address.
+const zaloImageHosts = ['zdn.vn', 'zadn.vn', 'zalo.me', 'zaloapp.com', 'zalo.vn']
+
+export function isZaloImageURL(raw: string): boolean {
+  try {
+    const u = new URL(raw)
+    if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443')) return false
+    const host = u.hostname.toLowerCase()
+    return zaloImageHosts.some(s => host === s || host.endsWith('.' + s))
+  } catch {
+    return false
+  }
+}
+
 export function parseCaseImages(raw: string | null | undefined): CaseImage[] {
   try {
     const v = JSON.parse(raw || '[]')
-    return Array.isArray(v) ? v.filter(x => x && typeof x.url === 'string' && x.url) : []
+    return Array.isArray(v) ? v.filter(x => x && typeof x.url === 'string' && isZaloImageURL(x.url)) : []
   } catch {
     return []
   }

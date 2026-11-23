@@ -91,8 +91,12 @@ func handleComplaintTool(ctx context.Context, tenantID, agentType, permissionTok
 		return result(gin.H{"error": "complaint_unavailable", "message": "Chưa ghi nhận được lúc này. Hãy xin lỗi khách và nói em sẽ chuyển ngay cho nhân viên."}, true)
 	}
 	auditComplaint(tenantID, permissions, 200, 1)
-	log.Printf("[cases] %s case %s for %s/%s (%s)", out.Action, out.Case.ID, report.SubjectType, report.SubjectID, out.Reason)
-	return result(gin.H{"status": "success", "action": out.Action, "case": customercases.ViewForBot(out.Case)}, false)
+	log.Printf("[cases] %s case %s for %s/%s (staff_notified=%t, %s)", out.Action, out.Case.ID, report.SubjectType, report.SubjectID, out.StaffNotified, out.Reason)
+	body := gin.H{"status": "success", "action": out.Action, "staff_notified": out.StaffNotified, "case": customercases.ViewForBot(out.Case)}
+	if !out.StaffNotified {
+		body["note"] = "Đã lưu vấn đề nhưng chưa báo trực tiếp được nhân viên. Chỉ nói với khách là em đã ghi nhận; không hứa nhân viên sẽ liên hệ ngay."
+	}
+	return result(body, false)
 }
 
 // complaintReport builds the report for the chat the token pins. It returns
@@ -110,18 +114,28 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 		Source: customercases.SourceBot, Type: args.Type, Severity: args.Severity,
 		Title: args.Title, Detail: args.Detail, Evidence: args.Evidence,
 	}
-	if p.ZaloGroupID != "" {
+	// A group's cases belong to the group, except for a sender who is not a
+	// CRM member of it (GroupGuest): theirs stay their own, matched only with
+	// their own chat and customer code.
+	if p.ZaloGroupID != "" && !p.GroupGuest {
 		r.SubjectType, r.SubjectID = "group", p.ZaloGroupID
 	}
 	if db.DB != nil {
+		var ch models.Channel
+		if err := db.DB.WithContext(ctx).Select("id, metadata").Where("id = ? AND tenant_id = ?", p.ChannelID, p.TenantID).First(&ch).Error; err != nil || !customercases.EnabledFor(ch.Metadata) {
+			return customercases.Report{}, "Kênh này chưa bật ghi nhận khiếu nại. Hãy nói với khách em sẽ chuyển thông tin cho nhân viên phụ trách."
+		}
 		r.ReporterName = zaloPersonName(p.TenantID, p.ZaloUserID)
 		r.CustomerName = r.ReporterName
 		if p.ZaloGroupID != "" {
 			var g models.CRMGroup
 			if err := db.DB.Select("name, customer_code").Where("tenant_id = ? AND zalo_group_id = ?", p.TenantID, p.ZaloGroupID).First(&g).Error; err == nil {
-				r.ChatGroup, r.CustomerName = g.Name, g.Name
-				if r.CustomerCode == "" {
-					r.CustomerCode = g.CustomerCode
+				r.ChatGroup = g.Name
+				if !p.GroupGuest {
+					r.CustomerName = g.Name
+					if r.CustomerCode == "" {
+						r.CustomerCode = g.CustomerCode
+					}
 				}
 			}
 		}

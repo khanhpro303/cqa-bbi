@@ -20,19 +20,18 @@ const alertTimeout = 10 * time.Second
 // MetaEnabled is the channel metadata switch for complaint cases: the bot
 // gets the complaint guide and the customer's open cases, a HANDOVER turn
 // goes to the bot so it can record the case, and staff are alerted about
-// cases. Unset means on.
+// cases. Unset means off: turn it on once the Langflow MCP Tools node lists
+// complaint_record, or complaints would reach a bot that cannot record them.
 const MetaEnabled = "complaint_cases"
 
 // EnabledFor reads the switch from channel metadata JSON.
 func EnabledFor(metadata string) bool {
 	var m map[string]interface{}
 	if json.Unmarshal([]byte(metadata), &m) != nil {
-		return true
+		return false
 	}
-	if v, ok := m[MetaEnabled].(bool); ok {
-		return v
-	}
-	return true
+	v, _ := m[MetaEnabled].(bool)
+	return v
 }
 
 // sendAlert delivers a case alert; replaced in tests.
@@ -46,30 +45,34 @@ var sendAlert = func(ctx context.Context, ch models.Channel, a engine.CaseAlert)
 }
 
 // alertStaff tells staff about a new case, a reopened case, or a customer
-// chasing an open case (at most once per followupAlertGap).
-func alertStaff(ctx context.Context, out *Outcome, r Report) {
+// chasing an open case (at most once per followupAlertGap). It reports
+// whether staff know about this report: alerted now, or alerted about the
+// case recently enough (follow-up) or before (summary link).
+func alertStaff(ctx context.Context, out *Outcome, r Report) bool {
 	c := out.Case
 	switch out.Action {
 	case ActionCreated, ActionReopened:
 	case ActionFollowup:
 		if c.LastAlertAt != nil && time.Since(*c.LastAlertAt) < followupAlertGap {
-			return
+			return true
 		}
+	case ActionLinked:
+		return c.LastAlertAt != nil
 	default:
-		return
+		return false
 	}
 	if c.ChannelID == "" {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), alertTimeout)
 	defer cancel()
 	var ch models.Channel
 	if err := db.DB.WithContext(ctx).Where("id = ? AND tenant_id = ?", c.ChannelID, c.TenantID).First(&ch).Error; err != nil {
 		log.Printf("[cases] alert: load channel %s: %v", c.ChannelID, err)
-		return
+		return false
 	}
 	if !EnabledFor(ch.Metadata) {
-		return
+		return false
 	}
 	group := ""
 	if c.SubjectType == "group" {
@@ -94,11 +97,13 @@ func alertStaff(ctx context.Context, out *Outcome, r Report) {
 		}
 	}
 	if !sendAlert(ctx, ch, a) {
-		return
+		log.Printf("[cases] alert for case %s (%s) was not delivered", c.ID, out.Action)
+		return false
 	}
 	now := time.Now()
 	db.DB.WithContext(ctx).Model(&models.CustomerCase{}).Where("id = ?", c.ID).Update("last_alert_at", now)
 	out.Case.LastAlertAt = &now
+	return true
 }
 
 func joinNonEmpty(a, b string) string {

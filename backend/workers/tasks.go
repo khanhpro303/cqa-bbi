@@ -704,9 +704,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// a holder can only ever release its own lock — never one a later worker
 		// acquired after a TTL lapse. Locking on workKey means different senders in
 		// a group run in parallel (when the feature is on) instead of serialising.
+		// lockKey/lockToken: this turn's session lock (empty without Redis).
+		var lockKey, lockToken string
 		if db.RedisClient != nil {
-			lockKey := workKey + ":lock"
-			var lockToken string
+			lockKey = workKey + ":lock"
 			acquired := false
 			// Try to acquire the lock every 250ms for up to 30 seconds.
 			for i := 0; i < 120; i++ {
@@ -854,6 +855,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		var images []inboundImage
 		if urls := imageURLs(payload.Message.Attachments); len(urls) > 0 {
 			images = readInboundImages(ctx, matchedChannel.TenantID, matchedChannel.ID, urls, strings.TrimSpace(payload.Message.Text))
+			// Reading images can take up to imageReadTimeout of the lock's
+			// lease; renew it so the classifier and Langflow call that follow
+			// still finish under the lock.
+			if lockToken != "" && !engine.ExtendSessionLock(ctx, lockKey, lockToken) {
+				log.Printf("[zalo-drop] reason=session_lock_lost sender=%s after reading images", payload.Sender.ID)
+				return nil
+			}
 			if text := imagesText(images); text != "" {
 				if userText == "" {
 					userText = text
@@ -1007,12 +1015,28 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// Complaint cases: a complaint goes to the bot, which records it as a
-		// case (complaint_record) and answers the customer itself. If the bot
-		// does not record anything, staff still get the handover alert.
-		complaintCases := customercases.EnabledFor(matchedChannel.Metadata)
-		if intent == "HANDOVER" && complaintCases {
-			log.Printf("[cases] HANDOVER from %s goes to the bot to record a case", payload.Sender.ID)
-			intent = "IN_SCOPE"
+		// case (complaint_record) and answers the customer itself. The guide
+		// rides on the AI Engine system prompt, so without one the legacy
+		// handover path stays.
+		caseAgentType := "public"
+		if isWhitelisted && matchedGroup.ZaloGroupID == "" {
+			caseAgentType = "private"
+		}
+		complaintCases := customercases.EnabledFor(matchedChannel.Metadata) &&
+			strings.TrimSpace(selectSystemPrompt(caseAgentType, meta.SystemPrompt, meta.SystemPromptInternal)) != ""
+		// A sender in a group chat who is not a CRM member of it (a customer
+		// in someone else's group) has their own cases, not the group's.
+		groupGuest := matchedGroup.ZaloGroupID != "" && !groupMember && !isWhitelisted
+		caseSubjectType, caseSubjectID := memTurn.Subject()
+		if groupGuest {
+			caseSubjectType, caseSubjectID = "user", payload.Sender.ID
+		}
+		if complaintCases {
+			handover := intent == "HANDOVER"
+			if handover {
+				log.Printf("[cases] HANDOVER from %s goes to the bot to record a case", payload.Sender.ID)
+				intent = "IN_SCOPE"
+			}
 			alert := engine.HandoverAlert{
 				TenantID:   matchedChannel.TenantID,
 				Channel:    *matchedChannel,
@@ -1024,13 +1048,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				alert.CustomerName = customerRec.Name
 				alert.CustomerCode = customerCode
 			}
-			subjectType, subjectID := memTurn.Subject()
+			// Staff must hear about this turn's complaint: if the bot did not
+			// record one (on a HANDOVER turn), or recorded one whose alert did
+			// not go out, the handover alert goes instead.
 			defer func() {
-				if customercases.TouchedSince(context.WithoutCancel(ctx), matchedChannel.TenantID, subjectType, subjectID, turnStart) {
+				bg := context.WithoutCancel(ctx)
+				recorded, notified := customercases.TurnCaseState(bg, matchedChannel.TenantID, caseSubjectType, caseSubjectID, payload.Sender.ID, turnStart)
+				if notified || (!recorded && !handover) {
 					return
 				}
-				log.Printf("[cases] bot recorded no case for %s's complaint; sending the handover alert", payload.Sender.ID)
-				engine.NotifyHandover(context.WithoutCancel(ctx), adapter, alert)
+				log.Printf("[cases] complaint turn from %s reached no staff (recorded=%t); sending the handover alert", payload.Sender.ID, recorded)
+				engine.NotifyHandover(bg, adapter, alert)
 			}()
 		}
 
@@ -1205,9 +1233,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// and into this conversation (group or 1:1), and land under workKey.
 		permCtx.ChannelID = matchedChannel.ID
 		permCtx.ZaloGroupID = matchedGroup.ZaloGroupID
+		permCtx.GroupGuest = groupGuest
 		systemPromptToUse = appendOrderCartContext(ctx, matchedChannel.TenantID, workKey, &permCtx, systemPromptToUse)
 		if complaintCases {
-			systemPromptToUse = appendComplaintContext(ctx, memTurn, customerCode, systemPromptToUse)
+			systemPromptToUse = appendComplaintContext(ctx, matchedChannel.TenantID, caseSubjectType, caseSubjectID, customerCode, systemPromptToUse)
 		}
 
 		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
@@ -1854,6 +1883,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// of being dropped as small talk.
 			engine.StoreAwaitingFollowup(ctx, workKey, meta.SessionTimeout)
 			return nil
+		}
+
+		// Customers are never given a ticket or case number, whatever the
+		// model wrote (see customercases.StripRefs).
+		if complaintCases {
+			if cleaned := customercases.StripRefs(replyText); cleaned != replyText && strings.TrimSpace(cleaned) != "" {
+				log.Printf("[cases] removed a case reference from the reply to %s", payload.Sender.ID)
+				replyText = cleaned
+			}
 		}
 
 		// Legacy raw history in Astra (see the user message above). The reply

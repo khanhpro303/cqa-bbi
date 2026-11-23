@@ -85,12 +85,14 @@ func TestMergeImagesDedupesAndCaps(t *testing.T) {
 	}
 }
 
-func TestEnabledForDefaultsOn(t *testing.T) {
-	if !EnabledFor("") || !EnabledFor("{}") || !EnabledFor(`{"complaint_cases":true}`) {
-		t.Fatal("unset must mean on")
+// Off until staff turn it on (after the Langflow MCP Tools node lists
+// complaint_record).
+func TestEnabledForDefaultsOff(t *testing.T) {
+	if EnabledFor("") || EnabledFor("{}") || EnabledFor(`{"complaint_cases":false}`) || EnabledFor(`{"complaint_cases":"yes"}`) {
+		t.Fatal("unset must mean off")
 	}
-	if EnabledFor(`{"complaint_cases":false}`) {
-		t.Fatal("false must turn it off")
+	if !EnabledFor(`{"complaint_cases":true}`) {
+		t.Fatal("true must turn it on")
 	}
 }
 

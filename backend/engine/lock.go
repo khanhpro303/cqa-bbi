@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,4 +57,29 @@ func ReleaseSessionLock(ctx context.Context, lockKey, token string) {
 		return
 	}
 	_ = releaseLockScript.Run(ctx, db.RedisClient, []string{lockKey}, token).Err()
+}
+
+// extendLockScript resets the lock's TTL only if it still holds the caller's
+// token (compare-and-pexpire).
+var extendLockScript = redis.NewScript(`
+if redis.call("get", KEYS[1]) == ARGV[1] then
+	return redis.call("pexpire", KEYS[1], ARGV[2])
+end
+return 0
+`)
+
+// ExtendSessionLock gives the holder of lockKey a fresh SessionLockTTL, for a
+// turn that spent time on a step before its Langflow call (reading images).
+// It reports false only when the lock is known to belong to someone else
+// now; a Redis error keeps the old lease and reports true.
+func ExtendSessionLock(ctx context.Context, lockKey, token string) bool {
+	if db.RedisClient == nil || token == "" {
+		return true
+	}
+	n, err := extendLockScript.Run(ctx, db.RedisClient, []string{lockKey}, token, SessionLockTTL.Milliseconds()).Int()
+	if err != nil {
+		log.Printf("[lock] extend %s: %v", lockKey, err)
+		return true
+	}
+	return n == 1
 }

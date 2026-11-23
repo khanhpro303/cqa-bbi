@@ -100,13 +100,12 @@ func appendChatMemoryContext(ctx context.Context, cfg *config.Config, channelMet
 // the bot records complaints with complaint_record and knows what is still
 // being handled. Skipped when no system prompt is set, like the other
 // blocks, so the flow's own prompt is never replaced by this block alone.
-func appendComplaintContext(ctx context.Context, turn chatmemory.Turn, customerCode, systemPrompt string) string {
+func appendComplaintContext(ctx context.Context, tenantID, subjectType, subjectID, customerCode, systemPrompt string) string {
 	if strings.TrimSpace(systemPrompt) == "" {
 		return systemPrompt
 	}
-	subjectType, subjectID := turn.Subject()
-	block := customercases.BotContext(ctx, turn.TenantID, subjectType, subjectID, customerCode, func(cases string) string {
-		return engine.BuildTaskPrompt(turn.TenantID, engine.PromptComplaintBot, map[string]string{"cases": cases})
+	block := customercases.BotContext(ctx, tenantID, subjectType, subjectID, customerCode, func(cases string) string {
+		return engine.BuildTaskPrompt(tenantID, engine.PromptComplaintBot, map[string]string{"cases": cases})
 	})
 	if strings.TrimSpace(block) == "" {
 		return systemPrompt

@@ -67,7 +67,13 @@ describe('Complaint cases panel', () => {
 
 describe('case labels', () => {
   it('parses images and measures waiting time', () => {
-    expect(parseCaseImages('[{"url":"a"},{"x":1}]')).toEqual([{ url: 'a' }])
+    expect(parseCaseImages('[{"url":"https://f1.zdn.vn/a.jpg"},{"x":1}]')).toEqual([{ url: 'https://f1.zdn.vn/a.jpg' }])
+    // Only Zalo CDN images are shown: opening a case must not make the
+    // browser load an arbitrary address.
+    expect(parseCaseImages(JSON.stringify([
+      { url: 'http://f1.zdn.vn/a.jpg' }, { url: 'https://evil.example/x.png' },
+      { url: 'https://f1.zdn.vn.evil.example/x.png' }, { url: 'https://user@f1.zdn.vn/x.png' }, { url: 'javascript:alert(1)' },
+    ]))).toEqual([])
     expect(parseCaseImages('bad')).toEqual([])
     expect(Math.round(waitingHours(new Date(Date.now() - 3 * 3_600_000).toISOString()))).toBe(3)
   })

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func setupTenant(t *testing.T) (tenantID, channelID string) {
 	if err := db.DB.Create(&models.Tenant{ID: tenantID, Name: "t", Slug: "t-" + tenantID[:8], Settings: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DB.Create(&models.Channel{ID: channelID, TenantID: tenantID, ChannelType: "zalo_oa", Name: "OA", CredentialsEncrypted: []byte("x"), Metadata: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+	if err := db.DB.Create(&models.Channel{ID: channelID, TenantID: tenantID, ChannelType: "zalo_oa", Name: "OA", CredentialsEncrypted: []byte("x"), Metadata: `{"complaint_cases":true}`, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	return tenantID, channelID
@@ -101,7 +102,7 @@ func TestRecordLifecycleMySQL(t *testing.T) {
 	r1.Type, r1.Severity, r1.Title, r1.Detail, r1.Evidence = "product_defect", "high", "Kính FF800 bị nứt", "Nhận hàng thấy kính nứt", "kính nứt rồi em"
 	r1.Images = []models.CaseImage{{URL: "https://f1.zdn.vn/a.jpg", Description: "kính nứt"}}
 	out, err := Record(ctx, r1)
-	if err != nil || out.Action != ActionCreated {
+	if err != nil || out.Action != ActionCreated || !out.StaffNotified {
 		t.Fatalf("first report: %+v %v", out, err)
 	}
 	if len(model.inputs) != 0 || len(*alerts) != 1 || (*alerts)[0].Kind != ActionCreated || (*alerts)[0].ImageCount != 1 {
@@ -116,7 +117,7 @@ func TestRecordLifecycleMySQL(t *testing.T) {
 	r2.Title, r2.Detail, r2.Evidence = "Khách hỏi kính nứt xử lý tới đâu", "Hỏi tiến độ", "sao rồi em"
 	r2.Images = []models.CaseImage{{URL: "https://f1.zdn.vn/b.jpg"}}
 	out, err = Record(ctx, r2)
-	if err != nil || out.Action != ActionFollowup || out.Case.ID != first.ID || out.Case.FollowupCount != 1 {
+	if err != nil || out.Action != ActionFollowup || out.Case.ID != first.ID || out.Case.FollowupCount != 1 || !out.StaffNotified {
 		t.Fatalf("follow-up: %+v %v", out, err)
 	}
 	if len(*alerts) != 1 {
@@ -193,8 +194,14 @@ func TestRecordLifecycleMySQL(t *testing.T) {
 		t.Fatalf("other chat sees cases: %d", len(open))
 	}
 
-	if !TouchedSince(ctx, tenantID, "user", "zu-1", start) || TouchedSince(ctx, tenantID, "user", "zu-1", time.Now().Add(time.Minute)) {
-		t.Fatal("TouchedSince")
+	if rec, notified := TurnCaseState(ctx, tenantID, "user", "zu-1", "zu-1", start); !rec || !notified {
+		t.Fatalf("TurnCaseState this turn = %t %t", rec, notified)
+	}
+	if rec, _ := TurnCaseState(ctx, tenantID, "user", "zu-1", "zu-1", time.Now().Add(time.Minute)); rec {
+		t.Fatal("TurnCaseState after the turn")
+	}
+	if rec, _ := TurnCaseState(ctx, tenantID, "user", "zu-1", "someone-else", start); rec {
+		t.Fatal("another sender's turn must not see these reports")
 	}
 	if LastBotReportAt(ctx, tenantID, "user", "zu-1").Before(start) {
 		t.Fatal("LastBotReportAt")
@@ -221,6 +228,7 @@ func TestRecentImagesMySQL(t *testing.T) {
 	add("zu-b", "image", `[{"type":"image","url":"https://f1.zdn.vn/other.jpg"}]`, now.Add(-5*time.Minute))
 	add("zu-a", "image", `[{"type":"image","url":"https://f1.zdn.vn/old.jpg"}]`, now.Add(-5*time.Hour))
 	add("zu-a", "text", `[]`, now.Add(-time.Minute))
+	add("zu-a", "image", `[{"type":"image","url":"http://169.254.169.254/latest"}]`, now.Add(-3*time.Minute))
 
 	got := RecentImages(ctx, tenantID, channelID, "g-9", "zu-a", now.Add(-2*time.Hour))
 	if len(got) != 1 || got[0].URL != "https://f1.zdn.vn/mine.jpg" || got[0].Description != "móp" {
@@ -229,5 +237,87 @@ func TestRecentImagesMySQL(t *testing.T) {
 	all := ConversationImages(ctx, tenantID, convID, now.Add(-time.Hour), now)
 	if len(all) != 2 {
 		t.Fatalf("session images = %+v", all)
+	}
+}
+
+// An alert that does not go out leaves the report unnotified, so the worker
+// and the summarizer fall back to their own alerts.
+func TestRecordAlertFailureMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channelID := setupTenant(t)
+	orig := sendAlert
+	sendAlert = func(context.Context, models.Channel, engine.CaseAlert) bool { return false }
+	t.Cleanup(func() { sendAlert = orig })
+	stubModel(t, &fakeModel{})
+	start := time.Now().Add(-time.Second)
+
+	out, err := Record(ctx, Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "group", SubjectID: "g-x", ZaloUserID: "zu-a",
+		Source: SourceBot, Title: "Giao thiếu hàng"})
+	if err != nil || out.Action != ActionCreated || out.StaffNotified {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if rec, notified := TurnCaseState(ctx, tenantID, "group", "g-x", "zu-a", start); !rec || notified {
+		t.Fatalf("TurnCaseState = %t %t, want recorded and not notified", rec, notified)
+	}
+
+	// The switch off on the channel: recorded, but staff are not alerted.
+	db.DB.Model(&models.Channel{}).Where("id = ?", channelID).Update("metadata", `{"complaint_cases":false}`)
+	sendAlert = func(context.Context, models.Channel, engine.CaseAlert) bool {
+		t.Fatal("alert with the switch off")
+		return true
+	}
+	stubModel(t, &fakeModel{answers: []string{`{"decision":"new","case":0}`}})
+	out, err = Record(ctx, Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "group", SubjectID: "g-x", ZaloUserID: "zu-a",
+		Source: SourceBot, Title: "Sai giá"})
+	if err != nil || out.StaffNotified {
+		t.Fatalf("%+v %v", out, err)
+	}
+}
+
+// Two reports of one shop from two chats at the same moment: the lock makes
+// the second see the first, so the model can match them.
+func TestRecordConcurrentSameCustomerMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channelID := setupTenant(t)
+	stubAlerts(t)
+	var mu sync.Mutex
+	calls := 0
+	orig := callModel
+	callModel = func(context.Context, string, string, string, string) (string, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return `{"decision":"same","case":1}`, nil
+	}
+	t.Cleanup(func() { callModel = orig })
+
+	var wg sync.WaitGroup
+	results := make([]Outcome, 2)
+	errs := make([]error, 2)
+	for i, subject := range []string{"g-shop", "zu-owner"} {
+		wg.Add(1)
+		go func(i int, subjectType, subject string) {
+			defer wg.Done()
+			results[i], errs[i] = Record(ctx, Report{TenantID: tenantID, ChannelID: channelID, SubjectType: subjectType, SubjectID: subject,
+				ZaloUserID: "zu-owner", CustomerCode: "KH-SHOP", Source: SourceBot, Title: "Kính nứt", Images: []models.CaseImage{{URL: "https://f1.zdn.vn/" + subject + ".jpg"}}})
+		}(i, map[int]string{0: "group", 1: "user"}[i], subject)
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatal(errs)
+	}
+	actions := results[0].Action + "," + results[1].Action
+	if actions != ActionCreated+","+ActionFollowup && actions != ActionFollowup+","+ActionCreated {
+		t.Fatalf("actions = %s (model calls %d)", actions, calls)
+	}
+	if results[0].Case.ID != results[1].Case.ID {
+		t.Fatal("two cases for one problem")
+	}
+	var c models.CustomerCase
+	db.DB.Where("id = ?", results[0].Case.ID).First(&c)
+	if len(ParseImages(c.Images)) != 2 {
+		t.Fatalf("images = %s", c.Images)
 	}
 }

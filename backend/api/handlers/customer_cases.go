@@ -165,20 +165,27 @@ func UpdateCustomerCase(c *gin.Context) {
 		updates["title"] = t
 		event("edit", "Tiêu đề: "+t)
 	}
-	if req.AssigneeName != nil && strings.TrimSpace(*req.AssigneeName) != cc.AssigneeName {
+	if req.AssigneeName != nil {
 		name := truncateRunes(strings.TrimSpace(*req.AssigneeName), 250)
-		id := ""
+		id := cc.AssigneeID
 		if req.AssigneeID != nil {
 			id = strings.TrimSpace(*req.AssigneeID)
+			if id != "" && !tenantHasUser(tenantID, id) {
+				id = ""
+			}
 		}
-		if id != "" && !tenantHasUser(tenantID, id) {
+		if name == "" {
 			id = ""
 		}
-		updates["assignee_name"], updates["assignee_id"] = name, id
-		if name == "" {
-			event("assign", "Bỏ người phụ trách")
-		} else {
-			event("assign", "Người phụ trách: "+name)
+		// Two staff can share a display name: a different user id is a
+		// different assignee.
+		if name != cc.AssigneeName || id != cc.AssigneeID {
+			updates["assignee_name"], updates["assignee_id"] = name, id
+			if name == "" {
+				event("assign", "Bỏ người phụ trách")
+			} else {
+				event("assign", "Người phụ trách: "+name)
+			}
 		}
 	}
 	if req.CustomerUpdate != nil && strings.TrimSpace(*req.CustomerUpdate) != strings.TrimSpace(cc.CustomerUpdate) {

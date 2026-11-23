@@ -17,10 +17,10 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -99,6 +99,11 @@ type Outcome struct {
 	Case   models.CustomerCase
 	// Reason is the decision model's reason (empty for a first case).
 	Reason string
+	// StaffNotified: staff were alerted about this report, or about the
+	// case recently enough that no new alert was needed.
+	StaffNotified bool
+	// eventID is the history line this report added ("" when none).
+	eventID string
 }
 
 // IsOpen reports whether a status still needs staff.
@@ -136,22 +141,6 @@ func severityRank(s string) int {
 	return 0
 }
 
-// subjectLocks serialises reports for one customer inside this process, so
-// two reports arriving together (the bot and the summarizer, or two images)
-// cannot both open a case for the same problem.
-var subjectLocks sync.Map
-
-func lockSubject(ctx context.Context, key string) (func(), error) {
-	l, _ := subjectLocks.LoadOrStore(key, make(chan struct{}, 1))
-	ch := l.(chan struct{})
-	select {
-	case ch <- struct{}{}:
-		return func() { <-ch }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
 // ErrInvalid is returned for a report without the fields a case needs.
 var ErrInvalid = errors.New("report needs a tenant, a chat and a description")
 
@@ -176,12 +165,26 @@ func Record(ctx context.Context, r Report) (Outcome, error) {
 	if db.DB == nil {
 		return Outcome{}, errors.New("database not initialised")
 	}
-	unlock, err := lockSubject(ctx, r.TenantID+"|"+r.SubjectType+"|"+r.SubjectID)
+	unlock, err := lockReport(ctx, r)
 	if err != nil {
 		return Outcome{}, err
 	}
-	defer unlock()
+	out, err := decideAndWrite(ctx, r)
+	unlock()
+	if err != nil {
+		return Outcome{}, err
+	}
+	out.StaffNotified = alertStaff(ctx, &out, r)
+	if out.StaffNotified && out.eventID != "" {
+		db.DB.WithContext(context.WithoutCancel(ctx)).Model(&models.CustomerCaseEvent{}).
+			Where("id = ?", out.eventID).Update("staff_notified", true)
+	}
+	return out, nil
+}
 
+// decideAndWrite matches the report against the candidates and writes it,
+// under the report's lock.
+func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 	candidates, err := Candidates(ctx, r.TenantID, r.SubjectType, r.SubjectID, r.CustomerCode)
 	if err != nil {
 		return Outcome{}, err
@@ -196,20 +199,21 @@ func Record(ctx context.Context, r Report) (Outcome, error) {
 		}
 		matched, out.Reason = idx, reason
 	}
-	if matched < 0 {
-		c, err := create(ctx, r)
-		if err != nil {
+	if matched >= 0 {
+		c, action, eventID, err := join(ctx, candidates[matched].ID, r)
+		if err == nil {
+			out.Action, out.Case, out.eventID = action, c, eventID
+			return out, nil
+		}
+		if !errors.Is(err, errNoCase) {
 			return Outcome{}, err
 		}
-		out.Action, out.Case = ActionCreated, c
-	} else {
-		c, action, err := join(ctx, candidates[matched], r)
-		if err != nil {
-			return Outcome{}, err
-		}
-		out.Action, out.Case = action, c
 	}
-	alertStaff(ctx, &out, r)
+	c, eventID, err := create(ctx, r)
+	if err != nil {
+		return Outcome{}, err
+	}
+	out.Action, out.Case, out.eventID = ActionCreated, c, eventID
 	return out, nil
 }
 
@@ -249,23 +253,29 @@ func OpenCases(ctx context.Context, tenantID, subjectType, subjectID, customerCo
 	return rows
 }
 
-// TouchedSince reports whether the bot recorded or followed up a case for
-// this chat at or after since (used to tell whether a complaint turn reached
-// staff through a case).
-func TouchedSince(ctx context.Context, tenantID, subjectType, subjectID string, since time.Time) bool {
+// TurnCaseState reports, for the bot's reports from one person in a chat at
+// or after since (one turn): whether any was recorded, and whether staff
+// were told about one. A turn that recorded nothing, or whose alert failed,
+// still needs the handover alert.
+func TurnCaseState(ctx context.Context, tenantID, subjectType, subjectID, zaloUserID string, since time.Time) (recorded, notified bool) {
 	if db.DB == nil {
-		return false
+		return false, false
 	}
-	var n int64
+	var rows []struct{ StaffNotified bool }
 	db.DB.WithContext(ctx).Table("customer_case_events AS e").
+		Select("e.staff_notified").
 		Joins("JOIN customer_cases AS c ON c.id = e.case_id").
-		Where("c.tenant_id = ? AND c.subject_type = ? AND c.subject_id = ? AND e.actor = ? AND e.created_at >= ?",
-			tenantID, subjectType, subjectID, SourceBot, since).
-		Count(&n)
-	return n > 0
+		Where("c.tenant_id = ? AND c.subject_type = ? AND c.subject_id = ? AND e.actor = ? AND e.zalo_user_id = ? AND e.created_at >= ?",
+			tenantID, subjectType, subjectID, SourceBot, zaloUserID, since).
+		Scan(&rows)
+	for _, row := range rows {
+		recorded = true
+		notified = notified || row.StaffNotified
+	}
+	return recorded, notified
 }
 
-func create(ctx context.Context, r Report) (models.CustomerCase, error) {
+func create(ctx context.Context, r Report) (models.CustomerCase, string, error) {
 	now := time.Now()
 	images := mergeImages(nil, r.Images)
 	imagesJSON, _ := json.Marshal(images)
@@ -277,78 +287,93 @@ func create(ctx context.Context, r Report) (models.CustomerCase, error) {
 		Images: string(imagesJSON), Status: StatusOpen, Source: r.Source, OpenedSessionID: r.SessionID,
 		CreatedAt: now, UpdatedAt: now,
 	}
+	ev := newEvent(c, "opened", r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)
+	ev.ZaloUserID = r.ZaloUserID
 	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&c).Error; err != nil {
 			return err
 		}
-		return tx.Create(newEvent(c, "opened", r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)).Error
+		return tx.Create(ev).Error
 	})
-	return c, err
+	return c, ev.ID, err
 }
 
-// join adds a report to an earlier case.
-func join(ctx context.Context, c models.CustomerCase, r Report) (models.CustomerCase, string, error) {
-	now := time.Now()
-	updates := map[string]interface{}{"updated_at": now}
-	images := mergeImages(parseImages(c.Images), r.Images)
-	if imagesJSON, _ := json.Marshal(images); string(imagesJSON) != c.Images {
-		updates["images"] = string(imagesJSON)
-		c.Images = string(imagesJSON)
-	}
-	if severityRank(r.Severity) > severityRank(c.Severity) {
-		updates["severity"] = r.Severity
-		c.Severity = r.Severity
-	}
-	if c.CustomerCode == "" && r.CustomerCode != "" {
-		updates["customer_code"] = r.CustomerCode
-		c.CustomerCode = r.CustomerCode
-	}
-
-	action, kind := ActionFollowup, "followup"
-	switch {
-	case r.Source == SourceSummary:
-		// The summarizer reads the session after the fact: it never counts
-		// as the customer asking again and never reopens a case.
-		action, kind = ActionLinked, "linked"
-		if sessionAlreadyOnCase(ctx, c.ID, r.SessionID) {
-			// The bot already recorded this session's report on the case.
-			if len(updates) > 1 {
-				err := db.DB.WithContext(ctx).Model(&models.CustomerCase{}).Where("id = ?", c.ID).Updates(updates).Error
-				return c, action, err
-			}
-			return c, action, nil
-		}
-	case !IsOpen(c.Status):
-		action, kind = ActionReopened, "reopened"
-		updates["status"] = StatusOpen
-		updates["resolved_at"] = nil
-		updates["followup_count"] = gorm.Expr("followup_count + 1")
-		updates["last_followup_at"] = now
-		c.Status, c.ResolvedAt = StatusOpen, nil
-		c.FollowupCount++
-		c.LastFollowupAt = &now
-	default:
-		updates["followup_count"] = gorm.Expr("followup_count + 1")
-		updates["last_followup_at"] = now
-		c.FollowupCount++
-		c.LastFollowupAt = &now
-	}
-	c.UpdatedAt = now
+// join adds a report to an earlier case. The case is re-read and locked
+// inside the transaction, so a status change or another report that landed
+// after the candidates were read is not overwritten.
+func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, string, string, error) {
+	var c models.CustomerCase
+	action, eventID := "", ""
 	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", caseID).First(&c).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errNoCase
+			}
+			return err
+		}
+		now := time.Now()
+		updates := map[string]interface{}{"updated_at": now}
+		images := mergeImages(parseImages(c.Images), r.Images)
+		if imagesJSON, _ := json.Marshal(images); string(imagesJSON) != c.Images {
+			updates["images"] = string(imagesJSON)
+			c.Images = string(imagesJSON)
+		}
+		if severityRank(r.Severity) > severityRank(c.Severity) {
+			updates["severity"] = r.Severity
+			c.Severity = r.Severity
+		}
+		if c.CustomerCode == "" && r.CustomerCode != "" {
+			updates["customer_code"] = r.CustomerCode
+			c.CustomerCode = r.CustomerCode
+		}
+
+		kind := "followup"
+		action = ActionFollowup
+		switch {
+		case r.Source == SourceSummary:
+			// The summarizer reads the session after the fact: it never
+			// counts as the customer asking again and never reopens a case.
+			action, kind = ActionLinked, "linked"
+			if sessionAlreadyOnCase(tx, c.ID, r.SessionID) {
+				// The bot already recorded this session's report on the case.
+				if len(updates) > 1 {
+					return tx.Model(&models.CustomerCase{}).Where("id = ?", c.ID).Updates(updates).Error
+				}
+				return nil
+			}
+		case !IsOpen(c.Status):
+			action, kind = ActionReopened, "reopened"
+			updates["status"] = StatusOpen
+			updates["resolved_at"] = nil
+			updates["followup_count"] = gorm.Expr("followup_count + 1")
+			updates["last_followup_at"] = now
+			c.Status, c.ResolvedAt = StatusOpen, nil
+			c.FollowupCount++
+			c.LastFollowupAt = &now
+		default:
+			updates["followup_count"] = gorm.Expr("followup_count + 1")
+			updates["last_followup_at"] = now
+			c.FollowupCount++
+			c.LastFollowupAt = &now
+		}
+		c.UpdatedAt = now
 		if err := tx.Model(&models.CustomerCase{}).Where("id = ?", c.ID).Updates(updates).Error; err != nil {
 			return err
 		}
-		return tx.Create(newEvent(c, kind, r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)).Error
+		ev := newEvent(c, kind, r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)
+		ev.ZaloUserID = r.ZaloUserID
+		eventID = ev.ID
+		return tx.Create(ev).Error
 	})
-	return c, action, err
+	return c, action, eventID, err
 }
 
-func sessionAlreadyOnCase(ctx context.Context, caseID, sessionID string) bool {
+func sessionAlreadyOnCase(tx *gorm.DB, caseID, sessionID string) bool {
 	if sessionID == "" {
 		return false
 	}
 	var n int64
-	db.DB.WithContext(ctx).Model(&models.CustomerCaseEvent{}).Where("case_id = ? AND session_id = ?", caseID, sessionID).Count(&n)
+	tx.Model(&models.CustomerCaseEvent{}).Where("case_id = ? AND session_id = ?", caseID, sessionID).Count(&n)
 	return n > 0
 }
 

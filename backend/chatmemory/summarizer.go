@@ -278,31 +278,30 @@ func (s *Service) SummarizeSession(ctx context.Context, sessionID string) error 
 		log.Printf("[chat-memory] profile update for session %s: %v", sess.ID, err)
 	}
 
-	casesOn := s.recordCases(ctx, sess, msgs, result)
+	handled := s.recordCases(ctx, sess, msgs, result)
 	if sess.AlertedAt == nil {
-		s.alertIssues(ctx, sess, result, casesOn)
+		s.alertIssues(ctx, sess, result, handled)
 	}
 	return nil
 }
 
 // recordCases sends the session's issues that need staff follow-up to the
-// complaint cases. It reports whether the channel uses complaint cases (then
-// those issues are alerted as cases, not as session issues).
-func (s *Service) recordCases(ctx context.Context, sess models.ChatSession, msgs []models.Message, r SummaryResult) bool {
+// complaint cases. It returns the indexes of the issues staff already know
+// about through a case (recorded, and alerted now or before); only those are
+// left out of the session alert, so a failed write or alert never loses one.
+func (s *Service) recordCases(ctx context.Context, sess models.ChatSession, msgs []models.Message, r SummaryResult) map[int]bool {
+	handled := map[int]bool{}
 	var ch models.Channel
 	if err := db.DB.WithContext(ctx).Select("id, metadata").Where("id = ?", sess.ChannelID).First(&ch).Error; err != nil {
-		return false
+		return handled
 	}
-	if !customercases.EnabledFor(ch.Metadata) {
-		return false
-	}
-	if sess.AgentType == "private" {
+	if !customercases.EnabledFor(ch.Metadata) || sess.AgentType == "private" {
 		// The staff bot's sessions are staff talking to the bot.
-		return true
+		return handled
 	}
 	var images []models.CaseImage
 	imagesLoaded := false
-	for _, is := range r.Issues {
+	for i, is := range r.Issues {
 		if !caseIssue(is) {
 			continue
 		}
@@ -329,9 +328,10 @@ func (s *Service) recordCases(ctx context.Context, sess models.ChatSession, msgs
 			log.Printf("[chat-memory] case for session %s: %v", sess.ID, err)
 			continue
 		}
-		log.Printf("[chat-memory] session %s issue → case %s (%s)", sess.ID, out.Case.ID, out.Action)
+		log.Printf("[chat-memory] session %s issue → case %s (%s, staff_notified=%t)", sess.ID, out.Case.ID, out.Action, out.StaffNotified)
+		handled[i] = out.StaffNotified
 	}
-	return true
+	return handled
 }
 
 // caseIssue reports whether a summary issue goes to the complaint cases.
@@ -543,11 +543,11 @@ func upsertProfile(ctx context.Context, sess models.ChatSession, existing models
 }
 
 // sessionAlertIssues are the issues alerted as a session alert: high ones,
-// except those that went to complaint cases (alerted as cases).
-func sessionAlertIssues(sess models.ChatSession, r SummaryResult, casesOn bool) []engine.SessionIssue {
+// except those staff already know about through a case (handled).
+func sessionAlertIssues(r SummaryResult, handled map[int]bool) []engine.SessionIssue {
 	var serious []engine.SessionIssue
-	for _, is := range r.Issues {
-		if casesOn && caseIssue(is) && sess.AgentType != "private" {
+	for i, is := range r.Issues {
+		if handled[i] {
 			continue
 		}
 		if is.Severity == "high" {
@@ -557,8 +557,8 @@ func sessionAlertIssues(sess models.ChatSession, r SummaryResult, casesOn bool) 
 	return serious
 }
 
-func (s *Service) alertIssues(ctx context.Context, sess models.ChatSession, r SummaryResult, casesOn bool) {
-	serious := sessionAlertIssues(sess, r, casesOn)
+func (s *Service) alertIssues(ctx context.Context, sess models.ChatSession, r SummaryResult, handled map[int]bool) {
+	serious := sessionAlertIssues(r, handled)
 	if len(serious) == 0 {
 		return
 	}

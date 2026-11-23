@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 
@@ -82,5 +83,34 @@ func TestSniffImageType(t *testing.T) {
 	png := []byte("\x89PNG\r\n\x1a\n0000")
 	if sniffImageType(png) != "image/png" || sniffImageType([]byte("<html>")) != "" {
 		t.Fatal("sniff")
+	}
+}
+
+func TestImageDialerRefusesPrivateAddresses(t *testing.T) {
+	for _, ip := range []string{"127.0.0.1", "10.1.2.3", "192.168.1.1", "172.16.0.5", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fe80::1", "fc00::1"} {
+		if publicAddress(net.ParseIP(ip)) {
+			t.Errorf("%s must be refused", ip)
+		}
+		if err := imageDialer.Control("tcp", net.JoinHostPort(ip, "443"), nil); err == nil {
+			t.Errorf("dialer allowed %s", ip)
+		}
+	}
+	for _, ip := range []string{"14.225.1.1", "2001:4860::8888"} {
+		if !publicAddress(net.ParseIP(ip)) {
+			t.Errorf("%s must be allowed", ip)
+		}
+	}
+}
+
+func TestImageURLsKeepsOnlyZaloImages(t *testing.T) {
+	var atts []ZaloWebhookAttachment
+	for _, u := range []string{"https://f1.zdn.vn/a.jpg", "http://f1.zdn.vn/b.jpg", "https://evil.example/c.jpg", "https://f1.zdn.vn.evil.example/d.jpg"} {
+		var a ZaloWebhookAttachment
+		a.Type = "image"
+		a.Payload.URL = u
+		atts = append(atts, a)
+	}
+	if got := imageURLs(atts); len(got) != 1 || got[0] != "https://f1.zdn.vn/a.jpg" {
+		t.Fatalf("imageURLs = %v", got)
 	}
 }
