@@ -33,7 +33,8 @@ func ListCustomerCases(c *gin.Context) {
 		tx = tx.Where("tenant_id = ?", tenantID)
 		if subjectID != "" {
 			if customerCode != "" {
-				tx = tx.Where("((subject_type = ? AND subject_id = ?) OR customer_code = ?)", subjectType, subjectID, customerCode)
+				// A private (guest) case belongs to its own chat only.
+				tx = tx.Where("((subject_type = ? AND subject_id = ?) OR (customer_code = ? AND private = ?))", subjectType, subjectID, customerCode, false)
 			} else {
 				tx = tx.Where("subject_type = ? AND subject_id = ?", subjectType, subjectID)
 			}

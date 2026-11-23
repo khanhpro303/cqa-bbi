@@ -1266,6 +1266,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		permCtx.GroupGuest = groupGuest
 		permCtx.TurnID = turnID
 		permCtx.Complaints = complaintCases
+		if n, ok := asynq.GetRetryCount(ctx); ok && n > 0 {
+			permCtx.Retry = true
+		}
 		systemPromptToUse = appendOrderCartContext(ctx, matchedChannel.TenantID, workKey, &permCtx, systemPromptToUse)
 		if complaintCases {
 			// A guest's reply goes to the whole group: their own cases (and

@@ -14,7 +14,7 @@ var (
 	// Strong labels name a ticket for sure: "ticket", "mã ticket/case/hồ
 	// sơ/khiếu nại/yêu cầu", "số phiếu", "phiếu số", "case id", "case no". Any code with a digit
 	// after them is a reference ("Mã ticket ABC-123", "ticket số 66656").
-	caseRefStrong = regexp.MustCompile(`(?i)(?:\b(?:mã|số)\s+(?:ticket|case|phiếu|hồ\s*sơ|khiếu\s*nại|yêu\s*cầu)|\bphiếu\s+số|\bcase\s*(?:id|no\.?)|\bticket)\s*(?:số|id|no\.?)?\s*[:：]?\s*#?\s*[A-Za-z0-9-]*\d[A-Za-z0-9-]*`)
+	caseRefStrong = regexp.MustCompile(`(?i)(?:\b(?:mã|số)\s+(?:ticket|case|phiếu|hồ\s*sơ|khiếu\s*nại|yêu\s*cầu)|\bphiếu\s+số|\bcase\s*(?:id|no\.?)|\bticket)[\s*_]*(?:số|id|no\.?)?[\s*_]*[:：]?[\s*_]*#?[\s*_]*[A-Za-z0-9-]*\d[A-Za-z0-9-]*[*_]*`)
 	// Weak labels ("case", "phiếu") need a "#" or a plain number: "case #12",
 	// "case 4567", but not "Case FF800 bị nứt" or "phiếu xuất kho XK01".
 	caseRefWeak = regexp.MustCompile(`(?i)\b(?:case|phiếu)\s*(?:số|id|no\.?)?\s*[:：]?\s*(?:#\s*[A-Za-z0-9][A-Za-z0-9-]*|\d{2,}\b)`)
@@ -25,6 +25,8 @@ var (
 	spaceBefore = regexp.MustCompile(`[ \t]+([,.;:!?)])`)
 	multiSpace  = regexp.MustCompile(`[ \t]{2,}`)
 	doubleStop  = regexp.MustCompile(`([^.])\.\.([^.]|$)`)
+	// Markdown emphasis left empty around a removed label: "**", "__".
+	orphanMark = regexp.MustCompile(`(^|\s)(?:\*\*|__|\*|_)(\s|$)`)
 )
 
 // StripRefs removes ticket and case number references from s.
@@ -39,6 +41,7 @@ func StripRefs(s string) string {
 		return s
 	}
 	out = emptyParens.ReplaceAllString(out, "")
+	out = orphanMark.ReplaceAllString(out, "$1$2")
 	out = spaceBefore.ReplaceAllString(out, "$1")
 	out = multiSpace.ReplaceAllString(out, " ")
 	out = doubleStop.ReplaceAllString(out, "$1.$2")

@@ -160,7 +160,10 @@ func staleZaloEvent(ts string, now time.Time) bool {
 		return true
 	}
 	at := time.UnixMilli(ms)
-	return now.Sub(at) > zaloWebhookDedupeWindow || at.Sub(now) > zaloClockSkew
+	// An event up to zaloClockSkew ahead is accepted; it must go stale
+	// before its dedupe entry (kept zaloWebhookDedupeWindow after it was
+	// queued, i.e. after now) expires.
+	return now.Sub(at) > zaloWebhookDedupeWindow-zaloClockSkew || at.Sub(now) > zaloClockSkew
 }
 
 const (
@@ -175,8 +178,14 @@ const (
 // are dropped, and without ZALO_OA_SECRET_KEY that is every event.
 func zaloSignatureMode(cfg *config.Config) string {
 	switch cfg.ZaloWebhookSignature {
-	case zaloSignatureOff, zaloSignatureLog:
-		return cfg.ZaloWebhookSignature
+	case zaloSignatureOff:
+		return zaloSignatureOff
+	case zaloSignatureLog:
+		// log is for checking a secret; without one there is nothing to
+		// check, so it stays closed.
+		if cfg.ZaloOAWebhookSecret != "" {
+			return zaloSignatureLog
+		}
 	}
 	return zaloSignatureEnforce
 }

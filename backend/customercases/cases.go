@@ -89,6 +89,9 @@ type Report struct {
 	// SubjectOnly: match only the chat's own cases, not others with the same
 	// customer code (a sender in a group they are not a member of).
 	SubjectOnly bool
+	// Retry: the turn is a retried message. If it already recorded a
+	// report, that report stands and nothing new is written.
+	Retry bool
 	Source      string
 	Type        string
 	Severity    string
@@ -183,6 +186,11 @@ func Record(ctx context.Context, r Report) (Outcome, error) {
 		return Outcome{}, err
 	}
 	defer unlock()
+	if r.Retry && r.TurnID != "" {
+		if out, ok := priorTurnOutcome(ctx, r.TenantID, r.TurnID); ok {
+			return out, nil
+		}
+	}
 	out, err := decideAndWrite(ctx, r)
 	if err != nil {
 		return Outcome{}, err
@@ -286,6 +294,29 @@ func TurnCaseState(ctx context.Context, tenantID, turnID string) (recorded, noti
 		notified = notified && row.StaffNotified
 	}
 	return len(rows) > 0, notified
+}
+
+// priorTurnOutcome is what a turn already recorded (its latest report), for
+// a retried message: the retry must not open or follow up a case again.
+func priorTurnOutcome(ctx context.Context, tenantID, turnID string) (Outcome, bool) {
+	var ev models.CustomerCaseEvent
+	if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND turn_id = ? AND actor = ?", tenantID, turnID, SourceBot).
+		Order("created_at DESC").First(&ev).Error; err != nil {
+		return Outcome{}, false
+	}
+	var c models.CustomerCase
+	if err := db.DB.WithContext(ctx).Where("id = ?", ev.CaseID).First(&c).Error; err != nil {
+		return Outcome{}, false
+	}
+	action := ActionFollowup
+	switch ev.Kind {
+	case "opened":
+		action = ActionCreated
+	case "reopened":
+		action = ActionReopened
+	}
+	_, notified := TurnCaseState(ctx, tenantID, turnID)
+	return Outcome{Action: action, Case: c, StaffNotified: notified, repeated: true}, true
 }
 
 // caseNotified reports whether staff were told about the case's current

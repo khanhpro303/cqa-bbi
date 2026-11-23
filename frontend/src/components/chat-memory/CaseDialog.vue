@@ -170,7 +170,10 @@ async function load() {
   item.value = null
   events.value = []
   try {
-    const { data } = await api.get(`/tenants/${props.tenantId}/customer-cases/${props.caseId}`)
+    const caseId = props.caseId
+    const { data } = await api.get(`/tenants/${props.tenantId}/customer-cases/${caseId}`)
+    // Another case was opened while this one loaded: drop this answer.
+    if (caseId !== props.caseId) return
     fill(data.case)
     events.value = data.events || []
   } catch {
@@ -194,6 +197,16 @@ function assigneeFields() {
   return { assignee_name: u ? (u.name || u.email) : a.title, assignee_id: a.value }
 }
 
+// assigneeChanged compares the picked person (by user id when there is one),
+// not the name: a renamed user is still the same assignee.
+function assigneeChanged(c: CustomerCase) {
+  const a = form.assignee
+  if (!a) return !!(c.assignee_name || c.assignee_id)
+  if (typeof a === 'string') return a.trim() !== (c.assignee_name || '') || !!c.assignee_id
+  if (a.value) return a.value !== (c.assignee_id || '')
+  return a.title !== (c.assignee_name || '')
+}
+
 // changedFields sends only what staff changed in the form, so saving a note
 // does not write back fields the bot or another user changed meanwhile.
 function changedFields(c: CustomerCase) {
@@ -201,8 +214,7 @@ function changedFields(c: CustomerCase) {
   if (form.status !== c.status) body.status = form.status
   if (form.severity !== c.severity) body.severity = form.severity
   if (form.type !== c.type) body.type = form.type
-  const a = assigneeFields()
-  if (a.assignee_name !== (c.assignee_name || '') || a.assignee_id !== (c.assignee_id || '')) Object.assign(body, a)
+  if (assigneeChanged(c)) Object.assign(body, assigneeFields())
   if (form.customer_update !== (c.customer_update || '')) body.customer_update = form.customer_update
   if (form.resolution !== (c.resolution || '')) body.resolution = form.resolution
   if (form.note.trim()) body.note = form.note

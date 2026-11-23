@@ -103,7 +103,7 @@ func TestZaloWebhookFailsClosedWithoutSecret(t *testing.T) {
 func TestStaleZaloEvent(t *testing.T) {
 	now := time.Now()
 	ms := func(d time.Duration) string { return strconv.FormatInt(now.Add(d).UnixMilli(), 10) }
-	for ts, want := range map[string]bool{ms(-time.Minute): false, ms(-119 * time.Minute): false, ms(-121 * time.Minute): true, ms(10 * time.Minute): true, "": true, "abc": true} {
+	for ts, want := range map[string]bool{ms(-time.Minute): false, ms(-114 * time.Minute): false, ms(-116 * time.Minute): true, ms(10 * time.Minute): true, "": true, "abc": true} {
 		if got := staleZaloEvent(ts, now); got != want {
 			t.Errorf("staleZaloEvent(%q) = %t, want %t", ts, got, want)
 		}
@@ -117,6 +117,7 @@ func TestZaloSignatureModeDefaults(t *testing.T) {
 		{"", "off", "off"},
 		{"s", "", "enforce"},
 		{"s", "log", "log"},
+		{"", "log", "enforce"},
 		{"s", "enforce", "enforce"},
 		{"s", "bogus", "enforce"},
 		{"", "enforce", "enforce"},

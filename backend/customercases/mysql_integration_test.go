@@ -215,10 +215,11 @@ func TestRecentImagesMySQL(t *testing.T) {
 	if err := db.DB.Create(&models.Conversation{ID: convID, TenantID: tenantID, ChannelID: channelID, ExternalConversationID: "g-9", Metadata: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
+	raw := `{"webhook":{"cqa_signature_verified":true}}`
 	add := func(sender, contentType, attachments string, at time.Time) {
 		if err := db.DB.Create(&models.Message{ID: pkg.NewUUID(), TenantID: tenantID, ConversationID: convID, ExternalMessageID: pkg.NewUUID(),
 			SenderType: "customer", SenderExternalID: sender, Content: "x", ContentType: contentType, Attachments: attachments,
-			SentAt: at, RawData: "{}", CreatedAt: now}).Error; err != nil {
+			SentAt: at, RawData: raw, CreatedAt: now}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -227,6 +228,9 @@ func TestRecentImagesMySQL(t *testing.T) {
 	add("zu-a", "image", `[{"type":"image","url":"https://f1.zdn.vn/old.jpg"}]`, now.Add(-5*time.Hour))
 	add("zu-a", "text", `[]`, now.Add(-time.Minute))
 	add("zu-a", "image", `[{"type":"image","url":"http://169.254.169.254/latest"}]`, now.Add(-3*time.Minute))
+	// An unsigned webhook's image (log mode) is not evidence.
+	raw = `{"webhook":{}}`
+	add("zu-a", "image", `[{"type":"image","url":"https://f1.zdn.vn/unsigned.jpg"}]`, now.Add(-2*time.Minute))
 
 	got := RecentImages(ctx, tenantID, channelID, "g-9", "zu-a", now.Add(-2*time.Hour))
 	if len(got) != 1 || got[0].URL != "https://f1.zdn.vn/mine.jpg" || got[0].Description != "móp" {
@@ -473,6 +477,20 @@ func TestRecordRetryAndReopenCooldownMySQL(t *testing.T) {
 	db.DB.Model(&models.CustomerCaseEvent{}).Where("case_id = ? AND turn_id = ?", first.Case.ID, "turn-2").Count(&n)
 	if n != 1 {
 		t.Fatalf("turn-2 events = %d", n)
+	}
+	// Retried again, and this time the model says "new": the retry flag
+	// returns what the turn already recorded instead of a second case.
+	model.answers = []string{`{"decision":"new","case":0}`}
+	retry := r
+	retry.Retry = true
+	out, err = Record(ctx, retry)
+	if err != nil || out.Case.ID != first.Case.ID || out.Action != ActionFollowup {
+		t.Fatalf("retry opened another case: %+v %v", out, err)
+	}
+	var cases int64
+	db.DB.Model(&models.CustomerCase{}).Where("tenant_id = ?", tenantID).Count(&cases)
+	if cases != 1 {
+		t.Fatalf("cases = %d", cases)
 	}
 
 	// Resolved, then reopened within the follow-up cooldown of the first

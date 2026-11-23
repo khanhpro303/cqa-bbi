@@ -121,6 +121,8 @@ func conversationImages(ctx context.Context, tenantID, conversationID, senderID 
 		return nil
 	}
 	q := db.DB.WithContext(ctx).Select("id, attachments, sent_at").
+		// Only images from webhooks with a verified Zalo signature.
+		Where("JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.webhook.cqa_signature_verified')) = 'true'").
 		Where("tenant_id = ? AND conversation_id = ? AND sender_type = 'customer' AND content_type = 'image' AND sent_at BETWEEN ? AND ?",
 			tenantID, conversationID, from, to)
 	if senderID != "" {

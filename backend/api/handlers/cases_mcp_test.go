@@ -98,7 +98,8 @@ func TestComplaintToolRecordsForTheTokensChat(t *testing.T) {
 		t.Fatalf("guest report = %+v", r)
 	}
 	// The reply goes to the group: no staff update on the guest's case.
-	if strings.Contains(guestOut, "Thứ 5 giao kính mới") || strings.Contains(guestOut, `"case"`) || strings.Contains(guestOut, "Kính nứt") {
+	if strings.Contains(guestOut, "Thứ 5 giao kính mới") || strings.Contains(guestOut, `"case"`) || strings.Contains(guestOut, "Kính nứt") ||
+		strings.Contains(guestOut, "followup") || !strings.Contains(guestOut, `"action":"recorded"`) {
 		t.Fatalf("guest result carries the staff update: %s", guestOut)
 	}
 

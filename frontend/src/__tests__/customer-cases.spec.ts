@@ -76,6 +76,36 @@ describe('Complaint cases panel', () => {
     expect(mocks.patch).toHaveBeenCalledWith('/tenants/t1/customer-cases/c1', { note: 'Đã gọi khách' })
   })
 
+  it('does not resend the assignee when only their directory name changed', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/customer-cases/c1')) return { data: { case: { ...sampleCase, assignee_name: 'Hậu cũ', assignee_id: 'u-staff' }, events: [] } }
+      if (url.endsWith('/users')) return { data: [{ user_id: 'u-staff', name: 'Hậu mới', email: 'h@x' }] }
+      return { data: {} }
+    })
+    mocks.patch.mockResolvedValue({ data: { case: sampleCase } })
+    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1' }, global: { mocks: { $t: (k: string) => k } } })
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.form.note = 'ghi chú'
+    await vm.save()
+    expect(mocks.patch).toHaveBeenCalledWith('/tenants/t1/customer-cases/c1', { note: 'ghi chú' })
+  })
+
+  it('keeps the case that was opened last', async () => {
+    let releaseA: (v: unknown) => void = () => {}
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/customer-cases/a')) { await new Promise(r => { releaseA = r }); return { data: { case: { ...sampleCase, id: 'a', title: 'A' }, events: [] } } }
+      if (url.endsWith('/customer-cases/b')) return { data: { case: { ...sampleCase, id: 'b', title: 'B' }, events: [] } }
+      return { data: [] }
+    })
+    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'a' }, global: { mocks: { $t: (k: string) => k } } })
+    await wrapper.setProps({ caseId: 'b' })
+    await flushPromises()
+    releaseA(undefined)
+    await flushPromises()
+    expect((wrapper.vm as any).item.id).toBe('b')
+  })
+
   it('ignores an older list response that finishes last', async () => {
     let releaseSlow: (v: unknown) => void = () => {}
     mocks.get.mockImplementation(async (url: string, opts: any) => {

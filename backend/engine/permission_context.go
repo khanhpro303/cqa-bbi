@@ -44,6 +44,9 @@ type GroupPermissionContext struct {
 	// a system prompt carrying the complaint guide). complaint_record refuses
 	// tokens without it.
 	Complaints bool `json:"complaints,omitempty"`
+	// Retry: the worker is processing this message again (an earlier attempt
+	// failed after the bot may have recorded complaints).
+	Retry bool `json:"retry,omitempty"`
 	Groups        []GroupPermission `json:"groups"`
 }
 

@@ -16,6 +16,10 @@ import (
 	"github.com/vietbui/chat-quality-agent/engine"
 )
 
+// guestNote is the tool's answer for someone reporting in a group they are not
+// a member of: the reply is read by the whole group.
+const guestNote = "Đã ghi nhận. Tin trả lời sẽ hiện cho cả nhóm: chỉ cảm ơn và nói em đã ghi nhận, không nhắc lại chi tiết hay các vấn đề trước đây của người này, không hứa nhân viên liên hệ ngay."
+
 // complaintsOffMessage is the tool's answer when complaint handling is off.
 const complaintsOffMessage = "Kênh này chưa bật ghi nhận khiếu nại. Hãy nói với khách em sẽ chuyển thông tin cho nhân viên phụ trách."
 
@@ -96,12 +100,16 @@ func handleComplaintTool(ctx context.Context, tenantID, agentType, permissionTok
 	auditComplaint(tenantID, permissions, 200, 1)
 	log.Printf("[cases] %s case %s for %s/%s (staff_notified=%t, %s)", out.Action, out.Case.ID, report.SubjectType, report.SubjectID, out.StaffNotified, out.Reason)
 	body := gin.H{"status": "success", "action": out.Action, "staff_notified": out.StaffNotified}
-	if !permissions.GroupGuest {
+	if permissions.GroupGuest {
+		// A guest's reply goes to the whole group: nothing about their case
+		// (whether it is new or old, title, status, staff updates) is
+		// returned, only that it was recorded.
+		body["action"] = "recorded"
+		body["note"] = guestNote
+	} else {
 		body["case"] = customercases.ViewForBot(out.Case)
 	}
-	// A guest's reply goes to the whole group: nothing about their case
-	// (title, status, staff updates) is returned, only that it was recorded.
-	if !out.StaffNotified {
+	if !out.StaffNotified && !permissions.GroupGuest {
 		body["note"] = "Đã lưu vấn đề nhưng chưa báo trực tiếp được nhân viên. Chỉ nói với khách là em đã ghi nhận; không hứa nhân viên sẽ liên hệ ngay."
 	}
 	return result(body, false)
@@ -125,7 +133,7 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 	r := customercases.Report{
 		TenantID: p.TenantID, ChannelID: p.ChannelID, ZaloUserID: p.ZaloUserID, ZaloGroupID: p.ZaloGroupID,
 		SubjectType: "user", SubjectID: p.ZaloUserID, CustomerCode: p.CustomerCode,
-		Source: customercases.SourceBot, TurnID: p.TurnID, SubjectOnly: p.GroupGuest, Type: args.Type, Severity: args.Severity,
+		Source: customercases.SourceBot, TurnID: p.TurnID, SubjectOnly: p.GroupGuest, Retry: p.Retry, Type: args.Type, Severity: args.Severity,
 		Title: args.Title, Detail: args.Detail, Evidence: args.Evidence,
 	}
 	// A group's cases belong to the group, except for a sender who is not a

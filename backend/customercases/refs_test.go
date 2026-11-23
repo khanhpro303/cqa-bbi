@@ -17,6 +17,8 @@ func TestStripRefs(t *testing.T) {
 		"case 4567":                                          "",
 		"Case ID: ABC-123 đã ghi":                            "đã ghi",
 		"case no. XY9":                                       "",
+		"**Case ID:** ABC-123 đang xử lý":                    "đang xử lý",
+		"Dạ **Case No.** ABC-123 ạ":                          "Dạ ạ",
 	}
 	for in, want := range cases {
 		if got := StripRefs(in); got != want {
