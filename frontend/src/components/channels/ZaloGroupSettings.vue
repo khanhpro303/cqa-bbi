@@ -10,6 +10,27 @@
       color="primary"
       data-testid="group-assistant-mode"
     />
+    <v-switch
+      v-model="settings.group_staff_call_only"
+      :label="$t('group_staff_call_only')"
+      :hint="$t('group_staff_call_only_hint')"
+      persistent-hint
+      density="compact"
+      color="primary"
+      class="mt-2"
+      data-testid="group-staff-call-only"
+    />
+    <v-text-field
+      v-if="settings.group_staff_call_only"
+      v-model="settings.group_bot_names"
+      :label="$t('group_bot_names')"
+      :hint="$t('group_bot_names_hint')"
+      placeholder="bot"
+      persistent-hint
+      density="compact"
+      class="mt-2"
+      data-testid="group-bot-names"
+    />
 
     <v-divider class="my-3" />
     <div class="text-body-2 font-weight-medium mb-1">{{ $t('campaign_alert_settings_title') }}</div>

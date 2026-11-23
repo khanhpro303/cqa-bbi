@@ -3,6 +3,8 @@ import type { AlertOutput } from './CampaignAlertOutputs.vue'
 export function readZaloGroupSettings(metadata: Record<string, unknown> = {}) {
   return {
     group_assistant_mode: metadata.group_assistant_mode === true,
+    group_staff_call_only: metadata.group_staff_call_only !== false,
+    group_bot_names: typeof metadata.group_bot_names === 'string' ? metadata.group_bot_names : '',
     campaign_alerts_enabled: metadata.campaign_alerts_enabled === true,
     campaign_alert_group_id: typeof metadata.campaign_alert_group_id === 'string' ? metadata.campaign_alert_group_id : '',
     campaign_alert_outputs: Array.isArray(metadata.campaign_alert_outputs)

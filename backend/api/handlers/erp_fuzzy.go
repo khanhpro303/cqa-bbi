@@ -14,6 +14,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
 )
 
 // getAIClient creates an AI provider client based on tenant settings
@@ -93,14 +94,17 @@ func getAIClient(ctx context.Context, tenantID string) (ai.AIProvider, error) {
 // The prompt includes a representative ten_dong_bo_web + ten per ma_cha so
 // the LLM can bridge name-level variations (e.g. "Storm 3" ↔ "Storm III",
 // "mu bao hiem" ↔ "mũ bảo hiểm") in addition to code-format variants.
-func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (string, error) {
+//
+// scopes narrow the candidate parents (e.g. engine.ExcludeDKCopies for
+// catalog lookups, where "_DK" copy parents would take slots from real lines).
+func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string, scopes ...func(*gorm.DB) *gorm.DB) (string, error) {
 	type maChaCandidate struct {
 		MaCha        string `gorm:"column:ma_cha"`
 		TenDongBoWeb string `gorm:"column:ten_dong_bo_web"`
 		Ten          string `gorm:"column:ten"`
 	}
 	var candidates []maChaCandidate
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(scopes...).
 		Table((&models.CachedProduct{}).TableName()).
 		Select("ma_cha, MAX(ten_dong_bo_web) AS ten_dong_bo_web, MAX(ten) AS ten").
 		Where("tenant_id = ? AND ma_cha != ''", tenantID).

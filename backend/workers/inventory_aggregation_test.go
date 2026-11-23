@@ -43,12 +43,21 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 		switch result := query.Statement.Dest.(type) {
 		case *[]models.CachedProduct:
 			*result = []models.CachedProduct{{MA: "fixture-visible"}}
+			if vars := query.Statement.Vars; len(vars) >= 2 && vars[1] == "fixture-parent_DK" {
+				// The line's "_DK" copy parent holds stock of its own.
+				*result = []models.CachedProduct{{MA: "fixture-copy", MA_CHA: "fixture-parent_DK"}}
+			}
 			sql := query.Statement.SQL.String()
 			if !strings.Contains(sql, "tenant_id = ? AND ma_cha = ?") {
 				t.Errorf("catalog lookup lacks tenant or parent scope: %s", sql)
 			}
-			if !strings.Contains(sql, "ten_dong_bo_web = ?") && !strings.Contains(sql, "LIMIT") {
+			if !strings.Contains(sql, "ten_dong_bo_web = ?") && !strings.Contains(sql, "LIMIT") && (*result)[0].MA != "fixture-copy" {
 				*result = append(*result, models.CachedProduct{MA: "fixture-sibling"})
+			}
+		case *int64:
+			if vars := query.Statement.Vars; len(vars) >= 2 && vars[1] == "fixture-parent_DK" {
+				*result = 1
+				query.RowsAffected = 1 // gorm's Count keeps the value only for one row
 			}
 		case *models.AppSetting:
 			if strings.Contains(query.Statement.SQL.String(), "setting_key = ?") &&
@@ -63,9 +72,11 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 
 	originalTransport := http.DefaultTransport
 	failSibling := false
+	reports := 0
 	http.DefaultTransport = stockTestTransport(func(req *http.Request) (*http.Response, error) {
 		status, body := http.StatusOK, `{"result":{"uid":1,"session_id":"fixture"}}`
 		if req.URL.Path != "/web/session/authenticate" {
+			reports++
 			if req.Method != http.MethodPost || req.URL.Path != "/rest_api/private/tong_hop_ton_kho/search" {
 				t.Errorf("unexpected stock request: %s %s", req.Method, req.URL.Path)
 			}
@@ -74,7 +85,7 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 				values.Get("TU_NGAY") == "" || values.Get("TU_NGAY") != values.Get("DEN_NGAY") {
 				t.Errorf("unexpected warehouse parameters: %v", values)
 			}
-			body = `[{"MA_HANG":"fixture-visible","SO_LUONG_CUOI_KY":5},{"MA_HANG":"fixture-sibling","SO_LUONG_CUOI_KY":376}]`
+			body = `[{"MA_HANG":"fixture-visible","SO_LUONG_CUOI_KY":5},{"MA_HANG":"fixture-sibling","SO_LUONG_CUOI_KY":376},{"MA_HANG":"fixture-copy","SO_LUONG_CUOI_KY":7}]`
 			if failSibling {
 				status, body = http.StatusServiceUnavailable, "fixture inventory unavailable"
 			}
@@ -87,11 +98,23 @@ func TestParentInventoryIncludesSiblingWebNames(t *testing.T) {
 	})
 
 	permissions := &engine.GroupPermissionContext{AgentType: "private"}
-	for webName, want := range map[string]float64{"Bulldog DOGO": 5, "": 381} {
+	// Within one web line the parent's "_DK" copy rows count too (5 + 7);
+	// with no web name the plain sum stays on the parent alone.
+	for webName, want := range map[string]float64{"Bulldog DOGO": 12, "": 381} {
 		got, _, err := sumInventoryByMaChaAndWebName(context.Background(), "fixture-tenant", permissions, "fixture-parent", webName)
 		if err != nil || got != want {
 			t.Errorf("stock for web filter %q: got %g, %v; want %g", webName, got, err, want)
 		}
+	}
+	// A parent-code pick (no web name) also counts its "_DK" copy's stock,
+	// once: the plain sum above must not add it (the by-web loop sums the
+	// copy parent itself).
+	reports = 0
+	if got, _, err := sumInventoryByParentWithDKCopy(context.Background(), "fixture-tenant", permissions, "fixture-parent"); err != nil || got != 388 {
+		t.Errorf("parent + _DK copy stock: got %g, %v; want 388", got, err)
+	}
+	if reports != 1 {
+		t.Errorf("parent + copy read the warehouse report %d times; want 1", reports)
 	}
 	failSibling = true
 	got, _, err := sumInventoryByMaChaAndWebName(context.Background(), "fixture-tenant", permissions, "fixture-parent", "")

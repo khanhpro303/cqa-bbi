@@ -627,8 +627,14 @@ func (z *ZaloOAAdapter) SendMessage(ctx context.Context, conversationID string, 
 		}
 		// Not valid JSON after all — fall through and treat as plain text.
 	}
+	return z.SendTextMessage(ctx, conversationID, content)
+}
 
-	// Plain text: split over-long replies so Zalo doesn't silently reject them
+// SendTextMessage sends content as plain text, even when it looks like a JSON
+// template. Use it for text written by a model, which must never become a
+// rich message (links, buttons) posted under the OA's name.
+func (z *ZaloOAAdapter) SendTextMessage(ctx context.Context, conversationID string, content string) error {
+	// Split over-long replies so Zalo doesn't silently reject them
 	// (HTTP 200 + non-zero error code). Each chunk is an ordered, under-cap send.
 	chunks := chunkMessageText(content, zaloMaxTextRunes)
 	for i, chunk := range chunks {

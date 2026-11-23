@@ -23,6 +23,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"github.com/vietbui/chat-quality-agent/realtime"
+	"gorm.io/gorm"
 )
 
 // disambiguationReplyPattern matches the short replies the Langflow agent's
@@ -152,6 +153,13 @@ type ChannelMetadata struct {
 	// trigger word, it reads the whole group and answers only when needed.
 	// See group_assistant.go.
 	GroupAssistant bool `json:"group_assistant_mode"`
+	// GroupStaffCallOnly: in a customer group a staff message reaches the bot
+	// only when it calls the bot or the staff member is already talking with
+	// it. Unset means on. See group_staff.go.
+	GroupStaffCallOnly *bool `json:"group_staff_call_only"`
+	// GroupBotNames are the names staff call the bot by in a group,
+	// separated by ";". Empty means "bot".
+	GroupBotNames string `json:"group_bot_names"`
 
 	LangflowAPIURL       string `json:"langflow_api_url"`
 	LangflowAPIKey       string `json:"langflow_api_key"`
@@ -713,6 +721,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 			defer engine.ReleaseSessionLock(ctx, lockKey, lockToken)
 		}
+		// turnStart is when this turn took the session lock; the small-talk
+		// call is bounded from it so a main-bot fallback still fits.
+		turnStart := time.Now()
 
 		// Display name of the sender for chat memory.
 		memSenderName := ""
@@ -790,6 +801,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				if err != nil {
 					log.Printf("[worker] failed to send welcome message: %v", err)
 				}
+				if staffCallOnlyOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode, groupRoleFor(isWhitelisted, isCustomer)) {
+					markStaffEngaged(ctx, sessionKey, payload.Sender.ID)
+				}
 				log.Printf("[worker] opened new session %s for key %s", newSessionID, sessionKey)
 				return nil
 			}
@@ -811,6 +825,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		sessionTTL := time.Duration(meta.SessionTimeout)*time.Minute + time.Minute
 		groupName, groupRole := groupSpeaker(isWhitelisted, isCustomer, whitelistRec.Name, customerRec.Name)
+		// Staff in a customer group mostly talk to the customer; their
+		// messages reach the bot only when they call it (group_staff.go).
+		staffGated := staffCallOnlyOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode, groupRole)
 
 		// Verified-only interaction (design intent): the trigger-time gate above
 		// only blocks unverified senders at session OPEN. Because a group session
@@ -849,6 +866,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		if isEndTriggered {
 			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
+			if staffGated {
+				clearStaffEngaged(ctx, sessionKey, payload.Sender.ID)
+			}
 			var err error
 			if matchedGroup.ZaloGroupID != "" {
 				err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionGoodbyeMessage)
@@ -902,6 +922,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// A pending order draft waits for this sender's "1"/"2". Settle it here,
 		// before the intent classifier, which would read "ok" as small talk.
 		if handled, err := handleOrderDraftReply(ctx, cfg, adapter, matchedChannel.TenantID, workKey, payload.Sender.ID, matchedGroup.ZaloGroupID, userText); handled {
+			// Confirming or cancelling an order is business: end any
+			// small-talk run (casual_budget.go).
+			if casualBudgetActive(ctx) {
+				engine.ResetCasualStreak(ctx, workKey)
+			}
 			return err
 		}
 
@@ -914,9 +939,32 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// below routes small talk to the agent as IN_SCOPE, but small talk
 		// must still not consume the variant-line lock further down.
 		var intent, classified string
+		// Recent session turns of a 1:1 chat, read at most once: for the
+		// classifier and, on a long small-talk run, for the short reply.
+		var history func() []chatmemory.RecentTurn
+		if matchedGroup.ZaloGroupID == "" {
+			msgID, sessionID := payload.Message.MsgID, activeSessionID
+			history = onceTurns(func() []chatmemory.RecentTurn {
+				return chatmemory.RecentTurns(ctx, sessionID, msgID, userText, 0)
+			})
+		}
+		staffTurnKind := staffTurnUngated
+		if staffGated {
+			staffTurnKind = classifyStaffTurn(ctx, meta, matchedChannel.TenantID, sessionKey, workKey, payload.Sender.ID, userText)
+		}
 		if engine.TakeAwaitingFollowup(ctx, workKey) {
 			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
 			intent = "IN_SCOPE"
+		} else if staffTurnKind == staffTurnCalled {
+			// A staff member called the bot by name: answer without asking
+			// the classifier, which could read the call as group chatter.
+			log.Printf("[group-staff] group %s staff %s called the bot", matchedGroup.ZaloGroupID, payload.Sender.ID)
+			intent, classified = "IN_SCOPE", "IN_SCOPE"
+		} else if staffTurnKind == staffTurnNotForBot {
+			// Staff talking to the customer: not for the bot. No classifier
+			// call, so no AI cost; the group log below still keeps the line.
+			log.Printf("[group-staff] group %s staff %s did not call the bot; staying silent", matchedGroup.ZaloGroupID, payload.Sender.ID)
+			intent, classified = "CASUAL", "CASUAL"
 		} else if groupAssistant {
 			intent = classifyGroupMessage(ctx, matchedChannel.TenantID, workKey, recentGroupLines(ctx, sessionKey), groupName, groupRole, userText)
 			log.Printf("[group-assistant] group %s sender %s: %s", matchedGroup.ZaloGroupID, payload.Sender.ID, intent)
@@ -927,16 +975,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		} else {
 			var err error
-			// Only a 1:1 chat reads the session's recent turns: in a keyword
-			// group the shared log has no speakers, so one member's "ok" could
-			// be read as the answer to a question the bot asked someone else.
-			var history func() []chatmemory.RecentTurn
-			if matchedGroup.ZaloGroupID == "" {
-				msgID, sessionID := payload.Message.MsgID, activeSessionID
-				history = func() []chatmemory.RecentTurn {
-					return chatmemory.RecentTurns(ctx, sessionID, msgID, userText, 0)
-				}
-			}
+			// Only a 1:1 chat reads the session's recent turns (history is
+			// nil in a group): in a keyword group the shared log has no
+			// speakers, so one member's "ok" could be read as the answer to a
+			// question the bot asked someone else.
 			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
 			if err != nil {
 				log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
@@ -1002,12 +1044,77 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// word and treat a short "đúng rồi" as the yes to its own question,
 		// which a canned refusal from a classifier that reads one message
 		// cannot do. How it answers small talk is up to the system prompt.
+		// A long run of small talk is answered more cheaply (casual_budget.go).
+		// Only a task's first attempt applies the budget: a retry answers as
+		// before this feature, so it can never skew or wipe a newer run.
+		if matchedGroup.ZaloGroupID == "" && casualBudgetActive(ctx) {
+			switch intent {
+			case "IN_SCOPE", "OUT_OF_SCOPE":
+				engine.ResetCasualStreak(ctx, workKey)
+			case "CASUAL":
+				turnID := casualTurnID(ctx, payload.Message.MsgID)
+				streak := engine.BumpCasualStreak(ctx, workKey, turnID, meta.SessionTimeout)
+				budget := casualBudgetFrom(matchedChannel.Metadata)
+				route := routeCasualTurn(streak, budget)
+				if route == casualToAgent {
+					break
+				}
+				var recent []chatmemory.RecentTurn
+				if history != nil {
+					recent = history()
+				}
+				reply, err := replyToCasualTurn(ctx, matchedChannel.TenantID, recent, userText, isWhitelisted,
+					casualModeFor(route, streak, budget), casualCallDeadline(turnStart, time.Now()))
+				if err == nil && reply.Result.HasUsage {
+					casualAgentType := "public"
+					if isWhitelisted {
+						casualAgentType = "private"
+					}
+					go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, casualAgentType, "", reply.Result, reply.Prompt, reply.Text)
+				}
+				switch {
+				case err != nil:
+					// No answer (no provider, timeout, no time left): the main
+					// bot answers, in quiet mode too, so a business turn the
+					// classifier mislabelled is never dropped unchecked.
+					log.Printf("[casual-budget] sender %s: small-talk call failed on turn %d (%v); using the main bot", payload.Sender.ID, streak, err)
+				case reply.Outcome == casualHandoff:
+					// The second look says this needs the main bot after all
+					// (a lookup, a reply to the bot's question): treat it as
+					// business from here on, including the variant-line lock.
+					log.Printf("[casual-budget] sender %s: small-talk model handed turn %d to the main bot", payload.Sender.ID, streak)
+					engine.ResetCasualStreak(ctx, workKey)
+					intent, classified = "IN_SCOPE", "IN_SCOPE"
+				case route == casualToQuiet && reply.Outcome == casualQuietAck:
+					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row (quiet after %d); no reply", payload.Sender.ID, streak, budget.QuietAfter)
+					return nil
+				case route == casualToLite && reply.Outcome == casualSend:
+					log.Printf("[casual-budget] sender %s: small-talk turn %d in a row answered with the short prompt", payload.Sender.ID, streak)
+					// Always as plain text: never let model output become a
+					// Zalo message template.
+					if err := adapter.SendTextMessage(ctx, payload.Sender.ID, reply.Text); err != nil {
+						return fmt.Errorf("failed to send small-talk reply to Zalo: %w", err)
+					}
+					return nil
+				default:
+					// Unusable or off-format answer: the main bot answers,
+					// still as small talk (no variant-line lock, no reset).
+					log.Printf("[casual-budget] sender %s: small-talk model answer unusable on turn %d (outcome %d); using the main bot", payload.Sender.ID, streak, reply.Outcome)
+				}
+			}
+		}
 
 		if intent == "OUT_OF_SCOPE" {
 			if err := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botOutOfScopeMessage); err != nil {
 				return fmt.Errorf("failed to send out-of-scope reply to Zalo: %w", err)
 			}
 			return nil
+		}
+
+		if staffGated && intent == "IN_SCOPE" {
+			// The bot is answering this staff member: their next messages may
+			// be replies to it, so the classifier reads them for a while.
+			markStaffEngaged(ctx, sessionKey, payload.Sender.ID)
 		}
 
 		// Determine which flow to run: private (internal staff) only for a
@@ -1236,7 +1343,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			if len(webNames) == 0 {
 				// No web names found, perform direct realtime inventory lookup for this MA_CHA
-				stock, details, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, maCha, "")
+				stock, details, err := sumInventoryByParentWithDKCopy(ctx, matchedChannel.TenantID, &permCtx, maCha)
 				if err != nil {
 					_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi truy vấn tồn kho dòng sản phẩm.")
 					return nil
@@ -1459,8 +1566,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// 3. Show Product Variants Selection (#show_product_variants:<MA_CHA>)
 		if strings.HasPrefix(userText, "#show_product_variants:") {
-			maCha := strings.TrimPrefix(userText, "#show_product_variants:")
-			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha)
+			maCha := engine.RealParentOf(strings.TrimPrefix(userText, "#show_product_variants:"))
+			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha, engine.ExcludeDKCopies)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Không tìm thấy thông tin chi tiết của dòng sản phẩm.")
 				return nil
@@ -1953,9 +2060,9 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 	return totalStock, nil
 }
 
-func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
+func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string, scopes ...func(*gorm.DB) *gorm.DB) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(scopes...).
 		Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha).
 		Limit(100).
 		Find(&products).Error
@@ -1992,7 +2099,7 @@ func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string) ([
 
 func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAdapter, tenantID, sku, zaloGroupID, senderID string) {
 	var p models.CachedProduct
-	if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma = ?", tenantID, sku).First(&p).Error; err != nil {
+	if err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).Where("tenant_id = ? AND ma = ?", tenantID, sku).First(&p).Error; err != nil {
 		log.Printf("[worker] error finding cached product details: %v", err)
 		_ = adapter.SendMessage(ctx, senderID, "Không tìm thấy thông tin chi tiết cho mã SKU: "+sku)
 		return
@@ -2043,7 +2150,7 @@ func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAda
 // instead of sending an empty or misleading reply.
 func priceRangeReplyByWebName(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, webName string) (string, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
 		Limit(200).Find(&products).Error
 	if err != nil {
@@ -2623,6 +2730,8 @@ func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string)
 func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
+	// No _DK filter here: this lookup only feeds the stock picker, and _DK
+	// SKUs hold real stock.
 	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
 		Limit(100).
@@ -2676,6 +2785,36 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 	return results, nil
 }
 
+// sumInventoryByParentWithDKCopy sums a line picked by parent code (no web
+// name) together with its "_DK" copy parent. The picker hides the copy as a
+// line of its own, but its SKUs hold real stock that belongs to this line.
+// Only this call site adds the copy: the by-web-name sum already reads every
+// parent of the web name, copy included.
+func sumInventoryByParentWithDKCopy(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string) (float64, []string, error) {
+	// One warehouse report serves both parents.
+	ctx = engine.WithWarehouseStock(ctx, tenantID)
+	stock, details, err := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, maCha, "")
+	if err != nil {
+		return 0, nil, err
+	}
+	dkParent := engine.DKCopyParentOf(maCha)
+	if dkParent == strings.TrimSpace(maCha) {
+		return stock, details, nil
+	}
+	var copies int64
+	if err := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).Where("tenant_id = ? AND ma_cha = ?", tenantID, dkParent).Count(&copies).Error; err != nil {
+		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+	}
+	if copies == 0 {
+		return stock, details, nil
+	}
+	copyStock, copyDetails, err := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, dkParent, "")
+	if err != nil {
+		return 0, nil, err
+	}
+	return stock + copyStock, append(details, copyDetails...), nil
+}
+
 // sumInventoryByMaChaAndWebName aggregates realtime inventory by MA_CHA and optionally WEB_NAME
 func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string, webName string) (float64, []string, error) {
 	var products []models.CachedProduct
@@ -2686,6 +2825,28 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	err := q.Find(&products).Error
 	if err != nil {
 		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+	}
+	// A parent picked within one web line also owns that line's SKUs under
+	// its "_DK" copy parent, which pickers no longer list on their own. The
+	// no-web-name case is left to its callers: the by-web postback already
+	// sums every parent of the line, and sumInventoryByParentWithDKCopy adds
+	// the copy for a bare parent pick.
+	if dkParent := engine.DKCopyParentOf(maCha); webName != "" && dkParent != strings.TrimSpace(maCha) {
+		var copies []models.CachedProduct
+		if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma_cha = ?", tenantID, dkParent).
+			Where("ten_dong_bo_web = ?", webName).Limit(100).Find(&copies).Error; err != nil {
+			return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+		}
+		seen := make(map[string]struct{}, len(products))
+		for _, p := range products {
+			seen[p.MA] = struct{}{}
+		}
+		for _, p := range copies {
+			if _, dup := seen[p.MA]; !dup {
+				seen[p.MA] = struct{}{}
+				products = append(products, p)
+			}
+		}
 	}
 	if webName == "" && len(products) == 0 {
 		return 0, nil, fmt.Errorf("no cached SKUs for ma_cha=%s", maCha)
@@ -2794,7 +2955,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 // MA_CHA list / variant SKUs.
 func getProductsByWebNameFromCache(ctx context.Context, tenantID, webName string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
 		Limit(100).
 		Find(&products).Error

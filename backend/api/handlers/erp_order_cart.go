@@ -446,8 +446,16 @@ func (r *cartResolver) pickVariant(ctx context.Context, line cartProductLine, sp
 	if len(variants) == 0 {
 		return cartResolution{problem: fmt.Sprintf("Dòng \"%s\" không có mã nào được đặt.", line.Name)}
 	}
-	if len(variants) == 1 {
+	if len(variants) == 1 && spec.color == "" && spec.size == "" {
 		return r.resolved(ctx, variants[0])
+	}
+	if len(variants) == 1 {
+		// The sole SKU is added only when the asked colour/size fits it, or
+		// when the line has no colour/size at all: hiding "_DK" copies can
+		// leave one visible SKU of a different colour.
+		if colors, sizes := variantAttributes(variants); len(colors) == 0 && len(sizes) == 0 {
+			return r.resolved(ctx, variants[0])
+		}
 	}
 	color, size := spec.color, spec.size
 	matched := filterCartVariants(variants, color, size)
@@ -638,20 +646,21 @@ func liveCartCatalog(tenantID string, stockClient *pkg.CloudifyClient) cartCatal
 			pattern := "%" + text + "%"
 			for _, column := range []string{"ten_dong_bo_web", "ten", "ma"} {
 				var rows []models.CachedProduct
-				if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND "+column+" LIKE ?", tenantID, pattern).
+				if err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).Where("tenant_id = ? AND "+column+" LIKE ?", tenantID, pattern).
 					Limit(cartCatalogRowLimit).Find(&rows).Error; err != nil {
 					return nil, false, err
 				}
-				if len(rows) > 0 {
-					return groupCartLines(rows), false, nil
+				if lines := groupCartLines(rows); len(lines) > 0 {
+					return lines, false, nil
 				}
 			}
-			_, maCha, _ := resolveMaChaFuzzy(ctx, tenantID, text)
+			_, maCha, _ := resolveMaChaFuzzy(ctx, tenantID, text, engine.ExcludeDKCopies)
+			maCha = engine.RealParentOf(maCha)
 			if maCha == "" {
 				return nil, false, nil
 			}
 			var rows []models.CachedProduct
-			if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha).
+			if err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha).
 				Limit(cartCatalogRowLimit).Find(&rows).Error; err != nil {
 				return nil, false, err
 			}
@@ -660,10 +669,11 @@ func liveCartCatalog(tenantID string, stockClient *pkg.CloudifyClient) cartCatal
 		line: func(ctx context.Context, name string) (cartProductLine, bool) {
 			for _, column := range []string{"ten_dong_bo_web", "ma_cha"} {
 				var rows []models.CachedProduct
-				if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND "+column+" = ?", tenantID, strings.TrimSpace(name)).
-					Limit(cartCatalogRowLimit).Find(&rows).Error; err == nil && len(rows) > 0 {
-					lines := groupCartLines(rows)
-					return lines[0], true
+				if err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).Where("tenant_id = ? AND "+column+" = ?", tenantID, strings.TrimSpace(name)).
+					Limit(cartCatalogRowLimit).Find(&rows).Error; err == nil {
+					if lines := groupCartLines(rows); len(lines) > 0 {
+						return lines[0], true
+					}
 				}
 			}
 			return cartProductLine{}, false
@@ -685,11 +695,15 @@ func liveCartCatalog(tenantID string, stockClient *pkg.CloudifyClient) cartCatal
 }
 
 // groupCartLines buckets cache rows by web name (or parent code when a row
-// has none).
+// has none). ERP "_DK" copy rows are left out: unpriced, colour/size
+// "false", never orderable. Lookups by exact SKU (bySKU) still see them.
 func groupCartLines(rows []models.CachedProduct) []cartProductLine {
 	index := map[string]int{}
 	var lines []cartProductLine
 	for _, row := range rows {
+		if engine.IsDKCopy(row.MA, row.MA_CHA) {
+			continue
+		}
 		name := strings.TrimSpace(row.TEN_DONG_BO_WEB)
 		if name == "" {
 			name = strings.TrimSpace(row.MA_CHA)

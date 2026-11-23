@@ -28,6 +28,29 @@ theo phiên có từ khoá như cũ.
   `chưa xác thực` (người trong nhóm chưa liên kết tài khoản; bot đọc tin của họ
   nhưng không trả lời họ).
 
+## Nhân viên trong nhóm khách
+
+Công tắc **Nhân viên trong nhóm khách: bot chỉ trả lời khi được gọi** (tab
+**Nhóm Zalo**, mặc định bật) áp dụng cho nhóm khách (nhóm CRM có mã KH), cả khi
+bật chế độ trợ lý nhóm lẫn khi dùng phiên có từ khoá.
+
+- **Nhân viên nói với khách thì bot im.** Tin của nhân viên (người trong
+  whitelist) không qua bộ lọc AI, nên không tốn lượt gọi AI. Ở chế độ trợ lý nhóm,
+  tin đó vẫn được ghi vào `<tin_nhom>`, nên câu trả lời sau của bot biết nhân viên
+  đã nói gì với khách.
+- **Gọi bot bằng tên.** Tin có tên gọi bot đứng riêng thành một từ thì bot trả
+  lời ngay: `Bull ơi FF399 còn không`, `@Bull tra đơn hôm qua`, `nhờ bot tra công
+  nợ`. Tên gọi đặt ở ô **Tên gọi bot trong nhóm**, cách nhau bằng `;` (để trống thì
+  dùng `bot`). Gõ đúng từ khoá mở phiên (`Chào Bull`) cũng tính là gọi bot.
+- **Hỏi tiếp không cần gọi lại.** Sau khi bot trả lời một nhân viên, trong 5
+  phút tin tiếp của chính nhân viên đó đi qua bộ lọc như bình thường, nên trả lời
+  câu bot vừa hỏi ("kho HCM", "lấy 10 cái") vẫn được. Nhân viên đang có menu số
+  hoặc giỏ hàng dở cũng vậy. Nhân viên khác trong nhóm vẫn phải gọi bot.
+- **Từ khoá kết thúc** (`Bye Bull`) vẫn đóng phiên của cả nhóm như cũ.
+- Tin của khách và người chưa xác thực không đổi. Nhóm nhân viên, nhóm cảnh báo,
+  nhóm chưa có mã KH và chat 1:1 không đổi.
+- Tắt công tắc để quay lại cách cũ: tin nhân viên đi qua bộ lọc như tin khách.
+
 ## Không đổi
 
 - Quyền tra cứu vẫn ký riêng cho từng người gửi, trong mã KH của nhóm.
@@ -37,7 +60,10 @@ theo phiên có từ khoá như cũ.
 
 ## Prompt sửa được trong AI Engine
 
-- **Trợ lý nhóm: khi nào bot lên tiếng**: quyết định trả lời hay im lặng.
+- **Trợ lý nhóm: khi nào bot lên tiếng**: quyết định trả lời hay im lặng. Mặc
+  định có quy tắc: tin của nhân viên chỉ IN_SCOPE khi họ đang nói với bot. Tenant
+  đã sửa prompt này trong AI Engine thì cần thêm quy tắc đó hoặc bấm khôi phục mặc
+  định.
 - **Trợ lý nhóm: cách trả lời trong nhóm**: nối vào system prompt của bot. Cần có
   system prompt trong AI Engine; nếu để trống, flow dùng prompt riêng của nó và
   phần này không được nối.

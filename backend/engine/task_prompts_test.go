@@ -46,3 +46,23 @@ func TestIntentClassifierPromptKeepsJSONContract(t *testing.T) {
 		t.Fatalf("classifier prompt changed:\n%s", got)
 	}
 }
+
+// The worker hands a small-talk turn back to the main bot when the model
+// answers the marker, so the marker must stay in the fixed, read-only part.
+func TestCasualReplyPromptKeepsHandoffMarker(t *testing.T) {
+	p, ok := LookupTaskPrompt(PromptCasualReply)
+	if !ok {
+		t.Fatal("small-talk prompt is not registered")
+	}
+	if !strings.Contains(p.Format, CasualReplyHandoff) || strings.Contains(p.Instructions, CasualReplyHandoff) {
+		t.Fatalf("handoff marker must live in the fixed format only:\n%s\n---\n%s", p.Instructions, p.Format)
+	}
+	for _, want := range []string{"<nguoi_nhan>", "<luot_cuoi>", "<im_lang>", "<tin_gan_day>", "Tin mới:"} {
+		if !strings.Contains(p.Format, want) {
+			t.Fatalf("format does not describe %s:\n%s", want, p.Format)
+		}
+	}
+	if !strings.Contains(p.Instructions, "<luot_cuoi>") {
+		t.Fatal("default instructions should say what to do on the last small-talk reply")
+	}
+}
