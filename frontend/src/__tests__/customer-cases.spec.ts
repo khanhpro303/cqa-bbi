@@ -22,7 +22,7 @@ describe('Complaint cases panel', () => {
     mocks.get.mockReset().mockImplementation(async (url: string) => {
       if (url.endsWith('/customer-cases')) return { data: { data: [sampleCase], total: 1, counts: { open: 1, resolved: 2 } } }
       if (url.endsWith('/customer-cases/c1')) return { data: { case: sampleCase, events: [] } }
-      if (url.endsWith('/users')) return { data: [{ user_id: 'u-staff', name: 'Hậu', email: 'h@x' }] }
+      if (url.endsWith('/users')) return { data: [{ user_id: 'u-staff', name: 'Hậu', email: 'h@x' }, { user_id: 'u-other', name: 'Hậu', email: 'hau2@x' }] }
       return { data: {} }
     })
     mocks.patch.mockReset()
@@ -54,7 +54,9 @@ describe('Complaint cases panel', () => {
     const vm = wrapper.vm as any
     expect(vm.item.title).toBe('Kính FF800 bị nứt')
     vm.form.status = 'in_progress'
-    vm.form.assignee = { title: 'Hậu', value: 'u-staff' }
+    // Two staff named Hậu: the list tells them apart, the saved name stays plain.
+    expect(vm.userOptions.map((o: any) => o.title)).toEqual(['Hậu (h@x)', 'Hậu (hau2@x)'])
+    vm.form.assignee = vm.userOptions[0]
     vm.form.customer_update = 'Bên em đổi kính mới, giao thứ 5'
     vm.form.note = 'Đã gọi khách'
     await vm.save()

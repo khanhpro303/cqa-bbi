@@ -80,6 +80,8 @@ type CustomerCaseEvent struct {
 	SessionID string `gorm:"type:varchar(100);not null;default:''" json:"session_id"`
 	// ZaloUserID: who reported it (bot and summary events).
 	ZaloUserID string `gorm:"type:varchar(100);not null;default:''" json:"zalo_user_id"`
+	// TurnID: the chat turn that made this report (bot events).
+	TurnID string `gorm:"type:varchar(36);not null;default:'';index" json:"-"`
 	// StaffNotified: staff were alerted about this report, or about the case
 	// recently enough that no new alert was needed.
 	StaffNotified bool      `gorm:"not null;default:false" json:"staff_notified"`

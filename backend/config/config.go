@@ -30,7 +30,7 @@ type Config struct {
 	// ZaloOAWebhookSecret is the "OA Secret Key" from the Zalo app's Webhook
 	// page. ZaloWebhookSignature is off, log or enforce: log checks every
 	// X-ZEvent-Signature and logs mismatches, enforce drops them. It defaults
-	// to log once a secret is set.
+	// to enforce once a secret is set.
 	ZaloOAWebhookSecret     string
 	ZaloWebhookSignature    string
 	MessengerJourneyEnabled bool

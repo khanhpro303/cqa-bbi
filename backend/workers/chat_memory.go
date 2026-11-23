@@ -57,7 +57,7 @@ func startChatMemoryTurn(ctx context.Context, turn chatmemory.Turn, payload Zalo
 		Attachments: attachments,
 		SenderName:  senderName,
 		SentAt:      webhookTime(payload.Timestamp),
-		Raw:         payload,
+		Raw:         withoutForeignImages(payload),
 	})
 	return chatmemory.WithTurn(ctx, turn)
 }
@@ -100,9 +100,12 @@ func appendChatMemoryContext(ctx context.Context, cfg *config.Config, channelMet
 // the bot records complaints with complaint_record and knows what is still
 // being handled. Skipped when no system prompt is set, like the other
 // blocks, so the flow's own prompt is never replaced by this block alone.
-func appendComplaintContext(ctx context.Context, tenantID, subjectType, subjectID, customerCode, systemPrompt string) string {
+func appendComplaintContext(ctx context.Context, tenantID, subjectType, subjectID, customerCode string, listCases bool, systemPrompt string) string {
 	if strings.TrimSpace(systemPrompt) == "" {
 		return systemPrompt
+	}
+	if !listCases {
+		subjectID = "" // no cases listed
 	}
 	block := customercases.BotContext(ctx, tenantID, subjectType, subjectID, customerCode, func(cases string) string {
 		return engine.BuildTaskPrompt(tenantID, engine.PromptComplaintBot, map[string]string{"cases": cases})
@@ -111,4 +114,25 @@ func appendComplaintContext(ctx context.Context, tenantID, subjectType, subjectI
 		return systemPrompt
 	}
 	return systemPrompt + "\n\n" + block
+}
+
+// withoutForeignImages is the payload as stored: image URLs that are not on
+// Zalo's CDN are blanked, so no stored copy points elsewhere.
+func withoutForeignImages(payload ZaloWebhookPayload) ZaloWebhookPayload {
+	atts := make([]ZaloWebhookAttachment, len(payload.Message.Attachments))
+	for i, a := range payload.Message.Attachments {
+		if a.Type != "image" {
+			atts[i] = a
+			continue
+		}
+		if a.Payload.URL != "" && !allowedImageURL(a.Payload.URL) {
+			a.Payload.URL = ""
+		}
+		if a.Payload.Thumbnail != "" && !allowedImageURL(a.Payload.Thumbnail) {
+			a.Payload.Thumbnail = ""
+		}
+		atts[i] = a
+	}
+	payload.Message.Attachments = atts
+	return payload
 }

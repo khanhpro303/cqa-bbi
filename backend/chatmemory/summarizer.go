@@ -299,6 +299,13 @@ func (s *Service) recordCases(ctx context.Context, sess models.ChatSession, msgs
 		// The staff bot's sessions are staff talking to the bot.
 		return handled
 	}
+	if sess.SubjectType == "group" {
+		// A group session mixes senders, and the summary does not say whose
+		// problem an issue is (it may be a guest's, not the group's). The bot
+		// records group complaints per sender during the chat; whatever it
+		// missed stays in the session alert for staff to sort out.
+		return handled
+	}
 	var images []models.CaseImage
 	imagesLoaded := false
 	for i, is := range r.Issues {

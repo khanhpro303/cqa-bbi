@@ -37,6 +37,13 @@ type GroupPermissionContext struct {
 	// it. Their complaints are their own, not the group's: complaint tools use
 	// the sender's chat and customer code, never the group's.
 	GroupGuest bool `json:"group_guest,omitempty"`
+	// TurnID identifies the chat turn the token was signed for; complaint
+	// reports carry it so the worker can tell what this turn recorded.
+	TurnID string `json:"turn_id,omitempty"`
+	// Complaints: complaint handling is on for this turn (channel switch and
+	// a system prompt carrying the complaint guide). complaint_record refuses
+	// tokens without it.
+	Complaints bool `json:"complaints,omitempty"`
 	Groups        []GroupPermission `json:"groups"`
 }
 

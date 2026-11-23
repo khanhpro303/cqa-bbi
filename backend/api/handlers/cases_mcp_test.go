@@ -61,7 +61,7 @@ func TestComplaintToolRecordsForTheTokensChat(t *testing.T) {
 		return parsed.Content[0].Text, parsed.IsError
 	}
 
-	group := engine.GroupPermissionContext{TenantID: "t1", AgentType: "public", ZaloUserID: "zu-1", ChannelID: "ch-1", ZaloGroupID: "g-1", CustomerCode: "KH01"}
+	group := engine.GroupPermissionContext{TenantID: "t1", AgentType: "public", ZaloUserID: "zu-1", ChannelID: "ch-1", ZaloGroupID: "g-1", CustomerCode: "KH01", Complaints: true, TurnID: "turn-9"}
 	res := handleComplaintTool(context.Background(), "t1", "public", sign(group), args(map[string]any{
 		"type": "product_defect", "severity": "high", "title": "Kính nứt", "detail": "Ảnh: kính nứt", "evidence": "nứt rồi em",
 	}))
@@ -70,7 +70,7 @@ func TestComplaintToolRecordsForTheTokensChat(t *testing.T) {
 		t.Fatalf("call failed: %s", out)
 	}
 	r := got[0]
-	if r.SubjectType != "group" || r.SubjectID != "g-1" || r.ZaloUserID != "zu-1" || r.CustomerCode != "KH01" || r.Source != customercases.SourceBot || r.Type != "product_defect" {
+	if r.SubjectType != "group" || r.SubjectID != "g-1" || r.ZaloUserID != "zu-1" || r.CustomerCode != "KH01" || r.Source != customercases.SourceBot || r.Type != "product_defect" || r.TurnID != "turn-9" || r.SubjectOnly {
 		t.Fatalf("report = %+v", r)
 	}
 	if strings.Contains(out, "case-uuid-secret") || strings.Contains(out, "66656") || !strings.Contains(out, `"action":"followup"`) || !strings.Contains(out, "Thứ 5 giao kính mới") {
@@ -81,7 +81,7 @@ func TestComplaintToolRecordsForTheTokensChat(t *testing.T) {
 	}
 
 	// A customer cannot report for another customer code.
-	direct := engine.GroupPermissionContext{TenantID: "t1", AgentType: "public", ZaloUserID: "zu-2", ChannelID: "ch-1", CustomerCode: "KH02"}
+	direct := engine.GroupPermissionContext{TenantID: "t1", AgentType: "public", ZaloUserID: "zu-2", ChannelID: "ch-1", CustomerCode: "KH02", Complaints: true}
 	directOut, _ := body(handleComplaintTool(context.Background(), "t1", "public", sign(direct), args(map[string]any{"title": "Giao chậm", "detail": "x", "customer_code": "KH99"})))
 	if r := got[len(got)-1]; r.SubjectType != "user" || r.SubjectID != "zu-2" || r.CustomerCode != "KH02" {
 		t.Fatalf("customer_code from a customer must be ignored: %+v", r)
@@ -92,10 +92,23 @@ func TestComplaintToolRecordsForTheTokensChat(t *testing.T) {
 
 	// A customer in someone else's group (not a CRM member): the report is
 	// theirs, never the group's, and keeps their own code.
-	guest := engine.GroupPermissionContext{TenantID: "t1", AgentType: "public", ZaloUserID: "zu-4", ChannelID: "ch-1", ZaloGroupID: "g-1", CustomerCode: "KH04", GroupGuest: true}
-	handleComplaintTool(context.Background(), "t1", "public", sign(guest), args(map[string]any{"title": "Giao thiếu", "detail": "x"}))
-	if r := got[len(got)-1]; r.SubjectType != "user" || r.SubjectID != "zu-4" || r.CustomerCode != "KH04" || r.ZaloGroupID != "g-1" {
+	guest := engine.GroupPermissionContext{TenantID: "t1", AgentType: "public", ZaloUserID: "zu-4", ChannelID: "ch-1", ZaloGroupID: "g-1", CustomerCode: "KH04", GroupGuest: true, Complaints: true}
+	guestOut, _ := body(handleComplaintTool(context.Background(), "t1", "public", sign(guest), args(map[string]any{"title": "Giao thiếu", "detail": "x"})))
+	if r := got[len(got)-1]; r.SubjectType != "user" || r.SubjectID != "zu-4" || r.CustomerCode != "KH04" || r.ZaloGroupID != "g-1" || !r.SubjectOnly {
 		t.Fatalf("guest report = %+v", r)
+	}
+	// The reply goes to the group: no staff update on the guest's case.
+	if strings.Contains(guestOut, "Thứ 5 giao kính mới") {
+		t.Fatalf("guest result carries the staff update: %s", guestOut)
+	}
+
+	// A token signed without complaint handling (switch off, or no system
+	// prompt for the guide) cannot write.
+	before := len(got)
+	off := direct
+	off.Complaints = false
+	if out, failed := body(handleComplaintTool(context.Background(), "t1", "public", sign(off), args(map[string]any{"title": "x", "detail": "y"}))); !failed || !strings.Contains(out, "chưa bật") || len(got) != before {
+		t.Fatalf("complaints off: %s", out)
 	}
 
 	for _, tc := range []struct {
@@ -109,7 +122,7 @@ func TestComplaintToolRecordsForTheTokensChat(t *testing.T) {
 			t.Errorf("%s: %s", tc.name, out)
 		}
 	}
-	noChat := engine.GroupPermissionContext{TenantID: "t1", AgentType: "public", ZaloUserID: "zu-3"}
+	noChat := engine.GroupPermissionContext{TenantID: "t1", AgentType: "public", ZaloUserID: "zu-3", Complaints: true}
 	if out, failed := body(handleComplaintTool(context.Background(), "t1", "public", sign(noChat), args(map[string]any{"title": "x", "detail": "y"}))); !failed || !strings.Contains(out, "cuộc trò chuyện") {
 		t.Errorf("token without a chat: %s", out)
 	}
@@ -159,7 +172,7 @@ func TestComplaintToolRespectsChannelSwitchMySQL(t *testing.T) {
 	now := time.Now()
 	db.DB.Create(&models.Tenant{ID: tenant, Name: "t", Slug: "t-" + tenant[:8], Settings: "{}", CreatedAt: now, UpdatedAt: now})
 	db.DB.Create(&models.Channel{ID: channel, TenantID: tenant, ChannelType: "zalo_oa", Name: "OA", CredentialsEncrypted: []byte("x"), Metadata: "{}", CreatedAt: now, UpdatedAt: now})
-	token, err := engine.SignPermissionToken(engine.GroupPermissionContext{TenantID: tenant, AgentType: "public", ZaloUserID: "zu-1", ChannelID: channel}, stockFixtureSigningKey)
+	token, err := engine.SignPermissionToken(engine.GroupPermissionContext{TenantID: tenant, AgentType: "public", ZaloUserID: "zu-1", ChannelID: channel, Complaints: true}, stockFixtureSigningKey)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -109,6 +109,9 @@ type ZaloWebhookPayload struct {
 		Attachments []ZaloWebhookAttachment `json:"attachments,omitempty"`
 	} `json:"message"`
 	OAID string `json:"oa_id"`
+	// SignatureVerified: the webhook handler checked Zalo's signature on
+	// this event. Always overwritten by the handler, never read from Zalo.
+	SignatureVerified bool `json:"cqa_signature_verified,omitempty"`
 }
 
 // NewZaloWebhookTask creates a new task for processing a Zalo webhook
@@ -192,6 +195,8 @@ const (
 	botUnavailableMessage = "Dạ hệ thống tra cứu đang bận nên em chưa trả lời được câu này. Anh/chị vui lòng nhắn lại sau ít phút giúp em ạ."
 	botEmptyAnswerMessage = "Dạ em chưa tìm được câu trả lời phù hợp. Anh/chị nói rõ hơn giúp em (ví dụ mã sản phẩm, màu, size) nhé."
 	botOutOfScopeMessage  = "Dạ em chưa thể hỗ trợ câu hỏi này. Anh/chị có thể hỏi em câu khác nhé."
+	// caseRecordedReply replaces a reply that was nothing but a ticket number.
+	caseRecordedReply = "Dạ em đã ghi nhận vấn đề của anh/chị và chuyển bộ phận phụ trách kiểm tra ạ."
 
 	handoverStaffNotifiedMessage = "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Em đã báo các bạn nhân viên admin liên hệ trực tiếp hỗ trợ mình ngay nhé ạ!"
 	handoverNoStaffMessage       = "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Anh/chị vui lòng nhắn trực tiếp cho nhân viên phụ trách để được hỗ trợ ngay giúp em nhé ạ!"
@@ -858,9 +863,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// Reading images can take up to imageReadTimeout of the lock's
 			// lease; renew it so the classifier and Langflow call that follow
 			// still finish under the lock.
-			if lockToken != "" && !engine.ExtendSessionLock(ctx, lockKey, lockToken) {
-				log.Printf("[zalo-drop] reason=session_lock_lost sender=%s after reading images", payload.Sender.ID)
-				return nil
+			if lockToken != "" {
+				if held, err := engine.ExtendSessionLock(ctx, lockKey, lockToken); !held {
+					// Nothing is recorded yet: retry the whole message later
+					// rather than run without the lock.
+					return fmt.Errorf("session lock not renewed after reading images (sender=%s): %v", payload.Sender.ID, err)
+				}
 			}
 			if text := imagesText(images); text != "" {
 				if userText == "" {
@@ -1022,7 +1030,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if isWhitelisted && matchedGroup.ZaloGroupID == "" {
 			caseAgentType = "private"
 		}
-		complaintCases := customercases.EnabledFor(matchedChannel.Metadata) &&
+		// Only a webhook with a verified Zalo signature may write cases:
+		// otherwise anyone who knows the URL could file them as any customer.
+		complaintCases := customercases.EnabledFor(matchedChannel.Metadata) && payload.SignatureVerified &&
 			strings.TrimSpace(selectSystemPrompt(caseAgentType, meta.SystemPrompt, meta.SystemPromptInternal)) != ""
 		// A sender in a group chat who is not a CRM member of it (a customer
 		// in someone else's group) has their own cases, not the group's.
@@ -1031,6 +1041,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if groupGuest {
 			caseSubjectType, caseSubjectID = "user", payload.Sender.ID
 		}
+		// turnID ties the complaint reports the bot makes in this turn (via
+		// the signed token) to this turn.
+		turnID := pkg.NewUUID()
 		if complaintCases {
 			handover := intent == "HANDOVER"
 			if handover {
@@ -1053,7 +1066,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// not go out, the handover alert goes instead.
 			defer func() {
 				bg := context.WithoutCancel(ctx)
-				recorded, notified := customercases.TurnCaseState(bg, matchedChannel.TenantID, caseSubjectType, caseSubjectID, payload.Sender.ID, turnStart)
+				recorded, notified := customercases.TurnCaseState(bg, matchedChannel.TenantID, turnID)
 				if notified || (!recorded && !handover) {
 					return
 				}
@@ -1234,9 +1247,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		permCtx.ChannelID = matchedChannel.ID
 		permCtx.ZaloGroupID = matchedGroup.ZaloGroupID
 		permCtx.GroupGuest = groupGuest
+		permCtx.TurnID = turnID
+		permCtx.Complaints = complaintCases
 		systemPromptToUse = appendOrderCartContext(ctx, matchedChannel.TenantID, workKey, &permCtx, systemPromptToUse)
 		if complaintCases {
-			systemPromptToUse = appendComplaintContext(ctx, matchedChannel.TenantID, caseSubjectType, caseSubjectID, customerCode, systemPromptToUse)
+			// A guest's reply goes to the whole group: their own cases (and
+			// staff updates on them) stay out of the prompt.
+			systemPromptToUse = appendComplaintContext(ctx, matchedChannel.TenantID, caseSubjectType, caseSubjectID, customerCode, !groupGuest, systemPromptToUse)
 		}
 
 		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
@@ -1888,9 +1905,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Customers are never given a ticket or case number, whatever the
 		// model wrote (see customercases.StripRefs).
 		if complaintCases {
-			if cleaned := customercases.StripRefs(replyText); cleaned != replyText && strings.TrimSpace(cleaned) != "" {
+			if cleaned := customercases.StripRefs(replyText); cleaned != replyText {
 				log.Printf("[cases] removed a case reference from the reply to %s", payload.Sender.ID)
 				replyText = cleaned
+				if strings.TrimSpace(replyText) == "" {
+					replyText = caseRecordedReply
+				}
 			}
 		}
 

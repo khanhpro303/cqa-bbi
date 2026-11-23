@@ -11,8 +11,13 @@ import (
 // StripRefs removes such references from text going to the bot and from the
 // bot's reply.
 var (
-	// "mã ticket: #66656", "ticket số 123", "case #A-12", "số phiếu 4567"
-	caseRefLabelled = regexp.MustCompile(`(?i)(?:\bmã\s+|\bsố\s+)?(?:\bticket|\bcase|\bphiếu|\bmã\s+hồ\s+sơ|\bmã\s+khiếu\s+nại|\bmã\s+yêu\s+cầu)\s*(?:số|id|no\.?)?\s*[:：]?\s*(?:#\s*[A-Za-z0-9][A-Za-z0-9-]*|\d{2,}[A-Za-z0-9-]*)`)
+	// Strong labels name a ticket for sure: "ticket", "mã ticket/case/hồ
+	// sơ/khiếu nại/yêu cầu", "số phiếu", "phiếu số". Any code with a digit
+	// after them is a reference ("Mã ticket ABC-123", "ticket số 66656").
+	caseRefStrong = regexp.MustCompile(`(?i)(?:\b(?:mã|số)\s+(?:ticket|case|phiếu|hồ\s*sơ|khiếu\s*nại|yêu\s*cầu)|\bphiếu\s+số|\bticket)\s*(?:số|id|no\.?)?\s*[:：]?\s*#?\s*[A-Za-z0-9-]*\d[A-Za-z0-9-]*`)
+	// Weak labels ("case", "phiếu") need a "#" or a plain number: "case #12",
+	// "case 4567", but not "Case FF800 bị nứt" or "phiếu xuất kho XK01".
+	caseRefWeak = regexp.MustCompile(`(?i)\b(?:case|phiếu)\s*(?:số|id|no\.?)?\s*[:：]?\s*(?:#\s*[A-Za-z0-9][A-Za-z0-9-]*|\d{2,}\b)`)
 	// a bare "#66656"
 	caseRefHash = regexp.MustCompile(`#\d{3,}\b`)
 	// what removing a reference can leave behind
@@ -27,7 +32,8 @@ func StripRefs(s string) string {
 	if s == "" {
 		return s
 	}
-	out := caseRefLabelled.ReplaceAllString(s, "")
+	out := caseRefStrong.ReplaceAllString(s, "")
+	out = caseRefWeak.ReplaceAllString(out, "")
 	out = caseRefHash.ReplaceAllString(out, "")
 	if out == s {
 		return s

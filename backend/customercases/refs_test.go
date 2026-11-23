@@ -11,6 +11,10 @@ func TestStripRefs(t *testing.T) {
 		"Bên em sẽ đổi hàng, mã hồ sơ #A-12":                 "Bên em sẽ đổi hàng,",
 		"Cảm ơn anh.\nTicket #66656\nEm sẽ báo lại.":         "Cảm ơn anh.\n\nEm sẽ báo lại.",
 		"Dạ, bên em đang xử lý #66656 ạ":                     "Dạ, bên em đang xử lý ạ",
+		"Mã ticket ABC-123 đã chuyển kỹ thuật":               "đã chuyển kỹ thuật",
+		"Ticket số TK2024-9 ạ":                               "ạ",
+		"Mã ticket: #66656":                                  "",
+		"case 4567":                                          "",
 	}
 	for in, want := range cases {
 		if got := StripRefs(in); got != want {
@@ -23,6 +27,8 @@ func TestStripRefs(t *testing.T) {
 		"Phiếu xuất kho XK0565913-3.1 đã có",
 		"Mã KH KH0123",
 		"Case FF800 bị nứt",
+		"Số phiếu xuất kho XK0565913-3.1",
+		"Mã yêu cầu của anh là đổi size",
 	}
 	for _, s := range keep {
 		if got := StripRefs(s); got != s {

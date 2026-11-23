@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/workers"
 )
 
 func zaloMAC(appID, body, timestamp, secret string) string {
@@ -68,13 +69,37 @@ func TestZaloWebhookEnforceDropsForgedEvents(t *testing.T) {
 func TestZaloSignatureModeDefaults(t *testing.T) {
 	for _, tc := range []struct{ secret, mode, want string }{
 		{"", "", "off"},
-		{"s", "", "log"},
+		{"s", "", "enforce"},
+		{"s", "log", "log"},
 		{"s", "enforce", "enforce"},
-		{"s", "bogus", "log"},
+		{"s", "bogus", "enforce"},
 		{"", "enforce", "enforce"},
 	} {
 		if got := zaloSignatureMode(&config.Config{ZaloOAWebhookSecret: tc.secret, ZaloWebhookSignature: tc.mode}); got != tc.want {
 			t.Errorf("secret=%q mode=%q: got %s, want %s", tc.secret, tc.mode, got, tc.want)
 		}
+	}
+}
+
+// Only the handler says whether an event was signed: a body claiming
+// cqa_signature_verified is not believed.
+func TestZaloWebhookMarksVerifiedEvents(t *testing.T) {
+	var got []workers.ZaloWebhookPayload
+	zaloWebhookSink = func(p workers.ZaloWebhookPayload) { got = append(got, p) }
+	t.Cleanup(func() { zaloWebhookSink = nil })
+	cfg := &config.Config{ZaloOAWebhookSecret: "oa-secret", ZaloWebhookSignature: "log"}
+	router := gin.New()
+	router.POST("/webhooks/zalo", ZaloWebhookHandler(cfg))
+	body := `{"app_id":"111","event_name":"user_send_text","timestamp":"1700000000000","sender":{"id":"u1"},"message":{"text":"hàng lỗi"},"cqa_signature_verified":true}`
+	for _, sig := range []string{"", zaloMAC("111", body, "1700000000000", "oa-secret")} {
+		req := httptest.NewRequest(http.MethodPost, "/webhooks/zalo", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if sig != "" {
+			req.Header.Set("X-ZEvent-Signature", sig)
+		}
+		router.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	if len(got) != 2 || got[0].SignatureVerified || !got[1].SignatureVerified {
+		t.Fatalf("verified flags = %+v", got)
 	}
 }

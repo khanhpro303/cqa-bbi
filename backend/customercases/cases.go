@@ -84,13 +84,18 @@ type Report struct {
 	// ChatGroup is the Zalo group's name for a group chat (alerts only).
 	ChatGroup string
 	SessionID string
-	Source    string
-	Type      string
-	Severity  string
-	Title     string
-	Detail    string
-	Evidence  string
-	Images    []models.CaseImage
+	// TurnID: the chat turn that made the report (bot reports).
+	TurnID string
+	// SubjectOnly: match only the chat's own cases, not others with the same
+	// customer code (a sender in a group they are not a member of).
+	SubjectOnly bool
+	Source      string
+	Type        string
+	Severity    string
+	Title       string
+	Detail      string
+	Evidence    string
+	Images      []models.CaseImage
 }
 
 // Outcome is what Report did.
@@ -104,6 +109,9 @@ type Outcome struct {
 	StaffNotified bool
 	// eventID is the history line this report added ("" when none).
 	eventID string
+	// linkedNotified: for a summary link, staff know about the case's
+	// current opening (or this session's earlier report).
+	linkedNotified bool
 }
 
 // IsOpen reports whether a status still needs staff.
@@ -165,12 +173,14 @@ func Record(ctx context.Context, r Report) (Outcome, error) {
 	if db.DB == nil {
 		return Outcome{}, errors.New("database not initialised")
 	}
+	// The lock is held through the alert, so two reports cannot both find
+	// the follow-up cooldown expired and alert twice.
 	unlock, err := lockReport(ctx, r)
 	if err != nil {
 		return Outcome{}, err
 	}
+	defer unlock()
 	out, err := decideAndWrite(ctx, r)
-	unlock()
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -185,7 +195,11 @@ func Record(ctx context.Context, r Report) (Outcome, error) {
 // decideAndWrite matches the report against the candidates and writes it,
 // under the report's lock.
 func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
-	candidates, err := Candidates(ctx, r.TenantID, r.SubjectType, r.SubjectID, r.CustomerCode)
+	matchCode := r.CustomerCode
+	if r.SubjectOnly {
+		matchCode = ""
+	}
+	candidates, err := Candidates(ctx, r.TenantID, r.SubjectType, r.SubjectID, matchCode)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -200,9 +214,9 @@ func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 		matched, out.Reason = idx, reason
 	}
 	if matched >= 0 {
-		c, action, eventID, err := join(ctx, candidates[matched].ID, r)
+		c, action, eventID, linkedNotified, err := join(ctx, candidates[matched].ID, r)
 		if err == nil {
-			out.Action, out.Case, out.eventID = action, c, eventID
+			out.Action, out.Case, out.eventID, out.linkedNotified = action, c, eventID, linkedNotified
 			return out, nil
 		}
 		if !errors.Is(err, errNoCase) {
@@ -253,26 +267,43 @@ func OpenCases(ctx context.Context, tenantID, subjectType, subjectID, customerCo
 	return rows
 }
 
-// TurnCaseState reports, for the bot's reports from one person in a chat at
-// or after since (one turn): whether any was recorded, and whether staff
-// were told about one. A turn that recorded nothing, or whose alert failed,
-// still needs the handover alert.
-func TurnCaseState(ctx context.Context, tenantID, subjectType, subjectID, zaloUserID string, since time.Time) (recorded, notified bool) {
-	if db.DB == nil {
+// TurnCaseState reports what the bot recorded in one chat turn: whether it
+// recorded any report, and whether staff know about every one of them. A
+// turn that recorded nothing on a complaint, or any report whose alert
+// failed, still needs the handover alert.
+func TurnCaseState(ctx context.Context, tenantID, turnID string) (recorded, notified bool) {
+	if db.DB == nil || turnID == "" {
 		return false, false
 	}
 	var rows []struct{ StaffNotified bool }
-	db.DB.WithContext(ctx).Table("customer_case_events AS e").
-		Select("e.staff_notified").
-		Joins("JOIN customer_cases AS c ON c.id = e.case_id").
-		Where("c.tenant_id = ? AND c.subject_type = ? AND c.subject_id = ? AND e.actor = ? AND e.zalo_user_id = ? AND e.created_at >= ?",
-			tenantID, subjectType, subjectID, SourceBot, zaloUserID, since).
-		Scan(&rows)
+	db.DB.WithContext(ctx).Model(&models.CustomerCaseEvent{}).Select("staff_notified").
+		Where("tenant_id = ? AND turn_id = ? AND actor = ?", tenantID, turnID, SourceBot).Scan(&rows)
+	notified = len(rows) > 0
 	for _, row := range rows {
-		recorded = true
-		notified = notified || row.StaffNotified
+		notified = notified && row.StaffNotified
 	}
-	return recorded, notified
+	return len(rows) > 0, notified
+}
+
+// caseNotified reports whether staff were told about the case's current
+// opening: an event since its latest opened/reopened event was delivered.
+func caseNotified(tx *gorm.DB, caseID string) bool {
+	var since models.CustomerCaseEvent
+	if err := tx.Select("created_at").Where("case_id = ? AND kind IN ?", caseID, []string{"opened", "reopened"}).
+		Order("created_at DESC").First(&since).Error; err != nil {
+		return false
+	}
+	var n int64
+	tx.Model(&models.CustomerCaseEvent{}).Where("case_id = ? AND staff_notified = ? AND created_at >= ?", caseID, true, since.CreatedAt).Count(&n)
+	return n > 0
+}
+
+// sessionNotified reports whether staff were told about what this session
+// already reported on the case.
+func sessionNotified(tx *gorm.DB, caseID, sessionID string) bool {
+	var n int64
+	tx.Model(&models.CustomerCaseEvent{}).Where("case_id = ? AND session_id = ? AND staff_notified = ?", caseID, sessionID, true).Count(&n)
+	return n > 0
 }
 
 func create(ctx context.Context, r Report) (models.CustomerCase, string, error) {
@@ -288,7 +319,7 @@ func create(ctx context.Context, r Report) (models.CustomerCase, string, error) 
 		CreatedAt: now, UpdatedAt: now,
 	}
 	ev := newEvent(c, "opened", r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)
-	ev.ZaloUserID = r.ZaloUserID
+	ev.ZaloUserID, ev.TurnID = r.ZaloUserID, r.TurnID
 	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&c).Error; err != nil {
 			return err
@@ -301,15 +332,21 @@ func create(ctx context.Context, r Report) (models.CustomerCase, string, error) 
 // join adds a report to an earlier case. The case is re-read and locked
 // inside the transaction, so a status change or another report that landed
 // after the candidates were read is not overwritten.
-func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, string, string, error) {
+func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, string, string, bool, error) {
 	var c models.CustomerCase
 	action, eventID := "", ""
+	linkedNotified := false
 	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", caseID).First(&c).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return errNoCase
 			}
 			return err
+		}
+		// Staff may have closed it while the model was deciding: a case
+		// that is no longer a candidate is not joined (a new one opens).
+		if !candidate(c, time.Now()) {
+			return errNoCase
 		}
 		now := time.Now()
 		updates := map[string]interface{}{"updated_at": now}
@@ -335,12 +372,15 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 			// counts as the customer asking again and never reopens a case.
 			action, kind = ActionLinked, "linked"
 			if sessionAlreadyOnCase(tx, c.ID, r.SessionID) {
-				// The bot already recorded this session's report on the case.
+				// The bot already recorded this session's report on the case:
+				// staff know if that report reached them.
+				linkedNotified = sessionNotified(tx, c.ID, r.SessionID)
 				if len(updates) > 1 {
 					return tx.Model(&models.CustomerCase{}).Where("id = ?", c.ID).Updates(updates).Error
 				}
 				return nil
 			}
+			linkedNotified = caseNotified(tx, c.ID)
 		case !IsOpen(c.Status):
 			action, kind = ActionReopened, "reopened"
 			updates["status"] = StatusOpen
@@ -361,11 +401,24 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 			return err
 		}
 		ev := newEvent(c, kind, r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)
-		ev.ZaloUserID = r.ZaloUserID
+		ev.ZaloUserID, ev.TurnID = r.ZaloUserID, r.TurnID
 		eventID = ev.ID
+		if action == ActionLinked {
+			ev.StaffNotified = linkedNotified
+		}
 		return tx.Create(ev).Error
 	})
-	return c, action, eventID, err
+	return c, action, eventID, linkedNotified, err
+}
+
+// candidate reports whether c may still take a new report: open, or
+// resolved within recentResolvedWindow (the Candidates query, re-checked
+// under the row lock).
+func candidate(c models.CustomerCase, now time.Time) bool {
+	if IsOpen(c.Status) {
+		return true
+	}
+	return c.Status == StatusResolved && c.ResolvedAt != nil && c.ResolvedAt.After(now.Add(-recentResolvedWindow))
 }
 
 func sessionAlreadyOnCase(tx *gorm.DB, caseID, sessionID string) bool {

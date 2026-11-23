@@ -100,4 +100,13 @@ func TestSessionIssuesBecomeCasesMySQL(t *testing.T) {
 	if len(reports) != 0 {
 		t.Fatalf("cases off but reported: %+v", reports)
 	}
+
+	// A group session does not say whose problem an issue is: no case from
+	// the summary (the issue stays in the session alert).
+	db.DB.Model(&models.Channel{}).Where("id = ?", channelID).Update("metadata", `{"complaint_cases":true}`)
+	db.DB.Model(&models.ChatSession{}).Where("id = ?", sessionID).Updates(map[string]interface{}{"status": "open", "attempts": 0, "subject_type": "group", "subject_id": "g-1", "zalo_group_id": "g-1"})
+	s.RunOnce(context.Background())
+	if len(reports) != 0 {
+		t.Fatalf("group session summary opened a case: %+v", reports)
+	}
 }

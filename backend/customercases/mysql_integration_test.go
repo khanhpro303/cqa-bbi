@@ -101,6 +101,7 @@ func TestRecordLifecycleMySQL(t *testing.T) {
 	r1 := base
 	r1.Type, r1.Severity, r1.Title, r1.Detail, r1.Evidence = "product_defect", "high", "Kính FF800 bị nứt", "Nhận hàng thấy kính nứt", "kính nứt rồi em"
 	r1.Images = []models.CaseImage{{URL: "https://f1.zdn.vn/a.jpg", Description: "kính nứt"}}
+	r1.TurnID = "turn-1"
 	out, err := Record(ctx, r1)
 	if err != nil || out.Action != ActionCreated || !out.StaffNotified {
 		t.Fatalf("first report: %+v %v", out, err)
@@ -194,14 +195,11 @@ func TestRecordLifecycleMySQL(t *testing.T) {
 		t.Fatalf("other chat sees cases: %d", len(open))
 	}
 
-	if rec, notified := TurnCaseState(ctx, tenantID, "user", "zu-1", "zu-1", start); !rec || !notified {
+	if rec, notified := TurnCaseState(ctx, tenantID, "turn-1"); !rec || !notified {
 		t.Fatalf("TurnCaseState this turn = %t %t", rec, notified)
 	}
-	if rec, _ := TurnCaseState(ctx, tenantID, "user", "zu-1", "zu-1", time.Now().Add(time.Minute)); rec {
-		t.Fatal("TurnCaseState after the turn")
-	}
-	if rec, _ := TurnCaseState(ctx, tenantID, "user", "zu-1", "someone-else", start); rec {
-		t.Fatal("another sender's turn must not see these reports")
+	if rec, _ := TurnCaseState(ctx, tenantID, "turn-other"); rec {
+		t.Fatal("another turn must not see these reports")
 	}
 	if LastBotReportAt(ctx, tenantID, "user", "zu-1").Before(start) {
 		t.Fatal("LastBotReportAt")
@@ -253,13 +251,26 @@ func TestRecordAlertFailureMySQL(t *testing.T) {
 	start := time.Now().Add(-time.Second)
 
 	out, err := Record(ctx, Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "group", SubjectID: "g-x", ZaloUserID: "zu-a",
-		Source: SourceBot, Title: "Giao thiếu hàng"})
+		Source: SourceBot, Title: "Giao thiếu hàng", TurnID: "turn-a"})
 	if err != nil || out.Action != ActionCreated || out.StaffNotified {
 		t.Fatalf("%+v %v", out, err)
 	}
-	if rec, notified := TurnCaseState(ctx, tenantID, "group", "g-x", "zu-a", start); !rec || notified {
+	if rec, notified := TurnCaseState(ctx, tenantID, "turn-a"); !rec || notified {
 		t.Fatalf("TurnCaseState = %t %t, want recorded and not notified", rec, notified)
 	}
+
+	// A second report in the same turn that does reach staff does not hide
+	// the first one's failed alert.
+	sendAlert = func(context.Context, models.Channel, engine.CaseAlert) bool { return true }
+	stubModel(t, &fakeModel{answers: []string{`{"decision":"new","case":0}`}})
+	if out, err := Record(ctx, Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "group", SubjectID: "g-x", ZaloUserID: "zu-a",
+		Source: SourceBot, Title: "Sai giá đơn DH9", TurnID: "turn-a"}); err != nil || !out.StaffNotified {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if rec, notified := TurnCaseState(ctx, tenantID, "turn-a"); !rec || notified {
+		t.Fatalf("TurnCaseState = %t %t, one report still unnotified", rec, notified)
+	}
+	_ = start
 
 	// The switch off on the channel: recorded, but staff are not alerted.
 	db.DB.Model(&models.Channel{}).Where("id = ?", channelID).Update("metadata", `{"complaint_cases":false}`)
@@ -319,5 +330,104 @@ func TestRecordConcurrentSameCustomerMySQL(t *testing.T) {
 	db.DB.Where("id = ?", results[0].Case.ID).First(&c)
 	if len(ParseImages(c.Images)) != 2 {
 		t.Fatalf("images = %s", c.Images)
+	}
+}
+
+// Staff cancel a case while the model is deciding: the report opens a new
+// case instead of reopening the cancelled one.
+func TestRecordCaseCancelledDuringMatchMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channelID := setupTenant(t)
+	stubAlerts(t)
+	stubModel(t, &fakeModel{})
+	base := Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-c", ZaloUserID: "zu-c", Source: SourceBot}
+	r := base
+	r.Title = "Kính nứt"
+	first, err := Record(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := callModel
+	callModel = func(context.Context, string, string, string, string) (string, error) {
+		db.DB.Model(&models.CustomerCase{}).Where("id = ?", first.Case.ID).Updates(map[string]interface{}{"status": StatusCancelled, "resolved_at": time.Now()})
+		return `{"decision":"same","case":1}`, nil
+	}
+	t.Cleanup(func() { callModel = orig })
+	r.Title = "Kính nứt, hỏi lại"
+	out, err := Record(ctx, r)
+	if err != nil || out.Action != ActionCreated || out.Case.ID == first.Case.ID {
+		t.Fatalf("%+v %v", out, err)
+	}
+	var c models.CustomerCase
+	db.DB.Where("id = ?", first.Case.ID).First(&c)
+	if c.Status != StatusCancelled {
+		t.Fatalf("cancelled case was changed: %s", c.Status)
+	}
+}
+
+// A guest in someone else's group matches only their own chat's cases, even
+// when the group has a case under the same customer code.
+func TestRecordSubjectOnlyMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channelID := setupTenant(t)
+	stubAlerts(t)
+	model := &fakeModel{}
+	stubModel(t, model)
+	if _, err := Record(ctx, Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "group", SubjectID: "g-host", CustomerCode: "KH-SAME",
+		Source: SourceBot, Title: "Đơn của nhóm giao thiếu"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Record(ctx, Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-guest", ZaloUserID: "zu-guest",
+		CustomerCode: "KH-SAME", SubjectOnly: true, Source: SourceBot, Title: "Đơn của tôi giao thiếu"})
+	if err != nil || out.Action != ActionCreated || len(model.inputs) != 0 {
+		t.Fatalf("guest saw the group's case: %+v %v (model calls %d)", out, err, len(model.inputs))
+	}
+}
+
+// A summary link counts as known to staff only when the case's current
+// opening reached them.
+func TestSummaryLinkNotifiedMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channelID := setupTenant(t)
+	delivered := false
+	orig := sendAlert
+	sendAlert = func(context.Context, models.Channel, engine.CaseAlert) bool { return delivered }
+	t.Cleanup(func() { sendAlert = orig })
+	model := &fakeModel{}
+	stubModel(t, model)
+	base := Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-s", ZaloUserID: "zu-s"}
+
+	// Opened by the bot, alert delivered.
+	delivered = true
+	r := base
+	r.Source, r.Title, r.SessionID = SourceBot, "Kính nứt", "s-1"
+	first, err := Record(ctx, r)
+	if err != nil || !first.StaffNotified {
+		t.Fatalf("%+v %v", first, err)
+	}
+	// Resolved, then reopened, but the reopen alert fails.
+	db.DB.Model(&models.CustomerCase{}).Where("id = ?", first.Case.ID).Updates(map[string]interface{}{"status": StatusResolved, "resolved_at": time.Now()})
+	delivered = false
+	model.answers = []string{`{"decision":"same","case":1}`}
+	r.Title, r.SessionID = "Vẫn nứt", "s-2"
+	if out, err := Record(ctx, r); err != nil || out.Action != ActionReopened || out.StaffNotified {
+		t.Fatalf("%+v %v", out, err)
+	}
+	// The summary of another session links to it: the old alert does not
+	// count for the reopened case.
+	model.answers = []string{`{"decision":"same","case":1}`}
+	s := base
+	s.Source, s.Title, s.SessionID = SourceSummary, "Kính nứt", "s-3"
+	if out, err := Record(ctx, s); err != nil || out.Action != ActionLinked || out.StaffNotified {
+		t.Fatalf("summary link after an undelivered reopen: %+v %v", out, err)
+	}
+	// The summary of session s-1, whose bot report reached staff.
+	model.answers = []string{`{"decision":"same","case":1}`}
+	s.SessionID = "s-1"
+	if out, err := Record(ctx, s); err != nil || out.Action != ActionLinked || !out.StaffNotified {
+		t.Fatalf("summary of a notified session: %+v %v", out, err)
 	}
 }

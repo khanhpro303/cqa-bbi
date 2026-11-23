@@ -144,7 +144,15 @@ const images = computed(() => parseCaseImages(item.value?.images))
 const statusOptions = computed(() => caseStatuses.map(s => ({ title: t(`cc_status_${s}`), value: s })))
 const severityOptions = computed(() => ['high', 'medium', 'low'].map(s => ({ title: t(`cm_severity_${s}`), value: s })))
 const typeOptions = computed(() => caseTypes.map(v => ({ title: t(issueTypeLabelKey(v)), value: v })))
-const userOptions = computed<AssigneeOption[]>(() => users.value.map(u => ({ title: u.name || u.email, value: u.user_id })))
+// Staff sharing a display name are told apart by their email.
+const userOptions = computed<AssigneeOption[]>(() => {
+  const count = new Map<string, number>()
+  for (const u of users.value) count.set(u.name || u.email, (count.get(u.name || u.email) || 0) + 1)
+  return users.value.map(u => {
+    const name = u.name || u.email
+    return { title: (count.get(name) || 0) > 1 && u.name ? `${u.name} (${u.email})` : name, value: u.user_id }
+  })
+})
 
 function fill(c: CustomerCase) {
   item.value = c
@@ -182,7 +190,8 @@ function assigneeFields() {
   const a = form.assignee
   if (!a) return { assignee_name: '', assignee_id: '' }
   if (typeof a === 'string') return { assignee_name: a.trim(), assignee_id: '' }
-  return { assignee_name: a.title, assignee_id: a.value }
+  const u = users.value.find(x => x.user_id === a.value)
+  return { assignee_name: u ? (u.name || u.email) : a.title, assignee_id: a.value }
 }
 
 async function save() {

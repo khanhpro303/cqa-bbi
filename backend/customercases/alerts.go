@@ -57,7 +57,7 @@ func alertStaff(ctx context.Context, out *Outcome, r Report) bool {
 			return true
 		}
 	case ActionLinked:
-		return c.LastAlertAt != nil
+		return out.linkedNotified
 	default:
 		return false
 	}

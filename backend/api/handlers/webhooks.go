@@ -20,6 +20,9 @@ import (
 	"github.com/vietbui/chat-quality-agent/workers"
 )
 
+// zaloWebhookSink replaces the queue in tests.
+var zaloWebhookSink func(workers.ZaloWebhookPayload)
+
 // ZaloWebhookHandler processes incoming Zalo OA webhooks
 func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 	var asynqClient *asynq.Client
@@ -58,10 +61,14 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		// Set here, never taken from the body: only a verified event may
+		// write complaint cases (workers.ZaloWebhookPayload.SignatureVerified).
+		payload.SignatureVerified = false
 		if signatureMode != zaloSignatureOff {
 			ok := verifyZaloSignature(c.GetHeader("X-ZEvent-Signature"), payload.AppID, bodyBytes, payload.Timestamp, cfg.ZaloOAWebhookSecret)
 			switch {
 			case ok:
+				payload.SignatureVerified = true
 				firstVerified.Do(func() { log.Printf("[zalo-webhook] signature verified (mode=%s)", signatureMode) })
 			case signatureMode == zaloSignatureEnforce:
 				log.Printf("[zalo-drop] reason=bad_signature event=%s sender=%s ip=%s", payload.EventName, payload.Sender.ID, c.ClientIP())
@@ -79,6 +86,10 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		if zaloWebhookSink != nil {
+			zaloWebhookSink(payload)
+			return
+		}
 		// Process async via Asynq if available
 		if asynqClient == nil {
 			log.Printf("[zalo-webhook] REDIS_URL not configured; dropping %s from Zalo user %s", payload.EventName, payload.Sender.ID)
@@ -131,15 +142,16 @@ const (
 )
 
 // zaloSignatureMode picks how strictly Zalo webhook signatures are checked.
-// With no explicit mode, a configured secret turns on log mode, so a wrong
-// secret shows up in the logs before anyone switches to enforce.
+// With no explicit mode, a configured secret means enforce: an unsigned or
+// badly signed event is dropped. ZALO_WEBHOOK_SIGNATURE=log checks a new
+// secret without dropping anything.
 func zaloSignatureMode(cfg *config.Config) string {
 	switch cfg.ZaloWebhookSignature {
 	case zaloSignatureOff, zaloSignatureLog, zaloSignatureEnforce:
 		return cfg.ZaloWebhookSignature
 	}
 	if cfg.ZaloOAWebhookSecret != "" {
-		return zaloSignatureLog
+		return zaloSignatureEnforce
 	}
 	return zaloSignatureOff
 }

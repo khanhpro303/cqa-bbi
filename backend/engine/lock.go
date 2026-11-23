@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -70,16 +71,22 @@ return 0
 
 // ExtendSessionLock gives the holder of lockKey a fresh SessionLockTTL, for a
 // turn that spent time on a step before its Langflow call (reading images).
-// It reports false only when the lock is known to belong to someone else
-// now; a Redis error keeps the old lease and reports true.
-func ExtendSessionLock(ctx context.Context, lockKey, token string) bool {
+// It reports whether the lease was renewed; a Redis error is retried once.
+func ExtendSessionLock(ctx context.Context, lockKey, token string) (bool, error) {
 	if db.RedisClient == nil || token == "" {
-		return true
+		return true, nil
 	}
-	n, err := extendLockScript.Run(ctx, db.RedisClient, []string{lockKey}, token, SessionLockTTL.Milliseconds()).Int()
-	if err != nil {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		var n int
+		n, err = extendLockScript.Run(ctx, db.RedisClient, []string{lockKey}, token, SessionLockTTL.Milliseconds()).Int()
+		if err == nil {
+			if n != 1 {
+				return false, errors.New("lock held by another turn")
+			}
+			return true, nil
+		}
 		log.Printf("[lock] extend %s: %v", lockKey, err)
-		return true
 	}
-	return n == 1
+	return false, err
 }
