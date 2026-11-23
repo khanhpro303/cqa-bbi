@@ -153,6 +153,13 @@ type ChannelMetadata struct {
 	// trigger word, it reads the whole group and answers only when needed.
 	// See group_assistant.go.
 	GroupAssistant bool `json:"group_assistant_mode"`
+	// GroupStaffCallOnly: in a customer group a staff message reaches the bot
+	// only when it calls the bot or the staff member is already talking with
+	// it. Unset means on. See group_staff.go.
+	GroupStaffCallOnly *bool `json:"group_staff_call_only"`
+	// GroupBotNames are the names staff call the bot by in a group,
+	// separated by ";". Empty means "bot".
+	GroupBotNames string `json:"group_bot_names"`
 
 	LangflowAPIURL       string `json:"langflow_api_url"`
 	LangflowAPIKey       string `json:"langflow_api_key"`
@@ -794,6 +801,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				if err != nil {
 					log.Printf("[worker] failed to send welcome message: %v", err)
 				}
+				if staffCallOnlyOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode, groupRoleFor(isWhitelisted, isCustomer)) {
+					markStaffEngaged(ctx, sessionKey, payload.Sender.ID)
+				}
 				log.Printf("[worker] opened new session %s for key %s", newSessionID, sessionKey)
 				return nil
 			}
@@ -815,6 +825,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		sessionTTL := time.Duration(meta.SessionTimeout)*time.Minute + time.Minute
 		groupName, groupRole := groupSpeaker(isWhitelisted, isCustomer, whitelistRec.Name, customerRec.Name)
+		// Staff in a customer group mostly talk to the customer; their
+		// messages reach the bot only when they call it (group_staff.go).
+		staffGated := staffCallOnlyOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode, groupRole)
 
 		// Verified-only interaction (design intent): the trigger-time gate above
 		// only blocks unverified senders at session OPEN. Because a group session
@@ -853,6 +866,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		if isEndTriggered {
 			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
+			if staffGated {
+				clearStaffEngaged(ctx, sessionKey, payload.Sender.ID)
+			}
 			var err error
 			if matchedGroup.ZaloGroupID != "" {
 				err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionGoodbyeMessage)
@@ -932,9 +948,23 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return chatmemory.RecentTurns(ctx, sessionID, msgID, userText, 0)
 			})
 		}
+		staffTurnKind := staffTurnUngated
+		if staffGated {
+			staffTurnKind = classifyStaffTurn(ctx, meta, matchedChannel.TenantID, sessionKey, workKey, payload.Sender.ID, userText)
+		}
 		if engine.TakeAwaitingFollowup(ctx, workKey) {
 			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
 			intent = "IN_SCOPE"
+		} else if staffTurnKind == staffTurnCalled {
+			// A staff member called the bot by name: answer without asking
+			// the classifier, which could read the call as group chatter.
+			log.Printf("[group-staff] group %s staff %s called the bot", matchedGroup.ZaloGroupID, payload.Sender.ID)
+			intent, classified = "IN_SCOPE", "IN_SCOPE"
+		} else if staffTurnKind == staffTurnNotForBot {
+			// Staff talking to the customer: not for the bot. No classifier
+			// call, so no AI cost; the group log below still keeps the line.
+			log.Printf("[group-staff] group %s staff %s did not call the bot; staying silent", matchedGroup.ZaloGroupID, payload.Sender.ID)
+			intent, classified = "CASUAL", "CASUAL"
 		} else if groupAssistant {
 			intent = classifyGroupMessage(ctx, matchedChannel.TenantID, workKey, recentGroupLines(ctx, sessionKey), groupName, groupRole, userText)
 			log.Printf("[group-assistant] group %s sender %s: %s", matchedGroup.ZaloGroupID, payload.Sender.ID, intent)
@@ -1079,6 +1109,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return fmt.Errorf("failed to send out-of-scope reply to Zalo: %w", err)
 			}
 			return nil
+		}
+
+		if staffGated && intent == "IN_SCOPE" {
+			// The bot is answering this staff member: their next messages may
+			// be replies to it, so the classifier reads them for a while.
+			markStaffEngaged(ctx, sessionKey, payload.Sender.ID)
 		}
 
 		// Determine which flow to run: private (internal staff) only for a
