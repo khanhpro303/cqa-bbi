@@ -299,6 +299,11 @@ func (s *Service) recordCases(ctx context.Context, sess models.ChatSession, msgs
 		// The staff bot's sessions are staff talking to the bot.
 		return handled
 	}
+	if !customerMessagesVerified(msgs) {
+		// A message whose Zalo signature was not checked (webhook mode log
+		// or off) may be forged: no case from it without staff reading it.
+		return handled
+	}
 	if sess.SubjectType == "group" {
 		// A group session mixes senders, and the summary does not say whose
 		// problem an issue is (it may be a guest's, not the group's). The bot
@@ -339,6 +344,28 @@ func (s *Service) recordCases(ctx context.Context, sess models.ChatSession, msgs
 		handled[i] = out.StaffNotified
 	}
 	return handled
+}
+
+// customerMessagesVerified reports whether every customer message of the
+// session came from a webhook with a verified Zalo signature (the worker
+// stores the payload, with cqa_signature_verified, under raw_data.webhook).
+func customerMessagesVerified(msgs []models.Message) bool {
+	seen := false
+	for _, m := range msgs {
+		if m.SenderType != "customer" {
+			continue
+		}
+		seen = true
+		var raw struct {
+			Webhook struct {
+				Verified bool `json:"cqa_signature_verified"`
+			} `json:"webhook"`
+		}
+		if json.Unmarshal([]byte(m.RawData), &raw) != nil || !raw.Webhook.Verified {
+			return false
+		}
+	}
+	return seen
 }
 
 // caseIssue reports whether a summary issue goes to the complaint cases.

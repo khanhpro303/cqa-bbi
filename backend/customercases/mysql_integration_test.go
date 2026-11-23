@@ -381,8 +381,18 @@ func TestRecordSubjectOnlyMySQL(t *testing.T) {
 	}
 	out, err := Record(ctx, Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-guest", ZaloUserID: "zu-guest",
 		CustomerCode: "KH-SAME", SubjectOnly: true, Source: SourceBot, Title: "Đơn của tôi giao thiếu"})
-	if err != nil || out.Action != ActionCreated || len(model.inputs) != 0 {
+	if err != nil || out.Action != ActionCreated || len(model.inputs) != 0 || !out.Case.Private {
 		t.Fatalf("guest saw the group's case: %+v %v (model calls %d)", out, err, len(model.inputs))
+	}
+	// The other way: the group, matching by its customer code, does not see
+	// the guest's private case.
+	for _, c := range OpenCases(ctx, tenantID, "group", "g-host", "KH-SAME") {
+		if c.ID == out.Case.ID {
+			t.Fatal("group sees the guest's private case")
+		}
+	}
+	if cands, _ := Candidates(ctx, tenantID, "group", "g-host", "KH-SAME"); len(cands) != 1 {
+		t.Fatalf("group candidates = %d, want only its own", len(cands))
 	}
 }
 
@@ -429,5 +439,58 @@ func TestSummaryLinkNotifiedMySQL(t *testing.T) {
 	s.SessionID = "s-1"
 	if out, err := Record(ctx, s); err != nil || out.Action != ActionLinked || !out.StaffNotified {
 		t.Fatalf("summary of a notified session: %+v %v", out, err)
+	}
+}
+
+// A retried message (same turn id) does not count as asking again, and a
+// reopened case gets its own alert even inside the old follow-up cooldown.
+func TestRecordRetryAndReopenCooldownMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channelID := setupTenant(t)
+	alerts := stubAlerts(t)
+	model := &fakeModel{}
+	stubModel(t, model)
+	base := Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-r", ZaloUserID: "zu-r", Source: SourceBot}
+	r := base
+	r.Title, r.TurnID = "Kính nứt", "turn-1"
+	first, err := Record(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Title, r.TurnID = "Kính nứt, xử lý chưa", "turn-2"
+	model.answers = []string{`{"decision":"same","case":1}`}
+	if out, err := Record(ctx, r); err != nil || out.Action != ActionFollowup || out.Case.FollowupCount != 1 {
+		t.Fatalf("%+v %v", out, err)
+	}
+	// turn-2 retried
+	model.answers = []string{`{"decision":"same","case":1}`}
+	out, err := Record(ctx, r)
+	if err != nil || out.Case.FollowupCount != 1 || !out.StaffNotified {
+		t.Fatalf("retry counted again: %+v %v", out, err)
+	}
+	var n int64
+	db.DB.Model(&models.CustomerCaseEvent{}).Where("case_id = ? AND turn_id = ?", first.Case.ID, "turn-2").Count(&n)
+	if n != 1 {
+		t.Fatalf("turn-2 events = %d", n)
+	}
+
+	// Resolved, then reopened within the follow-up cooldown of the first
+	// alert: the reopen alerts, and a later follow-up relies on that alert.
+	db.DB.Model(&models.CustomerCase{}).Where("id = ?", first.Case.ID).Updates(map[string]interface{}{"status": StatusResolved, "resolved_at": time.Now()})
+	before := len(*alerts)
+	orig := sendAlert
+	sendAlert = func(context.Context, models.Channel, engine.CaseAlert) bool { return false }
+	model.answers = []string{`{"decision":"same","case":1}`}
+	r.Title, r.TurnID = "Vẫn nứt", "turn-3"
+	if out, err := Record(ctx, r); err != nil || out.Action != ActionReopened || out.StaffNotified {
+		t.Fatalf("reopen: %+v %v", out, err)
+	}
+	sendAlert = orig
+	model.answers = []string{`{"decision":"same","case":1}`}
+	r.Title, r.TurnID = "Sao rồi em", "turn-4"
+	out, err = Record(ctx, r)
+	if err != nil || out.Action != ActionFollowup || len(*alerts) != before+1 {
+		t.Fatalf("follow-up after an undelivered reopen must alert: %+v %v alerts %d→%d", out, err, before, len(*alerts))
 	}
 }

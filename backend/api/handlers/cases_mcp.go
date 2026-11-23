@@ -95,13 +95,12 @@ func handleComplaintTool(ctx context.Context, tenantID, agentType, permissionTok
 	}
 	auditComplaint(tenantID, permissions, 200, 1)
 	log.Printf("[cases] %s case %s for %s/%s (staff_notified=%t, %s)", out.Action, out.Case.ID, report.SubjectType, report.SubjectID, out.StaffNotified, out.Reason)
-	view := customercases.ViewForBot(out.Case)
-	if permissions.GroupGuest {
-		// The reply goes to the whole group: staff updates on this person's
-		// own case are not for the group to read.
-		view.CustomerUpdate = ""
+	body := gin.H{"status": "success", "action": out.Action, "staff_notified": out.StaffNotified}
+	if !permissions.GroupGuest {
+		body["case"] = customercases.ViewForBot(out.Case)
 	}
-	body := gin.H{"status": "success", "action": out.Action, "staff_notified": out.StaffNotified, "case": view}
+	// A guest's reply goes to the whole group: nothing about their case
+	// (title, status, staff updates) is returned, only that it was recorded.
 	if !out.StaffNotified {
 		body["note"] = "Đã lưu vấn đề nhưng chưa báo trực tiếp được nhân viên. Chỉ nói với khách là em đã ghi nhận; không hứa nhân viên sẽ liên hệ ngay."
 	}

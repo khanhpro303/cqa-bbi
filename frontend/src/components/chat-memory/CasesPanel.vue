@@ -40,7 +40,18 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-for="c in cases" :key="c.id" class="cursor-pointer" :data-testid="`case-${c.id}`" @click="open(c)">
+        <tr
+          v-for="c in cases"
+          :key="c.id"
+          class="cursor-pointer"
+          tabindex="0"
+          role="button"
+          :aria-label="c.title"
+          :data-testid="`case-${c.id}`"
+          @click="open(c)"
+          @keydown.enter.prevent="open(c)"
+          @keydown.space.prevent="open(c)"
+        >
           <td><v-chip size="x-small" :color="severityColor(c.severity)">{{ severityLabel(c.severity) }}</v-chip></td>
           <td class="title-cell">
             <div class="font-weight-medium text-truncate">{{ c.title }}</div>
@@ -136,9 +147,14 @@ const severityOptions = computed(() => [
   ...['high', 'medium', 'low'].map(v => ({ title: t(`cm_severity_${v}`), value: v })),
 ])
 
+// Only the latest request's answer is shown: an earlier, slower one (old
+// filter, previous customer) must not replace it.
+let requestSeq = 0
+
 async function load(p = page.value) {
   page.value = p
   loading.value = true
+  const seq = ++requestSeq
   try {
     const { data } = await api.get(`/tenants/${props.tenantId}/customer-cases`, {
       params: {
@@ -148,13 +164,14 @@ async function load(p = page.value) {
         customer_code: props.customerCode || undefined,
       },
     })
+    if (seq !== requestSeq) return
     cases.value = data?.data || []
     total.value = data?.total || 0
     counts.value = data?.counts || {}
   } catch {
-    cases.value = []
+    if (seq === requestSeq) cases.value = []
   } finally {
-    loading.value = false
+    if (seq === requestSeq) loading.value = false
   }
 }
 

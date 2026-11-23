@@ -96,8 +96,12 @@ func GetCustomerCase(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
 		return
 	}
+	// The newest 500 events, shown oldest first.
 	var events []models.CustomerCaseEvent
-	db.DB.Where("tenant_id = ? AND case_id = ?", tenantID, cc.ID).Order("created_at ASC").Limit(500).Find(&events)
+	db.DB.Where("tenant_id = ? AND case_id = ?", tenantID, cc.ID).Order("created_at DESC").Limit(500).Find(&events)
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
 	c.JSON(http.StatusOK, gin.H{"case": cc, "events": events})
 }
 

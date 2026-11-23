@@ -110,8 +110,11 @@ type Outcome struct {
 	// eventID is the history line this report added ("" when none).
 	eventID string
 	// linkedNotified: for a summary link, staff know about the case's
-	// current opening (or this session's earlier report).
+	// current opening (or this session's earlier report); for a repeated
+	// turn, whether its first report reached staff.
 	linkedNotified bool
+	// repeated: the same turn already reported this on the case (a retry).
+	repeated bool
 }
 
 // IsOpen reports whether a status still needs staff.
@@ -214,9 +217,9 @@ func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 		matched, out.Reason = idx, reason
 	}
 	if matched >= 0 {
-		c, action, eventID, linkedNotified, err := join(ctx, candidates[matched].ID, r)
+		c, action, eventID, linkedNotified, repeated, err := join(ctx, candidates[matched].ID, r)
 		if err == nil {
-			out.Action, out.Case, out.eventID, out.linkedNotified = action, c, eventID, linkedNotified
+			out.Action, out.Case, out.eventID, out.linkedNotified, out.repeated = action, c, eventID, linkedNotified, repeated
 			return out, nil
 		}
 		if !errors.Is(err, errNoCase) {
@@ -236,7 +239,7 @@ func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 func Candidates(ctx context.Context, tenantID, subjectType, subjectID, customerCode string) ([]models.CustomerCase, error) {
 	q := db.DB.WithContext(ctx).Where("tenant_id = ?", tenantID)
 	if customerCode != "" {
-		q = q.Where("((subject_type = ? AND subject_id = ?) OR customer_code = ?)", subjectType, subjectID, customerCode)
+		q = q.Where("((subject_type = ? AND subject_id = ?) OR (customer_code = ? AND private = ?))", subjectType, subjectID, customerCode, false)
 	} else {
 		q = q.Where("subject_type = ? AND subject_id = ?", subjectType, subjectID)
 	}
@@ -255,7 +258,7 @@ func OpenCases(ctx context.Context, tenantID, subjectType, subjectID, customerCo
 	}
 	q := db.DB.WithContext(ctx).Where("tenant_id = ? AND status IN ?", tenantID, []string{StatusOpen, StatusInProgress})
 	if customerCode != "" {
-		q = q.Where("((subject_type = ? AND subject_id = ?) OR customer_code = ?)", subjectType, subjectID, customerCode)
+		q = q.Where("((subject_type = ? AND subject_id = ?) OR (customer_code = ? AND private = ?))", subjectType, subjectID, customerCode, false)
 	} else {
 		q = q.Where("subject_type = ? AND subject_id = ?", subjectType, subjectID)
 	}
@@ -315,7 +318,7 @@ func create(ctx context.Context, r Report) (models.CustomerCase, string, error) 
 		SubjectType: r.SubjectType, SubjectID: r.SubjectID, ZaloUserID: r.ZaloUserID, ZaloGroupID: r.ZaloGroupID,
 		ReporterName: truncate(r.ReporterName, 250), CustomerName: truncate(r.CustomerName, 250), CustomerCode: truncate(r.CustomerCode, 60),
 		Type: r.Type, Severity: r.Severity, Title: r.Title, Detail: r.Detail, Evidence: r.Evidence,
-		Images: string(imagesJSON), Status: StatusOpen, Source: r.Source, OpenedSessionID: r.SessionID,
+		Images: string(imagesJSON), Status: StatusOpen, Source: r.Source, OpenedSessionID: r.SessionID, Private: r.SubjectOnly,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	ev := newEvent(c, "opened", r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)
@@ -332,10 +335,10 @@ func create(ctx context.Context, r Report) (models.CustomerCase, string, error) 
 // join adds a report to an earlier case. The case is re-read and locked
 // inside the transaction, so a status change or another report that landed
 // after the candidates were read is not overwritten.
-func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, string, string, bool, error) {
+func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, string, string, bool, bool, error) {
 	var c models.CustomerCase
 	action, eventID := "", ""
-	linkedNotified := false
+	linkedNotified, repeated := false, false
 	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", caseID).First(&c).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -364,6 +367,16 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 			c.CustomerCode = r.CustomerCode
 		}
 
+		// A retried message (same turn id) that matches a case it already
+		// reported on adds nothing.
+		if r.TurnID != "" {
+			var prior models.CustomerCaseEvent
+			if err := tx.Select("id, staff_notified").Where("case_id = ? AND turn_id = ?", c.ID, r.TurnID).First(&prior).Error; err == nil {
+				action, repeated, linkedNotified = ActionFollowup, true, prior.StaffNotified
+				return nil
+			}
+		}
+
 		kind := "followup"
 		action = ActionFollowup
 		switch {
@@ -385,6 +398,10 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 			action, kind = ActionReopened, "reopened"
 			updates["status"] = StatusOpen
 			updates["resolved_at"] = nil
+			// The follow-up cooldown starts again with the new opening: an
+			// alert about the earlier opening says nothing about this one.
+			updates["last_alert_at"] = nil
+			c.LastAlertAt = nil
 			updates["followup_count"] = gorm.Expr("followup_count + 1")
 			updates["last_followup_at"] = now
 			c.Status, c.ResolvedAt = StatusOpen, nil
@@ -408,7 +425,7 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 		}
 		return tx.Create(ev).Error
 	})
-	return c, action, eventID, linkedNotified, err
+	return c, action, eventID, linkedNotified, repeated, err
 }
 
 // candidate reports whether c may still take a new report: open, or

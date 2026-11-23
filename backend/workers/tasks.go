@@ -2,6 +2,8 @@ package workers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -114,6 +116,16 @@ type ZaloWebhookPayload struct {
 	SignatureVerified bool `json:"cqa_signature_verified,omitempty"`
 }
 
+// complaintTurnID is the turn id for a Zalo message: stable across retries of
+// the same message (msg_id), random when Zalo sent none.
+func complaintTurnID(channelID, msgID string) string {
+	if strings.TrimSpace(msgID) == "" {
+		return pkg.NewUUID()
+	}
+	sum := sha256.Sum256([]byte(channelID + ":" + msgID))
+	return "m" + hex.EncodeToString(sum[:])[:35]
+}
+
 // NewZaloWebhookTask creates a new task for processing a Zalo webhook
 func NewZaloWebhookTask(payload ZaloWebhookPayload) (*asynq.Task, error) {
 	payloadBytes, err := json.Marshal(payload)
@@ -196,7 +208,8 @@ const (
 	botEmptyAnswerMessage = "Dạ em chưa tìm được câu trả lời phù hợp. Anh/chị nói rõ hơn giúp em (ví dụ mã sản phẩm, màu, size) nhé."
 	botOutOfScopeMessage  = "Dạ em chưa thể hỗ trợ câu hỏi này. Anh/chị có thể hỏi em câu khác nhé."
 	// caseRecordedReply replaces a reply that was nothing but a ticket number.
-	caseRecordedReply = "Dạ em đã ghi nhận vấn đề của anh/chị và chuyển bộ phận phụ trách kiểm tra ạ."
+	// It promises nothing: whether staff were told is not known here.
+	caseRecordedReply = "Dạ em đã nhận được thông tin của anh/chị ạ."
 
 	handoverStaffNotifiedMessage = "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Em đã báo các bạn nhân viên admin liên hệ trực tiếp hỗ trợ mình ngay nhé ạ!"
 	handoverNoStaffMessage       = "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Anh/chị vui lòng nhắn trực tiếp cho nhân viên phụ trách để được hỗ trợ ngay giúp em nhé ạ!"
@@ -1042,8 +1055,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			caseSubjectType, caseSubjectID = "user", payload.Sender.ID
 		}
 		// turnID ties the complaint reports the bot makes in this turn (via
-		// the signed token) to this turn.
-		turnID := pkg.NewUUID()
+		// the signed token) to this turn. It comes from the Zalo message id,
+		// so a retried message is the same turn and does not report twice.
+		turnID := complaintTurnID(matchedChannel.ID, payload.Message.MsgID)
 		if complaintCases {
 			handover := intent == "HANDOVER"
 			if handover {
@@ -1061,6 +1075,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				alert.CustomerName = customerRec.Name
 				alert.CustomerCode = customerCode
 			}
+			// This turn's own alert, not deduplicated against the user's
+			// earlier handover alerts.
+			alert.DedupeKey = "turn:" + turnID
 			// Staff must hear about this turn's complaint: if the bot did not
 			// record one (on a HANDOVER turn), or recorded one whose alert did
 			// not go out, the handover alert goes instead.

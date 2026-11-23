@@ -50,6 +50,9 @@ var sendAlert = func(ctx context.Context, ch models.Channel, a engine.CaseAlert)
 // case recently enough (follow-up) or before (summary link).
 func alertStaff(ctx context.Context, out *Outcome, r Report) bool {
 	c := out.Case
+	if out.repeated {
+		return out.linkedNotified
+	}
 	switch out.Action {
 	case ActionCreated, ActionReopened:
 	case ActionFollowup:

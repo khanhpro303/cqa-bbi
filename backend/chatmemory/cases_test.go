@@ -34,6 +34,18 @@ func TestSessionAlertIssuesSkipsCaseIssues(t *testing.T) {
 	}
 }
 
+func TestCustomerMessagesVerified(t *testing.T) {
+	signed := models.Message{SenderType: "customer", RawData: `{"webhook":{"cqa_signature_verified":true}}`}
+	unsigned := models.Message{SenderType: "customer", RawData: `{"webhook":{"cqa_signature_verified":false}}`}
+	bot := models.Message{SenderType: "bot", RawData: `{}`}
+	if !customerMessagesVerified([]models.Message{signed, bot}) {
+		t.Fatal("signed session rejected")
+	}
+	if customerMessagesVerified([]models.Message{signed, unsigned}) || customerMessagesVerified([]models.Message{bot}) {
+		t.Fatal("unsigned or customer-less session accepted")
+	}
+}
+
 func TestParseSummaryNeedsCase(t *testing.T) {
 	r, err := ParseSummaryResult(`{"summary":"x","issues":[{"type":"delivery","severity":"HIGH","detail":"giao thiếu","needs_case":true}]}`)
 	if err != nil || len(r.Issues) != 1 || !r.Issues[0].NeedsCase || r.Issues[0].Severity != "high" {
@@ -58,9 +70,10 @@ func TestSessionIssuesBecomeCasesMySQL(t *testing.T) {
 	userID, sessionID := "zu-"+pkg.NewUUID()[:8], pkg.NewUUID()
 	turn := Turn{TenantID: tenantID, ChannelID: channelID, SessionID: sessionID, ZaloUserID: userID, CustomerName: "Anh Bình", CustomerCode: "KH01", AgentType: "public"}
 	start := now.Add(-2 * time.Hour).Truncate(time.Second)
-	RecordInbound(context.Background(), turn, Inbound{MessageID: "c1", Text: "kính em nhận bị nứt", SentAt: start})
+	signed := map[string]any{"cqa_signature_verified": true}
+	RecordInbound(context.Background(), turn, Inbound{MessageID: "c1", Text: "kính em nhận bị nứt", SentAt: start, Raw: signed})
 	RecordInbound(context.Background(), turn, Inbound{MessageID: "c2", Text: "[Ảnh khách gửi: kính nứt]", ContentType: "image",
-		Attachments: []customercases.ImageAttachment{{Type: "image", URL: "https://f1.zdn.vn/k.jpg", Description: "kính nứt"}}, SentAt: start.Add(time.Minute)})
+		Attachments: []customercases.ImageAttachment{{Type: "image", URL: "https://f1.zdn.vn/k.jpg", Description: "kính nứt"}}, SentAt: start.Add(time.Minute), Raw: signed})
 
 	var reports []customercases.Report
 	cfg := &config.Config{ChatbotSessionTimeout: 30}

@@ -24,6 +24,10 @@ type CustomerCase struct {
 	ReporterName string `gorm:"type:varchar(255);not null;default:''" json:"reporter_name"`
 	CustomerName string `gorm:"type:varchar(255);not null;default:''" json:"customer_name"`
 	CustomerCode string `gorm:"type:varchar(64);not null;default:'';index:idx_ccase_tenant_code,priority:2" json:"customer_code"`
+	// Private: reported by someone in a group they are not a CRM member of.
+	// Only that person's own chat sees it; the customer code does not link it
+	// to other chats.
+	Private bool `gorm:"not null;default:false" json:"private"`
 
 	// Type uses the chat-memory issue types: complaint, delivery,
 	// product_defect, price, payment, staff_request, other.

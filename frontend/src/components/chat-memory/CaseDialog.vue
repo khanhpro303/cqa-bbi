@@ -194,19 +194,26 @@ function assigneeFields() {
   return { assignee_name: u ? (u.name || u.email) : a.title, assignee_id: a.value }
 }
 
+// changedFields sends only what staff changed in the form, so saving a note
+// does not write back fields the bot or another user changed meanwhile.
+function changedFields(c: CustomerCase) {
+  const body: Record<string, string> = {}
+  if (form.status !== c.status) body.status = form.status
+  if (form.severity !== c.severity) body.severity = form.severity
+  if (form.type !== c.type) body.type = form.type
+  const a = assigneeFields()
+  if (a.assignee_name !== (c.assignee_name || '') || a.assignee_id !== (c.assignee_id || '')) Object.assign(body, a)
+  if (form.customer_update !== (c.customer_update || '')) body.customer_update = form.customer_update
+  if (form.resolution !== (c.resolution || '')) body.resolution = form.resolution
+  if (form.note.trim()) body.note = form.note
+  return body
+}
+
 async function save() {
   if (!item.value) return
   saving.value = true
   try {
-    const { data } = await api.patch(`/tenants/${props.tenantId}/customer-cases/${item.value.id}`, {
-      status: form.status,
-      severity: form.severity,
-      type: form.type,
-      ...assigneeFields(),
-      customer_update: form.customer_update,
-      resolution: form.resolution,
-      note: form.note,
-    })
+    const { data } = await api.patch(`/tenants/${props.tenantId}/customer-cases/${item.value.id}`, changedFields(item.value))
     notify(t('cc_saved'))
     emit('saved', data.case)
     await load()

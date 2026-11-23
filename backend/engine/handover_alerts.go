@@ -36,6 +36,10 @@ type HandoverAlert struct {
 	CustomerCode string
 	ChatGroup    string // CRM group name when the message came from a group chat
 	Message      string
+	// DedupeKey replaces the per-user dedupe (one alert per user per
+	// window) when set: a complaint turn whose case alert failed is its own
+	// alert, not a repeat of the user's last one.
+	DedupeKey string
 }
 
 // ParseHandoverAlertGroupID returns the CRM group that receives handover
@@ -105,6 +109,9 @@ func NotifyHandover(ctx context.Context, sender HandoverGroupSender, a HandoverA
 	}
 
 	dedupKey := fmt.Sprintf("handover_alert:%s:%s:%s", a.TenantID, a.Channel.ID, a.ZaloUserID)
+	if a.DedupeKey != "" {
+		dedupKey = fmt.Sprintf("handover_alert:%s:%s", a.TenantID, a.DedupeKey)
+	}
 	if db.RedisClient != nil {
 		fresh, err := db.RedisClient.SetNX(ctx, dedupKey, "1", handoverAlertDedupWindow).Result()
 		if err == nil && !fresh {

@@ -60,10 +60,38 @@ describe('Complaint cases panel', () => {
     vm.form.customer_update = 'Bên em đổi kính mới, giao thứ 5'
     vm.form.note = 'Đã gọi khách'
     await vm.save()
-    expect(mocks.patch).toHaveBeenCalledWith('/tenants/t1/customer-cases/c1', expect.objectContaining({
+    expect(mocks.patch).toHaveBeenCalledWith('/tenants/t1/customer-cases/c1', {
       status: 'in_progress', assignee_name: 'Hậu', assignee_id: 'u-staff',
       customer_update: 'Bên em đổi kính mới, giao thứ 5', note: 'Đã gọi khách',
-    }))
+    })
+  })
+
+  it('saves only the note when only the note changed', async () => {
+    mocks.patch.mockResolvedValue({ data: { case: sampleCase } })
+    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1' }, global: { mocks: { $t: (k: string) => k } } })
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.form.note = 'Đã gọi khách'
+    await vm.save()
+    expect(mocks.patch).toHaveBeenCalledWith('/tenants/t1/customer-cases/c1', { note: 'Đã gọi khách' })
+  })
+
+  it('ignores an older list response that finishes last', async () => {
+    let releaseSlow: (v: unknown) => void = () => {}
+    mocks.get.mockImplementation(async (url: string, opts: any) => {
+      if (url.endsWith('/customer-cases') && opts?.params?.status === 'active') {
+        await new Promise(r => { releaseSlow = r })
+        return { data: { data: [sampleCase], total: 1, counts: {} } }
+      }
+      return { data: { data: [], total: 0, counts: {} } }
+    })
+    const wrapper = shallowMount(CasesPanel, { props: { tenantId: 't1' }, global: { mocks: { $t: (k: string) => k } } })
+    const vm = wrapper.vm as any
+    vm.status = 'resolved'
+    await vm.load(1)
+    releaseSlow(undefined)
+    await flushPromises()
+    expect(vm.cases).toHaveLength(0)
   })
 })
 
