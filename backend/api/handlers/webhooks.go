@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,9 +37,11 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 	signatureMode := zaloSignatureMode(cfg)
 	switch {
 	case signatureMode == zaloSignatureOff:
-		log.Printf("[zalo-webhook] WARNING: webhook signatures are not checked (set ZALO_OA_SECRET_KEY). Anyone who knows the URL can send messages as any Zalo user.")
-	case signatureMode == zaloSignatureEnforce && cfg.ZaloOAWebhookSecret == "":
-		log.Printf("[zalo-webhook] ERROR: ZALO_WEBHOOK_SIGNATURE=enforce without ZALO_OA_SECRET_KEY: every Zalo webhook will be rejected")
+		log.Printf("[zalo-webhook] WARNING: ZALO_WEBHOOK_SIGNATURE=off: webhook signatures are not checked. Anyone who knows the URL can send messages as any Zalo user. Use only on a developer machine.")
+	case signatureMode == zaloSignatureLog:
+		log.Printf("[zalo-webhook] WARNING: ZALO_WEBHOOK_SIGNATURE=log: bad signatures are only logged. Remove it once the secret is verified.")
+	case cfg.ZaloOAWebhookSecret == "":
+		log.Printf("[zalo-webhook] ERROR: ZALO_OA_SECRET_KEY is not set: every Zalo webhook will be rejected (set the secret, or ZALO_WEBHOOK_SIGNATURE=off on a developer machine)")
 	}
 	var firstVerified sync.Once
 
@@ -77,6 +80,15 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 			default:
 				log.Printf("[zalo-webhook] signature mismatch (mode=log, not dropped) event=%s sender=%s ip=%s has_header=%t", payload.EventName, payload.Sender.ID, c.ClientIP(), c.GetHeader("X-ZEvent-Signature") != "")
 			}
+		}
+
+		// A signed event can be captured and sent again. Within
+		// zaloWebhookDedupeWindow the msg_id dedupe drops it; past that its
+		// timestamp (covered by the signature) is too old.
+		if signatureMode == zaloSignatureEnforce && staleZaloEvent(payload.Timestamp, time.Now()) {
+			log.Printf("[zalo-drop] reason=stale_event event=%s sender=%s timestamp=%s ip=%s", payload.EventName, payload.Sender.ID, payload.Timestamp, c.ClientIP())
+			c.JSON(http.StatusOK, gin.H{"status": "ignored"})
+			return
 		}
 
 		// Always return 200 OK to Zalo quickly
@@ -135,6 +147,22 @@ func zaloTaskOptions(payload workers.ZaloWebhookPayload) []asynq.Option {
 
 const zaloWebhookMaxBody = 1 << 20
 
+// zaloClockSkew is how far in the future a Zalo timestamp may be.
+const zaloClockSkew = 5 * time.Minute
+
+// staleZaloEvent reports whether a webhook's millisecond timestamp is older
+// than the dedupe window (or implausibly far ahead), so a replayed event
+// cannot outlive the msg_id dedupe. A missing timestamp fails the signature
+// check already; an unparsable one is treated as stale.
+func staleZaloEvent(ts string, now time.Time) bool {
+	ms, err := strconv.ParseInt(strings.TrimSpace(ts), 10, 64)
+	if err != nil || ms <= 0 {
+		return true
+	}
+	at := time.UnixMilli(ms)
+	return now.Sub(at) > zaloWebhookDedupeWindow || at.Sub(now) > zaloClockSkew
+}
+
 const (
 	zaloSignatureOff     = "off"
 	zaloSignatureLog     = "log"
@@ -142,18 +170,15 @@ const (
 )
 
 // zaloSignatureMode picks how strictly Zalo webhook signatures are checked.
-// With no explicit mode, a configured secret means enforce: an unsigned or
-// badly signed event is dropped. ZALO_WEBHOOK_SIGNATURE=log checks a new
-// secret without dropping anything.
+// It fails closed: unless ZALO_WEBHOOK_SIGNATURE is exactly log (testing a
+// new secret) or off (a developer machine), unsigned and badly signed events
+// are dropped, and without ZALO_OA_SECRET_KEY that is every event.
 func zaloSignatureMode(cfg *config.Config) string {
 	switch cfg.ZaloWebhookSignature {
-	case zaloSignatureOff, zaloSignatureLog, zaloSignatureEnforce:
+	case zaloSignatureOff, zaloSignatureLog:
 		return cfg.ZaloWebhookSignature
 	}
-	if cfg.ZaloOAWebhookSecret != "" {
-		return zaloSignatureEnforce
-	}
-	return zaloSignatureOff
+	return zaloSignatureEnforce
 }
 
 // verifyZaloSignature checks X-ZEvent-Signature, which Zalo sets to

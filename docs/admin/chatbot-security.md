@@ -7,12 +7,12 @@ khách không điều khiển được bot vượt quyền.
 
 1. Zalo gửi webhook tới `/api/v1/webhooks/zalo`. Đặt `ZALO_OA_SECRET_KEY` (OA
    Secret Key trên trang Webhook của app Zalo) để kiểm chữ ký
-   `X-ZEvent-Signature`. Có secret thì mặc định là `enforce` (tin sai hoặc
-   thiếu chữ ký bị bỏ). Muốn thử secret mới mà không bỏ tin thì đặt
-   `ZALO_WEBHOOK_SIGNATURE=log`, đợi log có dòng `[zalo-webhook] signature
-   verified` rồi bỏ biến đó. Khi chưa có secret, ai biết URL cũng giả được tin
-   nhắn của bất kỳ Zalo ID nào, nên bot không ghi khiếu nại (case) từ webhook
-   chưa xác thực.
+   `X-ZEvent-Signature`. Mặc định là `enforce`: tin sai hoặc thiếu chữ ký bị
+   bỏ, và nếu chưa đặt secret thì mọi webhook đều bị bỏ. Muốn thử secret mới
+   mà không bỏ tin thì đặt `ZALO_WEBHOOK_SIGNATURE=log`, đợi log có dòng
+   `[zalo-webhook] signature verified` rồi bỏ biến đó. `off` chỉ dùng trên máy
+   dev: khi đó ai biết URL cũng giả được tin nhắn của bất kỳ Zalo ID nào. Bot
+   chỉ ghi khiếu nại (case) từ webhook đã xác thực.
 2. Worker tra Zalo ID người gửi ra nhân viên (whitelist) hoặc khách đã duyệt.
    Người lạ bị bỏ qua.
 3. Mã xác thực (`verify <mã>`): 6 ký tự từ `crypto/rand`; mỗi mã chỉ liên kết
