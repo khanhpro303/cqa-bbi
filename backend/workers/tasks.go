@@ -23,6 +23,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"github.com/vietbui/chat-quality-agent/realtime"
+	"gorm.io/gorm"
 )
 
 // disambiguationReplyPattern matches the short replies the Langflow agent's
@@ -1236,7 +1237,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			if len(webNames) == 0 {
 				// No web names found, perform direct realtime inventory lookup for this MA_CHA
-				stock, details, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, maCha, "")
+				stock, details, err := sumInventoryByParentWithDKCopy(ctx, matchedChannel.TenantID, &permCtx, maCha)
 				if err != nil {
 					_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi truy vấn tồn kho dòng sản phẩm.")
 					return nil
@@ -1459,8 +1460,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// 3. Show Product Variants Selection (#show_product_variants:<MA_CHA>)
 		if strings.HasPrefix(userText, "#show_product_variants:") {
-			maCha := strings.TrimPrefix(userText, "#show_product_variants:")
-			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha)
+			maCha := engine.RealParentOf(strings.TrimPrefix(userText, "#show_product_variants:"))
+			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha, engine.ExcludeDKCopies)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Không tìm thấy thông tin chi tiết của dòng sản phẩm.")
 				return nil
@@ -1953,9 +1954,9 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 	return totalStock, nil
 }
 
-func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
+func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string, scopes ...func(*gorm.DB) *gorm.DB) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(scopes...).
 		Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha).
 		Limit(100).
 		Find(&products).Error
@@ -1992,7 +1993,7 @@ func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string) ([
 
 func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAdapter, tenantID, sku, zaloGroupID, senderID string) {
 	var p models.CachedProduct
-	if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma = ?", tenantID, sku).First(&p).Error; err != nil {
+	if err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).Where("tenant_id = ? AND ma = ?", tenantID, sku).First(&p).Error; err != nil {
 		log.Printf("[worker] error finding cached product details: %v", err)
 		_ = adapter.SendMessage(ctx, senderID, "Không tìm thấy thông tin chi tiết cho mã SKU: "+sku)
 		return
@@ -2043,7 +2044,7 @@ func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAda
 // instead of sending an empty or misleading reply.
 func priceRangeReplyByWebName(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, webName string) (string, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
 		Limit(200).Find(&products).Error
 	if err != nil {
@@ -2623,6 +2624,8 @@ func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string)
 func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
 	likePattern := "%" + keyword + "%"
+	// No _DK filter here: this lookup only feeds the stock picker, and _DK
+	// SKUs hold real stock.
 	err := db.DB.WithContext(ctx).
 		Where("tenant_id = ? AND (ten_dong_bo_web LIKE ? OR ma LIKE ? OR ten LIKE ? OR ma_cha LIKE ?)", tenantID, likePattern, likePattern, likePattern, likePattern).
 		Limit(100).
@@ -2676,6 +2679,36 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 	return results, nil
 }
 
+// sumInventoryByParentWithDKCopy sums a line picked by parent code (no web
+// name) together with its "_DK" copy parent. The picker hides the copy as a
+// line of its own, but its SKUs hold real stock that belongs to this line.
+// Only this call site adds the copy: the by-web-name sum already reads every
+// parent of the web name, copy included.
+func sumInventoryByParentWithDKCopy(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string) (float64, []string, error) {
+	// One warehouse report serves both parents.
+	ctx = engine.WithWarehouseStock(ctx, tenantID)
+	stock, details, err := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, maCha, "")
+	if err != nil {
+		return 0, nil, err
+	}
+	dkParent := engine.DKCopyParentOf(maCha)
+	if dkParent == strings.TrimSpace(maCha) {
+		return stock, details, nil
+	}
+	var copies int64
+	if err := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).Where("tenant_id = ? AND ma_cha = ?", tenantID, dkParent).Count(&copies).Error; err != nil {
+		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+	}
+	if copies == 0 {
+		return stock, details, nil
+	}
+	copyStock, copyDetails, err := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, dkParent, "")
+	if err != nil {
+		return 0, nil, err
+	}
+	return stock + copyStock, append(details, copyDetails...), nil
+}
+
 // sumInventoryByMaChaAndWebName aggregates realtime inventory by MA_CHA and optionally WEB_NAME
 func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string, webName string) (float64, []string, error) {
 	var products []models.CachedProduct
@@ -2686,6 +2719,28 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	err := q.Find(&products).Error
 	if err != nil {
 		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+	}
+	// A parent picked within one web line also owns that line's SKUs under
+	// its "_DK" copy parent, which pickers no longer list on their own. The
+	// no-web-name case is left to its callers: the by-web postback already
+	// sums every parent of the line, and sumInventoryByParentWithDKCopy adds
+	// the copy for a bare parent pick.
+	if dkParent := engine.DKCopyParentOf(maCha); webName != "" && dkParent != strings.TrimSpace(maCha) {
+		var copies []models.CachedProduct
+		if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND ma_cha = ?", tenantID, dkParent).
+			Where("ten_dong_bo_web = ?", webName).Limit(100).Find(&copies).Error; err != nil {
+			return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+		}
+		seen := make(map[string]struct{}, len(products))
+		for _, p := range products {
+			seen[p.MA] = struct{}{}
+		}
+		for _, p := range copies {
+			if _, dup := seen[p.MA]; !dup {
+				seen[p.MA] = struct{}{}
+				products = append(products, p)
+			}
+		}
 	}
 	if webName == "" && len(products) == 0 {
 		return 0, nil, fmt.Errorf("no cached SKUs for ma_cha=%s", maCha)
@@ -2794,7 +2849,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 // MA_CHA list / variant SKUs.
 func getProductsByWebNameFromCache(ctx context.Context, tenantID, webName string) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
 		Limit(100).
 		Find(&products).Error

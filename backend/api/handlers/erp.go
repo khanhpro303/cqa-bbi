@@ -223,7 +223,7 @@ func ERPQuery(c *gin.Context) {
 		// and pivot to the exact SKU + price.
 		if req.ExactWebName && strings.TrimSpace(req.Search) != "" && !isVariantPriceIntent(req.Intent, req.Color, req.Size, req.Brand) {
 			search := strings.TrimSpace(req.Search)
-			cachedData, err := searchProductsByExactWebNameFromCache(c.Request.Context(), tenantID, search, req.Limit)
+			cachedData, err := searchProductsByExactWebNameFromCache(c.Request.Context(), tenantID, search, exactWebNameLineRowCap, engine.ExcludeDKCopies)
 			if err != nil {
 				log.Printf("[erp_query] exact web-name search error: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{
@@ -237,19 +237,24 @@ func ERPQuery(c *gin.Context) {
 				cachedData = []map[string]interface{}{}
 			}
 
+			if len(cachedData) >= exactWebNameLineRowCap {
+				log.Printf("[erp_query] exact web-name %q hit the %d-row cap; price range may be partial", search, exactWebNameLineRowCap)
+			}
+			filteredCached, slim := priceExactWebLine(c.Request.Context(), cachedData, productGroups, brandFilter, allBrands)
+
+			// The debug push gets only rows the caller may see, capped at the
+			// caller's limit: the read above takes the whole line for pricing.
 			if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
+				debugRows := filteredCached
+				if len(debugRows) > req.Limit {
+					debugRows = debugRows[:req.Limit]
+				}
 				go func(s string, payload []map[string]interface{}) {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					pushFallbackPayloadToZaloOA(ctx, tenantID, "exact_web", s, payload, permCtx)
-				}(search, cachedData)
+				}(search, debugRows)
 			}
-
-			filteredCached := filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands)
-			filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, brandFilter, allBrands, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
-				return getProductsByMaChaFromCache(ctx, tenantID, maCha)
-			})
-			slim := slimProductsForLLM(filteredCached)
 			// Surface the line's parent SKU(s) so the agent can chain to
 			// product_variants. slimProductsForLLM collapses by web name and drops
 			// ma_cha, but the STOCK-pick continuation (system prompt "KHÓA ĐÚNG
@@ -284,6 +289,9 @@ func ERPQuery(c *gin.Context) {
 		// down — set by the LIKE single-group path or the fuzzy fallback. It
 		// feeds the variant price-pivot below (shouldPivotToVariant).
 		var resolvedParent string
+		// lineWebName is set when the keyword matched exactly one web line;
+		// that line is then priced like the exact web-name path.
+		var lineWebName string
 		search := strings.TrimSpace(req.Search)
 
 		if search != "" {
@@ -360,13 +368,30 @@ func ERPQuery(c *gin.Context) {
 				if len(webGroups[0].ParentCodes) == 1 {
 					resolvedParent = webGroups[0].ParentCodes[0]
 				}
-				for _, pc := range webGroups[0].ParentCodes {
-					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, pc)
+				if !webGroups[0].IsFallback {
+					// One web line matched: read and price exactly that line, the
+					// same way the exact web-name path does, so "ff399" and
+					// "LS2 FF399" can never quote different prices (a parent can
+					// also carry other web lines, which must not widen the range).
+					lineWebName = webGroups[0].WebName
+					rows, fetchErr := searchProductsByExactWebNameFromCache(c.Request.Context(), tenantID, lineWebName, exactWebNameLineRowCap, engine.ExcludeDKCopies)
 					if fetchErr != nil {
-						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", pc, fetchErr)
-						continue
+						log.Printf("[erp_query] fetch by web name=%s failed: %v", lineWebName, fetchErr)
 					}
-					cachedData = append(cachedData, rows...)
+					cachedData = rows
+				}
+				// The grouped name is trimmed; if the stored name is not, the exact
+				// read finds nothing. Fall back to the line's parent codes.
+				if len(cachedData) == 0 {
+					lineWebName = ""
+					for _, pc := range webGroups[0].ParentCodes {
+						rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, pc, engine.ExcludeDKCopies)
+						if fetchErr != nil {
+							log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", pc, fetchErr)
+							continue
+						}
+						cachedData = append(cachedData, rows...)
+					}
 				}
 			} else {
 				// B proved LIKE returns nothing. Resolve the product *family*
@@ -389,10 +414,12 @@ func ERPQuery(c *gin.Context) {
 				// a SKU. For a vague/stock query the family price_range is the answer;
 				// for a variant PRICE query the pivot below (shouldPivotToVariant) takes
 				// resolvedParent and re-resolves the exact SKU via product_variants.
-				_, matchedMaCha, _ := resolveMaChaFuzzy(c.Request.Context(), tenantID, req.Search)
+				_, matchedMaCha, _ := resolveMaChaFuzzy(c.Request.Context(), tenantID, req.Search, engine.ExcludeDKCopies)
+				// The embedding index may still point at a "_DK" copy line.
+				matchedMaCha = engine.RealParentOf(matchedMaCha)
 				if matchedMaCha != "" {
 					resolvedParent = matchedMaCha
-					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, matchedMaCha)
+					rows, fetchErr := getProductsByMaChaFromCache(c.Request.Context(), tenantID, matchedMaCha, engine.ExcludeDKCopies)
 					if fetchErr != nil {
 						log.Printf("[erp_query] fetch by ma_cha=%s failed: %v", matchedMaCha, fetchErr)
 					} else {
@@ -411,7 +438,9 @@ func ERPQuery(c *gin.Context) {
 			// bug). Re-resolve the exact SKU with the SAME engine the
 			// product_variants resource uses, so both routes agree on price.
 			if shouldPivotToVariant(req.Intent, req.Color, req.Size, req.Brand, resolvedParent) {
-				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands)
+				// Stay on the matched web line: the parent may carry sibling
+				// lines with the same colour/size.
+				vResp, vErr := buildVariantResponse(c.Request.Context(), tenantID, resolvedParent, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands, lineWebName)
 				if vErr != nil {
 					log.Printf("[erp_query] variant price-pivot from products failed parent=%s: %v", resolvedParent, vErr)
 				} else if vResp != nil {
@@ -446,20 +475,29 @@ func ERPQuery(c *gin.Context) {
 			cachedData = []map[string]interface{}{}
 		}
 
+		var filteredCached, slim []map[string]interface{}
+		if lineWebName != "" {
+			filteredCached, slim = priceExactWebLine(c.Request.Context(), cachedData, productGroups, brandFilter, allBrands)
+		} else {
+			filteredCached = withoutDKCopies(filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands))
+			filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, brandFilter, allBrands, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
+				return getProductsByMaChaFromCache(ctx, tenantID, maCha, engine.ExcludeDKCopies)
+			})
+			slim = slimProductsForLLM(filteredCached)
+		}
+
+		// Debug push: only rows the caller may see, capped at their limit.
 		if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
+			debugRows := filteredCached
+			if len(debugRows) > req.Limit {
+				debugRows = debugRows[:req.Limit]
+			}
 			go func(search string, payload []map[string]interface{}) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				pushFallbackPayloadToZaloOA(ctx, tenantID, "raw_like", search, payload, permCtx)
-			}(req.Search, cachedData)
+			}(req.Search, debugRows)
 		}
-
-		filteredCached := filterProductsByBrands(filterProductsByGroups(cachedData, productGroups), brandFilter, allBrands)
-		filteredCached = enrichProductsWithPriceRanges(c.Request.Context(), filteredCached, productGroups, brandFilter, allBrands, func(ctx context.Context, maCha string) ([]map[string]interface{}, error) {
-			return getProductsByMaChaFromCache(ctx, tenantID, maCha)
-		})
-
-		slim := slimProductsForLLM(filteredCached)
 
 		if os.Getenv("DEBUG_PUSH_FALLBACK_TO_ZALO") == "true" {
 			go func(search string, payload []map[string]interface{}) {
@@ -503,7 +541,7 @@ func ERPQuery(c *gin.Context) {
 			return
 		}
 
-		response, err := buildVariantResponse(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands)
+		response, err := buildVariantResponse(c.Request.Context(), tenantID, parentCode, req.Color, req.Size, req.Brand, req.Limit, productGroups, brandFilter, allBrands, "")
 		if err != nil {
 			log.Printf("[erp_query] variant attribute search error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -620,7 +658,7 @@ func ERPQuery(c *gin.Context) {
 			if code == "" {
 				code = strings.TrimSpace(req.ParentCode)
 			}
-			if !hasVariantAttribute(req.Color, req.Size, req.Brand) && isParentProductCode(c.Request.Context(), tenantID, code) {
+			if !hasVariantAttribute(req.Color, req.Size, req.Brand) && isParentProductCode(c.Request.Context(), tenantID, code, !req.ExactSKU) {
 				respondWithWarehouseStock(c, client, permCtx, scopeType, productGroups, code, warehouseByParent)
 				return
 			}
@@ -694,7 +732,7 @@ func isVariantPriceIntent(intent, color, size, brand string) bool {
 // out into an unbounded number of variant lookups before we just ask the user.
 func pivotVariantAcrossGroups(ctx context.Context, tenantID string, groups []engine.WebGroupMatch, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool) (gin.H, bool) {
 	return selectUniqueVariantMatch(groups, func(parentCode string) (gin.H, bool) {
-		vResp, vErr := buildVariantResponse(ctx, tenantID, parentCode, color, size, brand, limit, productGroups, allowedBrands, allBrands)
+		vResp, vErr := buildVariantResponse(ctx, tenantID, parentCode, color, size, brand, limit, productGroups, allowedBrands, allBrands, "")
 		if vErr != nil {
 			log.Printf("[erp_query] cross-group variant pivot parent=%s failed: %v", parentCode, vErr)
 			return nil, false
@@ -763,13 +801,24 @@ func selectUniqueVariantMatch(groups []engine.WebGroupMatch, resolve func(parent
 //
 // Returns (nil, err) only when the initial cache lookup hard-fails; every
 // downstream fallback tolerates its own errors by logging and pressing on.
-func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool) (gin.H, error) {
-	variants, err := searchVariantsByAttributes(ctx, tenantID, parentCode, color, size, brand, limit)
+//
+// lineWebName, when set, keeps every read off sibling web lines of the parent
+// (see webLineScope): cache reads are narrowed in SQL before LIMIT, and Astra
+// hybrid hits from a sibling line are dropped so the bilingual fallback still
+// runs.
+func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size, brand string, limit int, productGroups []string, allowedBrands []string, allBrands bool, lineWebName string) (gin.H, error) {
+	var scopes []func(*gorm.DB) *gorm.DB
+	if lineWebName != "" {
+		scopes = append(scopes, webLineScope(lineWebName))
+	}
+	// A "_DK" copy parent has no visible variants; read its real line.
+	parentCode = engine.RealParentOf(parentCode)
+	variants, err := searchVariantsByAttributes(ctx, tenantID, parentCode, color, size, brand, limit, scopes...)
 	if err != nil {
 		return nil, err
 	}
 
-	filtered := filterProductsByBrands(filterProductsByGroups(variants, productGroups), allowedBrands, allBrands)
+	filtered := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(variants, productGroups), allowedBrands, allBrands))
 	slim := slimVariantsForLLM(filtered)
 
 	response := gin.H{
@@ -796,14 +845,14 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 	// unrelated accessory whose label contains "FF901"). Skip resolution in that
 	// case so the response stays empty (count=0) and the caller re-evaluates.
 	if len(slim) == 0 && hasVariantAttribute(color, size, brand) {
-		if resolved := resolveParentMaCha(ctx, tenantID, parentCode, brand); resolved != "" && !strings.EqualFold(resolved, parentCode) {
+		if resolved := engine.RealParentOf(resolveParentMaCha(ctx, tenantID, parentCode, brand)); resolved != "" && !strings.EqualFold(resolved, parentCode) {
 			effectiveParent = resolved
 			response["resolved_parent"] = resolved
-			resolvedVariants, resolvedErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, color, size, brand, limit)
+			resolvedVariants, resolvedErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, color, size, brand, limit, scopes...)
 			if resolvedErr != nil {
 				log.Printf("[erp_query] variant search after parent resolve error: %v", resolvedErr)
 			} else {
-				resolvedSlim := slimVariantsForLLM(filterProductsByBrands(filterProductsByGroups(resolvedVariants, productGroups), allowedBrands, allBrands))
+				resolvedSlim := slimVariantsForLLM(withoutDKCopies(filterProductsByBrands(filterProductsByGroups(resolvedVariants, productGroups), allowedBrands, allBrands)))
 				if len(resolvedSlim) > 0 {
 					slim = resolvedSlim
 					response["data"] = resolvedSlim
@@ -821,7 +870,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 	//     The hybrid index ("FF901 — Gloss White — L") handles both.
 	if len(slim) == 0 && (strings.TrimSpace(color) != "" || strings.TrimSpace(size) != "" || strings.TrimSpace(brand) != "") {
 		if hybridRows := hybridMatchVariant(ctx, tenantID, parentCode, effectiveParent, color, size, brand); len(hybridRows) > 0 {
-			hybridSlim := slimVariantsForLLM(filterProductsByBrands(filterProductsByGroups(hybridRows, productGroups), allowedBrands, allBrands))
+			hybridSlim := slimVariantsForLLM(rowsOfWebLine(withoutDKCopies(filterProductsByBrands(filterProductsByGroups(hybridRows, productGroups), allowedBrands, allBrands)), lineWebName))
 			if len(hybridSlim) > 0 {
 				slim = hybridSlim
 				response["data"] = hybridSlim
@@ -840,11 +889,11 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 	//  (2) If still zero, surface available_* lists so the agent can ask the
 	//      customer to pick a real combination.
 	if len(slim) == 0 && (strings.TrimSpace(color) != "" || strings.TrimSpace(size) != "" || strings.TrimSpace(brand) != "") {
-		allVariants, allErr := getProductsByMaChaFromCache(ctx, tenantID, effectiveParent)
+		allVariants, allErr := getProductsByMaChaFromCache(ctx, tenantID, effectiveParent, append([]func(*gorm.DB) *gorm.DB{engine.ExcludeDKCopies}, scopes...)...)
 		if allErr != nil {
 			log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
 		} else {
-			allowed := filterProductsByBrands(filterProductsByGroups(allVariants, productGroups), allowedBrands, allBrands)
+			allowed := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(allVariants, productGroups), allowedBrands, allBrands))
 			availColors, availSizes, availBrands := collectAvailableAttributes(allowed)
 
 			matchedColor, matchedSize, matchedBrand, matchErr := fuzzyMatchAttributesWithLLM(
@@ -876,11 +925,11 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 					retryBrand = brand
 				}
 
-				retryVariants, retryErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, retryColor, retrySize, retryBrand, limit)
+				retryVariants, retryErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, retryColor, retrySize, retryBrand, limit, scopes...)
 				if retryErr != nil {
 					log.Printf("[erp_query] variant retry after bilingual match error: %v", retryErr)
 				} else {
-					retryFiltered := filterProductsByBrands(filterProductsByGroups(retryVariants, productGroups), allowedBrands, allBrands)
+					retryFiltered := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(retryVariants, productGroups), allowedBrands, allBrands))
 					retrySlim := slimVariantsForLLM(retryFiltered)
 					if len(retrySlim) > 0 {
 						slim = retrySlim
@@ -1184,15 +1233,82 @@ func searchProductsFromCache(ctx context.Context, tenantID, search string, limit
 	return results, nil
 }
 
+// webLineScope keeps a parent's SKUs on one web line, plus its SKUs whose
+// web name is not synced yet (blank), which belong to no sibling line.
+func webLineScope(lineWebName string) func(*gorm.DB) *gorm.DB {
+	return func(tx *gorm.DB) *gorm.DB {
+		return tx.Where("(ten_dong_bo_web = ? OR TRIM(COALESCE(ten_dong_bo_web, '')) = '')", lineWebName)
+	}
+}
+
+// rowsOfWebLine is webLineScope for rows already read: it keeps rows on
+// lineWebName or with a blank web name. An empty lineWebName keeps every row.
+func rowsOfWebLine(rows []map[string]interface{}, lineWebName string) []map[string]interface{} {
+	if lineWebName == "" {
+		return rows
+	}
+	kept := make([]map[string]interface{}, 0, len(rows))
+	for _, r := range rows {
+		if name := getMapString(r, "TEN_DONG_BO_WEB", "ten_dong_bo_web"); name == lineWebName || strings.TrimSpace(name) == "" {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
+// withoutDKCopies drops ERP "_DK" copy rows (engine.IsDKCopy) from rows the
+// bot shows as a catalog: prices, colour/size lists, search results. Stock
+// sums read the cache directly and keep them, since they hold real stock.
+func withoutDKCopies(rows []map[string]interface{}) []map[string]interface{} {
+	kept := make([]map[string]interface{}, 0, len(rows))
+	for _, r := range rows {
+		if engine.IsDKCopy(getMapString(r, "MA", "ma", "ma_hang"), getMapString(r, "MA_CHA", "ma_cha")) {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept
+}
+
+// exactWebNameLineRowCap bounds the products exact web-name read, which must
+// see every row of the line to price it. A line has at most a few hundred
+// rows (LS2 FF399: 74 across two parent codes).
+const exactWebNameLineRowCap = 1000
+
+// priceExactWebLine filters the rows of one exact web name by product group
+// and brand, then prices each parent code over those same rows, so the range
+// covers exactly the SKUs the caller may see, with no second per-parent query
+// (whose own LIMIT could drop the cheapest or dearest SKU). This matches the
+// worker's priceRangeReplyByWebName, which prices a web name over its rows.
+// Returns the filtered, enriched rows and their slim LLM view.
+func priceExactWebLine(ctx context.Context, rows []map[string]interface{}, productGroups []string, brandFilter []string, allBrands bool) ([]map[string]interface{}, []map[string]interface{}) {
+	filtered := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(rows, productGroups), brandFilter, allBrands))
+	byParent := make(map[string][]map[string]interface{})
+	for _, r := range filtered {
+		if maCha := getMapString(r, "MA_CHA", "ma_cha"); maCha != "" {
+			byParent[maCha] = append(byParent[maCha], r)
+		}
+	}
+	enriched := enrichProductsWithPriceRanges(ctx, filtered, productGroups, brandFilter, allBrands, func(_ context.Context, maCha string) ([]map[string]interface{}, error) {
+		return byParent[maCha], nil
+	})
+	return enriched, slimProductsForLLM(enriched)
+}
+
 // searchProductsByExactWebNameFromCache queries the local MySQL cache for
 // products whose ten_dong_bo_web equals webName exactly. Used by the agent's
 // disambiguation-resolution path to skip the LIKE-based fuzzy lookup that
 // would otherwise re-trigger the option-list disambiguation push for
 // prefix-overlapping web names (e.g. "FF901" matching "FF901 Carbon").
-func searchProductsByExactWebNameFromCache(ctx context.Context, tenantID, webName string, limit int) ([]map[string]interface{}, error) {
+func searchProductsByExactWebNameFromCache(ctx context.Context, tenantID, webName string, limit int, scopes ...func(*gorm.DB) *gorm.DB) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	// Fixed order: without ORDER BY, MySQL returned whichever rows it met
+	// first; for "LS2 FF399" that was the unpriced "_DK" copies. Sorting by
+	// ma_cha also lists parent codes in the same order as the keyword path
+	// (RankProductWebGroups sorts them).
+	err := db.DB.WithContext(ctx).Scopes(scopes...).
 		Where("tenant_id = ? AND ten_dong_bo_web = ?", tenantID, webName).
+		Order("ma_cha, ma").
 		Limit(limit).
 		Find(&products).Error
 	if err != nil {
@@ -1237,7 +1353,7 @@ func searchProductWebGroupsFromCache(ctx context.Context, tenantID, search strin
 	selectCols := []string{"ma", "ten_dong_bo_web", "ten", "nhan_hieu_name", "list_ten_nhom_vthh", "ma_cha"}
 
 	// Pass 1 — match against ten_dong_bo_web (web-synced display name).
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 		Select(selectCols).
 		Where("tenant_id = ? AND ten_dong_bo_web LIKE ?", tenantID, likePattern).
 		Find(&products).Error
@@ -1247,7 +1363,7 @@ func searchProductWebGroupsFromCache(ctx context.Context, tenantID, search strin
 
 	// Pass 2 — only if pass 1 returned nothing, fall back to ERP's ten column.
 	if len(products) == 0 {
-		err = db.DB.WithContext(ctx).
+		err = db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).
 			Select(selectCols).
 			Where("tenant_id = ? AND ten LIKE ?", tenantID, likePattern).
 			Find(&products).Error
@@ -1274,7 +1390,7 @@ func searchProductWebGroupsFromCache(ctx context.Context, tenantID, search strin
 		})
 	}
 
-	filtered := filterProductsByBrands(filterProductsByGroups(candidates, allowedGroups), allowedBrands, allBrands)
+	filtered := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(candidates, allowedGroups), allowedBrands, allBrands))
 	return engine.RankProductWebGroups(filtered), nil
 }
 
@@ -1352,29 +1468,48 @@ func collectParentCodesFromProducts(products []map[string]interface{}) []string 
 
 func slimProductsForLLM(products []map[string]interface{}) []map[string]interface{} {
 	slim := make([]map[string]interface{}, 0, len(products))
-	seen := make(map[string]struct{}, len(products))
+	type lineSpan struct {
+		row      map[string]interface{}
+		min, max float64
+	}
+	byName := make(map[string]*lineSpan, len(products))
 
 	for _, p := range products {
 		name := getFirstNonEmptyMapString(p, "TEN_DONG_BO_WEB", "ten_dong_bo_web", "TEN", "ten", "name")
 		if name == "" {
 			continue
 		}
-		if _, dup := seen[name]; dup {
+		minP := getMapFloat(p, "price_min")
+		maxP := getMapFloat(p, "price_max")
+		if span, dup := byName[name]; dup {
+			// Rows of one web name can belong to several parent codes, some
+			// unpriced (FF399: SP000557 priced, SP000557_DK all 0). The line's
+			// price is the span over all of them, not the first row's, or the
+			// same line answers "Liên hệ" or a range depending on row order.
+			if minP > 0 && (span.min == 0 || minP < span.min) {
+				span.min = minP
+			}
+			if maxP > span.max {
+				span.max = maxP
+			}
+			if span.min > 0 && span.max > 0 {
+				span.row["price_range"] = engine.FormatPriceRange(span.min, span.max)
+			}
 			continue
 		}
-		seen[name] = struct{}{}
+		if len(slim) >= slimProductsForLLMLimit {
+			continue
+		}
 
-		slim = append(slim, map[string]interface{}{
+		row := map[string]interface{}{
 			"name":               name,
 			"price_range":        getFirstNonEmptyMapString(p, "price_range"),
 			"nhan_hieu_name":     getFirstNonEmptyMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name"),
 			"list_ten_nhom_vthh": getFirstNonEmptyMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
 			"dvt":                getFirstNonEmptyMapString(p, "DVT", "dvt_chinh_id", "unit"),
-		})
-
-		if len(slim) >= slimProductsForLLMLimit {
-			break
 		}
+		byName[name] = &lineSpan{row: row, min: minP, max: maxP}
+		slim = append(slim, row)
 	}
 
 	return slim
@@ -3646,9 +3781,9 @@ func getProductByMaFromCache(ctx context.Context, tenantID, ma string) ([]map[st
 	return cachedProductsToMaps(products), nil
 }
 
-func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string) ([]map[string]interface{}, error) {
+func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string, scopes ...func(*gorm.DB) *gorm.DB) ([]map[string]interface{}, error) {
 	var products []models.CachedProduct
-	err := db.DB.WithContext(ctx).
+	err := db.DB.WithContext(ctx).Scopes(scopes...).
 		Where("tenant_id = ? AND ma_cha = ?", tenantID, maCha).
 		Limit(100).
 		Find(&products).Error
@@ -3749,7 +3884,10 @@ func classifyDominantMaCha(ctx context.Context, tenantID string, rows []map[stri
 // always answers at the family level so price_range covers the whole line),
 // while the inventory resource honours it to read one SKU's live stock instead
 // of collapsing an already-resolved SKU back into a whole-line query.
-func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) (ma, maCha string, specific bool) {
+//
+// candidateScopes narrow the LLM stage's parent candidates (catalog callers
+// pass engine.ExcludeDKCopies; the inventory caller keeps "_DK" stock parents).
+func resolveMaChaFuzzy(ctx context.Context, tenantID, search string, candidateScopes ...func(*gorm.DB) *gorm.DB) (ma, maCha string, specific bool) {
 	appCfg, cfgErr := config.Load()
 	if cfgErr != nil {
 		log.Printf("[resolve_macha_fuzzy] embedding fuzzy config load error: %v", cfgErr)
@@ -3766,7 +3904,7 @@ func resolveMaChaFuzzy(ctx context.Context, tenantID, search string) (ma, maCha 
 		}
 	}
 
-	m, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search)
+	m, llmErr := fuzzyMatchMaChaWithLLM(ctx, tenantID, search, candidateScopes...)
 	if llmErr != nil {
 		log.Printf("[resolve_macha_fuzzy] LLM fuzzy match failed for '%s': %v", search, llmErr)
 	} else if m != "" {

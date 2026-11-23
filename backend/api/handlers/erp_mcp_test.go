@@ -62,14 +62,15 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *int) {
 				*result = products
 			case len(vars) == 2 && vars[0] == stockFixtureTenant && vars[1] == "SP457996":
 				*result = products[:1]
-			case strings.Contains(sql, "ma_cha =") && len(vars) == 2 && vars[0] == stockFixtureTenant && vars[1] == "SP457204":
+			case strings.Contains(sql, "ma_cha IN") && len(vars) == 3 && vars[0] == stockFixtureTenant && vars[1] == "SP457204" && vars[2] == "SP457204_DK":
+				// Parent stock reads the parent and its "_DK" copy parent.
 				*result = products[:2]
 			default:
 				t.Errorf("unexpected catalog query: %s %v", sql, vars)
 			}
 		case *int64:
 			// isParentProductCode: SP457204 is the parent of two SKUs.
-			if vars := q.Statement.Vars; strings.Contains(q.Statement.SQL.String(), "ma_cha =") && len(vars) == 2 && vars[1] == "SP457204" {
+			if vars := q.Statement.Vars; strings.Contains(q.Statement.SQL.String(), "ma_cha IN") && len(vars) == 3 && vars[1] == "SP457204" && vars[2] == "SP457204_DK" {
 				*result = 2
 				q.RowsAffected = 1 // gorm's Count keeps the scanned value only when one row came back
 			}
