@@ -270,3 +270,119 @@ func truncateRunes(s string, n int) string {
 	}
 	return string(r[:n]) + "…"
 }
+
+// CaseAlert tells staff about a customer case: a new one, the customer
+// asking again about an open one, or a resolved one the customer says is
+// still not fixed.
+type CaseAlert struct {
+	TenantID      string
+	Channel       models.Channel
+	Kind          string // created | followup | reopened
+	ZaloUserID    string
+	ReporterName  string
+	CustomerName  string
+	CustomerCode  string
+	ChatGroup     string
+	TypeLabel     string
+	Severity      string
+	Title         string
+	Detail        string
+	Evidence      string
+	StatusLabel   string
+	FollowupCount int
+	ImageCount    int
+	// FromSummary: the problem was found when the session was summarized,
+	// not recorded by the bot while chatting.
+	FromSummary bool
+}
+
+// BuildCaseAlertMessage renders a case alert. Pure for unit tests. It never
+// contains a case id: staff find the case by customer on the Insights khách
+// page.
+func BuildCaseAlertMessage(a CaseAlert, at time.Time) string {
+	var b strings.Builder
+	switch a.Kind {
+	case "followup":
+		fmt.Fprintf(&b, "🔁 Khách hỏi lại vấn đề đang chờ xử lý (lần %d)\n", a.FollowupCount)
+	case "reopened":
+		b.WriteString("♻️ Khách báo vấn đề đã xử lý vẫn chưa ổn\n")
+	default:
+		if a.Severity == "high" {
+			b.WriteString("🚨 Khiếu nại mới cần xử lý gấp\n")
+		} else {
+			b.WriteString("📋 Khiếu nại mới cần xử lý\n")
+		}
+	}
+	name := strings.TrimSpace(a.CustomerName)
+	if name == "" {
+		name = strings.TrimSpace(a.ReporterName)
+	}
+	if name == "" {
+		name = "(chưa xác minh)"
+	}
+	fmt.Fprintf(&b, "Khách: %s\n", name)
+	if code := strings.TrimSpace(a.CustomerCode); code != "" {
+		fmt.Fprintf(&b, "Mã KH: %s\n", code)
+	}
+	if g := strings.TrimSpace(a.ChatGroup); g != "" {
+		fmt.Fprintf(&b, "Nhóm chat: %s\n", g)
+		if r := strings.TrimSpace(a.ReporterName); r != "" && r != name {
+			fmt.Fprintf(&b, "Người báo: %s\n", r)
+		}
+	} else if a.ZaloUserID != "" {
+		fmt.Fprintf(&b, "Zalo ID: %s\n", a.ZaloUserID)
+	}
+	label := strings.TrimSpace(a.TypeLabel)
+	if label == "" {
+		label = "Khác"
+	}
+	fmt.Fprintf(&b, "Vấn đề: [%s] %s\n", label, truncateRunes(strings.TrimSpace(a.Title), 200))
+	if d := strings.TrimSpace(a.Detail); d != "" && d != strings.TrimSpace(a.Title) {
+		fmt.Fprintf(&b, "Chi tiết: %s\n", truncateRunes(d, 500))
+	}
+	if ev := strings.TrimSpace(a.Evidence); ev != "" {
+		fmt.Fprintf(&b, "Khách nói: \"%s\"\n", truncateRunes(ev, 300))
+	}
+	if a.ImageCount > 0 {
+		fmt.Fprintf(&b, "Ảnh khách gửi: %d ảnh (xem ở trang Insights khách → Khiếu nại)\n", a.ImageCount)
+	}
+	if a.Kind != "created" && a.StatusLabel != "" {
+		fmt.Fprintf(&b, "Trạng thái: %s\n", a.StatusLabel)
+	}
+	if a.FromSummary {
+		b.WriteString("(Phát hiện khi tóm tắt phiên chat)\n")
+	}
+	fmt.Fprintf(&b, "Thời điểm: %s", at.Format("15:04 02/01/2006"))
+	return b.String()
+}
+
+// NotifyCase sends a case alert to the channel's handover alert group. It
+// reports whether the alert was sent.
+func NotifyCase(ctx context.Context, sender HandoverGroupSender, a CaseAlert) bool {
+	groupID := ParseHandoverAlertGroupID(a.Channel.Metadata)
+	if groupID == "" {
+		log.Printf("[case-alert] channel %s has no alert group configured; case not alerted", a.Channel.ID)
+		return false
+	}
+	logAlert := func(body, status, errMsg string) {
+		recordHandoverAlertLog(HandoverAlert{TenantID: a.TenantID}, groupID, body, status, errMsg)
+	}
+	var group models.CRMGroup
+	if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, a.TenantID).First(&group).Error; err != nil || strings.TrimSpace(group.ZaloGroupID) == "" {
+		log.Printf("[case-alert] channel %s alert group %s misconfigured: %v", a.Channel.ID, groupID, err)
+		logAlert("", "failed", "alert_group_misconfigured")
+		return false
+	}
+	loc, err := time.LoadLocation(tenantTimezone(a.TenantID))
+	if err != nil || loc == nil {
+		loc = time.Local
+	}
+	msg := BuildCaseAlertMessage(a, time.Now().In(loc))
+	if err := sender.SendGroupMessage(ctx, group.ZaloGroupID, msg); err != nil {
+		log.Printf("[case-alert] send to group %s failed: %v", group.ZaloGroupID, err)
+		logAlert(msg, "failed", err.Error())
+		return false
+	}
+	logAlert(msg, "sent", "")
+	return true
+}

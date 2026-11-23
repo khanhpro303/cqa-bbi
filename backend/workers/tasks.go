@@ -18,6 +18,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/chatmemory"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/customercases"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
@@ -635,7 +636,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
-		if matchedGroup.ZaloGroupID == "" && payload.EventName == "user_send_group_text" {
+		if matchedGroup.ZaloGroupID == "" && (payload.EventName == "user_send_group_text" || payload.EventName == "user_send_group_image") {
 			matchedGroup.ZaloGroupID = payload.Recipient.ID
 		}
 
@@ -848,12 +849,26 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
+		// Images: the tenant's AI model reads what the customer sent, and the
+		// rest of the turn (classifier, bot, chat memory) sees it as text.
+		var images []inboundImage
+		if urls := imageURLs(payload.Message.Attachments); len(urls) > 0 {
+			images = readInboundImages(ctx, matchedChannel.TenantID, matchedChannel.ID, urls, strings.TrimSpace(payload.Message.Text))
+			if text := imagesText(images); text != "" {
+				if userText == "" {
+					userText = text
+				} else {
+					userText += "\n" + text
+				}
+			}
+		}
+
 		// Record this message in the session's chat memory (MySQL). Replies
 		// sent with ctx from here on, including the goodbye, are recorded too.
 		memTurn := chatMemoryTurn(matchedChannel.TenantID, matchedChannel.ID, activeSessionID,
 			payload.Sender.ID, matchedGroup.ZaloGroupID, matchedGroup.Name, memSenderName, customerCode,
 			isWhitelisted && matchedGroup.ZaloGroupID == "")
-		ctx = startChatMemoryTurn(ctx, memTurn, payload, userText, memSenderName)
+		ctx = startChatMemoryTurn(ctx, memTurn, payload, userText, memSenderName, imageAttachments(images)...)
 
 		// Has session. Check for end word.
 		var isEndTriggered bool
@@ -989,6 +1004,34 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				log.Printf("[worker] chat has an open order cart; treating %s reply as IN_SCOPE", intent)
 				intent = "IN_SCOPE"
 			}
+		}
+
+		// Complaint cases: a complaint goes to the bot, which records it as a
+		// case (complaint_record) and answers the customer itself. If the bot
+		// does not record anything, staff still get the handover alert.
+		complaintCases := customercases.EnabledFor(matchedChannel.Metadata)
+		if intent == "HANDOVER" && complaintCases {
+			log.Printf("[cases] HANDOVER from %s goes to the bot to record a case", payload.Sender.ID)
+			intent = "IN_SCOPE"
+			alert := engine.HandoverAlert{
+				TenantID:   matchedChannel.TenantID,
+				Channel:    *matchedChannel,
+				ZaloUserID: payload.Sender.ID,
+				ChatGroup:  matchedGroup.Name,
+				Message:    userText,
+			}
+			if isCustomer {
+				alert.CustomerName = customerRec.Name
+				alert.CustomerCode = customerCode
+			}
+			subjectType, subjectID := memTurn.Subject()
+			defer func() {
+				if customercases.TouchedSince(context.WithoutCancel(ctx), matchedChannel.TenantID, subjectType, subjectID, turnStart) {
+					return
+				}
+				log.Printf("[cases] bot recorded no case for %s's complaint; sending the handover alert", payload.Sender.ID)
+				engine.NotifyHandover(context.WithoutCancel(ctx), adapter, alert)
+			}()
 		}
 
 		if groupAssistant {
@@ -1163,6 +1206,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		permCtx.ChannelID = matchedChannel.ID
 		permCtx.ZaloGroupID = matchedGroup.ZaloGroupID
 		systemPromptToUse = appendOrderCartContext(ctx, matchedChannel.TenantID, workKey, &permCtx, systemPromptToUse)
+		if complaintCases {
+			systemPromptToUse = appendComplaintContext(ctx, memTurn, customerCode, systemPromptToUse)
+		}
 
 		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
 		// presented numbered menu (inventory ten_dong_bo_web options). On a valid

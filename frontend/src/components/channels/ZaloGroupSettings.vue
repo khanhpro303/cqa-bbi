@@ -90,6 +90,16 @@
       color="primary"
       data-testid="chat-memory-profile-in-prompt"
     />
+    <v-switch
+      v-model="settings.complaint_cases"
+      :label="$t('complaint_cases_switch')"
+      :hint="$t('complaint_cases_switch_hint')"
+      persistent-hint
+      density="compact"
+      color="primary"
+      class="mt-2"
+      data-testid="complaint-cases"
+    />
   </div>
 </template>
 

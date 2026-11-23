@@ -106,6 +106,7 @@ const groupLabels: Record<string, string> = {
   chat_memory: 'task_prompt_group_chat_memory',
   chatbot: 'task_prompt_group_chatbot',
   erp: 'task_prompt_group_erp',
+  complaints: 'task_prompt_group_complaints',
 }
 
 const groups = computed(() => {

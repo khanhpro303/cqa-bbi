@@ -75,7 +75,7 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 		// Always return 200 OK to Zalo quickly
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 
-		if (payload.EventName != "user_send_text" && payload.EventName != "user_send_group_text") || (payload.Message.Text == "" && len(payload.Message.Attachments) == 0) {
+		if !acceptedZaloEvent(payload.EventName) || (payload.Message.Text == "" && len(payload.Message.Attachments) == 0) {
 			return
 		}
 
@@ -157,4 +157,15 @@ func verifyZaloSignature(header, appID string, body []byte, timestamp, secret st
 	sum := sha256.Sum256([]byte(appID + string(body) + timestamp + secret))
 	want := hex.EncodeToString(sum[:])
 	return subtle.ConstantTimeCompare([]byte(strings.ToLower(got)), []byte(want)) == 1
+}
+
+// acceptedZaloEvent reports whether a Zalo webhook event reaches the bot:
+// text, and images (the bot reads them, see workers/image_reader.go), in
+// 1:1 and group chats.
+func acceptedZaloEvent(name string) bool {
+	switch name {
+	case "user_send_text", "user_send_group_text", "user_send_image", "user_send_group_image":
+		return true
+	}
+	return false
 }

@@ -19,8 +19,17 @@ describe('ChatMemory page', () => {
     })
   })
 
+  it('opens on the complaints tab', async () => {
+    const wrapper = shallowMount(ChatMemory, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    await flushPromises()
+    expect((wrapper.vm as any).tab).toBe('cases')
+    expect(mocks.get).not.toHaveBeenCalledWith('/tenants/tenant-1/chat-memory/profiles', expect.anything())
+  })
+
   it('loads profiles and renders the profile fields with labels', async () => {
     const wrapper = shallowMount(ChatMemory, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    await flushPromises()
+    ;(wrapper.vm as any).tab = 'profiles'
     await flushPromises()
     expect(mocks.get).toHaveBeenCalledWith('/tenants/tenant-1/chat-memory/profiles', expect.anything())
     const vm = wrapper.vm as any

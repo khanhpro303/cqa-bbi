@@ -93,3 +93,85 @@ export function severityColor(s: string): string {
 export function sentimentColor(s: string): string {
   return s === 'negative' ? 'error' : s === 'positive' ? 'success' : 'grey'
 }
+
+export interface CaseImage {
+  url: string
+  description?: string
+  at?: string
+}
+
+export interface CustomerCase {
+  id: string
+  channel_id: string
+  subject_type: 'user' | 'group'
+  subject_id: string
+  zalo_user_id: string
+  zalo_group_id: string
+  reporter_name: string
+  customer_name: string
+  customer_code: string
+  type: string
+  severity: string
+  title: string
+  detail: string
+  evidence: string
+  images: string
+  status: string
+  source: string
+  opened_session_id: string
+  assignee_id: string
+  assignee_name: string
+  customer_update: string
+  resolution: string
+  followup_count: number
+  last_followup_at: string | null
+  resolved_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CaseEvent {
+  id: string
+  kind: string
+  actor: string
+  actor_name: string
+  session_id: string
+  text: string
+  images: string
+  created_at: string
+}
+
+export const caseTypes = ['complaint', 'delivery', 'product_defect', 'price', 'payment', 'staff_request', 'other']
+export const caseStatuses = ['open', 'in_progress', 'resolved', 'cancelled']
+
+export function parseCaseImages(raw: string | null | undefined): CaseImage[] {
+  try {
+    const v = JSON.parse(raw || '[]')
+    return Array.isArray(v) ? v.filter(x => x && typeof x.url === 'string' && x.url) : []
+  } catch {
+    return []
+  }
+}
+
+export function caseStatusColor(s: string): string {
+  return s === 'open' ? 'error' : s === 'in_progress' ? 'warning' : s === 'resolved' ? 'success' : 'grey'
+}
+
+export function caseEventIcon(kind: string): string {
+  switch (kind) {
+    case 'opened': return 'mdi-alert-circle-outline'
+    case 'followup': return 'mdi-message-reply-text-outline'
+    case 'reopened': return 'mdi-restore-alert'
+    case 'linked': return 'mdi-link-variant'
+    case 'status': return 'mdi-swap-horizontal'
+    case 'update': return 'mdi-message-arrow-right-outline'
+    case 'assign': return 'mdi-account-arrow-right-outline'
+    case 'note': return 'mdi-note-text-outline'
+    default: return 'mdi-pencil-outline'
+  }
+}
+
+// waitingHours is how long a case has waited since it was opened, in hours.
+export function waitingHours(createdAt: string, now = Date.now()): number {
+  return Math.max(0, (now - new Date(createdAt).getTime()) / 3_600_000)
+}

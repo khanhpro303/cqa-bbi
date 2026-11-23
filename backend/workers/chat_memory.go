@@ -8,6 +8,8 @@ import (
 
 	"github.com/vietbui/chat-quality-agent/chatmemory"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/customercases"
+	"github.com/vietbui/chat-quality-agent/engine"
 )
 
 // chatMemoryTurn describes the chat a webhook belongs to for chat memory.
@@ -33,7 +35,9 @@ func chatMemoryTurn(tenantID, channelID, sessionID, zaloUserID, zaloGroupID, gro
 
 // startChatMemoryTurn records the received message and returns ctx carrying
 // the turn, so the replies sent with it are recorded in the same session.
-func startChatMemoryTurn(ctx context.Context, turn chatmemory.Turn, payload ZaloWebhookPayload, text, senderName string) context.Context {
+// images are the pictures the customer sent with it, with what the AI read in
+// them; the message is then stored as an image so cases can attach them.
+func startChatMemoryTurn(ctx context.Context, turn chatmemory.Turn, payload ZaloWebhookPayload, text, senderName string, images ...customercases.ImageAttachment) context.Context {
 	if !chatmemory.Enabled() {
 		return ctx
 	}
@@ -41,10 +45,16 @@ func startChatMemoryTurn(ctx context.Context, turn chatmemory.Turn, payload Zalo
 	if strings.TrimSpace(payload.Message.Text) == "" && len(payload.Message.Attachments) > 0 {
 		contentType = payload.Message.Attachments[0].Type
 	}
+	var attachments interface{}
+	if len(images) > 0 {
+		contentType = "image"
+		attachments = images
+	}
 	chatmemory.RecordInbound(ctx, turn, chatmemory.Inbound{
 		MessageID:   payload.Message.MsgID,
 		Text:        text,
 		ContentType: contentType,
+		Attachments: attachments,
 		SenderName:  senderName,
 		SentAt:      webhookTime(payload.Timestamp),
 		Raw:         payload,
@@ -83,4 +93,23 @@ func appendChatMemoryContext(ctx context.Context, cfg *config.Config, channelMet
 		return systemPrompt
 	}
 	return systemPrompt + "\n\n" + memo
+}
+
+// appendComplaintContext adds the complaint guide (editable in AI Engine,
+// complaint_bot_guide) and the chat's open cases to the system prompt, so
+// the bot records complaints with complaint_record and knows what is still
+// being handled. Skipped when no system prompt is set, like the other
+// blocks, so the flow's own prompt is never replaced by this block alone.
+func appendComplaintContext(ctx context.Context, turn chatmemory.Turn, customerCode, systemPrompt string) string {
+	if strings.TrimSpace(systemPrompt) == "" {
+		return systemPrompt
+	}
+	subjectType, subjectID := turn.Subject()
+	block := customercases.BotContext(ctx, turn.TenantID, subjectType, subjectID, customerCode, func(cases string) string {
+		return engine.BuildTaskPrompt(turn.TenantID, engine.PromptComplaintBot, map[string]string{"cases": cases})
+	})
+	if strings.TrimSpace(block) == "" {
+		return systemPrompt
+	}
+	return systemPrompt + "\n\n" + block
 }
