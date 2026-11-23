@@ -31,11 +31,16 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 	}
 
 	signatureMode := zaloSignatureMode(cfg)
+	if cfg.ZaloWebhookSignature != "" && cfg.ZaloWebhookSignature != signatureMode {
+		log.Printf("[zalo-webhook] ERROR: unknown ZALO_WEBHOOK_SIGNATURE=%q; enforcing signatures (valid: off, log, enforce)", cfg.ZaloWebhookSignature)
+	}
 	switch {
 	case signatureMode == zaloSignatureOff:
-		log.Printf("[zalo-webhook] WARNING: webhook signatures are not checked (set ZALO_OA_SECRET_KEY). Anyone who knows the URL can send messages as any Zalo user.")
-	case signatureMode == zaloSignatureEnforce && cfg.ZaloOAWebhookSecret == "":
-		log.Printf("[zalo-webhook] ERROR: ZALO_WEBHOOK_SIGNATURE=enforce without ZALO_OA_SECRET_KEY: every Zalo webhook will be rejected")
+		log.Printf("[zalo-webhook] WARNING: ZALO_WEBHOOK_SIGNATURE=off: webhook signatures are not checked. Anyone who knows the URL can send messages as any Zalo user.")
+	case signatureMode == zaloSignatureLog:
+		log.Printf("[zalo-webhook] WARNING: ZALO_WEBHOOK_SIGNATURE=log: bad signatures are only logged, not dropped. Switch to enforce once \"signature verified\" appears.")
+	case cfg.ZaloOAWebhookSecret == "":
+		log.Printf("[zalo-webhook] ERROR: signatures are enforced but ZALO_OA_SECRET_KEY is empty: every Zalo webhook will be rejected. Set the OA Secret Key (or ZALO_WEBHOOK_SIGNATURE=off for local development only).")
 	}
 	var firstVerified sync.Once
 
@@ -131,17 +136,16 @@ const (
 )
 
 // zaloSignatureMode picks how strictly Zalo webhook signatures are checked.
-// With no explicit mode, a configured secret turns on log mode, so a wrong
-// secret shows up in the logs before anyone switches to enforce.
+// It fails closed: unless ZALO_WEBHOOK_SIGNATURE is explicitly "off" or "log",
+// every webhook must carry a valid signature. A missing secret or a mistyped
+// mode therefore rejects webhooks instead of letting anyone who knows the URL
+// send messages as any Zalo user (and, through them, drive bot writes).
 func zaloSignatureMode(cfg *config.Config) string {
 	switch cfg.ZaloWebhookSignature {
 	case zaloSignatureOff, zaloSignatureLog, zaloSignatureEnforce:
 		return cfg.ZaloWebhookSignature
 	}
-	if cfg.ZaloOAWebhookSecret != "" {
-		return zaloSignatureLog
-	}
-	return zaloSignatureOff
+	return zaloSignatureEnforce
 }
 
 // verifyZaloSignature checks X-ZEvent-Signature, which Zalo sets to
