@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/vietbui/chat-quality-agent/knowledge"
 	"log"
 
 	"github.com/vietbui/chat-quality-agent/api"
@@ -64,6 +65,10 @@ func main() {
 		defer stopMemory()
 		chatmemory.NewService(cfg).Start(memoryCtx)
 	}
+
+	// Chatbot knowledge base: finish indexing that a restart interrupted.
+	knowledge.SetEnvDefaults(cfg.ChatMemory.UnstructuredAPIURL, cfg.ChatMemory.UnstructuredAPIKey)
+	knowledge.Default().ResumePending()
 
 	// Start scheduler
 	scheduler, err := engine.NewScheduler(cfg)

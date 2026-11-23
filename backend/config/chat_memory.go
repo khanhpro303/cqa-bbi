@@ -32,6 +32,18 @@ type ChatMemoryConfig struct {
 
 	AstraCollection string
 
+	// Chatbot knowledge base (package knowledge): its chunk vectors live on
+	// the same vector store and embedding model, in their own collection /
+	// index. For Vectorize create the index with metadata indexes on
+	// tenant_id and audience.
+	KnowledgeAstraCollection string
+	KnowledgeVectorizeIndex  string
+	// Unstructured partition API used to read uploaded documents when a
+	// tenant has not set its own in AI Engine (UNSTRUCTURED_API_URL /
+	// UNSTRUCTURED_API_KEY).
+	UnstructuredAPIURL string
+	UnstructuredAPIKey string
+
 	VectorizeAccountID string
 	VectorizeAPIToken  string
 	VectorizeIndex     string
@@ -49,18 +61,22 @@ type ChatMemoryConfig struct {
 
 func loadChatMemoryConfig() ChatMemoryConfig {
 	return ChatMemoryConfig{
-		Enabled:              !strings.EqualFold(getEnv("CHAT_MEMORY_ENABLED", "true"), "false"),
-		SummarizeIdleMinutes: getEnvInt("CHAT_MEMORY_SUMMARIZE_IDLE_MINUTES", 0),
-		VectorStore:          strings.ToLower(strings.TrimSpace(getEnv("CHAT_MEMORY_VECTOR_STORE", ""))),
-		VectorRetentionDays:  getEnvInt("CHAT_MEMORY_VECTOR_RETENTION_DAYS", 365),
-		MessageRetentionDays: getEnvInt("CHAT_MESSAGE_RETENTION_DAYS", 730),
-		AstraCollection:      getEnv("CHAT_MEMORY_ASTRA_COLLECTION", "zalo_session_summaries"),
-		VectorizeAccountID:   getEnv("CHAT_MEMORY_VECTORIZE_ACCOUNT_ID", ""),
-		VectorizeAPIToken:    getEnv("CHAT_MEMORY_VECTORIZE_API_TOKEN", ""),
-		VectorizeIndex:       getEnv("CHAT_MEMORY_VECTORIZE_INDEX", "zalo-session-summaries"),
-		EmbeddingAPIKey:      getEnv("CHAT_MEMORY_EMBEDDING_API_KEY", ""),
-		EmbeddingModel:       getEnv("CHAT_MEMORY_EMBEDDING_MODEL", "text-embedding-3-small"),
-		EmbeddingBaseURL:     strings.TrimRight(getEnv("CHAT_MEMORY_EMBEDDING_BASE_URL", ""), "/"),
-		EmbeddingDimensions:  getEnvInt("CHAT_MEMORY_EMBEDDING_DIMENSIONS", 1536),
+		Enabled:                  !strings.EqualFold(getEnv("CHAT_MEMORY_ENABLED", "true"), "false"),
+		SummarizeIdleMinutes:     getEnvInt("CHAT_MEMORY_SUMMARIZE_IDLE_MINUTES", 0),
+		VectorStore:              strings.ToLower(strings.TrimSpace(getEnv("CHAT_MEMORY_VECTOR_STORE", ""))),
+		VectorRetentionDays:      getEnvInt("CHAT_MEMORY_VECTOR_RETENTION_DAYS", 365),
+		MessageRetentionDays:     getEnvInt("CHAT_MESSAGE_RETENTION_DAYS", 730),
+		AstraCollection:          getEnv("CHAT_MEMORY_ASTRA_COLLECTION", "zalo_session_summaries"),
+		KnowledgeAstraCollection: getEnv("KNOWLEDGE_ASTRA_COLLECTION", "cqa_knowledge"),
+		KnowledgeVectorizeIndex:  getEnv("KNOWLEDGE_VECTORIZE_INDEX", "cqa-knowledge"),
+		UnstructuredAPIURL:       getEnv("UNSTRUCTURED_API_URL", ""),
+		UnstructuredAPIKey:       getEnv("UNSTRUCTURED_API_KEY", ""),
+		VectorizeAccountID:       getEnv("CHAT_MEMORY_VECTORIZE_ACCOUNT_ID", ""),
+		VectorizeAPIToken:        getEnv("CHAT_MEMORY_VECTORIZE_API_TOKEN", ""),
+		VectorizeIndex:           getEnv("CHAT_MEMORY_VECTORIZE_INDEX", "zalo-session-summaries"),
+		EmbeddingAPIKey:          getEnv("CHAT_MEMORY_EMBEDDING_API_KEY", ""),
+		EmbeddingModel:           getEnv("CHAT_MEMORY_EMBEDDING_MODEL", "text-embedding-3-small"),
+		EmbeddingBaseURL:         strings.TrimRight(getEnv("CHAT_MEMORY_EMBEDDING_BASE_URL", ""), "/"),
+		EmbeddingDimensions:      getEnvInt("CHAT_MEMORY_EMBEDDING_DIMENSIONS", 1536),
 	}
 }

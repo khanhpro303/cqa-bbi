@@ -77,6 +77,11 @@ the typed tools exported by CQA and chooses between them from their schemas:
 - `inventory_by_line` when the customer asks for stock of a whole named line.
 - `find_customer`, `lookup_order`, and `lookup_debt` for customer-specific ERP
   questions.
+- `search_knowledge` for business documents (policies, warranty, shipping,
+  guides) managed on the CQA "Tài liệu chatbot" page. The public agent token
+  only sees documents marked for customers. Its description is the editable
+  AI Engine task prompt `chatbot_knowledge_tool`; refresh the MCP Tools node
+  after changing it. See `docs/admin/knowledge-base.md`.
 
 The Agent must copy identifiers returned by tools. It must not invent parent
 codes, SKUs, customer codes, endpoint paths, HTTP methods, warehouse names, or
