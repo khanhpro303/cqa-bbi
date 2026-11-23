@@ -201,7 +201,7 @@ func TestRecordLifecycleMySQL(t *testing.T) {
 	if rec, _ := TurnCaseState(ctx, tenantID, "turn-other"); rec {
 		t.Fatal("another turn must not see these reports")
 	}
-	if LastBotReportAt(ctx, tenantID, "user", "zu-1").Before(start) {
+	if LastBotReportAt(ctx, tenantID, "user", "zu-1", "zu-1").Before(start) {
 		t.Fatal("LastBotReportAt")
 	}
 }

@@ -107,7 +107,9 @@ func RecentImages(ctx context.Context, tenantID, channelID, conversationExtID, s
 		First(&conv).Error; err != nil {
 		return nil
 	}
-	return conversationImages(ctx, tenantID, conv.ID, senderID, since, time.Now().Add(time.Minute))
+	// sent_at is Zalo's timestamp, which the webhook accepts up to a few
+	// minutes ahead of this server's clock.
+	return conversationImages(ctx, tenantID, conv.ID, senderID, since, time.Now().Add(10*time.Minute))
 }
 
 // ConversationImages returns the customer images of a conversation sent
@@ -145,16 +147,16 @@ func conversationImages(ctx context.Context, tenantID, conversationID, senderID 
 	return out
 }
 
-// LastBotReportAt is when the bot last recorded a report for this chat (zero
-// when never), so images already attached are not attached again elsewhere.
-func LastBotReportAt(ctx context.Context, tenantID, subjectType, subjectID string) time.Time {
+// LastBotReportAt is when the bot last recorded a report from this person in
+// this chat (zero when never), so their images are not attached twice.
+func LastBotReportAt(ctx context.Context, tenantID, subjectType, subjectID, zaloUserID string) time.Time {
 	if db.DB == nil {
 		return time.Time{}
 	}
 	var row struct{ At *time.Time }
 	db.DB.WithContext(ctx).Table("customer_case_events AS e").Select("MAX(e.created_at) AS at").
 		Joins("JOIN customer_cases AS c ON c.id = e.case_id").
-		Where("c.tenant_id = ? AND c.subject_type = ? AND c.subject_id = ? AND e.actor = ?", tenantID, subjectType, subjectID, SourceBot).
+		Where("c.tenant_id = ? AND c.subject_type = ? AND c.subject_id = ? AND e.actor = ? AND e.zalo_user_id = ?", tenantID, subjectType, subjectID, SourceBot, zaloUserID).
 		Scan(&row)
 	if row.At == nil {
 		return time.Time{}

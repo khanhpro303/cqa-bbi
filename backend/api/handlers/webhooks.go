@@ -85,7 +85,7 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 		// A signed event can be captured and sent again. Within
 		// zaloWebhookDedupeWindow the msg_id dedupe drops it; past that its
 		// timestamp (covered by the signature) is too old.
-		if signatureMode == zaloSignatureEnforce && staleZaloEvent(payload.Timestamp, time.Now()) {
+		if payload.SignatureVerified && staleZaloEvent(payload.Timestamp, time.Now()) {
 			log.Printf("[zalo-drop] reason=stale_event event=%s sender=%s timestamp=%s ip=%s", payload.EventName, payload.Sender.ID, payload.Timestamp, c.ClientIP())
 			c.JSON(http.StatusOK, gin.H{"status": "ignored"})
 			return

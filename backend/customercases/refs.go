@@ -12,12 +12,13 @@ import (
 // bot's reply.
 var (
 	// Strong labels name a ticket for sure: "ticket", "mã ticket/case/hồ
-	// sơ/khiếu nại/yêu cầu", "số phiếu", "phiếu số", "case id", "case no". Any code with a digit
-	// after them is a reference ("Mã ticket ABC-123", "ticket số 66656").
+	// sơ/khiếu nại/yêu cầu", "số phiếu", "phiếu số", "case id", "case no".
+	// Any code with a digit after them is a reference ("Mã ticket ABC-123",
+	// "ticket số 66656"). Markdown emphasis may sit anywhere in between.
 	caseRefStrong = regexp.MustCompile(`(?i)(?:\b(?:mã|số)\s+(?:ticket|case|phiếu|hồ\s*sơ|khiếu\s*nại|yêu\s*cầu)|\bphiếu\s+số|\bcase\s*(?:id|no\.?)|\bticket)[\s*_]*(?:số|id|no\.?)?[\s*_]*[:：]?[\s*_]*#?[\s*_]*[A-Za-z0-9-]*\d[A-Za-z0-9-]*[*_]*`)
 	// Weak labels ("case", "phiếu") need a "#" or a plain number: "case #12",
 	// "case 4567", but not "Case FF800 bị nứt" or "phiếu xuất kho XK01".
-	caseRefWeak = regexp.MustCompile(`(?i)\b(?:case|phiếu)\s*(?:số|id|no\.?)?\s*[:：]?\s*(?:#\s*[A-Za-z0-9][A-Za-z0-9-]*|\d{2,}\b)`)
+	caseRefWeak = regexp.MustCompile(`(?i)\b(?:case|phiếu)[\s*_]*(?:số|id|no\.?)?[\s*_]*[:：]?[\s*_]*(?:#[\s*_]*[A-Za-z0-9][A-Za-z0-9-]*|\d{2,}\b)`)
 	// a bare "#66656"
 	caseRefHash = regexp.MustCompile(`#\d{3,}\b`)
 	// what removing a reference can leave behind
@@ -26,7 +27,7 @@ var (
 	multiSpace  = regexp.MustCompile(`[ \t]{2,}`)
 	doubleStop  = regexp.MustCompile(`([^.])\.\.([^.]|$)`)
 	// Markdown emphasis left empty around a removed label: "**", "__".
-	orphanMark = regexp.MustCompile(`(^|\s)(?:\*\*|__|\*|_)(\s|$)`)
+	orphanMark = regexp.MustCompile(`(^|\s)[*_]+(\s|$)`)
 )
 
 // StripRefs removes ticket and case number references from s.
@@ -34,9 +35,9 @@ func StripRefs(s string) string {
 	if s == "" {
 		return s
 	}
-	out := caseRefStrong.ReplaceAllString(s, "")
-	out = caseRefWeak.ReplaceAllString(out, "")
-	out = caseRefHash.ReplaceAllString(out, "")
+	out := cutMatches(caseRefStrong, s)
+	out = cutMatches(caseRefWeak, out)
+	out = cutMatches(caseRefHash, out)
 	if out == s {
 		return s
 	}
@@ -54,4 +55,22 @@ func StripRefs(s string) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// cutMatches removes re's matches from s. "_" (markdown emphasis, "__Case
+// ID: X__") counts as a word character for \b, so matching runs on a copy
+// with "_" read as a space; both are one byte, so the offsets hold.
+func cutMatches(re *regexp.Regexp, s string) string {
+	locs := re.FindAllStringIndex(strings.ReplaceAll(s, "_", " "), -1)
+	if len(locs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, l := range locs {
+		b.WriteString(s[last:l[0]])
+		last = l[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }

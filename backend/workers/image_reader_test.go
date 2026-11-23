@@ -114,3 +114,20 @@ func TestImageURLsKeepsOnlyZaloImages(t *testing.T) {
 		t.Fatalf("imageURLs = %v", got)
 	}
 }
+
+func TestComplaintTurnIDStableWithoutMsgID(t *testing.T) {
+	var p ZaloWebhookPayload
+	p.Sender.ID, p.Timestamp, p.EventName, p.Message.Text = "u1", "1700000000000", "user_send_text", "hàng lỗi"
+	a, b := complaintTurnID("ch", p), complaintTurnID("ch", p)
+	if a != b || len(a) > 36 {
+		t.Fatalf("turn ids %q %q", a, b)
+	}
+	p.Message.Text = "khác"
+	if complaintTurnID("ch", p) == a {
+		t.Fatal("different message, same turn id")
+	}
+	p.Message.MsgID = "m1"
+	if complaintTurnID("ch", p) != complaintTurnID("ch", p) {
+		t.Fatal("msg_id turn id not stable")
+	}
+}

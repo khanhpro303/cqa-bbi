@@ -116,13 +116,18 @@ type ZaloWebhookPayload struct {
 	SignatureVerified bool `json:"cqa_signature_verified,omitempty"`
 }
 
-// complaintTurnID is the turn id for a Zalo message: stable across retries of
-// the same message (msg_id), random when Zalo sent none.
-func complaintTurnID(channelID, msgID string) string {
-	if strings.TrimSpace(msgID) == "" {
-		return pkg.NewUUID()
+// complaintTurnID is the turn id for a Zalo message, stable across retries
+// of the same task: from the msg_id, or without one from the sender, chat,
+// timestamp and content.
+func complaintTurnID(channelID string, p ZaloWebhookPayload) string {
+	key := channelID + ":" + strings.TrimSpace(p.Message.MsgID)
+	if strings.TrimSpace(p.Message.MsgID) == "" {
+		key = channelID + "|" + p.Sender.ID + "|" + p.Recipient.ID + "|" + p.Timestamp + "|" + p.EventName + "|" + p.Message.Text
+		for _, a := range p.Message.Attachments {
+			key += "|" + a.Payload.URL
+		}
 	}
-	sum := sha256.Sum256([]byte(channelID + ":" + msgID))
+	sum := sha256.Sum256([]byte(key))
 	return "m" + hex.EncodeToString(sum[:])[:35]
 }
 
@@ -1057,7 +1062,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// turnID ties the complaint reports the bot makes in this turn (via
 		// the signed token) to this turn. It comes from the Zalo message id,
 		// so a retried message is the same turn and does not report twice.
-		turnID := complaintTurnID(matchedChannel.ID, payload.Message.MsgID)
+		turnID := complaintTurnID(matchedChannel.ID, payload)
 		if complaintCases {
 			handover := intent == "HANDOVER"
 			if handover {

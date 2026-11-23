@@ -173,7 +173,7 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 	r.SessionID = engine.ResolveActiveSessionID(ctx, p.ChannelID, p.ZaloUserID, p.ZaloGroupID)
 
 	since := time.Now().Add(-complaintImageWindow)
-	if last := customercases.LastBotReportAt(ctx, r.TenantID, r.SubjectType, r.SubjectID); last.After(since) {
+	if last := customercases.LastBotReportAt(ctx, r.TenantID, r.SubjectType, r.SubjectID, p.ZaloUserID); last.After(since) {
 		since = last
 	}
 	r.Images = customercases.RecentImages(ctx, r.TenantID, r.ChannelID, conversationExtID(r), p.ZaloUserID, since)

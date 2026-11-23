@@ -165,15 +165,18 @@ function fill(c: CustomerCase) {
   form.note = ''
 }
 
+// Only the latest load fills the dialog: a slower earlier one (another
+// case, or the same case opened again) must not overwrite it.
+let loadSeq = 0
+
 async function load() {
   if (!props.caseId) return
+  const seq = ++loadSeq
   item.value = null
   events.value = []
   try {
-    const caseId = props.caseId
-    const { data } = await api.get(`/tenants/${props.tenantId}/customer-cases/${caseId}`)
-    // Another case was opened while this one loaded: drop this answer.
-    if (caseId !== props.caseId) return
+    const { data } = await api.get(`/tenants/${props.tenantId}/customer-cases/${props.caseId}`)
+    if (seq !== loadSeq) return
     fill(data.case)
     events.value = data.events || []
   } catch {

@@ -150,4 +150,14 @@ func TestZaloWebhookMarksVerifiedEvents(t *testing.T) {
 	if len(got) != 2 || got[0].SignatureVerified || !got[1].SignatureVerified {
 		t.Fatalf("verified flags = %+v", got)
 	}
+	// In log mode too, a signed but stale event is not queued.
+	old := strconv.FormatInt(time.Now().Add(-3*time.Hour).UnixMilli(), 10)
+	stale := `{"app_id":"111","event_name":"user_send_text","timestamp":"` + old + `","sender":{"id":"u1"},"message":{"text":"hàng lỗi"}}`
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/zalo", strings.NewReader(stale))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-ZEvent-Signature", zaloMAC("111", stale, old, "oa-secret"))
+	router.ServeHTTP(httptest.NewRecorder(), req)
+	if len(got) != 2 {
+		t.Fatalf("stale signed event queued in log mode: %d", len(got))
+	}
 }
