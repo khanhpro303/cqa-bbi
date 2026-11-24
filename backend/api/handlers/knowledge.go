@@ -32,7 +32,7 @@ func ListKnowledgeDocuments(c *gin.Context) {
 		q = q.Where("status <> ?", knowledge.StatusArchived)
 	}
 	var docs []models.KnowledgeDocument
-	if err := q.Order("created_at DESC").Limit(1000).Find(&docs).Error; err != nil {
+	if err := q.Omit("Summary", "SummaryAttempted", "SummaryStartedAt").Order("created_at DESC").Limit(1000).Find(&docs).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
 		return
 	}
@@ -142,24 +142,59 @@ func loadKnowledgeDoc(c *gin.Context) (*models.KnowledgeDocument, bool) {
 	return &doc, true
 }
 
-// GetKnowledgeDocument returns a document with its passages.
+func lockKnowledgeDoc(c *gin.Context) (*models.KnowledgeDocument, func()) {
+	release, ok := knowledge.LockDocumentIndex(c.Request.Context(), middleware.GetTenantID(c), c.Param("docId"), false)
+	if !ok {
+		c.JSON(http.StatusConflict, gin.H{"error": "index_busy"})
+		return nil, nil
+	}
+	doc, ok := loadKnowledgeDoc(c)
+	if !ok {
+		release()
+		return nil, nil
+	}
+	return doc, release
+}
+
+// GetKnowledgeDocument returns a document with its saved reading summary.
 func GetKnowledgeDocument(c *gin.Context) {
 	doc, ok := loadKnowledgeDoc(c)
 	if !ok {
 		return
 	}
-	var chunks []models.KnowledgeChunk
-	db.DB.Where("document_id = ?", doc.ID).Order("position").Limit(2000).Find(&chunks)
-	c.JSON(http.StatusOK, gin.H{"document": doc, "chunks": chunks})
+	c.JSON(http.StatusOK, gin.H{"document": doc, "summary": knowledge.ReadDocumentSummary(doc)})
+}
+
+func GenerateKnowledgeSummary(c *gin.Context, cfg *config.Config) {
+	doc, ok := loadKnowledgeDoc(c)
+	if !ok {
+		return
+	}
+	summary, err := knowledge.StartDocumentSummary(c.Request.Context(), doc, cfg)
+	switch {
+	case errors.Is(err, knowledge.ErrSummaryNoText):
+		c.JSON(http.StatusConflict, gin.H{"error": "summary_no_text"})
+	case errors.Is(err, knowledge.ErrSummaryNoAI):
+		c.JSON(http.StatusConflict, gin.H{"error": "summary_no_ai"})
+	case errors.Is(err, knowledge.ErrSummarySize):
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "summary_too_large"})
+	case errors.Is(err, knowledge.ErrSummaryBusy):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "summary_busy"})
+	case err != nil:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "summary_failed"})
+	default:
+		c.JSON(http.StatusAccepted, gin.H{"summary": summary})
+	}
 }
 
 // UpdateKnowledgeDocument changes title, audience or enabled. A change of
 // audience or enabled rebuilds the document's vectors.
 func UpdateKnowledgeDocument(c *gin.Context) {
-	doc, ok := loadKnowledgeDoc(c)
-	if !ok {
+	doc, release := lockKnowledgeDoc(c)
+	if doc == nil {
 		return
 	}
+	defer release()
 	var req struct {
 		Title    *string `json:"title"`
 		Audience *string `json:"audience"`
@@ -221,12 +256,17 @@ func UpdateKnowledgeDocument(c *gin.Context) {
 
 // ReindexKnowledgeDocument rebuilds a document's vectors.
 func ReindexKnowledgeDocument(c *gin.Context) {
-	doc, ok := loadKnowledgeDoc(c)
-	if !ok {
+	doc, release := lockKnowledgeDoc(c)
+	if doc == nil {
 		return
 	}
+	defer release()
 	if doc.Status == knowledge.StatusArchived || !doc.Enabled {
 		c.JSON(http.StatusConflict, gin.H{"error": "not_active"})
+		return
+	}
+	if doc.ChunkCount == 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "index_no_text"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
@@ -241,10 +281,11 @@ func ReindexKnowledgeDocument(c *gin.Context) {
 // ArchiveKnowledgeDocument hides a document from the bot (soft delete): its
 // vectors are removed, the text is kept so it can be restored.
 func ArchiveKnowledgeDocument(c *gin.Context) {
-	doc, ok := loadKnowledgeDoc(c)
-	if !ok {
+	doc, release := lockKnowledgeDoc(c)
+	if doc == nil {
 		return
 	}
+	defer release()
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
 	if err := knowledge.Default().RemoveVectors(ctx, doc.ID); err != nil {
@@ -252,22 +293,25 @@ func ArchiveKnowledgeDocument(c *gin.Context) {
 		return
 	}
 	now := time.Now()
-	db.DB.Model(doc).Updates(map[string]interface{}{"status": knowledge.StatusArchived, "archived_at": now, "indexed_at": nil, "updated_at": now})
+	if err := db.DB.Model(doc).Updates(map[string]interface{}{"status": knowledge.StatusArchived, "archived_at": now, "indexed_at": nil, "updated_at": now}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "archive_failed"})
+		return
+	}
 	db.LogActivity(doc.TenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "knowledge.document_archived", "knowledge_document", doc.ID, doc.Title, "", c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // RestoreKnowledgeDocument brings an archived document back and re-indexes it.
 func RestoreKnowledgeDocument(c *gin.Context) {
-	doc, ok := loadKnowledgeDoc(c)
-	if !ok {
+	doc, release := lockKnowledgeDoc(c)
+	if doc == nil {
 		return
 	}
+	defer release()
 	if doc.Status != knowledge.StatusArchived {
 		c.JSON(http.StatusConflict, gin.H{"error": "not_archived"})
 		return
 	}
-	db.DB.Model(doc).Updates(map[string]interface{}{"status": knowledge.StatusProcessing, "archived_at": nil, "updated_at": time.Now()})
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
 	if err := knowledge.Default().Reindex(ctx, doc.ID); err != nil {
@@ -280,10 +324,11 @@ func RestoreKnowledgeDocument(c *gin.Context) {
 
 // PurgeKnowledgeDocument permanently deletes an archived document.
 func PurgeKnowledgeDocument(c *gin.Context) {
-	doc, ok := loadKnowledgeDoc(c)
-	if !ok {
+	doc, release := lockKnowledgeDoc(c)
+	if doc == nil {
 		return
 	}
+	defer release()
 	if doc.Status != knowledge.StatusArchived {
 		c.JSON(http.StatusConflict, gin.H{"error": "archive_first"})
 		return

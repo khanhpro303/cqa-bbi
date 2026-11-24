@@ -47,14 +47,17 @@
       </template>
     </div>
 
-    <v-card class="pa-2">
+    <v-alert v-if="listError" type="error" variant="tonal" density="compact" class="mb-3">
+      {{ $t('kb_list_failed') }}
+      <v-btn variant="text" size="small" @click="load">{{ $t('kb_retry') }}</v-btn>
+    </v-alert>
+    <v-card class="document-table" variant="outlined">
       <v-table density="comfortable" hover>
         <thead>
           <tr>
             <th>{{ $t('kb_col_title') }}</th>
             <th>{{ $t('kb_col_audience') }}</th>
             <th>{{ $t('kb_col_status') }}</th>
-            <th class="text-right">{{ $t('kb_col_chunks') }}</th>
             <th>{{ $t('kb_col_added') }}</th>
             <th v-if="view === 'active'">{{ $t('kb_col_enabled') }}</th>
             <th class="text-right" />
@@ -62,11 +65,9 @@
         </thead>
         <tbody>
           <tr v-for="d in documents" :key="d.id">
-            <td class="cursor-pointer" @click="openDoc(d)">
-              <div class="font-weight-medium">{{ d.title }}</div>
-              <div class="text-caption text-medium-emphasis">
-                {{ d.file_name || sourceLabel(d.source) }}<span v-if="d.parser"> · {{ d.parser === 'unstructured' ? 'Unstructured' : $t('kb_parser_builtin') }}</span>
-              </div>
+            <td class="py-2">
+              <button type="button" class="document-link" aria-haspopup="dialog" @click="openDoc(d, $event)">{{ d.title }}</button>
+              <div class="text-caption text-medium-emphasis">{{ documentSource(d) }}</div>
             </td>
             <td>
               <v-chip size="small" :color="d.audience === 'internal' ? 'deep-purple' : 'teal'" variant="tonal">
@@ -74,30 +75,34 @@
               </v-chip>
             </td>
             <td>
-              <v-chip size="small" :color="statusColor(d.status)" variant="tonal">{{ $t('kb_status_' + d.status) }}</v-chip>
-              <div v-if="d.error" class="text-caption error-cell" :class="d.status === 'failed' ? 'text-error' : 'text-warning'">{{ d.error }}</div>
+              <v-chip size="small" :color="statusColor(d.status)" variant="tonal">{{ $t(statusLabel(d)) }}</v-chip>
+              <div v-if="d.status === 'failed'" class="text-caption text-medium-emphasis mt-1">
+                {{ $t(d.chunk_count ? 'kb_index_failed' : 'kb_extract_failed') }}
+              </div>
             </td>
-            <td class="text-right">{{ d.chunk_count }}</td>
             <td>
               <div>{{ formatDateTime(d.created_at) }}</div>
               <div v-if="d.created_by" class="text-caption text-medium-emphasis">{{ d.created_by }}</div>
             </td>
             <td v-if="view === 'active'">
-              <v-switch :model-value="d.enabled" :disabled="!canEdit" color="primary" density="compact" hide-details @update:model-value="(v) => patchDoc(d, { enabled: !!v })" />
+              <v-switch :model-value="d.enabled" :disabled="!canEdit" :aria-label="`${$t('kb_col_enabled')} ${d.title}`" color="success" density="compact" hide-details @update:model-value="(v) => patchDoc(d, { enabled: !!v })" />
             </td>
             <td class="text-right text-no-wrap">
               <template v-if="canEdit && view === 'active'">
-                <v-btn icon="mdi-refresh" size="small" variant="text" :title="$t('kb_reindex')" :disabled="!d.enabled" @click="reindex(d)" />
-                <v-btn icon="mdi-archive-arrow-down-outline" size="small" variant="text" :title="$t('kb_archive')" @click="archive(d)" />
+                <v-btn v-if="d.status === 'failed' && d.enabled && d.chunk_count" size="small" variant="tonal" prepend-icon="mdi-refresh" :title="$t('kb_reindex')" @click="reindex(d)">
+                  {{ $t('kb_retry') }}
+                </v-btn>
+                <v-btn v-else icon="mdi-refresh" size="small" variant="text" :title="$t('kb_reindex')" :aria-label="$t('kb_reindex')" :disabled="!d.enabled || !d.chunk_count" @click="reindex(d)" />
+                <v-btn icon="mdi-archive-arrow-down-outline" size="small" variant="text" :title="$t('kb_archive')" :aria-label="$t('kb_archive')" @click="archive(d)" />
               </template>
               <template v-if="canEdit && view === 'archived'">
-                <v-btn icon="mdi-archive-arrow-up-outline" size="small" variant="text" :title="$t('kb_restore')" @click="restore(d)" />
-                <v-btn v-if="isAdmin" icon="mdi-delete-forever" size="small" variant="text" color="error" :title="$t('kb_purge')" @click="purgeTarget = d" />
+                <v-btn icon="mdi-archive-arrow-up-outline" size="small" variant="text" :title="$t('kb_restore')" :aria-label="$t('kb_restore')" @click="restore(d)" />
+                <v-btn v-if="isAdmin" icon="mdi-delete-forever" size="small" variant="text" color="error" :title="$t('kb_purge')" :aria-label="$t('kb_purge')" @click="purgeTarget = d" />
               </template>
             </td>
           </tr>
-          <tr v-if="!loading && documents.length === 0">
-            <td colspan="7" class="text-center text-medium-emphasis py-6">{{ view === 'archived' ? $t('kb_no_archived') : $t('kb_empty') }}</td>
+          <tr v-if="!loading && !listError && documents.length === 0">
+            <td :colspan="view === 'active' ? 6 : 5" class="text-center text-medium-emphasis py-6">{{ view === 'archived' ? $t('kb_no_archived') : $t('kb_empty') }}</td>
           </tr>
         </tbody>
       </v-table>
@@ -166,34 +171,54 @@
       </v-card>
     </v-dialog>
 
-    <!-- Document view -->
-    <v-dialog v-model="docDialog" max-width="900px">
+    <v-dialog v-model="docDialog" :aria-label="selected?.title" max-width="760px" scrollable @after-leave="restoreDocumentFocus">
       <v-card v-if="selected">
-        <v-card-title class="d-flex align-center">
-          <v-icon start>mdi-file-document-outline</v-icon>
-          <v-text-field v-if="canEdit && view === 'active'" v-model="editTitle" density="compact" hide-details variant="underlined" class="mr-2" />
-          <span v-else>{{ selected.title }}</span>
-          <v-spacer />
-          <v-btn icon="mdi-close" variant="text" size="small" @click="docDialog = false" />
-        </v-card-title>
-        <v-card-text>
-          <v-row dense class="mb-2">
-            <v-col cols="12" md="5">
-              <v-select v-model="editAudience" :items="audienceOptions" :label="$t('kb_col_audience')" :disabled="!canEdit || view !== 'active'" density="compact" hide-details />
-            </v-col>
-            <v-col cols="12" md="7" class="d-flex align-center text-caption text-medium-emphasis">
-              {{ selected.file_name || sourceLabel(selected.source) }} · {{ selected.char_count }} {{ $t('kb_chars') }} · {{ selected.chunk_count }} {{ $t('kb_col_chunks').toLowerCase() }}
-            </v-col>
-          </v-row>
-          <div v-if="loadingChunks" class="text-center py-4"><v-progress-circular indeterminate size="24" /></div>
-          <v-sheet v-for="c in chunks" :key="c.id" class="pa-3 mb-2 rounded" color="surface-variant">
-            <div class="text-caption text-medium-emphasis mb-1">#{{ c.position + 1 }}</div>
-            <div class="passage">{{ c.content }}</div>
-          </v-sheet>
+        <div class="d-flex align-start justify-space-between ga-3 pa-4 pa-sm-6">
+          <div class="document-heading">
+            <h2 class="text-h6">{{ selected.title }}</h2>
+            <div class="d-flex align-center flex-wrap ga-2 mt-2">
+              <span class="text-caption text-medium-emphasis">{{ documentSource(selected) }}</span>
+              <v-chip size="small" variant="tonal">{{ $t(selected.audience === 'internal' ? 'kb_audience_internal' : 'kb_audience_public') }}</v-chip>
+            </div>
+          </div>
+          <v-btn icon="mdi-close" variant="text" size="small" :aria-label="$t('cm_close')" @click="docDialog = false" />
+        </div>
+        <v-divider />
+        <v-card-text class="px-4 px-sm-6 py-5">
+          <section aria-live="polite">
+            <h3 class="text-subtitle-1 font-weight-bold mb-3">{{ $t('kb_summary_title') }}</h3>
+            <p v-if="summary?.text" class="document-summary">{{ summary.text }}</p>
+            <template v-else-if="loadingDetail || generatingSummary || summary?.status === 'processing'">
+              <div class="d-flex align-center ga-3 text-medium-emphasis" role="status">
+                <v-progress-circular indeterminate size="18" width="2" color="primary" />
+                {{ $t(loadingDetail ? 'kb_summary_loading' : 'kb_summary_processing') }}
+              </div>
+            </template>
+            <p v-else-if="!summaryError && summary?.status !== 'failed'" class="text-body-2 text-medium-emphasis">
+              {{ $t(detailExtracting ? 'kb_status_extracting' : selected.chunk_count ? 'kb_summary_missing' : 'kb_summary_no_text') }}
+            </p>
+            <v-alert v-if="summaryError || summary?.status === 'failed'" type="error" variant="tonal" density="compact" class="mt-3">
+              {{ $t(summaryError || 'kb_summary_failed') }}
+            </v-alert>
+            <v-btn v-if="canGenerateSummary" data-testid="kb-generate-summary" class="mt-4" color="primary" variant="flat" prepend-icon="mdi-text-box-check-outline" @click="generateSummary">
+              {{ $t(summary?.status === 'failed' || summaryError ? 'kb_retry' : 'kb_summary_generate') }}
+            </v-btn>
+            <v-btn v-else-if="summaryError === 'kb_summary_load_failed'" class="mt-3" variant="text" @click="openDoc(selected)">
+              {{ $t('kb_retry') }}
+            </v-btn>
+          </section>
+          <section v-if="editingDoc" class="mt-6">
+            <v-divider class="mb-4" />
+            <v-text-field v-model="editTitle" :label="$t('kb_col_title')" density="compact" variant="outlined" maxlength="250" />
+            <v-select v-model="editAudience" :items="audienceOptions" :label="$t('kb_col_audience')" density="compact" variant="outlined" hide-details />
+          </section>
         </v-card-text>
-        <v-card-actions v-if="canEdit && view === 'active'">
+        <v-card-actions v-if="canEdit && selected.status !== 'archived'" class="px-4 px-sm-6">
+          <v-btn variant="text" :prepend-icon="editingDoc ? undefined : 'mdi-cog-outline'" :disabled="savingDoc" @click="toggleDocSettings">
+            {{ $t(editingDoc ? 'cancel' : 'kb_document_settings') }}
+          </v-btn>
           <v-spacer />
-          <v-btn color="primary" variant="flat" :loading="savingDoc" @click="saveDoc">{{ $t('save') }}</v-btn>
+          <v-btn v-if="editingDoc" color="primary" variant="flat" :disabled="!editTitle.trim()" :loading="savingDoc" @click="saveDoc">{{ $t('save') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -215,7 +240,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
@@ -236,7 +261,7 @@ export interface KnowledgeDoc {
   created_by: string
   created_at: string
 }
-interface Chunk { id: string; position: number; content: string }
+type Summary = { status: 'missing' | 'processing' | 'ready' | 'failed'; text?: string }
 interface Hit { title: string; content: string; score: number }
 
 const { t } = useI18n()
@@ -250,6 +275,7 @@ const isAdmin = computed(() => ['owner', 'admin'].includes(authStore.tenantPerms
 const view = ref<'active' | 'archived'>('active')
 const documents = ref<KnowledgeDoc[]>([])
 const loading = ref(false)
+const listError = ref(false)
 const vectorStore = ref('')
 const parser = ref('')
 const supported = ref<string[]>(['.pdf', '.docx', '.xlsx', '.txt', '.md', '.csv', '.html'])
@@ -278,29 +304,49 @@ function errMsg(e: any): string {
 }
 
 let poll: ReturnType<typeof setTimeout> | null = null
+let listRequest = 0
+let listScope = ''
 async function load() {
+  const request = ++listRequest
+  if (poll) clearTimeout(poll)
+  const scope = `${base.value}/${view.value}`
+  if (scope !== listScope) {
+    listScope = scope
+    documents.value = []
+    listError.value = false
+  }
   loading.value = true
   try {
     const { data } = await api.get(base.value, { params: { view: view.value } })
+    if (request !== listRequest) return
     documents.value = data?.documents || []
+    listError.value = false
     vectorStore.value = data?.vector_store || ''
     parser.value = data?.parser || ''
     if (data?.supported_extensions?.length) supported.value = data.supported_extensions
     if (data?.max_upload_mb) maxUploadMb.value = data.max_upload_mb
+  } catch {
+    if (request === listRequest) listError.value = true
   } finally {
-    loading.value = false
+    if (request === listRequest) {
+      loading.value = false
+      schedulePoll()
+    }
   }
-  schedulePoll()
 }
 function schedulePoll() {
   if (poll) clearTimeout(poll)
   poll = null
-  if (documents.value.some((d) => d.status === 'processing')) {
+  if (documents.value.some((d) => d.enabled && d.status === 'processing')) {
     poll = setTimeout(load, 4000)
   }
 }
 onMounted(load)
-onBeforeUnmount(() => { if (poll) clearTimeout(poll) })
+onBeforeUnmount(() => {
+  ++listRequest
+  if (poll) clearTimeout(poll)
+  closeDetail()
+})
 
 // Upload
 const uploadDialog = ref(false)
@@ -364,10 +410,12 @@ async function saveText() {
 // Row actions
 async function patchDoc(d: KnowledgeDoc, body: Partial<Pick<KnowledgeDoc, 'title' | 'audience' | 'enabled'>>) {
   try {
-    await api.patch(`${base.value}/${d.id}`, body)
+    const { data } = await api.patch<KnowledgeDoc>(`${base.value}/${d.id}`, body)
     await load()
+    return data
   } catch (e) {
-    notify(errMsg(e), 'error')
+    notify(t(errMsg(e) === 'index_busy' ? 'kb_index_busy' : 'kb_update_failed'), 'error')
+    return null
   }
 }
 async function reindex(d: KnowledgeDoc) {
@@ -375,7 +423,7 @@ async function reindex(d: KnowledgeDoc) {
     await api.post(`${base.value}/${d.id}/reindex`)
     await load()
   } catch (e) {
-    notify(errMsg(e), 'error')
+    notify(t(errMsg(e) === 'index_busy' ? 'kb_index_busy' : 'kb_reindex_failed'), 'error')
   }
 }
 async function archive(d: KnowledgeDoc) {
@@ -384,7 +432,7 @@ async function archive(d: KnowledgeDoc) {
     notify(t('kb_archived_msg', { title: d.title }))
     await load()
   } catch (e) {
-    notify(errMsg(e), 'error')
+    notify(t(errMsg(e) === 'index_busy' ? 'kb_index_busy' : 'kb_archive_failed'), 'error')
   }
 }
 async function restore(d: KnowledgeDoc) {
@@ -393,7 +441,7 @@ async function restore(d: KnowledgeDoc) {
     notify(t('kb_restored_msg', { title: d.title }))
     await load()
   } catch (e) {
-    notify(errMsg(e), 'error')
+    notify(t(errMsg(e) === 'index_busy' ? 'kb_index_busy' : 'kb_restore_failed'), 'error')
   }
 }
 const purgeTarget = ref<KnowledgeDoc | null>(null)
@@ -406,7 +454,7 @@ async function purge() {
     purgeTarget.value = null
     await load()
   } catch (e) {
-    notify(errMsg(e), 'error')
+    notify(t(errMsg(e) === 'index_busy' ? 'kb_index_busy' : 'kb_purge_failed'), 'error')
   } finally {
     purging.value = false
   }
@@ -415,40 +463,142 @@ async function purge() {
 // Document dialog
 const docDialog = ref(false)
 const selected = ref<KnowledgeDoc | null>(null)
-const chunks = ref<Chunk[]>([])
-const loadingChunks = ref(false)
+const summary = ref<Summary | null>(null)
+const loadingDetail = ref(false)
+const generatingSummary = ref(false)
+const summaryError = ref('')
+const editingDoc = ref(false)
 const editTitle = ref('')
 const editAudience = ref<'public' | 'internal'>('public')
+let editOriginal: Pick<KnowledgeDoc, 'title' | 'audience'> | null = null
 const savingDoc = ref(false)
-async function openDoc(d: KnowledgeDoc) {
+const detailExtracting = computed(() => selected.value?.status === 'processing' && !selected.value.chunk_count)
+const canGenerateSummary = computed(() => canEdit.value && !!selected.value?.chunk_count && !summary.value?.text &&
+  !loadingDetail.value && !generatingSummary.value && summary.value?.status !== 'processing' &&
+  !['kb_summary_load_failed', 'kb_summary_too_large'].includes(summaryError.value))
+let detailRequest = 0
+let documentRevision = 0
+let detailPoll: ReturnType<typeof setTimeout> | undefined
+let docOpener: HTMLElement | null = null
+
+function closeDetail() {
+  ++detailRequest
+  clearTimeout(detailPoll)
+}
+watch(docDialog, (open) => { if (!open) closeDetail() })
+watch(base, () => {
+  closeDetail()
+  docDialog.value = false
+  documents.value = []
+  view.value = 'active'
+  void load()
+})
+
+function restoreDocumentFocus() {
+  if (!docDialog.value && docOpener?.isConnected) docOpener.focus()
+}
+
+async function openDoc(d: KnowledgeDoc, event?: MouseEvent) {
+  closeDetail()
+  if (event?.currentTarget instanceof HTMLElement) docOpener = event.currentTarget
   selected.value = d
-  editTitle.value = d.title
-  editAudience.value = d.audience
+  summary.value = null
+  summaryError.value = ''
+  loadingDetail.value = true
+  generatingSummary.value = false
+  savingDoc.value = false
+  editingDoc.value = false
   docDialog.value = true
-  loadingChunks.value = true
-  chunks.value = []
+  await loadDetail(d.id, detailRequest)
+}
+
+async function loadDetail(id: string, request: number) {
+  const revision = documentRevision
   try {
-    const { data } = await api.get(`${base.value}/${d.id}`)
-    chunks.value = data?.chunks || []
+    const { data } = await api.get<{ document: KnowledgeDoc; summary: Summary }>(`${base.value}/${id}`)
+    if (!docDialog.value || request !== detailRequest) return
+    if (revision === documentRevision) selected.value = data.document
+    summary.value = data.summary
+    summaryError.value = ''
+  } catch {
+    if (docDialog.value && request === detailRequest) summaryError.value = 'kb_summary_load_failed'
   } finally {
-    loadingChunks.value = false
+    if (docDialog.value && request === detailRequest) {
+      loadingDetail.value = false
+      scheduleDetailPoll(id, request)
+    }
   }
 }
-async function saveDoc() {
+
+function scheduleDetailPoll(id: string, request: number) {
+  clearTimeout(detailPoll)
+  if (summary.value?.status === 'processing' || detailExtracting.value) {
+    detailPoll = setTimeout(() => loadDetail(id, request), 4000)
+  }
+}
+
+async function generateSummary() {
+  if (!selected.value || !canGenerateSummary.value) return
+  const { id } = selected.value
+  const request = detailRequest
+  generatingSummary.value = true
+  summaryError.value = ''
+  clearTimeout(detailPoll)
+  try {
+    const { data } = await api.post<{ summary: Summary }>(`${base.value}/${id}/summary`)
+    if (!docDialog.value || request !== detailRequest) return
+    summary.value = data.summary
+    scheduleDetailPoll(id, request)
+  } catch (e) {
+    if (!docDialog.value || request !== detailRequest) return
+    const code = errMsg(e)
+    switch (code) {
+      case 'summary_no_ai':
+      case 'summary_no_text':
+      case 'summary_too_large':
+      case 'summary_busy':
+        summaryError.value = `kb_${code}`
+        break
+      default:
+        summaryError.value = 'kb_summary_failed'
+    }
+  } finally {
+    if (request === detailRequest) generatingSummary.value = false
+  }
+}
+
+function toggleDocSettings() {
   if (!selected.value) return
-  const body: Record<string, unknown> = {}
-  if (editTitle.value.trim() && editTitle.value.trim() !== selected.value.title) body.title = editTitle.value.trim()
-  if (editAudience.value !== selected.value.audience) body.audience = editAudience.value
+  editingDoc.value = !editingDoc.value
+  if (editingDoc.value) {
+    const { title, audience } = selected.value
+    editOriginal = { title, audience }
+    editTitle.value = title
+    editAudience.value = audience
+  }
+}
+
+async function saveDoc() {
+  if (!selected.value || !editOriginal) return
+  const request = detailRequest
+  const body: Partial<Pick<KnowledgeDoc, 'title' | 'audience'>> = {}
+  const title = editTitle.value.trim()
+  if (title && title !== editOriginal.title) body.title = title
+  if (editAudience.value !== editOriginal.audience) body.audience = editAudience.value
   if (Object.keys(body).length === 0) {
-    docDialog.value = false
+    editingDoc.value = false
     return
   }
   savingDoc.value = true
   try {
-    await patchDoc(selected.value, body)
-    docDialog.value = false
+    const updated = await patchDoc(selected.value, body)
+    if (updated && docDialog.value && request === detailRequest) {
+      ++documentRevision
+      selected.value = updated
+      editingDoc.value = false
+    }
   } finally {
-    savingDoc.value = false
+    if (request === detailRequest) savingDoc.value = false
   }
 }
 
@@ -498,6 +648,16 @@ async function runImport() {
 function statusColor(s: string) {
   return ({ ready: 'success', processing: 'info', failed: 'error', archived: 'grey' } as Record<string, string>)[s] || 'grey'
 }
+function statusLabel(doc: KnowledgeDoc) {
+  if (doc.status === 'processing') {
+    if (!doc.enabled) return 'kb_status_paused'
+    if (!doc.chunk_count) return 'kb_status_extracting'
+  }
+  return 'kb_status_' + doc.status
+}
+function documentSource(doc: KnowledgeDoc) {
+  return doc.file_name && doc.file_name !== doc.title ? doc.file_name : sourceLabel(doc.source)
+}
 function sourceLabel(s: string) {
   return s === 'text' ? t('kb_source_text') : s === 'astra_import' ? t('kb_source_astra') : t('kb_source_upload')
 }
@@ -511,5 +671,21 @@ defineExpose({ load, documents, parser, upload, uploadFiles, runSearch, tryQuery
 
 <style scoped>
 .passage { white-space: pre-wrap; font-size: 0.9rem; }
-.error-cell { max-width: 280px; white-space: normal; }
+.document-table { border-color: rgba(var(--v-border-color), var(--v-border-opacity)); }
+.document-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.document-link:hover, .document-link:focus-visible { text-decoration: underline; }
+.document-link:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 3px; }
+.document-heading { min-width: 0; overflow-wrap: anywhere; }
+.document-summary { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 1rem; line-height: 1.75; }
 </style>

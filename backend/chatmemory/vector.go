@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -40,6 +42,47 @@ type VectorIndex interface {
 }
 
 var vectorHTTP = &http.Client{Timeout: 30 * time.Second}
+
+type astraStatusError struct {
+	status int
+	body   string
+}
+
+func (e *astraStatusError) Error() string {
+	return fmt.Sprintf("astra status %d: %s", e.status, e.body)
+}
+
+func retryAstraWrite(ctx context.Context, call func() error) error {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := call()
+		if err == nil || attempt == 2 || !temporaryAstraError(err) {
+			return err
+		}
+		timer := time.NewTimer(time.Duration(1<<attempt) * 500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func temporaryAstraError(err error) bool {
+	var status *astraStatusError
+	if errors.As(err, &status) {
+		switch status.status {
+		case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
+			http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return true
+		}
+	}
+	var network net.Error
+	return (errors.As(err, &network) && network.Timeout()) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
 
 // ---------------------------------------------------------------- AstraDB --
 
@@ -81,9 +124,12 @@ func (a *AstraIndex) call(ctx context.Context, url string, cmd map[string]interf
 		return err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("astra status %d: %s", resp.StatusCode, truncate(string(raw), 300))
+		return &astraStatusError{status: resp.StatusCode, body: truncate(string(raw), 300)}
 	}
 	var envelope struct {
 		Errors []struct {
@@ -91,7 +137,9 @@ func (a *AstraIndex) call(ctx context.Context, url string, cmd map[string]interf
 			ErrorCode string `json:"errorCode"`
 		} `json:"errors"`
 	}
-	_ = json.Unmarshal(raw, &envelope)
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("read Astra response: %w", err)
+	}
 	if len(envelope.Errors) > 0 {
 		e := envelope.Errors[0]
 		return fmt.Errorf("astra error %s: %s", e.ErrorCode, e.Message)
@@ -119,14 +167,15 @@ func (a *AstraIndex) ensureCollection(ctx context.Context) error {
 		dims = 1536
 	}
 	url := fmt.Sprintf("%s/api/json/v1/%s", strings.TrimRight(a.Endpoint, "/"), a.keyspace())
-	err := a.call(ctx, url, map[string]interface{}{
+	cmd := map[string]interface{}{
 		"createCollection": map[string]interface{}{
 			"name": a.Collection,
 			"options": map[string]interface{}{
 				"vector": map[string]interface{}{"dimension": dims, "metric": "cosine"},
 			},
 		},
-	}, nil)
+	}
+	err := retryAstraWrite(ctx, func() error { return a.call(ctx, url, cmd, nil) })
 	if err != nil {
 		return fmt.Errorf("create collection %s: %w", a.Collection, err)
 	}
@@ -143,7 +192,7 @@ func (a *AstraIndex) Upsert(ctx context.Context, docs []VectorDoc) error {
 		for k, v := range d.Metadata {
 			meta[k] = v
 		}
-		err := a.call(ctx, a.collectionURL(), map[string]interface{}{
+		cmd := map[string]interface{}{
 			"findOneAndReplace": map[string]interface{}{
 				"filter": map[string]interface{}{"_id": d.ID},
 				"replacement": map[string]interface{}{
@@ -154,7 +203,10 @@ func (a *AstraIndex) Upsert(ctx context.Context, docs []VectorDoc) error {
 				},
 				"options": map[string]interface{}{"upsert": true},
 			},
-		}, nil)
+		}
+		// The same _id and replacement are safe to retry when Astra may
+		// already have applied the write before the client timed out.
+		err := retryAstraWrite(ctx, func() error { return a.call(ctx, a.collectionURL(), cmd, nil) })
 		if err != nil {
 			return err
 		}
@@ -202,11 +254,12 @@ func (a *AstraIndex) Delete(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	return a.call(ctx, a.collectionURL(), map[string]interface{}{
+	cmd := map[string]interface{}{
 		"deleteMany": map[string]interface{}{
 			"filter": map[string]interface{}{"_id": map[string]interface{}{"$in": ids}},
 		},
-	}, nil)
+	}
+	return retryAstraWrite(ctx, func() error { return a.call(ctx, a.collectionURL(), cmd, nil) })
 }
 
 // ------------------------------------------------------ Cloudflare Vectorize --

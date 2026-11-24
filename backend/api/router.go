@@ -354,6 +354,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.PUT("/knowledge/parser", middleware.RequirePermission("settings", "w"), handlers.SaveKnowledgeParser)
 			tenant.POST("/knowledge/parser/test", middleware.RequirePermission("settings", "w"), handlers.TestKnowledgeParser)
 			tenant.GET("/knowledge/:docId", middleware.RequirePermission("settings", "r"), handlers.GetKnowledgeDocument)
+			tenant.POST("/knowledge/:docId/summary", middleware.RequirePermission("settings", "w"), func(c *gin.Context) {
+				handlers.GenerateKnowledgeSummary(c, cfg)
+			})
 			tenant.PATCH("/knowledge/:docId", middleware.RequirePermission("settings", "w"), handlers.UpdateKnowledgeDocument)
 			tenant.POST("/knowledge/:docId/reindex", middleware.RequirePermission("settings", "w"), handlers.ReindexKnowledgeDocument)
 			tenant.POST("/knowledge/:docId/archive", middleware.RequirePermission("settings", "w"), handlers.ArchiveKnowledgeDocument)

@@ -55,4 +55,52 @@ describe('Knowledge page', () => {
     await (wrapper.vm as any).patchDoc(doc, { enabled: false })
     expect(mocks.patch).toHaveBeenCalledWith('/tenants/tenant-1/knowledge/d1', { enabled: false })
   })
+
+  it('shows a saved summary for an indexing failure without rendering technical errors or chunks', async () => {
+    const failedDoc = { ...doc, status: 'failed', error: 'vector upsert: context deadline exceeded' }
+    mocks.get
+      .mockResolvedValueOnce({ data: { documents: [failedDoc] } })
+      .mockResolvedValueOnce({
+        data: { document: failedDoc, summary: { status: 'ready', text: 'Bảo hành trong 12 tháng.' }, chunks: [{ content: 'Raw passage' }] },
+      })
+    const wrapper = shallowMount(Knowledge, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    try {
+      await flushPromises()
+      await wrapper.get('.document-link').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.document-summary').text()).toBe('Bảo hành trong 12 tháng.')
+      expect(wrapper.text()).toContain('kb_index_failed')
+      expect(wrapper.text()).not.toContain('context deadline exceeded')
+      expect(wrapper.text()).not.toContain('Raw passage')
+      expect(mocks.post).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('generates a missing summary and refreshes the dialog when it is ready', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    mocks.get
+      .mockResolvedValueOnce({ data: { documents: [doc] } })
+      .mockResolvedValueOnce({ data: { document: doc, summary: { status: 'missing' } } })
+      .mockResolvedValueOnce({ data: { document: doc, summary: { status: 'ready', text: 'Mũ bảo hành 12 tháng.' } } })
+    mocks.post.mockResolvedValueOnce({ data: { summary: { status: 'processing' } } })
+    const wrapper = shallowMount(Knowledge, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    try {
+      await flushPromises()
+      await wrapper.get('.document-link').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="kb-generate-summary"]').trigger('click')
+      await flushPromises()
+      expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/knowledge/d1/summary')
+      expect(wrapper.text()).toContain('kb_summary_processing')
+
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(wrapper.get('.document-summary').text()).toBe('Mũ bảo hành 12 tháng.')
+      expect(wrapper.find('[data-testid="kb-generate-summary"]').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
 })
