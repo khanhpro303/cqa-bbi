@@ -18,7 +18,12 @@ Khi khách báo một vấn đề cần nhân viên xử lý (hàng lỗi, giao 
 9. **Tin gửi lại**: nếu một tin bị xử lý lại (Zalo gửi lại, lỗi mạng), bot không tính là khách hỏi lại lần nữa.
 8. **Chỉ webhook đã xác thực**: bot chỉ ghi case khi tin nhắn có chữ ký Zalo hợp lệ (cần `ZALO_OA_SECRET_KEY`). Có secret thì webhook mặc định ở chế độ `enforce`.
 
-Cảnh báo case gửi vào **nhóm cảnh báo handover** của kênh (Kênh → Nhóm Zalo).
+Cảnh báo case gửi vào **nhóm cảnh báo handover** của kênh (Kênh → Nhóm Zalo), hoặc nhóm của luồng xử lý nếu có.
+
+## Cài đặt trong kênh (Kênh → Nhóm Zalo, khi bật Ghi khiếu nại thành case)
+
+- **Số ngày bot còn nhớ case đã xử lý xong** (`complaint_resolved_days`, mặc định 14, tối đa 90): trong số ngày này bot vẫn thấy case đã xử lý và decision model vẫn có thể mở lại nó.
+- **Luồng xử lý khiếu nại** (`complaint_streams`): ví dụ Bảo hành, Khách hàng, Sản phẩm, Marketing. Mỗi luồng có tên, mô tả cho AI và nhóm nhận cảnh báo. Decision model (prompt **Quyết định: vấn đề cũ hay vấn đề mới**) xếp mỗi vấn đề mới vào một luồng theo tên và mô tả, kể cả khi khách chưa có case nào. Cảnh báo của case đi vào nhóm của luồng; luồng không chọn nhóm, nhóm không dùng được, model lỗi hoặc không luồng nào hợp thì đi vào nhóm cảnh báo handover. Case cũ được gộp thêm thì giữ luồng cũ. Nhân viên đổi luồng trong case thì nhóm của luồng mới nhận một tin báo. Trang Khiếu nại lọc được theo luồng.
 
 ## Nhân viên xử lý
 

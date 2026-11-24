@@ -41,13 +41,15 @@ func RenderForBot(cases []models.CustomerCase, loc *time.Location) string {
 
 // BotContext returns the complaint guide (task prompt complaint_bot_guide)
 // with the chat's open cases and recently resolved ones, for the bot's
-// system prompt. Resolved cases are listed so the bot can tell a customer
+// system prompt (resolved ones for the channel's complaint_resolved_days).
+// Resolved cases are listed so the bot can tell a customer
 // who asks about one that it was handled, instead of recording the question
 // as the problem coming back (which reopens the case).
-func BotContext(ctx context.Context, tenantID, subjectType, subjectID, customerCode string, build func(cases string) string) string {
+func BotContext(ctx context.Context, tenantID, channelID, subjectType, subjectID, customerCode string, build func(cases string) string) string {
 	var cases []models.CustomerCase
 	if db.DB != nil && tenantID != "" && subjectID != "" {
-		rows, err := Candidates(ctx, tenantID, subjectType, subjectID, customerCode)
+		window := channelSettings(ctx, tenantID, channelID).ResolvedWindow()
+		rows, err := Candidates(ctx, tenantID, subjectType, subjectID, customerCode, window)
 		if err != nil {
 			log.Printf("[cases] bot cases for %s/%s: %v", subjectType, subjectID, err)
 		}

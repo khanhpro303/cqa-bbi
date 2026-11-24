@@ -16,6 +16,13 @@ type OpenAIProvider struct {
 	apiKey  string
 	model   string
 	baseURL string
+	// name is the provider reported in AIResponse and logs: "openai", or
+	// "openrouter" for the OpenRouter flavour (see NewOpenRouterProvider).
+	name string
+	// chatOnly skips the Responses API: the endpoint only serves Chat
+	// Completions.
+	chatOnly bool
+	headers  map[string]string
 }
 
 func NewOpenAIProvider(apiKey, model, baseURL string) *OpenAIProvider {
@@ -33,7 +40,16 @@ func NewOpenAIProvider(apiKey, model, baseURL string) *OpenAIProvider {
 		apiKey:  apiKey,
 		model:   mappedModel,
 		baseURL: strings.TrimRight(baseURL, "/"),
+		name:    "openai",
 	}
+}
+
+// providerName is the provider recorded on responses and in cost logs.
+func (o *OpenAIProvider) providerName() string {
+	if o.name == "" {
+		return "openai"
+	}
+	return o.name
 }
 
 func (o *OpenAIProvider) AnalyzeChat(ctx context.Context, systemPrompt string, chatTranscript string) (AIResponse, error) {
@@ -49,7 +65,10 @@ func (o *OpenAIProvider) AnalyzeJSONSchema(ctx context.Context, systemPrompt, in
 }
 
 func (o *OpenAIProvider) analyze(ctx context.Context, systemPrompt string, input string, jsonOutput bool, schemas ...map[string]interface{}) (AIResponse, error) {
-	return withRetry(ctx, "openai", func() (AIResponse, error) {
+	return withRetry(ctx, o.providerName(), func() (AIResponse, error) {
+		if o.chatOnly {
+			return o.analyzeWithChatCompletions(ctx, systemPrompt, input, jsonOutput, schemas...)
+		}
 		// Prefer Responses API for modern OpenAI models, then fallback to Chat Completions
 		// for compatible proxies/older deployments.
 		resp, err := o.analyzeWithResponses(ctx, systemPrompt, input, jsonOutput, schemas...)
@@ -178,7 +197,7 @@ func (o *OpenAIProvider) analyzeWithResponses(ctx context.Context, systemPrompt 
 		InputTokens:  parsed.Usage.InputTokens,
 		OutputTokens: parsed.Usage.OutputTokens,
 		Model:        model,
-		Provider:     "openai",
+		Provider:     o.providerName(),
 	}, nil
 }
 
@@ -202,7 +221,9 @@ func (o *OpenAIProvider) analyzeWithChatCompletions(ctx context.Context, systemP
 		return AIResponse{}, err
 	}
 
-	return parseChatCompletion(body, o.model)
+	resp, err := parseChatCompletion(body, o.model)
+	resp.Provider = o.providerName()
+	return resp, err
 }
 
 // parseChatCompletion reads a Chat Completions response.
@@ -252,6 +273,9 @@ func (o *OpenAIProvider) doJSONPost(ctx context.Context, url string, reqBody int
 	}
 	req.Header.Set("Authorization", "Bearer "+o.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range o.headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := openAIHTTPClient.Do(req)
 	if err != nil {

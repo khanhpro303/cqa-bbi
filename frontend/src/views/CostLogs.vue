@@ -6,7 +6,7 @@
       <v-card-text class="d-flex ga-3 pb-0 flex-wrap">
         <v-select
           v-model="filterProvider"
-          :items="['claude', 'gemini', 'openai']"
+          :items="['claude', 'gemini', 'openai', 'openrouter']"
           :label="$t('ai_provider')"
           density="compact"
           clearable
@@ -110,6 +110,8 @@ function providerColor(provider: string) {
       return 'blue'
     case 'openai':
       return 'green'
+    case 'openrouter':
+      return 'orange'
     default:
       return 'grey'
   }

@@ -22,22 +22,33 @@ const decideTimeout = 20 * time.Second
 // callModel is the decision model call; replaced in tests.
 var callModel = callTenantModel
 
-// Decide asks the decision model whether r is one of candidates. It returns
-// the matching index, or -1 for a new problem. On error it returns -1 and
-// the error.
-func Decide(ctx context.Context, r Report, candidates []models.CustomerCase) (int, string, error) {
-	loc := location(r.TenantID)
-	system := engine.BuildTaskPrompt(r.TenantID, engine.PromptComplaintMatch, nil)
-	input := BuildDecisionInput(r, candidates, loc)
-	content, err := callModel(ctx, r.TenantID, r.ChannelID, system, input)
-	if err != nil {
-		return -1, "", err
-	}
-	return ParseDecision(content, len(candidates))
+// Decision is the decision model's answer.
+type Decision struct {
+	// Index of the matching candidate, or -1 for a new problem.
+	Index  int
+	Reason string
+	// Stream is the stream key the report belongs to ("" when the channel
+	// has no streams or none fits).
+	Stream string
 }
 
-// BuildDecisionInput renders the new report and the earlier cases.
-func BuildDecisionInput(r Report, candidates []models.CustomerCase, loc *time.Location) string {
+// Decide asks the decision model whether r is one of candidates, and which
+// of streams it belongs to. On error Index is -1 (a new problem); a stream
+// the model named is still kept.
+func Decide(ctx context.Context, r Report, candidates []models.CustomerCase, streams []Stream) (Decision, error) {
+	loc := location(r.TenantID)
+	system := engine.BuildTaskPrompt(r.TenantID, engine.PromptComplaintMatch, nil)
+	input := BuildDecisionInput(r, candidates, loc, streams)
+	content, err := callModel(ctx, r.TenantID, r.ChannelID, system, input)
+	if err != nil {
+		return Decision{Index: -1}, err
+	}
+	return ParseDecision(content, len(candidates), streams)
+}
+
+// BuildDecisionInput renders the new report, the earlier cases and the
+// streams to file it under.
+func BuildDecisionInput(r Report, candidates []models.CustomerCase, loc *time.Location, streams []Stream) string {
 	var b strings.Builder
 	b.WriteString("<van_de_moi>\n")
 	fmt.Fprintf(&b, "Loại: %s\n", TypeLabel(r.Type))
@@ -56,6 +67,9 @@ func BuildDecisionInput(r Report, candidates []models.CustomerCase, loc *time.Lo
 		}
 	}
 	b.WriteString("</van_de_moi>\n\n<van_de_cu>\n")
+	if len(candidates) == 0 {
+		b.WriteString("(không có)\n")
+	}
 	for i, c := range candidates {
 		fmt.Fprintf(&b, "[%d] %s · %s · báo lúc %s", i+1, StatusLabel(c.Status), TypeLabel(c.Type), c.CreatedAt.In(loc).Format("15:04 02/01/2006"))
 		if c.LastFollowupAt != nil {
@@ -70,13 +84,36 @@ func BuildDecisionInput(r Report, candidates []models.CustomerCase, loc *time.Lo
 			fmt.Fprintf(&b, "    Cách đã xử lý: %s\n", oneLine(truncate(c.Resolution, 300)))
 		}
 	}
-	b.WriteString("</van_de_cu>")
+	b.WriteString("</van_de_cu>\n\n<luong_xu_ly>\n")
+	if len(streams) == 0 {
+		b.WriteString("(không có)\n")
+	}
+	for _, s := range streams {
+		fmt.Fprintf(&b, "- %s: %s", s.Key, oneLine(s.Name))
+		if s.Description != "" {
+			fmt.Fprintf(&b, " — %s", oneLine(s.Description))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("</luong_xu_ly>")
 	return b.String()
 }
 
 // ParseDecision reads the model's JSON answer. n is the number of
-// candidates; a "same" answer must name one of them.
-func ParseDecision(content string, n int) (int, string, error) {
+// candidates; a "same" answer must name one of them. A stream must be one
+// of streams, else it is dropped.
+func ParseDecision(content string, n int, streams []Stream) (Decision, error) {
+	idx, reason, stream, err := parseDecision(content, n)
+	d := Decision{Index: idx, Reason: reason}
+	for _, s := range streams {
+		if s.Key == stream {
+			d.Stream = stream
+		}
+	}
+	return d, err
+}
+
+func parseDecision(content string, n int) (int, string, string, error) {
 	body := strings.TrimSpace(content)
 	if i := strings.Index(body, "{"); i >= 0 {
 		if j := strings.LastIndex(body, "}"); j > i {
@@ -87,31 +124,33 @@ func ParseDecision(content string, n int) (int, string, error) {
 		Decision string          `json:"decision"`
 		Case     json.RawMessage `json:"case"`
 		Reason   string          `json:"reason"`
+		Stream   string          `json:"stream"`
 	}
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
-		return -1, "", fmt.Errorf("decision is not valid JSON: %w", err)
+		return -1, "", "", fmt.Errorf("decision is not valid JSON: %w", err)
 	}
 	reason := truncate(strings.TrimSpace(out.Reason), 300)
+	stream := strings.ToLower(strings.TrimSpace(out.Stream))
 	switch strings.ToLower(strings.TrimSpace(out.Decision)) {
 	case engine.ComplaintMatchNew:
-		return -1, reason, nil
+		return -1, reason, stream, nil
 	case "same":
 		var idx int
 		if err := json.Unmarshal(out.Case, &idx); err != nil {
 			var s string
 			if json.Unmarshal(out.Case, &s) != nil {
-				return -1, reason, errors.New("decision names no case")
+				return -1, reason, stream, errors.New("decision names no case")
 			}
 			if _, err := fmt.Sscanf(strings.Trim(s, "[] "), "%d", &idx); err != nil {
-				return -1, reason, errors.New("decision names no case")
+				return -1, reason, stream, errors.New("decision names no case")
 			}
 		}
 		if idx < 1 || idx > n {
-			return -1, reason, fmt.Errorf("decision names case %d of %d", idx, n)
+			return -1, reason, stream, fmt.Errorf("decision names case %d of %d", idx, n)
 		}
-		return idx - 1, reason, nil
+		return idx - 1, reason, stream, nil
 	}
-	return -1, reason, fmt.Errorf("unknown decision %q", out.Decision)
+	return -1, reason, stream, fmt.Errorf("unknown decision %q", out.Decision)
 }
 
 func callTenantModel(ctx context.Context, tenantID, channelID, system, input string) (string, error) {

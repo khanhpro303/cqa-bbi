@@ -845,16 +845,7 @@ func (a *Analyzer) getProvider(job models.Job) (ai.AIProvider, error) {
 		baseURL = baseURLSetting.ValuePlain
 	}
 
-	switch provider {
-	case "claude":
-		return ai.NewClaudeProvider(apiKey, model, a.cfg.AIMaxTokens, baseURL), nil
-	case "gemini":
-		return ai.NewGeminiProvider(apiKey, model, baseURL), nil
-	case "openai":
-		return ai.NewOpenAIProvider(apiKey, model, baseURL), nil
-	default:
-		return nil, fmt.Errorf("unsupported AI provider: %s", provider)
-	}
+	return ai.NewProvider(provider, apiKey, model, baseURL, a.cfg.AIMaxTokens)
 }
 
 func buildConversationInsightDetail(classResult ai.ClassificationResponse, sourceLastMessageAt *time.Time, orderOutcomes ...[]persistedOrderOutcome) ([]byte, error) {

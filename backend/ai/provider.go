@@ -8,7 +8,7 @@ type AIResponse struct {
 	InputTokens  int
 	OutputTokens int
 	Model        string
-	Provider     string // "claude" | "gemini" | "openai"
+	Provider     string // "claude" | "gemini" | "openai" | "openrouter"
 }
 
 // BatchItem represents one conversation in a batch request.

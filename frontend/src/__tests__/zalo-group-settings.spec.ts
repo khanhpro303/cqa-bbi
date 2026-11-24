@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { describe, expect, it, vi } from 'vitest'
-import { readZaloGroupSettings, zaloGroupSettingsPatch } from '../components/channels/zaloGroupSettings'
+import { readZaloGroupSettings, streamKey, zaloGroupSettingsPatch } from '../components/channels/zaloGroupSettings'
 import { useChannelStore, type Channel } from '../stores/channels'
 
 const api = vi.hoisted(() => ({ put: vi.fn() }))
@@ -70,5 +70,40 @@ describe('complaint cases switch', () => {
   it('is off until turned on', () => {
     expect(readZaloGroupSettings({}).complaint_cases).toBe(false)
     expect(readZaloGroupSettings({ complaint_cases: true }).complaint_cases).toBe(true)
+  })
+})
+
+describe('complaint days and streams', () => {
+  it('reads defaults and clamps days', () => {
+    expect(readZaloGroupSettings({}).complaint_resolved_days).toBe(14)
+    expect(readZaloGroupSettings({ complaint_resolved_days: 30 }).complaint_resolved_days).toBe(30)
+    expect(readZaloGroupSettings({ complaint_resolved_days: 500 }).complaint_resolved_days).toBe(90)
+    expect(readZaloGroupSettings({}).complaint_streams).toEqual([])
+  })
+
+  it('keys new streams from their name and keeps saved keys', () => {
+    const original = { complaint_streams: [{ key: 'bao_hanh', name: 'Bảo hành', alert_group_id: 'g1' }] }
+    const settings = readZaloGroupSettings(original)
+    settings.complaint_streams[0].name = 'Bảo hành, đổi trả'
+    settings.complaint_streams.push({ key: '', name: 'Đội Marketing', description: ' Khuyến mãi ', alert_group_id: '' })
+    settings.complaint_streams.push({ key: '', name: '  ', description: '', alert_group_id: '' })
+    settings.complaint_resolved_days = 7
+    expect(zaloGroupSettingsPatch(settings, original)).toEqual({
+      complaint_resolved_days: 7,
+      complaint_streams: [
+        { key: 'bao_hanh', name: 'Bảo hành, đổi trả', description: '', alert_group_id: 'g1' },
+        { key: 'doi_marketing', name: 'Đội Marketing', description: 'Khuyến mãi', alert_group_id: '' },
+      ],
+    })
+  })
+
+  it('makes keys unique', () => {
+    expect(streamKey('Bảo hành', new Set(['bao_hanh']))).toBe('bao_hanh_2')
+    expect(streamKey('!!!', new Set())).toBe('luong')
+  })
+
+  it('sends nothing when streams are unchanged', () => {
+    const original = { complaint_streams: [{ key: 'sp', name: 'Sản phẩm', description: '', alert_group_id: '' }] }
+    expect(zaloGroupSettingsPatch(readZaloGroupSettings(original), original)).toEqual({})
   })
 })

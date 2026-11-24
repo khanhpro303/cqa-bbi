@@ -37,7 +37,7 @@
           />
 
           <v-select
-            v-if="aiSettings.provider !== 'openai'"
+            v-if="aiSettings.provider !== 'openai' && aiSettings.provider !== 'openrouter'"
             v-model="aiSettings.model"
             :label="$t('ai_model')"
             :items="modelOptions"
@@ -53,11 +53,23 @@
             item-title="title"
             item-value="value"
             :return-object="false"
-            hint="Chọn model gợi ý hoặc nhập model OpenAI tùy chỉnh"
+            :hint="aiSettings.provider === 'openrouter' ? $t('openrouter_free_models_hint') : 'Chọn model gợi ý hoặc nhập model OpenAI tùy chỉnh'"
+            :loading="loadingOpenRouterModels"
             persistent-hint
             clearable
             class="mb-3"
+            data-testid="ai-model-combobox"
           />
+          <v-btn
+            v-if="aiSettings.provider === 'openrouter'"
+            variant="text"
+            size="small"
+            prepend-icon="mdi-refresh"
+            class="mb-3 px-0"
+            :loading="loadingOpenRouterModels"
+            data-testid="openrouter-load-models"
+            @click="loadOpenRouterModels(true)"
+          >{{ $t('openrouter_load_models') }}</v-btn>
 
           <v-text-field
             v-model="aiSettings.apiKey"
@@ -210,12 +222,13 @@ const tabs = [
   { label: 'facebook_account', value: 'facebook', icon: 'mdi-facebook' },
 ]
 
-type AIProvider = 'claude' | 'gemini' | 'openai'
+type AIProvider = 'claude' | 'gemini' | 'openai' | 'openrouter'
 
 const providerOptions = [
   { title: 'Claude (Anthropic)', value: 'claude' },
   { title: 'Gemini (Google)', value: 'gemini' },
   { title: 'OpenAI (Codex)', value: 'openai' },
+  { title: 'OpenRouter (nhiều hãng, có model free)', value: 'openrouter' },
 ]
 
 const claudeModels = [
@@ -242,13 +255,37 @@ const defaultModelByProvider: Record<AIProvider, string> = {
   claude: 'claude-sonnet-4-6',
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-5.4-mini',
+  openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
 }
 
 const providerApiKeys = reactive<Record<AIProvider, string>>({
   claude: '',
   gemini: '',
   openai: '',
+  openrouter: '',
 })
+
+type OpenRouterModel = { id: string; name: string; context_length?: number; vision?: boolean; json_mode?: boolean }
+const openRouterModels = ref<OpenRouterModel[]>([])
+const loadingOpenRouterModels = ref(false)
+const openRouterModelOptions = computed(() => openRouterModels.value.map(m => {
+  const tags = [m.vision ? 'đọc ảnh' : '', m.json_mode ? 'JSON' : '', m.context_length ? `${Math.round(m.context_length / 1000)}k` : '']
+    .filter(Boolean).join(', ')
+  return { title: tags ? `${m.name} (${tags})` : m.name, value: m.id }
+}))
+
+async function loadOpenRouterModels(force = false) {
+  if (loadingOpenRouterModels.value || (openRouterModels.value.length && !force)) return
+  loadingOpenRouterModels.value = true
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/settings/ai/openrouter-models`)
+    openRouterModels.value = Array.isArray(data?.models) ? data.models : []
+  } catch {
+    showSnack(t('openrouter_load_failed'), 'error')
+  } finally {
+    loadingOpenRouterModels.value = false
+  }
+}
 
 const useCustomBaseUrl = ref(false)
 const aiSettings = reactive<{ provider: AIProvider; model: string; apiKey: string; baseUrl: string; batchMode: boolean; batchSize: number }>({
@@ -274,6 +311,8 @@ const modelOptions = computed(() => {
       return geminiModels
     case 'openai':
       return openAIModels
+    case 'openrouter':
+      return openRouterModelOptions.value
     default:
       return claudeModels
   }
@@ -282,6 +321,7 @@ const modelOptions = computed(() => {
 function onProviderChange() {
   aiSettings.model = defaultModelByProvider[aiSettings.provider]
   aiSettings.apiKey = providerApiKeys[aiSettings.provider] || ''
+  if (aiSettings.provider === 'openrouter') loadOpenRouterModels()
 }
 
 const baseURLPlaceholder = computed(() => {
@@ -292,6 +332,8 @@ const baseURLPlaceholder = computed(() => {
       return 'https://generativelanguage.googleapis.com'
     case 'openai':
       return 'https://api.openai.com/v1'
+    case 'openrouter':
+      return 'https://openrouter.ai/api/v1'
     default:
       return ''
   }
@@ -305,11 +347,13 @@ async function loadSettings() {
     providerApiKeys.claude = settings.ai_api_key_claude || ''
     providerApiKeys.gemini = settings.ai_api_key_gemini || ''
     providerApiKeys.openai = settings.ai_api_key_openai || ''
+    providerApiKeys.openrouter = settings.ai_api_key_openrouter || ''
 
     const provider = (settings.ai_provider as AIProvider) || 'claude'
     aiSettings.provider = provider
 
-    if (!providerApiKeys[provider] && settings.ai_api_key) {
+    if (provider === 'openrouter') loadOpenRouterModels()
+    if (!providerApiKeys[provider] && settings.ai_api_key && provider !== 'openrouter') {
       providerApiKeys[provider] = settings.ai_api_key
     }
     aiSettings.apiKey = providerApiKeys[provider] || ''

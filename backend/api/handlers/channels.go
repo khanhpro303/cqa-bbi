@@ -24,6 +24,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/customercases"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
@@ -289,6 +290,10 @@ func UpdateChannel(c *gin.Context) {
 					return
 				}
 			}
+			if errKey, err := normalizeComplaintSettings(tenantID, merged); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": errKey, "details": err.Error()})
+				return
+			}
 			out, _ := json.Marshal(merged)
 			metadata = string(out)
 		}
@@ -338,6 +343,37 @@ func mergeChannelMetadata(existingRaw, incomingRaw string) (map[string]interface
 		existing[k] = v
 	}
 	return existing, nil
+}
+
+// normalizeComplaintSettings checks the complaint case settings in merged
+// zalo_oa metadata: complaint_resolved_days is a whole number of days
+// (1-90) and every complaint stream is valid and alerts a usable group.
+func normalizeComplaintSettings(tenantID string, merged map[string]interface{}) (string, error) {
+	if v, ok := merged[customercases.MetaResolvedDays]; ok && v != nil {
+		days, isNum := v.(float64)
+		if !isNum || days != float64(int(days)) || days < 1 || days > customercases.MaxResolvedDays {
+			return "invalid_complaint_resolved_days", fmt.Errorf("complaint_resolved_days must be 1-%d", customercases.MaxResolvedDays)
+		}
+	}
+	if raw, ok := merged[customercases.MetaStreams]; ok {
+		streams, err := customercases.NormalizeStreams(raw)
+		if err != nil {
+			return "invalid_complaint_streams", err
+		}
+		for _, s := range streams {
+			if s.AlertGroupID == "" {
+				continue
+			}
+			if err := validateAlertGroup(tenantID, s.AlertGroupID); err != nil {
+				return "invalid_complaint_stream_group", fmt.Errorf("%s: %w", s.Name, err)
+			}
+		}
+		if streams == nil {
+			streams = []customercases.Stream{}
+		}
+		merged[customercases.MetaStreams] = streams
+	}
+	return "", nil
 }
 
 // validateAlertGroup ensures the campaign-alert recipient group exists for the

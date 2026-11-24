@@ -735,72 +735,18 @@ func DeleteZaloCustomer(c *gin.Context) {
 }
 
 func getAIClientForTenant(ctx context.Context, tenantID string) (ai.AIProvider, error) {
-	provider := "claude"
-	var providerSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_provider'", tenantID).First(&providerSetting).Error; err == nil && providerSetting.ValuePlain != "" {
-		provider = providerSetting.ValuePlain
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
 	}
-
-	var setting models.AppSetting
-	keyFound := false
-	for _, key := range ai.ProviderAPIKeySettingKeys(provider) {
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&setting).Error; err == nil {
-			keyFound = true
-			break
-		}
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	if err != nil {
+		return nil, err
 	}
-
-	cfg, _ := config.Load()
-	apiKey := ""
-	if keyFound {
-		if setting.ValueEncrypted != nil && len(setting.ValueEncrypted) > 0 {
-			decrypted, err := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decrypt API key: %w", err)
-			}
-			apiKey = string(decrypted)
-		} else {
-			apiKey = setting.ValuePlain
-		}
+	if resolved.Client == nil {
+		return nil, fmt.Errorf("API key not configured for provider %s", resolved.Provider)
 	}
-
-	if apiKey == "" {
-		if provider == "openai" {
-			apiKey = cfg.LangflowAPIKey
-		}
-	}
-
-	if apiKey == "" {
-		return nil, fmt.Errorf("API key not configured for provider %s", provider)
-	}
-
-	model := "claude-haiku-4-5"
-	if provider == "gemini" {
-		model = "gemini-2.0-flash"
-	} else if provider == "openai" {
-		model = "gpt-5-mini"
-	}
-	var modelSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_model'", tenantID).First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
-		model = modelSetting.ValuePlain
-	}
-
-	var baseURL string
-	var baseURLSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_base_url'", tenantID).First(&baseURLSetting).Error; err == nil {
-		baseURL = baseURLSetting.ValuePlain
-	}
-
-	switch provider {
-	case "claude":
-		return ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL), nil
-	case "gemini":
-		return ai.NewGeminiProvider(apiKey, model, baseURL), nil
-	case "openai":
-		return ai.NewOpenAIProvider(apiKey, model, baseURL), nil
-	default:
-		return nil, fmt.Errorf("unsupported AI provider: %s", provider)
-	}
+	return resolved.Client, nil
 }
 
 // AnalyzeZaloCustomerChat queries the chat history from Astra DB for a customer and runs AI analysis.
