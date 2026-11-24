@@ -25,6 +25,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
 )
 
 // Audience values.
@@ -68,9 +69,34 @@ func NewService(index chatmemory.VectorIndex, embed EmbedFunc) *Service {
 }
 
 var (
-	defaultOnce sync.Once
-	defaultSvc  *Service
+	defaultOnce        sync.Once
+	defaultSvc         *Service
+	documentIndexLocks sync.Map
 )
+
+// LockDocumentIndex serializes vector writes and document changes per tenant
+// and document. Mutations can decline to wait for a long-running index job.
+func LockDocumentIndex(ctx context.Context, tenantID, docID string, wait bool) (release func(), ok bool) {
+	key := [2]string{tenantID, docID}
+	done := make(chan struct{})
+	for ctx.Err() == nil {
+		active, locked := documentIndexLocks.LoadOrStore(key, done)
+		if !locked {
+			return func() {
+				documentIndexLocks.Delete(key)
+				close(done)
+			}, true
+		}
+		if !wait {
+			break
+		}
+		select {
+		case <-active.(chan struct{}):
+		case <-ctx.Done():
+		}
+	}
+	return nil, false
+}
 
 // Default returns the process-wide service built from the environment.
 func Default() *Service {
@@ -157,35 +183,34 @@ func (s *Service) CreateFromFile(in NewDocumentInput, data []byte, parser Parser
 	if err := db.DB.Create(doc).Error; err != nil {
 		return nil, err
 	}
-	go func() {
+	go func(doc models.KnowledgeDocument) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
 		text, used, notice, err := ExtractDocument(ctx, parser, in.FileName, data)
+		cancel()
 		if err != nil {
-			s.fail(doc, err)
+			s.fail(&doc, err)
 			return
 		}
 		in.Text, in.Chunks = text, nil
 		chunks := prepareChunks(in)
 		if len(chunks) == 0 {
-			s.fail(doc, errors.New("document has no text"))
+			s.fail(&doc, errors.New("document has no text"))
 			return
 		}
-		if err := insertChunks(doc, chunks); err != nil {
-			s.fail(doc, err)
+		if err := insertChunks(&doc, chunks, used); err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				s.fail(&doc, fmt.Errorf("save parsed document: %w", err))
+			}
 			return
 		}
-		db.DB.Model(&models.KnowledgeDocument{}).Where("id = ?", doc.ID).Updates(map[string]interface{}{
-			"parser": used, "char_count": doc.CharCount, "chunk_count": doc.ChunkCount, "updated_at": time.Now(),
-		})
-		if err := s.IndexDocument(ctx, doc.ID); err != nil {
+		if err := s.IndexDocument(context.Background(), doc.ID); err != nil {
 			log.Printf("[knowledge] index document %s: %v", doc.ID, err)
 			return
 		}
 		if notice != "" {
 			db.DB.Model(&models.KnowledgeDocument{}).Where("id = ? AND status = ?", doc.ID, StatusReady).Update("error", notice)
 		}
-	}()
+	}(*doc)
 	return doc, nil
 }
 
@@ -258,16 +283,33 @@ func saveDocument(doc *models.KnowledgeDocument, chunks []string) error {
 	return tx.Commit().Error
 }
 
-func insertChunks(doc *models.KnowledgeDocument, chunks []string) error {
-	return db.DB.CreateInBatches(chunkRows(doc, chunks), 200).Error
+func insertChunks(doc *models.KnowledgeDocument, chunks []string, parser string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	release, ok := LockDocumentIndex(ctx, doc.TenantID, doc.ID, true)
+	if !ok {
+		return ctx.Err()
+	}
+	defer release()
+
+	rows := chunkRows(doc, chunks)
+	return db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.KnowledgeDocument{}).Where("tenant_id = ? AND id = ?", doc.TenantID, doc.ID).
+			Updates(map[string]interface{}{"parser": parser, "char_count": doc.CharCount, "chunk_count": doc.ChunkCount})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return tx.CreateInBatches(rows, 200).Error
+	})
 }
 
 // IndexAsync indexes a document in the background.
 func (s *Service) IndexAsync(docID string) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		if err := s.IndexDocument(ctx, docID); err != nil {
+		if err := s.IndexDocument(context.Background(), docID); err != nil {
 			log.Printf("[knowledge] index document %s: %v", docID, err)
 		}
 	}()
@@ -281,18 +323,35 @@ func (s *Service) IndexDocument(ctx context.Context, docID string) error {
 	defer s.indexMu.Unlock()
 
 	var doc models.KnowledgeDocument
-	if err := db.DB.Where("id = ?", docID).First(&doc).Error; err != nil {
+	if err := db.DB.WithContext(ctx).Select("tenant_id").Where("id = ?", docID).First(&doc).Error; err != nil {
+		return err
+	}
+	release, ok := LockDocumentIndex(ctx, doc.TenantID, docID, true)
+	if !ok {
+		return ctx.Err()
+	}
+	defer release()
+
+	// Waiting behind another document and extracting a file do not use this
+	// document's indexing time.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	if err := db.DB.WithContext(ctx).Where("id = ?", docID).First(&doc).Error; err != nil {
 		return err
 	}
 	if doc.Status != StatusProcessing || !doc.Enabled {
 		return nil
 	}
+	if doc.ChunkCount == 0 {
+		return s.fail(&doc, errors.New("document has no extracted text"))
+	}
 	if s.index == nil || s.embed == nil {
 		return markReady(docID, nil)
 	}
 	var chunks []models.KnowledgeChunk
-	if err := db.DB.Where("document_id = ? AND indexed = ?", docID, false).Order("position").Find(&chunks).Error; err != nil {
-		return err
+	if err := db.DB.WithContext(ctx).Where("document_id = ? AND indexed = ?", docID, false).Order("position").Find(&chunks).Error; err != nil {
+		return s.fail(&doc, fmt.Errorf("read unindexed chunks: %w", err))
 	}
 	const batch = 20
 	for start := 0; start < len(chunks); start += batch {
@@ -318,10 +377,15 @@ func (s *Service) IndexDocument(ctx context.Context, docID string) error {
 		if err := s.index.Upsert(ctx, docs); err != nil {
 			return s.fail(&doc, fmt.Errorf("vector upsert: %w", err))
 		}
-		db.DB.Model(&models.KnowledgeChunk{}).Where("id IN ?", ids).Update("indexed", true)
+		if err := db.DB.WithContext(ctx).Model(&models.KnowledgeChunk{}).Where("id IN ?", ids).Update("indexed", true).Error; err != nil {
+			return s.fail(&doc, fmt.Errorf("save indexing progress: %w", err))
+		}
 	}
 	now := time.Now()
-	return markReady(docID, &now)
+	if err := markReady(docID, &now); err != nil {
+		return s.fail(&doc, fmt.Errorf("finish indexing: %w", err))
+	}
+	return nil
 }
 
 // markReady and fail only move a document out of processing, so a document
@@ -370,8 +434,10 @@ func (s *Service) Reindex(ctx context.Context, docID string) error {
 	if err := s.RemoveVectors(ctx, docID); err != nil {
 		return err
 	}
-	db.DB.Model(&models.KnowledgeDocument{}).Where("id = ?", docID).
-		Updates(map[string]interface{}{"status": StatusProcessing, "error": "", "indexed_at": nil, "updated_at": time.Now()})
+	if err := db.DB.Model(&models.KnowledgeDocument{}).Where("id = ?", docID).
+		Updates(map[string]interface{}{"status": StatusProcessing, "error": "", "indexed_at": nil, "archived_at": nil, "updated_at": time.Now()}).Error; err != nil {
+		return err
+	}
 	s.IndexAsync(docID)
 	return nil
 }

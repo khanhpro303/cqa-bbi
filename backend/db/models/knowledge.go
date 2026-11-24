@@ -26,14 +26,18 @@ type KnowledgeDocument struct {
 	// failed").
 	Error string `gorm:"type:text" json:"error,omitempty"`
 	// Parser is how the file was read: "unstructured" or "local".
-	Parser     string     `gorm:"type:varchar(20)" json:"parser"`
-	CharCount  int        `json:"char_count"`
-	ChunkCount int        `json:"chunk_count"`
-	IndexedAt  *time.Time `json:"indexed_at"`
-	CreatedBy  string     `gorm:"type:varchar(255)" json:"created_by"`
-	ArchivedAt *time.Time `json:"archived_at"`
-	CreatedAt  time.Time  `gorm:"not null" json:"created_at"`
-	UpdatedAt  time.Time  `gorm:"not null" json:"updated_at"`
+	Parser string `gorm:"type:varchar(20)" json:"parser"`
+	// Summaries are loaded on the document detail endpoint only.
+	Summary          string     `gorm:"type:text" json:"-"`
+	SummaryAttempted bool       `gorm:"not null;default:false" json:"-"`
+	SummaryStartedAt *time.Time `json:"-"`
+	CharCount        int        `json:"char_count"`
+	ChunkCount       int        `json:"chunk_count"`
+	IndexedAt        *time.Time `json:"indexed_at"`
+	CreatedBy        string     `gorm:"type:varchar(255)" json:"created_by"`
+	ArchivedAt       *time.Time `json:"archived_at"`
+	CreatedAt        time.Time  `gorm:"not null" json:"created_at"`
+	UpdatedAt        time.Time  `gorm:"not null" json:"updated_at"`
 }
 
 func (KnowledgeDocument) TableName() string { return "knowledge_documents" }
