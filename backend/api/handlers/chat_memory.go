@@ -83,7 +83,8 @@ func DeleteChatProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// ListChatSessions lists chatbot sessions. Query: subject_type + subject_id
+// ListChatSessions lists chatbot sessions. Query: id (one session),
+// subject_type + subject_id
 // (one customer or group), channel_id, status, issues ("any" or "high"),
 // alerted ("true"), from / to (YYYY-MM-DD, last activity).
 func ListChatSessions(c *gin.Context) {
@@ -93,8 +94,12 @@ func ListChatSessions(c *gin.Context) {
 	channelID, status, issues := c.Query("channel_id"), c.Query("status"), c.Query("issues")
 	alerted := c.Query("alerted") == "true"
 	from, to := c.Query("from"), c.Query("to")
+	sessionID := c.Query("id")
 	scope := func(tx *gorm.DB) *gorm.DB {
 		tx = tx.Where("tenant_id = ?", tenantID)
+		if sessionID != "" {
+			tx = tx.Where("id = ?", sessionID)
+		}
 		if subjectID != "" {
 			tx = tx.Where("subject_type = ? AND subject_id = ?", subjectType, subjectID)
 		}

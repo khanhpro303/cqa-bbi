@@ -16,6 +16,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/customercases"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
@@ -42,6 +43,8 @@ type Service struct {
 	summarize func(ctx context.Context, tenantID, system, input string) (ai.AIResponse, string, string, error)
 	// embed computes a summary vector; replaced in tests.
 	embed func(ctx context.Context, tenantID, text string) ([]float32, error)
+	// recordCase opens or updates a complaint case; replaced in tests.
+	recordCase func(ctx context.Context, r customercases.Report) (customercases.Outcome, error)
 }
 
 // NewService builds the service from config. The vector index is nil when no
@@ -50,6 +53,7 @@ func NewService(cfg *config.Config) *Service {
 	s := &Service{cfg: cfg, index: NewVectorIndex(cfg)}
 	s.summarize = s.callTenantLLM
 	s.embed = s.embedText
+	s.recordCase = customercases.Record
 	return s
 }
 
@@ -199,6 +203,10 @@ type SummaryIssue struct {
 	Severity string `json:"severity"`
 	Detail   string `json:"detail"`
 	Evidence string `json:"evidence"`
+	// NeedsCase: staff must handle and follow it up, so it goes to the
+	// complaint cases (customercases), merged into an earlier case when the
+	// decision model says it is the same problem.
+	NeedsCase bool `json:"needs_case,omitempty"`
 }
 
 // SummarizeSession summarizes one claimed session and updates its profile.
@@ -270,10 +278,106 @@ func (s *Service) SummarizeSession(ctx context.Context, sessionID string) error 
 		log.Printf("[chat-memory] profile update for session %s: %v", sess.ID, err)
 	}
 
+	handled := s.recordCases(ctx, sess, msgs, result)
 	if sess.AlertedAt == nil {
-		s.alertIssues(ctx, sess, result)
+		s.alertIssues(ctx, sess, result, handled)
 	}
 	return nil
+}
+
+// recordCases sends the session's issues that need staff follow-up to the
+// complaint cases. It returns the indexes of the issues staff already know
+// about through a case (recorded, and alerted now or before); only those are
+// left out of the session alert, so a failed write or alert never loses one.
+func (s *Service) recordCases(ctx context.Context, sess models.ChatSession, msgs []models.Message, r SummaryResult) map[int]bool {
+	handled := map[int]bool{}
+	var ch models.Channel
+	if err := db.DB.WithContext(ctx).Select("id, metadata").Where("id = ?", sess.ChannelID).First(&ch).Error; err != nil {
+		return handled
+	}
+	if !customercases.EnabledFor(ch.Metadata) || sess.AgentType == "private" {
+		// The staff bot's sessions are staff talking to the bot.
+		return handled
+	}
+	if !customerMessagesVerified(msgs) {
+		// A message whose Zalo signature was not checked (webhook mode log
+		// or off) may be forged: no case from it without staff reading it.
+		return handled
+	}
+	if sess.SubjectType == "group" {
+		// A group session mixes senders, and the summary does not say whose
+		// problem an issue is (it may be a guest's, not the group's). The bot
+		// records group complaints per sender during the chat; whatever it
+		// missed stays in the session alert for staff to sort out.
+		return handled
+	}
+	var images []models.CaseImage
+	imagesLoaded := false
+	for i, is := range r.Issues {
+		if !caseIssue(is) {
+			continue
+		}
+		if !imagesLoaded {
+			images = customercases.ConversationImages(ctx, sess.TenantID, sess.ConversationID, sess.StartedAt.Add(-time.Minute), sess.LastActivityAt.Add(time.Minute))
+			imagesLoaded = true
+		}
+		reporter := sess.CustomerName
+		if sess.SubjectType == "group" {
+			reporter = ""
+		}
+		record := s.recordCase
+		if record == nil {
+			record = customercases.Record
+		}
+		out, err := record(ctx, customercases.Report{
+			TenantID: sess.TenantID, ChannelID: sess.ChannelID, SubjectType: sess.SubjectType, SubjectID: sess.SubjectID,
+			ZaloUserID: sess.ZaloUserID, ZaloGroupID: sess.ZaloGroupID, ReporterName: reporter,
+			CustomerName: sess.CustomerName, CustomerCode: sess.CustomerCode, ChatGroup: groupNameOf(sess), SessionID: sess.ID,
+			Source: customercases.SourceSummary, Type: is.Type, Severity: is.Severity,
+			Title: is.Detail, Detail: r.Summary, Evidence: is.Evidence, Images: images,
+		})
+		if err != nil {
+			log.Printf("[chat-memory] case for session %s: %v", sess.ID, err)
+			continue
+		}
+		log.Printf("[chat-memory] session %s issue → case %s (%s, staff_notified=%t)", sess.ID, out.Case.ID, out.Action, out.StaffNotified)
+		handled[i] = out.StaffNotified
+	}
+	return handled
+}
+
+// customerMessagesVerified reports whether every customer message of the
+// session came from a webhook with a verified Zalo signature (the worker
+// stores the payload, with cqa_signature_verified, under raw_data.webhook).
+func customerMessagesVerified(msgs []models.Message) bool {
+	seen := false
+	for _, m := range msgs {
+		if m.SenderType != "customer" {
+			continue
+		}
+		seen = true
+		var raw struct {
+			Webhook struct {
+				Verified bool `json:"cqa_signature_verified"`
+			} `json:"webhook"`
+		}
+		if json.Unmarshal([]byte(m.RawData), &raw) != nil || !raw.Webhook.Verified {
+			return false
+		}
+	}
+	return seen
+}
+
+// caseIssue reports whether a summary issue goes to the complaint cases.
+func caseIssue(is SummaryIssue) bool {
+	return is.NeedsCase && is.Type != "bot_failure"
+}
+
+func groupNameOf(sess models.ChatSession) string {
+	if sess.SubjectType == "group" {
+		return sess.CustomerName
+	}
+	return ""
 }
 
 // SessionMessages returns the transcript of a session, oldest first.
@@ -381,7 +485,7 @@ const summaryOutputFormat = `ĐỊNH DẠNG TRẢ VỀ: DUY NHẤT một đối 
   "products": ["..."],
   "outcome": "answered | partially_answered | unanswered | handover | order_intent | abandoned | other",
   "sentiment": "positive | neutral | negative",
-  "issues": [{"type": "complaint | delivery | product_defect | price | payment | bot_failure | staff_request | other", "severity": "low | medium | high", "detail": "mô tả ngắn", "evidence": "trích lời khách"}],
+  "issues": [{"type": "complaint | delivery | product_defect | price | payment | bot_failure | staff_request | other", "severity": "low | medium | high", "detail": "mô tả ngắn", "evidence": "trích lời khách", "needs_case": true | false}],
   "profile": {"address_form": "", "communication_style": "", "active_hours": "", "interests": [], "price_behavior": "", "service_notes": [], "risk_flags": []},
   "card": "tối đa 500 ký tự"
 }`
@@ -472,13 +576,23 @@ func upsertProfile(ctx context.Context, sess models.ChatSession, existing models
 	}).Create(&row).Error
 }
 
-func (s *Service) alertIssues(ctx context.Context, sess models.ChatSession, r SummaryResult) {
+// sessionAlertIssues are the issues alerted as a session alert: high ones,
+// except those staff already know about through a case (handled).
+func sessionAlertIssues(r SummaryResult, handled map[int]bool) []engine.SessionIssue {
 	var serious []engine.SessionIssue
-	for _, is := range r.Issues {
+	for i, is := range r.Issues {
+		if handled[i] {
+			continue
+		}
 		if is.Severity == "high" {
 			serious = append(serious, engine.SessionIssue{Type: is.Type, Severity: is.Severity, Detail: is.Detail, Evidence: is.Evidence})
 		}
 	}
+	return serious
+}
+
+func (s *Service) alertIssues(ctx context.Context, sess models.ChatSession, r SummaryResult, handled map[int]bool) {
+	serious := sessionAlertIssues(r, handled)
 	if len(serious) == 0 {
 		return
 	}

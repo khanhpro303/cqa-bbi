@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,9 @@ import (
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/workers"
 )
+
+// zaloWebhookSink replaces the queue in tests.
+var zaloWebhookSink func(workers.ZaloWebhookPayload)
 
 // ZaloWebhookHandler processes incoming Zalo OA webhooks
 func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
@@ -31,16 +35,13 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 	}
 
 	signatureMode := zaloSignatureMode(cfg)
-	if cfg.ZaloWebhookSignature != "" && cfg.ZaloWebhookSignature != signatureMode {
-		log.Printf("[zalo-webhook] ERROR: unknown ZALO_WEBHOOK_SIGNATURE=%q; enforcing signatures (valid: off, log, enforce)", cfg.ZaloWebhookSignature)
-	}
 	switch {
 	case signatureMode == zaloSignatureOff:
-		log.Printf("[zalo-webhook] WARNING: ZALO_WEBHOOK_SIGNATURE=off: webhook signatures are not checked. Anyone who knows the URL can send messages as any Zalo user.")
+		log.Printf("[zalo-webhook] WARNING: ZALO_WEBHOOK_SIGNATURE=off: webhook signatures are not checked. Anyone who knows the URL can send messages as any Zalo user. Use only on a developer machine.")
 	case signatureMode == zaloSignatureLog:
-		log.Printf("[zalo-webhook] WARNING: ZALO_WEBHOOK_SIGNATURE=log: bad signatures are only logged, not dropped. Switch to enforce once \"signature verified\" appears.")
+		log.Printf("[zalo-webhook] WARNING: ZALO_WEBHOOK_SIGNATURE=log: bad signatures are only logged. Remove it once the secret is verified.")
 	case cfg.ZaloOAWebhookSecret == "":
-		log.Printf("[zalo-webhook] ERROR: signatures are enforced but ZALO_OA_SECRET_KEY is empty: every Zalo webhook will be rejected. Set the OA Secret Key (or ZALO_WEBHOOK_SIGNATURE=off for local development only).")
+		log.Printf("[zalo-webhook] ERROR: ZALO_OA_SECRET_KEY is not set: every Zalo webhook will be rejected (set the secret, or ZALO_WEBHOOK_SIGNATURE=off on a developer machine)")
 	}
 	var firstVerified sync.Once
 
@@ -63,10 +64,14 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		// Set here, never taken from the body: only a verified event may
+		// write complaint cases (workers.ZaloWebhookPayload.SignatureVerified).
+		payload.SignatureVerified = false
 		if signatureMode != zaloSignatureOff {
 			ok := verifyZaloSignature(c.GetHeader("X-ZEvent-Signature"), payload.AppID, bodyBytes, payload.Timestamp, cfg.ZaloOAWebhookSecret)
 			switch {
 			case ok:
+				payload.SignatureVerified = true
 				firstVerified.Do(func() { log.Printf("[zalo-webhook] signature verified (mode=%s)", signatureMode) })
 			case signatureMode == zaloSignatureEnforce:
 				log.Printf("[zalo-drop] reason=bad_signature event=%s sender=%s ip=%s", payload.EventName, payload.Sender.ID, c.ClientIP())
@@ -77,13 +82,26 @@ func ZaloWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 			}
 		}
 
-		// Always return 200 OK to Zalo quickly
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-
-		if (payload.EventName != "user_send_text" && payload.EventName != "user_send_group_text") || (payload.Message.Text == "" && len(payload.Message.Attachments) == 0) {
+		// A signed event can be captured and sent again. Within
+		// zaloWebhookDedupeWindow the msg_id dedupe drops it; past that its
+		// timestamp (covered by the signature) is too old.
+		if payload.SignatureVerified && staleZaloEvent(payload.Timestamp, time.Now()) {
+			log.Printf("[zalo-drop] reason=stale_event event=%s sender=%s timestamp=%s ip=%s", payload.EventName, payload.Sender.ID, payload.Timestamp, c.ClientIP())
+			c.JSON(http.StatusOK, gin.H{"status": "ignored"})
 			return
 		}
 
+		// Always return 200 OK to Zalo quickly
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+
+		if !acceptedZaloEvent(payload.EventName) || (payload.Message.Text == "" && len(payload.Message.Attachments) == 0) {
+			return
+		}
+
+		if zaloWebhookSink != nil {
+			zaloWebhookSink(payload)
+			return
+		}
 		// Process async via Asynq if available
 		if asynqClient == nil {
 			log.Printf("[zalo-webhook] REDIS_URL not configured; dropping %s from Zalo user %s", payload.EventName, payload.Sender.ID)
@@ -129,6 +147,25 @@ func zaloTaskOptions(payload workers.ZaloWebhookPayload) []asynq.Option {
 
 const zaloWebhookMaxBody = 1 << 20
 
+// zaloClockSkew is how far in the future a Zalo timestamp may be.
+const zaloClockSkew = 5 * time.Minute
+
+// staleZaloEvent reports whether a webhook's millisecond timestamp is older
+// than the dedupe window (or implausibly far ahead), so a replayed event
+// cannot outlive the msg_id dedupe. A missing timestamp fails the signature
+// check already; an unparsable one is treated as stale.
+func staleZaloEvent(ts string, now time.Time) bool {
+	ms, err := strconv.ParseInt(strings.TrimSpace(ts), 10, 64)
+	if err != nil || ms <= 0 {
+		return true
+	}
+	at := time.UnixMilli(ms)
+	// An event up to zaloClockSkew ahead is accepted; it must go stale
+	// before its dedupe entry (kept zaloWebhookDedupeWindow after it was
+	// queued, i.e. after now) expires.
+	return now.Sub(at) > zaloWebhookDedupeWindow-zaloClockSkew || at.Sub(now) > zaloClockSkew
+}
+
 const (
 	zaloSignatureOff     = "off"
 	zaloSignatureLog     = "log"
@@ -136,14 +173,19 @@ const (
 )
 
 // zaloSignatureMode picks how strictly Zalo webhook signatures are checked.
-// It fails closed: unless ZALO_WEBHOOK_SIGNATURE is explicitly "off" or "log",
-// every webhook must carry a valid signature. A missing secret or a mistyped
-// mode therefore rejects webhooks instead of letting anyone who knows the URL
-// send messages as any Zalo user (and, through them, drive bot writes).
+// It fails closed: unless ZALO_WEBHOOK_SIGNATURE is exactly log (testing a
+// new secret) or off (a developer machine), unsigned and badly signed events
+// are dropped, and without ZALO_OA_SECRET_KEY that is every event.
 func zaloSignatureMode(cfg *config.Config) string {
 	switch cfg.ZaloWebhookSignature {
-	case zaloSignatureOff, zaloSignatureLog, zaloSignatureEnforce:
-		return cfg.ZaloWebhookSignature
+	case zaloSignatureOff:
+		return zaloSignatureOff
+	case zaloSignatureLog:
+		// log is for checking a secret; without one there is nothing to
+		// check, so it stays closed.
+		if cfg.ZaloOAWebhookSecret != "" {
+			return zaloSignatureLog
+		}
 	}
 	return zaloSignatureEnforce
 }
@@ -161,4 +203,15 @@ func verifyZaloSignature(header, appID string, body []byte, timestamp, secret st
 	sum := sha256.Sum256([]byte(appID + string(body) + timestamp + secret))
 	want := hex.EncodeToString(sum[:])
 	return subtle.ConstantTimeCompare([]byte(strings.ToLower(got)), []byte(want)) == 1
+}
+
+// acceptedZaloEvent reports whether a Zalo webhook event reaches the bot:
+// text, and images (the bot reads them, see workers/image_reader.go), in
+// 1:1 and group chats.
+func acceptedZaloEvent(name string) bool {
+	switch name {
+	case "user_send_text", "user_send_group_text", "user_send_image", "user_send_group_image":
+		return true
+	}
+	return false
 }

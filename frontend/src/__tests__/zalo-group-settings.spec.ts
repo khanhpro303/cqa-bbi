@@ -65,3 +65,10 @@ describe('Zalo group settings', () => {
     })
   })
 })
+
+describe('complaint cases switch', () => {
+  it('is off until turned on', () => {
+    expect(readZaloGroupSettings({}).complaint_cases).toBe(false)
+    expect(readZaloGroupSettings({ complaint_cases: true }).complaint_cases).toBe(true)
+  })
+})

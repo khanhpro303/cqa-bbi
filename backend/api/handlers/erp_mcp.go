@@ -108,7 +108,7 @@ func ERPMCP(c *gin.Context) {
 		reply(gin.H{})
 	case "tools/list":
 		tools := append(append([]erpMCPTool{}, erpMCPTools...), listedOrderTools()...)
-		tools = append(tools, knowledgeMCPTool(tenantID))
+		tools = append(tools, knowledgeMCPTool(tenantID), complaintMCPTool())
 		reply(gin.H{"tools": tools})
 	case "tools/call":
 		var params struct {
@@ -121,6 +121,10 @@ func ERPMCP(c *gin.Context) {
 		}
 		if params.Name == knowledgeMCPToolName {
 			reply(handleKnowledgeTool(c.Request.Context(), tenantID, resolveAgentType(tenantID, token), params.Arguments))
+			return
+		}
+		if params.Name == complaintMCPToolName {
+			reply(handleComplaintTool(c.Request.Context(), tenantID, resolveAgentType(tenantID, token), c.GetHeader("X-Permission-Token"), params.Arguments))
 			return
 		}
 		if tool, ok := findCartTool(params.Name); ok {

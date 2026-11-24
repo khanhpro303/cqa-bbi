@@ -101,6 +101,8 @@ type Inbound struct {
 	MessageID   string
 	Text        string
 	ContentType string
+	// Attachments is stored as the message's attachments JSON (nil = none).
+	Attachments interface{}
 	SenderName  string
 	SentAt      time.Time
 	Raw         interface{}
@@ -134,8 +136,15 @@ func RecordInbound(ctx context.Context, t Turn, in Inbound) {
 	if senderName == "" {
 		senderName = t.CustomerName
 	}
+	attachments := "[]"
+	if in.Attachments != nil {
+		if b, err := json.Marshal(in.Attachments); err == nil && string(b) != "null" {
+			attachments = string(b)
+		}
+	}
 	if err := record(ctx, t, recordedMessage{
 		ExternalID:  in.MessageID,
+		Attachments: attachments,
 		SenderType:  "customer",
 		SenderName:  senderName,
 		SenderExtID: t.ZaloUserID,
@@ -239,6 +248,7 @@ type recordedMessage struct {
 	SenderExtID string
 	Content     string
 	ContentType string
+	Attachments string
 	SentAt      time.Time
 	Raw         map[string]interface{}
 }
@@ -369,6 +379,9 @@ func insertMessage(tx *gorm.DB, tenantID, convID string, m recordedMessage) (boo
 		}
 	}
 	rawJSON, _ := json.Marshal(m.Raw)
+	if m.Attachments == "" {
+		m.Attachments = "[]"
+	}
 	msg := models.Message{
 		ID:                pkg.NewUUID(),
 		TenantID:          tenantID,
@@ -379,7 +392,7 @@ func insertMessage(tx *gorm.DB, tenantID, convID string, m recordedMessage) (boo
 		SenderExternalID:  m.SenderExtID,
 		Content:           m.Content,
 		ContentType:       m.ContentType,
-		Attachments:       "[]",
+		Attachments:       m.Attachments,
 		SentAt:            m.SentAt,
 		RawData:           string(rawJSON),
 		CreatedAt:         time.Now(),
