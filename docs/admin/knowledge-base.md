@@ -86,8 +86,12 @@ liệt kê 1 job nên không tốn phí.
 - **Tải tài liệu**: PDF (có lớp chữ, PDF scan cần OCR trước), DOCX, XLSX, TXT,
   MD, CSV, HTML; tối đa 20 MB mỗi tệp. Chọn "Ai được dùng".
 - **Nhập văn bản**: dán nội dung trực tiếp.
-- **Thử hỏi như bot**: chạy đúng phép tìm mà bot chạy, với tư cách khách hoặc
-  nhân viên.
+- **Chat thử**: xem câu trả lời từ flow Langflow đã cấu hình trong một phiên thử
+  riêng, với flow ID và API key được lưu trong AI Engine của tenant. Phiên này
+  có quyền tra tài liệu qua CQA. Chủ tài khoản và quản trị viên có thể thử thêm
+  flow nội bộ.
+- **Tìm tài liệu**: tra trực tiếp các đoạn liên quan và xem điểm khớp. Chọn vai
+  trò khách hàng hoặc nhân viên để kiểm tra phạm vi tài liệu.
 - **Bật/tắt**: tắt thì bot không dùng nữa (xoá vector), bật lại thì lập chỉ mục lại.
 - **Lưu trữ / Khôi phục**: xoá mềm. **Xoá vĩnh viễn** chỉ cho owner/admin và
   chỉ với tài liệu đã lưu trữ.
@@ -100,7 +104,7 @@ liệt kê 1 job nên không tốn phí.
 
 1. Deploy, mở trang Tài liệu chatbot, dùng "Nhập từ Astra cũ" với database
    `bbi` (keyspace/collection `bbi_rag`), hoặc tải lại các tệp gốc.
-2. Thử vài câu hỏi trong ô "Thử hỏi như bot".
+2. Dùng "Tìm tài liệu" để kiểm tra các đoạn liên quan.
 3. Trên Langflow, làm mới tool của node MCP Tools ở flow Int_v2 và Ext_v2.
-4. Khi bot đã trả lời đúng qua `search_knowledge`, có thể bỏ node KnowledgeDB
+4. Dùng "Chat thử" để xem câu trả lời của flow. Khi bot đã trả lời đúng qua `search_knowledge`, có thể bỏ node KnowledgeDB
    (nếu flow còn) để bot chỉ có một nguồn tài liệu, quản lý ở CQA.

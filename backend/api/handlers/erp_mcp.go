@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/config"
 )
 
 type erpMCPTool struct {
@@ -59,7 +60,16 @@ func ERPMCP(c *gin.Context) {
 
 	tenantID := c.Param("tenantId")
 	token := c.GetHeader("X-Agent-Token")
-	if token == "" || resolveAgentType(tenantID, token) == "" {
+	preview := strings.HasPrefix(token, knowledgePreviewTokenPrefix)
+	var agentType string
+	if preview {
+		if cfg, err := config.Load(); err == nil {
+			agentType = resolveKnowledgePreviewAgent(cfg.EncryptionKey, tenantID, token)
+		}
+	} else if token != "" {
+		agentType = resolveAgentType(tenantID, token)
+	}
+	if agentType == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -107,6 +117,10 @@ func ERPMCP(c *gin.Context) {
 	case "ping":
 		reply(gin.H{})
 	case "tools/list":
+		if preview {
+			reply(gin.H{"tools": []erpMCPTool{knowledgeMCPTool(tenantID)}})
+			return
+		}
 		tools := append(append([]erpMCPTool{}, erpMCPTools...), listedOrderTools()...)
 		tools = append(tools, knowledgeMCPTool(tenantID), complaintMCPTool())
 		reply(gin.H{"tools": tools})
@@ -120,19 +134,23 @@ func ERPMCP(c *gin.Context) {
 			return
 		}
 		if params.Name == knowledgeMCPToolName {
-			reply(handleKnowledgeTool(c.Request.Context(), tenantID, resolveAgentType(tenantID, token), params.Arguments))
+			reply(handleKnowledgeTool(c.Request.Context(), tenantID, agentType, params.Arguments))
+			return
+		}
+		if preview {
+			fail(-32602, "Tool unavailable in knowledge preview")
 			return
 		}
 		if params.Name == complaintMCPToolName {
-			reply(handleComplaintTool(c.Request.Context(), tenantID, resolveAgentType(tenantID, token), c.GetHeader("X-Permission-Token"), params.Arguments))
+			reply(handleComplaintTool(c.Request.Context(), tenantID, agentType, c.GetHeader("X-Permission-Token"), params.Arguments))
 			return
 		}
 		if tool, ok := findCartTool(params.Name); ok {
-			reply(handleCartTool(c.Request.Context(), tenantID, resolveAgentType(tenantID, token), c.GetHeader("X-Permission-Token"), tool, params.Arguments))
+			reply(handleCartTool(c.Request.Context(), tenantID, agentType, c.GetHeader("X-Permission-Token"), tool, params.Arguments))
 			return
 		}
 		if tool, ok := findOrderTool(params.Name); ok {
-			reply(handleOrderDraftTool(c.Request.Context(), tenantID, resolveAgentType(tenantID, token), c.GetHeader("X-Permission-Token"), tool, params.Arguments))
+			reply(handleOrderDraftTool(c.Request.Context(), tenantID, agentType, c.GetHeader("X-Permission-Token"), tool, params.Arguments))
 			return
 		}
 		for _, tool := range erpMCPTools {

@@ -11,28 +11,7 @@
       {{ $t('kb_keyword_only') }}
     </v-alert>
 
-    <!-- Try a question -->
-    <v-card class="pa-4 mb-4">
-      <div class="text-subtitle-1 font-weight-medium mb-2">{{ $t('kb_try_title') }}</div>
-      <v-row dense>
-        <v-col cols="12" md="7">
-          <v-text-field v-model="tryQuery" :label="$t('kb_try_query')" density="compact" hide-details prepend-inner-icon="mdi-magnify" @keyup.enter="runSearch" />
-        </v-col>
-        <v-col cols="8" md="3">
-          <v-select v-model="tryAgent" :items="agentOptions" :label="$t('kb_try_as')" density="compact" hide-details />
-        </v-col>
-        <v-col cols="4" md="2">
-          <v-btn color="primary" block :loading="searching" :disabled="!tryQuery.trim()" @click="runSearch">{{ $t('kb_try_run') }}</v-btn>
-        </v-col>
-      </v-row>
-      <div v-if="searched" class="mt-3">
-        <div v-if="hits.length === 0" class="text-medium-emphasis">{{ $t('kb_try_no_hits') }}</div>
-        <v-sheet v-for="(h, i) in hits" :key="i" class="pa-3 mb-2 rounded" color="surface-variant">
-          <div class="text-caption text-medium-emphasis mb-1">{{ h.title }} · {{ $t('kb_score') }} {{ h.score.toFixed(3) }}</div>
-          <div class="passage">{{ h.content }}</div>
-        </v-sheet>
-      </div>
-    </v-card>
+    <KnowledgePlayground :base="base" :is-admin="isAdmin" />
 
     <div class="d-flex flex-wrap align-center ga-2 mb-3">
       <v-tabs v-model="view" color="primary" density="compact" @update:model-value="load">
@@ -244,6 +223,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import KnowledgePlayground from '../components/KnowledgePlayground.vue'
 import { useAuthStore } from '../stores/auth'
 
 export interface KnowledgeDoc {
@@ -262,7 +242,6 @@ export interface KnowledgeDoc {
   created_at: string
 }
 type Summary = { status: 'missing' | 'processing' | 'ready' | 'failed'; text?: string }
-interface Hit { title: string; content: string; score: number }
 
 const { t } = useI18n()
 const route = useRoute()
@@ -286,11 +265,6 @@ const audienceOptions = computed(() => [
   { title: t('kb_audience_public'), value: 'public' },
   { title: t('kb_audience_internal'), value: 'internal' },
 ])
-const agentOptions = computed(() => [
-  { title: t('kb_as_customer'), value: 'public' },
-  { title: t('kb_as_staff'), value: 'private' },
-])
-
 const snack = ref(false)
 const snackText = ref('')
 const snackColor = ref('success')
@@ -602,26 +576,6 @@ async function saveDoc() {
   }
 }
 
-// Try a question
-const tryQuery = ref('')
-const tryAgent = ref<'public' | 'private'>('public')
-const searching = ref(false)
-const searched = ref(false)
-const hits = ref<Hit[]>([])
-async function runSearch() {
-  if (!tryQuery.value.trim()) return
-  searching.value = true
-  try {
-    const { data } = await api.post(`${base.value}/search`, { query: tryQuery.value, agent_type: tryAgent.value })
-    hits.value = data?.hits || []
-    searched.value = true
-  } catch (e) {
-    notify(errMsg(e), 'error')
-  } finally {
-    searching.value = false
-  }
-}
-
 // Astra import
 const importDialog = ref(false)
 const importForm = ref({ api_endpoint: '', token: '', keyspace: 'bbi_rag', collection: 'bbi_rag', audience: 'public' })
@@ -666,11 +620,10 @@ function formatDateTime(v: string) {
   return new Date(v).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' })
 }
 
-defineExpose({ load, documents, parser, upload, uploadFiles, runSearch, tryQuery, tryAgent, hits, patchDoc, archive, vectorStore })
+defineExpose({ load, documents, parser, upload, uploadFiles, patchDoc, archive, vectorStore })
 </script>
 
 <style scoped>
-.passage { white-space: pre-wrap; font-size: 0.9rem; }
 .document-table { border-color: rgba(var(--v-border-color), var(--v-border-opacity)); }
 .document-link {
   appearance: none;
