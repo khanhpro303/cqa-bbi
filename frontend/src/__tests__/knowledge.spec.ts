@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import Knowledge from '../views/Knowledge.vue'
+import KnowledgePlayground from '../components/KnowledgePlayground.vue'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() }))
 vi.mock('../api', () => ({ default: mocks }))
@@ -14,7 +15,7 @@ const doc = { id: 'd1', title: 'Bảo hành', file_name: 'bh.pdf', source: 'uplo
 describe('Knowledge page', () => {
   beforeEach(() => {
     mocks.get.mockReset().mockResolvedValue({ data: { documents: [doc], vector_store: 'none', supported_extensions: ['.pdf'], max_upload_mb: 20 } })
-    mocks.post.mockReset().mockResolvedValue({ data: { hits: [{ title: 'Bảo hành', content: '12 tháng', score: 0.9 }] } })
+    mocks.post.mockReset().mockResolvedValue({ data: {} })
     mocks.patch.mockReset().mockResolvedValue({ data: {} })
   })
 
@@ -28,14 +29,13 @@ describe('Knowledge page', () => {
     expect(wrapper.find('[data-testid="kb-keyword-warning"]').exists()).toBe(true)
   })
 
-  it('tests a question as the customer bot', async () => {
+  it('mounts the playground in the current tenant', () => {
     const wrapper = shallowMount(Knowledge, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
-    await flushPromises()
-    const vm = wrapper.vm as any
-    vm.tryQuery = 'bảo hành bao lâu'
-    await vm.runSearch()
-    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/knowledge/search', { query: 'bảo hành bao lâu', agent_type: 'public' })
-    expect(vm.hits[0].content).toBe('12 tháng')
+    expect(wrapper.getComponent(KnowledgePlayground).props()).toEqual({
+      base: '/tenants/tenant-1/knowledge',
+      isAdmin: true,
+    })
+    wrapper.unmount()
   })
 
   it('uploads each file as multipart with the chosen audience', async () => {
