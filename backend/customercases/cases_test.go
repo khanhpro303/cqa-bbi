@@ -61,6 +61,14 @@ func TestRenderForBotHasNoIDs(t *testing.T) {
 			t.Errorf("render missing %q: %s", want, out)
 		}
 	}
+	done := time.Date(2026, 11, 20, 9, 30, 0, 0, time.UTC)
+	out = RenderForBot([]models.CustomerCase{{Type: "delivery", Title: "Giao thiếu", Status: StatusResolved, ResolvedAt: &done,
+		CustomerUpdate: "Đã giao bù", CreatedAt: done}}, time.UTC)
+	for _, want := range []string{"Đã xử lý xong lúc 09:30 20/11", "Nhân viên cho phép báo khách: Đã giao bù"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("resolved render missing %q: %s", want, out)
+		}
+	}
 	if RenderForBot(nil, time.UTC) != "(không có)" {
 		t.Error("empty list")
 	}

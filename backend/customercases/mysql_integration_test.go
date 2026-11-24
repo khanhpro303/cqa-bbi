@@ -512,3 +512,38 @@ func TestRecordRetryAndReopenCooldownMySQL(t *testing.T) {
 		t.Fatalf("follow-up after an undelivered reopen must alert: %+v %v alerts %d→%d", out, err, before, len(*alerts))
 	}
 }
+
+// The bot sees open cases and cases resolved in the last 14 days (so it can
+// tell a customer who asks that the problem was handled), never cancelled or
+// long-resolved ones.
+func TestBotContextListsRecentlyResolvedMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channelID := setupTenant(t)
+	now := time.Now()
+	recent, old := now.Add(-2*24*time.Hour), now.Add(-20*24*time.Hour)
+	mk := func(title, status string, resolvedAt *time.Time, update string) {
+		c := models.CustomerCase{ID: pkg.NewUUID(), TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-bot",
+			Type: "product_defect", Severity: "medium", Title: title, Status: status, ResolvedAt: resolvedAt, CustomerUpdate: update,
+			Images: "[]", Source: SourceBot, CreatedAt: now, UpdatedAt: now}
+		if err := db.DB.Create(&c).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("Kính FF800 nứt", StatusOpen, nil, "")
+	mk("Giao thiếu 2 hộp", StatusResolved, &recent, "Đã giao bù 2 hộp sáng nay")
+	mk("Sai giá cũ", StatusResolved, &old, "")
+	mk("Báo nhầm", StatusCancelled, &recent, "")
+
+	out := BotContext(ctx, tenantID, "user", "zu-bot", "", func(cases string) string { return cases })
+	for _, want := range []string{"Kính FF800 nứt", "Giao thiếu 2 hộp", "Đã xử lý xong lúc", "Đã giao bù 2 hộp sáng nay"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bot context missing %q:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"Sai giá cũ", "Báo nhầm"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("bot context should not list %q:\n%s", bad, out)
+		}
+	}
+}

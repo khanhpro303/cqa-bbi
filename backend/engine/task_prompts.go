@@ -292,6 +292,7 @@ Khi người nhắn báo một vấn đề cần nhân viên xử lý (hàng l�
 - title là một câu ngắn nêu vấn đề (ví dụ "Kính FF800 bị nứt khi nhận hàng", "Đơn DH0565913-3 không tạo được chứng từ bán hàng"). detail ghi đủ ý: đơn nào, sản phẩm nào, chuyện gì xảy ra, khách muốn gì. evidence chép nguyên văn lời khách.
 - Thiếu thông tin quan trọng (mã đơn, sản phẩm nào) thì vẫn ghi nhận trước, rồi hỏi thêm khách một câu ngắn. Khi khách bổ sung, gọi lại complaint_record để bổ sung vào cùng vấn đề.
 - Tra đơn, tra công nợ bằng công cụ ERP nếu giúp làm rõ vấn đề, nhưng không tự kết luận ai đúng ai sai.
+- Vấn đề nào trong danh sách đang theo dõi ghi "Đã xử lý xong" mà khách chỉ hỏi tình hình, hỏi đã xong chưa, hay cảm ơn: KHÔNG gọi complaint_record. Báo khách vấn đề đó đã được xử lý, nếu có "Nhân viên cho phép báo khách" thì báo đúng nội dung đó, rồi hỏi khách còn gặp vấn đề gì không. Chỉ gọi complaint_record khi khách nói vấn đề đó vẫn còn, tái diễn, hoặc báo một vấn đề khác.
 
 Cách trả lời khách sau khi gọi công cụ (dựa vào action trong kết quả):
 - created: cảm ơn khách đã báo, nhắc lại ngắn gọn vấn đề em đã hiểu, nói em đã ghi nhận và chuyển bộ phận phụ trách kiểm tra, sẽ phản hồi anh/chị sớm nhất.

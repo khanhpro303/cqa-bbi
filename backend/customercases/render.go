@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -24,6 +25,9 @@ func RenderForBot(cases []models.CustomerCase, loc *time.Location) string {
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "- %s: %s (báo lúc %s; %s", TypeLabel(c.Type), oneLine(StripRefs(c.Title)), c.CreatedAt.In(loc).Format("15:04 02/01"), StatusLabel(c.Status))
+		if c.Status == StatusResolved && c.ResolvedAt != nil {
+			fmt.Fprintf(&b, " lúc %s", c.ResolvedAt.In(loc).Format("15:04 02/01"))
+		}
 		if c.FollowupCount > 0 {
 			fmt.Fprintf(&b, "; khách đã hỏi lại %d lần", c.FollowupCount)
 		}
@@ -36,9 +40,19 @@ func RenderForBot(cases []models.CustomerCase, loc *time.Location) string {
 }
 
 // BotContext returns the complaint guide (task prompt complaint_bot_guide)
-// with the chat's open cases, for the bot's system prompt.
+// with the chat's open cases and recently resolved ones, for the bot's
+// system prompt. Resolved cases are listed so the bot can tell a customer
+// who asks about one that it was handled, instead of recording the question
+// as the problem coming back (which reopens the case).
 func BotContext(ctx context.Context, tenantID, subjectType, subjectID, customerCode string, build func(cases string) string) string {
-	cases := OpenCases(ctx, tenantID, subjectType, subjectID, customerCode)
+	var cases []models.CustomerCase
+	if db.DB != nil && tenantID != "" && subjectID != "" {
+		rows, err := Candidates(ctx, tenantID, subjectType, subjectID, customerCode)
+		if err != nil {
+			log.Printf("[cases] bot cases for %s/%s: %v", subjectType, subjectID, err)
+		}
+		cases = rows
+	}
 	return build(RenderForBot(cases, location(tenantID)))
 }
 
