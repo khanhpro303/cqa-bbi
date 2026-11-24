@@ -22,7 +22,6 @@
       <template v-if="canEdit">
         <v-btn color="primary" prepend-icon="mdi-upload" @click="uploadDialog = true">{{ $t('kb_upload') }}</v-btn>
         <v-btn variant="outlined" prepend-icon="mdi-text-box-plus-outline" @click="textDialog = true">{{ $t('kb_add_text') }}</v-btn>
-        <v-btn v-if="isAdmin" variant="text" prepend-icon="mdi-database-import-outline" @click="importDialog = true">{{ $t('kb_import_astra') }}</v-btn>
       </template>
     </div>
 
@@ -120,32 +119,6 @@
           <v-spacer />
           <v-btn variant="text" @click="textDialog = false">{{ $t('cancel') }}</v-btn>
           <v-btn color="primary" variant="flat" :loading="savingText" :disabled="!textTitle.trim() || !textContent.trim()" @click="saveText">{{ $t('save') }}</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-
-    <!-- Astra import -->
-    <v-dialog v-model="importDialog" max-width="620px">
-      <v-card>
-        <v-card-title>{{ $t('kb_import_astra') }}</v-card-title>
-        <v-card-text>
-          <div class="text-body-2 mb-3">{{ $t('kb_import_desc') }}</div>
-          <v-text-field v-model="importForm.api_endpoint" label="API endpoint" placeholder="https://<id>-<region>.apps.astra.datastax.com" density="compact" />
-          <v-text-field v-model="importForm.token" label="Application token" type="password" autocomplete="off" density="compact" />
-          <v-row dense>
-            <v-col cols="6"><v-text-field v-model="importForm.keyspace" label="Keyspace" density="compact" /></v-col>
-            <v-col cols="6"><v-text-field v-model="importForm.collection" label="Collection" density="compact" /></v-col>
-          </v-row>
-          <v-select v-model="importForm.audience" :items="audienceOptions" :label="$t('kb_col_audience')" density="compact" />
-          <v-alert v-if="importResult" type="success" variant="tonal" density="compact">
-            {{ $t('kb_import_done', { docs: importResult.documents, chunks: importResult.chunks }) }}
-          </v-alert>
-          <v-alert v-if="importError" type="error" variant="tonal" density="compact">{{ importError }}</v-alert>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" @click="importDialog = false">{{ $t('cm_close') }}</v-btn>
-          <v-btn color="primary" variant="flat" :loading="importing" :disabled="!importForm.api_endpoint || !importForm.token || !importForm.collection" @click="runImport">{{ $t('kb_import_run') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -573,29 +546,6 @@ async function saveDoc() {
     }
   } finally {
     if (request === detailRequest) savingDoc.value = false
-  }
-}
-
-// Astra import
-const importDialog = ref(false)
-const importForm = ref({ api_endpoint: '', token: '', keyspace: 'bbi_rag', collection: 'bbi_rag', audience: 'public' })
-const importing = ref(false)
-const importResult = ref<{ documents: number; chunks: number } | null>(null)
-const importError = ref('')
-async function runImport() {
-  importing.value = true
-  importResult.value = null
-  importError.value = ''
-  try {
-    const { data } = await api.post(`${base.value}/import-astra`, importForm.value, { timeout: 330000 })
-    importResult.value = data
-    importForm.value.token = ''
-    view.value = 'active'
-    await load()
-  } catch (e) {
-    importError.value = errMsg(e)
-  } finally {
-    importing.value = false
   }
 }
 

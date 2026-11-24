@@ -4,10 +4,8 @@ Trang **Tài liệu chatbot** (`/<tenant>/knowledge`, quyền `settings`) là n�
 tài liệu nghiệp vụ mà bot Zalo dùng để trả lời: chính sách bán hàng, bảo hành,
 đổi trả, giao hàng, hướng dẫn sử dụng, quy trình nội bộ...
 
-Trước đây tài liệu được nạp bằng các flow ingestion trên Langflow vào Astra DB
-`bbi` (keyspace và collection `bbi_rag`), và flow bot đọc qua node AstraDB
-"KnowledgeDB". Hai flow ingestion đó đã bị xoá ngày 18/11/2026 nên không còn chỗ
-tải tài liệu mới. Trang này thay thế chúng.
+Để thêm tài liệu mới, tải tệp hoặc dán nội dung trực tiếp trên trang này. Tài
+liệu đã chuyển từ Astra vẫn có thể tra cứu và quản lý tại đây.
 
 ## Bot đọc tài liệu thế nào
 
@@ -95,16 +93,3 @@ liệt kê 1 job nên không tốn phí.
 - **Bật/tắt**: tắt thì bot không dùng nữa (xoá vector), bật lại thì lập chỉ mục lại.
 - **Lưu trữ / Khôi phục**: xoá mềm. **Xoá vĩnh viễn** chỉ cho owner/admin và
   chỉ với tài liệu đã lưu trữ.
-- **Nhập từ Astra cũ** (owner/admin): chép các đoạn trong collection Astra mà
-  flow Langflow cũ đã nạp, gom theo tệp gốc (`metadata.file_path` / `source`),
-  mỗi tệp thành một tài liệu, rồi nhúng lại bằng model của CQA. Token chỉ dùng
-  cho lần nhập đó, không lưu. Endpoint phải là `https://*.apps.astra.datastax.com`.
-
-## Chuyển từ node KnowledgeDB sang search_knowledge
-
-1. Deploy, mở trang Tài liệu chatbot, dùng "Nhập từ Astra cũ" với database
-   `bbi` (keyspace/collection `bbi_rag`), hoặc tải lại các tệp gốc.
-2. Dùng "Tìm tài liệu" để kiểm tra các đoạn liên quan.
-3. Trên Langflow, làm mới tool của node MCP Tools ở flow Int_v2 và Ext_v2.
-4. Dùng "Chat thử" để xem câu trả lời của flow. Khi bot đã trả lời đúng qua `search_knowledge`, có thể bỏ node KnowledgeDB
-   (nếu flow còn) để bot chỉ có một nguồn tài liệu, quản lý ở CQA.
