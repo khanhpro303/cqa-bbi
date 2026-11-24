@@ -38,6 +38,22 @@ describe('Knowledge page', () => {
     wrapper.unmount()
   })
 
+  it('offers file and text input and still lists previously imported documents', async () => {
+    const imported = { ...doc, source: 'astra_import', file_name: doc.title }
+    mocks.get.mockResolvedValueOnce({ data: { documents: [imported] } })
+    const wrapper = shallowMount(Knowledge, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    try {
+      await flushPromises()
+      expect(wrapper.get('[prepend-icon="mdi-upload"]').text()).toBe('kb_upload')
+      expect(wrapper.get('[prepend-icon="mdi-text-box-plus-outline"]').text()).toBe('kb_add_text')
+      expect(wrapper.text()).not.toContain('kb_import_astra')
+      expect(wrapper.get('.document-link').text()).toBe(imported.title)
+      expect(wrapper.text()).toContain('kb_source_astra')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('uploads each file as multipart with the chosen audience', async () => {
     const wrapper = shallowMount(Knowledge, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
     await flushPromises()
