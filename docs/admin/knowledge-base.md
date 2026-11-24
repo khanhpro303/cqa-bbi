@@ -53,6 +53,16 @@ tự host), API key (lưu mã hoá), chiến lược (`auto`, `hi_res`, `fast`,
 Biến môi trường `UNSTRUCTURED_API_URL` / `UNSTRUCTURED_API_KEY` là giá trị dự
 phòng khi tenant chưa nhập.
 
+**Unstructured Transform (v2).** Key tạo ở https://transform.unstructured.io
+không dùng được với partition API. Với key này nhập API URL
+`https://transform.unstructured.io/api/v2` (nhập host hoặc `.../api/v2/parse`
+cũng được, CQA tự chuẩn hoá). CQA gọi `POST /api/v2/parse` (`output=elements`,
+bảng lấy `table_html`), job dài trả 202 thì tự hỏi lại `/api/v2/jobs/{id}`.
+Chiến lược `hi_res`/`ocr_only` dùng profile `best`, còn lại `balanced`; ô ngôn
+ngữ bị bỏ qua. Transform chỉ nhận PDF, DOCX, PPTX, PNG, JPG, TIFF, BMP, HEIC;
+TXT/MD/CSV/HTML/XLSX vẫn đọc bằng thư viện nội bộ. Nút kiểm tra kết nối chỉ
+liệt kê 1 job nên không tốn phí.
+
 - Có Unstructured: đọc được PDF scan, ảnh (PNG/JPG/TIFF...), DOC/PPT/PPTX/XLS,
   EPUB, email; bảng được giữ thành dòng `a | b`; bỏ header/footer/số trang.
 - Unstructured lỗi (hết quota, mạng) với loại tệp mà thư viện nội bộ đọc được:
