@@ -28,3 +28,15 @@ func TestBuildCaseAlertMessage(t *testing.T) {
 		t.Errorf("reopened alert:\n%s", reopened)
 	}
 }
+
+func TestBuildCaseAlertMessageStream(t *testing.T) {
+	at := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	msg := BuildCaseAlertMessage(CaseAlert{Kind: "created", CustomerName: "Chị Lan", TypeLabel: "Hàng lỗi", Title: "Kính nứt", StreamName: "Bảo hành"}, at)
+	if !strings.Contains(msg, "Luồng: Bảo hành") {
+		t.Errorf("stream missing:\n%s", msg)
+	}
+	moved := BuildCaseAlertMessage(CaseAlert{Kind: "moved", MovedBy: "Hà", CustomerName: "Chị Lan", Title: "Kính nứt", StreamName: "Marketing", StatusLabel: "Đang xử lý"}, at)
+	if !strings.Contains(moved, "Hà chuyển khiếu nại sang luồng này") || !strings.Contains(moved, "Trạng thái: Đang xử lý") {
+		t.Errorf("moved alert:\n%s", moved)
+	}
+}

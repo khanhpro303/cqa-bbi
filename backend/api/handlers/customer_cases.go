@@ -17,14 +17,15 @@ import (
 
 // ListCustomerCases lists complaint cases for the Insights khách page.
 // Query: status (active = open + in_progress, the default; open,
-// in_progress, resolved, cancelled, all), type, severity, q (title, customer
+// in_progress, resolved, cancelled, all), type, severity, stream ("none" for
+// cases without one), q (title, customer
 // name or code), subject_type + subject_id (one chat), customer_code,
 // channel_id. The response also counts cases per status for the tabs.
 func ListCustomerCases(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	page, perPage := pageParams(c)
 	status := c.DefaultQuery("status", "active")
-	caseType, severity := c.Query("type"), c.Query("severity")
+	caseType, severity, stream := c.Query("type"), c.Query("severity"), c.Query("stream")
 	q := strings.TrimSpace(c.Query("q"))
 	subjectType, subjectID := c.Query("subject_type"), c.Query("subject_id")
 	customerCode, channelID := strings.TrimSpace(c.Query("customer_code")), c.Query("channel_id")
@@ -49,6 +50,13 @@ func ListCustomerCases(c *gin.Context) {
 		}
 		if severity != "" {
 			tx = tx.Where("severity = ?", severity)
+		}
+		switch stream {
+		case "":
+		case "none":
+			tx = tx.Where("stream = ?", "")
+		default:
+			tx = tx.Where("stream = ?", stream)
 		}
 		if q != "" {
 			like := "%" + q + "%"
@@ -86,7 +94,8 @@ func ListCustomerCases(c *gin.Context) {
 	for _, row := range counts {
 		byStatus[row.Status] = row.N
 	}
-	c.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "per_page": perPage, "counts": byStatus})
+	c.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "per_page": perPage, "counts": byStatus,
+		"streams": customercases.TenantStreams(c.Request.Context(), tenantID)})
 }
 
 // GetCustomerCase returns a case with its history, newest last.
@@ -110,6 +119,7 @@ type caseUpdateRequest struct {
 	Status         *string `json:"status"`
 	Severity       *string `json:"severity"`
 	Type           *string `json:"type"`
+	Stream         *string `json:"stream"`
 	Title          *string `json:"title"`
 	AssigneeID     *string `json:"assignee_id"`
 	AssigneeName   *string `json:"assignee_name"`
@@ -164,6 +174,28 @@ func UpdateCustomerCase(c *gin.Context) {
 		t := customercases.ValidType(*req.Type)
 		updates["type"] = t
 		event("edit", "Loại: "+customercases.TypeLabel(t))
+	}
+	streamMoved := false
+	if req.Stream != nil && strings.TrimSpace(*req.Stream) != cc.Stream {
+		s := strings.TrimSpace(*req.Stream)
+		var settings customercases.Settings
+		if cc.ChannelID != "" {
+			var ch models.Channel
+			if err := db.DB.Select("metadata").Where("id = ? AND tenant_id = ?", cc.ChannelID, tenantID).First(&ch).Error; err == nil {
+				settings = customercases.ParseSettings(ch.Metadata)
+			}
+		}
+		if _, ok := settings.Stream(s); s != "" && !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_stream"})
+			return
+		}
+		updates["stream"] = s
+		streamMoved = s != ""
+		if s == "" {
+			event("edit", "Bỏ luồng xử lý")
+		} else {
+			event("edit", "Luồng: "+customercases.StreamLabel(settings, s))
+		}
 	}
 	if req.Title != nil && strings.TrimSpace(*req.Title) != "" && strings.TrimSpace(*req.Title) != cc.Title {
 		t := truncateRunes(strings.TrimSpace(*req.Title), 200)
@@ -231,6 +263,10 @@ func UpdateCustomerCase(c *gin.Context) {
 		return
 	}
 	db.DB.Where("id = ?", cc.ID).First(&cc)
+	if streamMoved && customercases.IsOpen(cc.Status) {
+		// The new stream's group hears about the case it now owns.
+		customercases.AlertStreamMoved(c.Request.Context(), cc, actor)
+	}
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "customer_case.updated", "customer_case", cc.ID, cc.Title, "", c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"case": cc})
 }

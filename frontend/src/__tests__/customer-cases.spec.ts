@@ -66,6 +66,30 @@ describe('Complaint cases panel', () => {
     })
   })
 
+  it('moves a case to another stream and filters by stream', async () => {
+    mocks.patch.mockResolvedValue({ data: { case: { ...sampleCase, stream: 'marketing' } } })
+    const streams = [{ key: 'bao_hanh', name: 'Bảo hành' }, { key: 'marketing', name: 'Marketing' }]
+    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1', streams }, global: { mocks: { $t: (k: string) => k } } })
+    await flushPromises()
+    const vm = wrapper.vm as any
+    expect(vm.form.stream).toBe('')
+    vm.form.stream = 'marketing'
+    await vm.save()
+    expect(mocks.patch).toHaveBeenCalledWith('/tenants/t1/customer-cases/c1', { stream: 'marketing' })
+
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/customer-cases')) return { data: { data: [sampleCase], total: 1, counts: {}, streams } }
+      return { data: {} }
+    })
+    const panel = shallowMount(CasesPanel, { props: { tenantId: 't1' }, global: { mocks: { $t: (k: string) => k } } })
+    await flushPromises()
+    const pvm = panel.vm as any
+    expect(pvm.streamOptions.map((o: any) => o.value)).toEqual(['', 'bao_hanh', 'marketing', 'none'])
+    pvm.stream = 'bao_hanh'
+    await pvm.load(1)
+    expect(mocks.get).toHaveBeenLastCalledWith('/tenants/t1/customer-cases', { params: expect.objectContaining({ stream: 'bao_hanh' }) })
+  })
+
   it('saves only the note when only the note changed', async () => {
     mocks.patch.mockResolvedValue({ data: { case: sampleCase } })
     const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1' }, global: { mocks: { $t: (k: string) => k } } })

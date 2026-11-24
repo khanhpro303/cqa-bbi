@@ -187,7 +187,7 @@ func TestRecordLifecycleMySQL(t *testing.T) {
 	model.err = nil
 
 	// 7. Customer code links chats: the same shop's group sees the 1:1 case.
-	cands, _ := Candidates(ctx, tenantID, "group", "g-1", "KH01")
+	cands, _ := Candidates(ctx, tenantID, "group", "g-1", "KH01", 14*24*time.Hour)
 	if len(cands) < 3 {
 		t.Fatalf("candidates by customer code = %d", len(cands))
 	}
@@ -395,7 +395,7 @@ func TestRecordSubjectOnlyMySQL(t *testing.T) {
 			t.Fatal("group sees the guest's private case")
 		}
 	}
-	if cands, _ := Candidates(ctx, tenantID, "group", "g-host", "KH-SAME"); len(cands) != 1 {
+	if cands, _ := Candidates(ctx, tenantID, "group", "g-host", "KH-SAME", 14*24*time.Hour); len(cands) != 1 {
 		t.Fatalf("group candidates = %d, want only its own", len(cands))
 	}
 }
@@ -510,5 +510,94 @@ func TestRecordRetryAndReopenCooldownMySQL(t *testing.T) {
 	out, err = Record(ctx, r)
 	if err != nil || out.Action != ActionFollowup || len(*alerts) != before+1 {
 		t.Fatalf("follow-up after an undelivered reopen must alert: %+v %v alerts %d→%d", out, err, before, len(*alerts))
+	}
+}
+
+// The bot sees open cases and cases resolved in the last 14 days (so it can
+// tell a customer who asks that the problem was handled), never cancelled or
+// long-resolved ones.
+func TestBotContextListsRecentlyResolvedMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channelID := setupTenant(t)
+	now := time.Now()
+	recent, old := now.Add(-2*24*time.Hour), now.Add(-20*24*time.Hour)
+	mk := func(title, status string, resolvedAt *time.Time, update string) {
+		c := models.CustomerCase{ID: pkg.NewUUID(), TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-bot",
+			Type: "product_defect", Severity: "medium", Title: title, Status: status, ResolvedAt: resolvedAt, CustomerUpdate: update,
+			Images: "[]", Source: SourceBot, CreatedAt: now, UpdatedAt: now}
+		if err := db.DB.Create(&c).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("Kính FF800 nứt", StatusOpen, nil, "")
+	mk("Giao thiếu 2 hộp", StatusResolved, &recent, "Đã giao bù 2 hộp sáng nay")
+	mk("Sai giá cũ", StatusResolved, &old, "")
+	mk("Báo nhầm", StatusCancelled, &recent, "")
+
+	out := BotContext(ctx, tenantID, channelID, "user", "zu-bot", "", func(cases string) string { return cases })
+	for _, want := range []string{"Kính FF800 nứt", "Giao thiếu 2 hộp", "Đã xử lý xong lúc", "Đã giao bù 2 hộp sáng nay"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bot context missing %q:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"Sai giá cũ", "Báo nhầm"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("bot context should not list %q:\n%s", bad, out)
+		}
+	}
+}
+
+// With streams set on the channel, the model files even a first report
+// under a stream and the alert goes to that stream's group. The resolved
+// window follows complaint_resolved_days.
+func TestRecordStreamsAndResolvedDaysMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channelID := setupTenant(t)
+	if err := db.DB.Model(&models.Channel{}).Where("id = ?", channelID).Update("metadata",
+		`{"complaint_cases":true,"complaint_resolved_days":3,"complaint_streams":[{"key":"bao_hanh","name":"Bảo hành","description":"Hàng lỗi","alert_group_id":"grp-bh"},{"key":"marketing","name":"Marketing"}]}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	alerts := stubAlerts(t)
+	model := &fakeModel{}
+	stubModel(t, model)
+
+	// A case resolved 5 days ago is outside the 3-day window.
+	old := time.Now().Add(-5 * 24 * time.Hour)
+	oldCase := models.CustomerCase{ID: pkg.NewUUID(), TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-s",
+		Type: "delivery", Severity: "medium", Title: "Giao chậm tuần trước", Status: StatusResolved, ResolvedAt: &old,
+		Images: "[]", Source: SourceBot, CreatedAt: old, UpdatedAt: old}
+	if err := db.DB.Create(&oldCase).Error; err != nil {
+		t.Fatal(err)
+	}
+	if out := BotContext(ctx, tenantID, channelID, "user", "zu-s", "", func(c string) string { return c }); strings.Contains(out, "Giao chậm") {
+		t.Fatalf("case resolved 5 days ago shown with a 3-day window:\n%s", out)
+	}
+
+	model.answers = []string{`{"decision":"new","case":0,"stream":"bao_hanh","reason":"hàng lỗi"}`}
+	r := Report{TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-s", ZaloUserID: "zu-s",
+		CustomerName: "Chị Lan", Source: SourceBot, Type: "product_defect", Title: "Kính nứt", TurnID: "t-s1"}
+	out, err := Record(ctx, r)
+	if err != nil || out.Action != ActionCreated || out.Case.Stream != "bao_hanh" {
+		t.Fatalf("first report: %+v %v", out, err)
+	}
+	if len(model.inputs) != 1 || !strings.Contains(model.inputs[0], "<van_de_cu>\n(không có)") || strings.Contains(model.inputs[0], "Giao chậm") {
+		t.Fatalf("decision input:\n%v", model.inputs)
+	}
+	if len(*alerts) != 1 || (*alerts)[0].GroupID != "grp-bh" || (*alerts)[0].StreamName != "Bảo hành" {
+		t.Fatalf("alerts = %+v", *alerts)
+	}
+
+	// Model failure on a first report: still a case, no stream, handover group.
+	model.err = errors.New("timeout")
+	r2 := r
+	r2.Title, r2.TurnID = "Sai giá", "t-s2"
+	out, err = Record(ctx, r2)
+	if err != nil || out.Action != ActionCreated || out.Case.Stream != "" {
+		t.Fatalf("model error: %+v %v", out, err)
+	}
+	if last := (*alerts)[len(*alerts)-1]; last.GroupID != "" || last.StreamName != "" {
+		t.Fatalf("alert without stream = %+v", last)
 	}
 }

@@ -23,7 +23,8 @@ func TestParseDecision(t *testing.T) {
 		{`not json`, -1, true},
 	}
 	for _, c := range cases {
-		got, _, err := ParseDecision(c.in, 2)
+		d, err := ParseDecision(c.in, 2, nil)
+		got := d.Index
 		if got != c.want || (err != nil) != c.wantErr {
 			t.Errorf("ParseDecision(%q) = %d, %v; want %d, err=%v", c.in, got, err, c.want, c.wantErr)
 		}
@@ -38,7 +39,7 @@ func TestBuildDecisionInputNumbersCandidates(t *testing.T) {
 		[]models.CustomerCase{
 			{ID: "a", Type: "delivery", Title: "Giao thiếu 2 nón", Status: StatusOpen, CreatedAt: at},
 			{ID: "b", Type: "payment", Title: "Chứng từ DH0565913-3 báo lỗi", Status: StatusResolved, CreatedAt: at, Resolution: "Đã xoá chứng từ cũ"},
-		}, loc)
+		}, loc, nil)
 	for _, want := range []string{"<van_de_moi>", "Loại: Thanh toán, công nợ", "Ảnh khách gửi: Thông báo", "[1] Mới, chưa xử lý · Giao hàng", "[2] Đã xử lý xong", "Cách đã xử lý: Đã xoá chứng từ cũ"} {
 		if !strings.Contains(in, want) {
 			t.Errorf("input missing %q:\n%s", want, in)
@@ -46,6 +47,49 @@ func TestBuildDecisionInputNumbersCandidates(t *testing.T) {
 	}
 	if strings.Contains(in, "\"a\"") || strings.Contains(in, " b ") {
 		t.Errorf("input leaks case ids:\n%s", in)
+	}
+}
+
+func TestDecisionStreams(t *testing.T) {
+	streams := []Stream{{Key: "bao_hanh", Name: "Bảo hành", Description: "Hàng lỗi cần đổi, sửa"}, {Key: "marketing", Name: "Marketing"}}
+	d, err := ParseDecision(`{"decision":"new","case":0,"stream":"bao_hanh","reason":"hàng lỗi"}`, 0, streams)
+	if err != nil || d.Index != -1 || d.Stream != "bao_hanh" {
+		t.Fatalf("new with stream = %+v %v", d, err)
+	}
+	if d, _ := ParseDecision(`{"decision":"new","stream":"khac"}`, 0, streams); d.Stream != "" {
+		t.Errorf("unknown stream kept: %+v", d)
+	}
+	// A bad case number on a first report still keeps the stream.
+	if d, err := ParseDecision(`{"decision":"same","case":1,"stream":"marketing"}`, 0, streams); err == nil || d.Index != -1 || d.Stream != "marketing" {
+		t.Errorf("same without candidates = %+v %v", d, err)
+	}
+	in := BuildDecisionInput(Report{Type: "product_defect", Title: "Kính nứt"}, nil, time.UTC, streams)
+	for _, want := range []string{"<van_de_cu>\n(không có)", "<luong_xu_ly>", "- bao_hanh: Bảo hành — Hàng lỗi cần đổi, sửa", "- marketing: Marketing"} {
+		if !strings.Contains(in, want) {
+			t.Errorf("input missing %q:\n%s", want, in)
+		}
+	}
+}
+
+func TestParseSettings(t *testing.T) {
+	s := ParseSettings(`{"complaint_resolved_days":30,"complaint_streams":[{"key":"bao_hanh","name":"Bảo hành","alert_group_id":"g1"}]}`)
+	if s.ResolvedDays != 30 || s.ResolvedWindow() != 30*24*time.Hour || len(s.Streams) != 1 || s.Streams[0].AlertGroupID != "g1" {
+		t.Fatalf("settings = %+v", s)
+	}
+	if d := ParseSettings(`{}`); d.ResolvedDays != DefaultResolvedDays || d.Streams != nil {
+		t.Errorf("defaults = %+v", d)
+	}
+	if d := ParseSettings(`{"complaint_resolved_days":500,"complaint_streams":"bad"}`); d.ResolvedDays != MaxResolvedDays || d.Streams != nil {
+		t.Errorf("clamped = %+v", d)
+	}
+	if _, err := NormalizeStreams([]interface{}{map[string]interface{}{"key": "a", "name": "A"}, map[string]interface{}{"key": "a", "name": "B"}}); err == nil {
+		t.Error("duplicate keys accepted")
+	}
+	if _, err := NormalizeStreams([]interface{}{map[string]interface{}{"key": "Bảo hành", "name": "A"}}); err == nil {
+		t.Error("bad key accepted")
+	}
+	if _, err := NormalizeStreams([]interface{}{map[string]interface{}{"key": "a", "name": " "}}); err == nil {
+		t.Error("empty name accepted")
 	}
 }
 
@@ -59,6 +103,14 @@ func TestRenderForBotHasNoIDs(t *testing.T) {
 	for _, want := range []string{"Hàng lỗi: Kính nứt", "Đang xử lý", "hỏi lại 2 lần", "Thứ 5 giao kính mới"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q: %s", want, out)
+		}
+	}
+	done := time.Date(2026, 11, 20, 9, 30, 0, 0, time.UTC)
+	out = RenderForBot([]models.CustomerCase{{Type: "delivery", Title: "Giao thiếu", Status: StatusResolved, ResolvedAt: &done,
+		CustomerUpdate: "Đã giao bù", CreatedAt: done}}, time.UTC)
+	for _, want := range []string{"Đã xử lý xong lúc 09:30 20/11", "Nhân viên cho phép báo khách: Đã giao bù"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("resolved render missing %q: %s", want, out)
 		}
 	}
 	if RenderForBot(nil, time.UTC) != "(không có)" {

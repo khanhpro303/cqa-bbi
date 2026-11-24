@@ -15,6 +15,7 @@ Vào menu **Cài đặt** > tab **Cấu hình AI**.
 | **Claude** (Anthropic) | Phân tích tiếng Việt tốt, chính xác cao | Giá cao hơn Gemini |
 | **Gemini** (Google) | Giá rẻ, tốc độ nhanh | Độ chính xác thấp hơn Claude |
 | **OpenAI (Codex)** | Hệ sinh thái model đa dạng, hỗ trợ OpenAI-compatible proxy | Cần chọn model phù hợp từng use case |
+| **OpenRouter** | Một key dùng model của nhiều hãng, có model miễn phí | Model free bị giới hạn lượt gọi mỗi ngày, danh sách model free thay đổi thường xuyên |
 
 ### Bước 2: Chọn Model
 
@@ -40,11 +41,14 @@ Vào menu **Cài đặt** > tab **Cấu hình AI**.
 | GPT-5 Mini | Chi phí thấp hơn | Bài toán đơn giản |
 | GPT-5 Nano | Nhanh, rẻ nhất | Khối lượng lớn, yêu cầu nhẹ |
 
+**OpenRouter:** bấm **Tải danh sách model free** để lấy các model đang miễn phí (tên kèm ghi chú "đọc ảnh" nếu model đọc được ảnh khách gửi, "JSON" nếu model hỗ trợ trả JSON), hoặc nhập mã model OpenRouter bất kỳ (ví dụ `deepseek/deepseek-chat-v3-0324:free`). Chi phí của model free được ghi là 0 trong nhật ký chi phí. Đọc ảnh khiếu nại cần chọn model có ghi chú "đọc ảnh".
+
 ### Bước 3: Nhập API Key
 
 - **Claude**: Lấy key tại [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
 - **Gemini**: Lấy key tại [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 - **OpenAI**: Lấy key tại [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+- **OpenRouter**: Lấy key tại [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys)
 
 Nhập key vào ô **API Key**, bấm **Test API Key** — nếu hiện tick xanh "Kết nối thành công" là OK.
 

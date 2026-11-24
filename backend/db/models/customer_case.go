@@ -28,6 +28,9 @@ type CustomerCase struct {
 	// Only that person's own chat sees it; the customer code does not link it
 	// to other chats.
 	Private bool `gorm:"not null;default:false" json:"private"`
+	// Stream is the complaint stream key (channel setting complaint_streams)
+	// the decision model filed the case under; staff can change it.
+	Stream string `gorm:"type:varchar(40);not null;default:'';index" json:"stream"`
 
 	// Type uses the chat-memory issue types: complaint, delivery,
 	// product_defect, price, payment, staff_request, other.

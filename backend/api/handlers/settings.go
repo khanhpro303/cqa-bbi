@@ -114,7 +114,7 @@ func getSettingValue(settings []models.AppSetting, key, defaultVal string) strin
 func SaveAISettings(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	var req struct {
-		Provider  string `json:"provider" binding:"required,oneof=claude gemini openai"`
+		Provider  string `json:"provider" binding:"required,oneof=claude gemini openai openrouter"`
 		APIKey    string `json:"api_key" binding:"required"`
 		Model     string `json:"model"`
 		BaseURL   string `json:"base_url"`
@@ -545,13 +545,11 @@ func TestAIKey(c *gin.Context) {
 		provider = providerSetting.ValuePlain
 	}
 	if req.Provider != "" {
-		switch req.Provider {
-		case "claude", "gemini", "openai":
-			provider = req.Provider
-		default:
+		if !ai.ValidProvider(req.Provider) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_provider"})
 			return
 		}
+		provider = req.Provider
 	}
 
 	var apiKey []byte
@@ -597,22 +595,15 @@ func TestAIKey(c *gin.Context) {
 		}
 	}
 
-	var providerClient ai.AIProvider
-	switch provider {
-	case "claude":
-		providerClient = ai.NewClaudeProvider(string(apiKey), model, cfg.AIMaxTokens, baseURL)
-	case "gemini":
-		providerClient = ai.NewGeminiProvider(string(apiKey), model, baseURL)
-	case "openai":
-		providerClient = ai.NewOpenAIProvider(string(apiKey), model, baseURL)
-	default:
+	providerClient, err := ai.NewProvider(provider, string(apiKey), model, baseURL, cfg.AIMaxTokens)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_provider"})
 		return
 	}
 
 	testCtx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 	defer cancel()
-	_, err := providerClient.AnalyzeChat(testCtx, "Respond with valid JSON only: {\"ok\": true}", "Ping")
+	_, err = providerClient.AnalyzeChat(testCtx, "Respond with valid JSON only: {\"ok\": true}", "Ping")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "api_test_failed", "details": err.Error()})
 		return
@@ -803,4 +794,17 @@ func getFirstSettingByKeys(tenantID string, keys []string) (*models.AppSetting, 
 		}
 	}
 	return nil, fmt.Errorf("setting not found")
+}
+
+// ListOpenRouterFreeModels lists OpenRouter's current free models for the
+// AI settings page (the catalogue is public; no key is used).
+func ListOpenRouterFreeModels(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	models, err := ai.OpenRouterFreeModels(ctx)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "openrouter_models_failed", "details": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"models": models})
 }

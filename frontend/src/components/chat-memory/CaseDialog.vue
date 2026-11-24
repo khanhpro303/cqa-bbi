@@ -12,6 +12,7 @@
           <v-chip size="small" variant="tonal" :color="caseStatusColor(item.status)">{{ $t(`cc_status_${item.status}`) }}</v-chip>
           <v-chip size="small" :color="severityColor(item.severity)">{{ $t(`cm_severity_${item.severity}`) }}</v-chip>
           <v-chip size="small" variant="outlined">{{ $t(issueTypeLabelKey(item.type)) }}</v-chip>
+          <v-chip v-if="item.stream" size="small" variant="outlined" prepend-icon="mdi-source-fork">{{ streamName(streams || [], item.stream) }}</v-chip>
           <v-chip size="small" variant="outlined" prepend-icon="mdi-source-branch">{{ $t(`cc_source_${item.source}`) }}</v-chip>
           <v-chip v-if="item.followup_count" size="small" color="warning" variant="tonal">{{ $t('cc_followups') }}: {{ item.followup_count }}</v-chip>
         </div>
@@ -70,6 +71,17 @@
               <v-col cols="6"><v-select v-model="form.severity" :items="severityOptions" :label="$t('cc_severity')" density="compact" hide-details /></v-col>
               <v-col cols="6"><v-select v-model="form.type" :items="typeOptions" :label="$t('cc_type')" density="compact" hide-details /></v-col>
             </v-row>
+            <v-select
+              v-if="streamOptions.length > 1"
+              v-model="form.stream"
+              :items="streamOptions"
+              :label="$t('cc_stream')"
+              :hint="$t('cc_stream_hint')"
+              persistent-hint
+              density="compact"
+              class="mb-2"
+              data-testid="case-stream"
+            />
             <v-combobox
               v-model="form.assignee"
               :items="userOptions"
@@ -113,11 +125,11 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import {
-  type CaseEvent, type CustomerCase, caseEventIcon, caseStatusColor, caseStatuses, caseTypes,
-  issueTypeLabelKey, parseCaseImages, severityColor,
+  type CaseEvent, type CaseStream, type CustomerCase, caseEventIcon, caseStatusColor, caseStatuses, caseTypes,
+  issueTypeLabelKey, parseCaseImages, severityColor, streamName,
 } from './labels'
 
-const props = defineProps<{ modelValue: boolean; tenantId: string; caseId: string }>()
+const props = defineProps<{ modelValue: boolean; tenantId: string; caseId: string; streams?: CaseStream[] }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'saved', c: CustomerCase): void
@@ -135,7 +147,7 @@ const snackColor = ref('success')
 
 type AssigneeOption = { title: string; value: string }
 const form = reactive({
-  status: '', severity: '', type: '',
+  status: '', severity: '', type: '', stream: '',
   assignee: null as AssigneeOption | string | null,
   customer_update: '', resolution: '', note: '',
 })
@@ -144,6 +156,14 @@ const images = computed(() => parseCaseImages(item.value?.images))
 const statusOptions = computed(() => caseStatuses.map(s => ({ title: t(`cc_status_${s}`), value: s })))
 const severityOptions = computed(() => ['high', 'medium', 'low'].map(s => ({ title: t(`cm_severity_${s}`), value: s })))
 const typeOptions = computed(() => caseTypes.map(v => ({ title: t(issueTypeLabelKey(v)), value: v })))
+// The case's current stream stays pickable even if it was removed from the
+// channel settings.
+const streamOptions = computed(() => {
+  const list = (props.streams || []).map(s => ({ title: s.name, value: s.key }))
+  const cur = item.value?.stream
+  if (cur && !list.some(o => o.value === cur)) list.push({ title: cur, value: cur })
+  return [{ title: t('cc_stream_none'), value: '' }, ...list]
+})
 // Staff sharing a display name are told apart by their email.
 const userOptions = computed<AssigneeOption[]>(() => {
   const count = new Map<string, number>()
@@ -159,6 +179,7 @@ function fill(c: CustomerCase) {
   form.status = c.status
   form.severity = c.severity
   form.type = c.type
+  form.stream = c.stream || ''
   form.assignee = c.assignee_name ? { title: c.assignee_name, value: c.assignee_id } : null
   form.customer_update = c.customer_update || ''
   form.resolution = c.resolution || ''
@@ -217,6 +238,7 @@ function changedFields(c: CustomerCase) {
   if (form.status !== c.status) body.status = form.status
   if (form.severity !== c.severity) body.severity = form.severity
   if (form.type !== c.type) body.type = form.type
+  if (form.stream !== (c.stream || '')) body.stream = form.stream
   if (assigneeChanged(c)) Object.assign(body, assigneeFields())
   if (form.customer_update !== (c.customer_update || '')) body.customer_update = form.customer_update
   if (form.resolution !== (c.resolution || '')) body.resolution = form.resolution

@@ -90,6 +90,9 @@ func alertStaff(ctx context.Context, out *Outcome, r Report) bool {
 		TypeLabel: TypeLabel(c.Type), Severity: c.Severity, Title: c.Title, StatusLabel: StatusLabel(c.Status),
 		FollowupCount: c.FollowupCount, ImageCount: len(parseImages(c.Images)), FromSummary: r.Source == SourceSummary,
 	}
+	if st, ok := ParseSettings(ch.Metadata).Stream(c.Stream); ok {
+		a.StreamName, a.GroupID = st.Name, st.AlertGroupID
+	}
 	if out.Action == ActionCreated {
 		a.Detail, a.Evidence = c.Detail, c.Evidence
 	} else {
@@ -107,6 +110,40 @@ func alertStaff(ctx context.Context, out *Outcome, r Report) bool {
 	db.DB.WithContext(ctx).Model(&models.CustomerCase{}).Where("id = ?", c.ID).Update("last_alert_at", now)
 	out.Case.LastAlertAt = &now
 	return true
+}
+
+// AlertStreamMoved tells a stream's group that staff moved an open case to
+// it. Best effort: the move stands even if the alert fails.
+func AlertStreamMoved(ctx context.Context, c models.CustomerCase, actor string) {
+	if c.ChannelID == "" || c.Stream == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), alertTimeout)
+	defer cancel()
+	var ch models.Channel
+	if err := db.DB.WithContext(ctx).Where("id = ? AND tenant_id = ?", c.ChannelID, c.TenantID).First(&ch).Error; err != nil {
+		return
+	}
+	if !EnabledFor(ch.Metadata) {
+		return
+	}
+	st, ok := ParseSettings(ch.Metadata).Stream(c.Stream)
+	if !ok {
+		return
+	}
+	a := engine.CaseAlert{
+		TenantID: c.TenantID, Channel: ch, Kind: "moved", ZaloUserID: c.ZaloUserID,
+		ReporterName: c.ReporterName, CustomerName: c.CustomerName, CustomerCode: c.CustomerCode,
+		TypeLabel: TypeLabel(c.Type), Severity: c.Severity, Title: c.Title, Detail: c.Detail, Evidence: c.Evidence,
+		StatusLabel: StatusLabel(c.Status), ImageCount: len(parseImages(c.Images)),
+		StreamName: st.Name, GroupID: st.AlertGroupID, MovedBy: actor,
+	}
+	if c.SubjectType == "group" {
+		a.ChatGroup = c.CustomerName
+	}
+	if !sendAlert(ctx, ch, a) {
+		log.Printf("[cases] stream move alert for case %s was not delivered", c.ID)
+	}
 }
 
 func joinNonEmpty(a, b string) string {

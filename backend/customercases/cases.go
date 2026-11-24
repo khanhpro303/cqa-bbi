@@ -60,10 +60,7 @@ var Types = []string{"complaint", "delivery", "product_defect", "price", "paymen
 var Statuses = []string{StatusOpen, StatusInProgress, StatusResolved, StatusCancelled}
 
 const (
-	// recentResolvedWindow: a case resolved this recently is still offered
-	// to the decision model, so "vẫn còn lỗi" reopens it.
-	recentResolvedWindow = 14 * 24 * time.Hour
-	maxCandidates        = 8
+	maxCandidates = 8
 	// followupAlertGap: a customer chasing the same case is reported to
 	// staff at most once in this window.
 	followupAlertGap = 2 * time.Hour
@@ -99,6 +96,11 @@ type Report struct {
 	Detail   string
 	Evidence string
 	Images   []models.CaseImage
+
+	// settings are the channel's complaint settings and stream the stream
+	// the decision model chose (both set by decideAndWrite).
+	settings Settings
+	stream   string
 }
 
 // Outcome is what Report did.
@@ -210,19 +212,22 @@ func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 	if r.SubjectOnly {
 		matchCode = ""
 	}
-	candidates, err := Candidates(ctx, r.TenantID, r.SubjectType, r.SubjectID, matchCode)
+	r.settings = channelSettings(ctx, r.TenantID, r.ChannelID)
+	candidates, err := Candidates(ctx, r.TenantID, r.SubjectType, r.SubjectID, matchCode, r.settings.ResolvedWindow())
 	if err != nil {
 		return Outcome{}, err
 	}
 	var out Outcome
 	matched := -1
-	if len(candidates) > 0 {
-		idx, reason, err := Decide(ctx, r, candidates)
+	// The model also files the report under a stream, so it runs for a
+	// first report too when the channel has streams.
+	if len(candidates) > 0 || len(r.settings.Streams) > 0 {
+		d, err := Decide(ctx, r, candidates, r.settings.Streams)
 		if err != nil {
 			// A duplicate case is easier to fix than a lost complaint.
 			log.Printf("[cases] decision model failed for %s/%s (%v); opening a new case", r.SubjectType, r.SubjectID, err)
 		}
-		matched, out.Reason = idx, reason
+		matched, out.Reason, r.stream = d.Index, d.Reason, d.Stream
 	}
 	if matched >= 0 {
 		c, action, eventID, linkedNotified, repeated, err := join(ctx, candidates[matched].ID, r)
@@ -243,8 +248,9 @@ func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 }
 
 // Candidates returns the cases a new report may belong to: the chat's (or
-// the customer code's) open cases and recently resolved ones, newest first.
-func Candidates(ctx context.Context, tenantID, subjectType, subjectID, customerCode string) ([]models.CustomerCase, error) {
+// the customer code's) open cases and the ones resolved within window,
+// newest first.
+func Candidates(ctx context.Context, tenantID, subjectType, subjectID, customerCode string, window time.Duration) ([]models.CustomerCase, error) {
 	q := db.DB.WithContext(ctx).Where("tenant_id = ?", tenantID)
 	if customerCode != "" {
 		q = q.Where("((subject_type = ? AND subject_id = ?) OR (customer_code = ? AND private = ?))", subjectType, subjectID, customerCode, false)
@@ -252,7 +258,7 @@ func Candidates(ctx context.Context, tenantID, subjectType, subjectID, customerC
 		q = q.Where("subject_type = ? AND subject_id = ?", subjectType, subjectID)
 	}
 	q = q.Where("(status IN ? OR (status = ? AND resolved_at > ?))",
-		[]string{StatusOpen, StatusInProgress}, StatusResolved, time.Now().Add(-recentResolvedWindow))
+		[]string{StatusOpen, StatusInProgress}, StatusResolved, time.Now().Add(-window))
 	var rows []models.CustomerCase
 	err := q.Order("updated_at DESC").Limit(maxCandidates).Find(&rows).Error
 	return rows, err
@@ -350,6 +356,7 @@ func create(ctx context.Context, r Report) (models.CustomerCase, string, error) 
 		ReporterName: truncate(r.ReporterName, 250), CustomerName: truncate(r.CustomerName, 250), CustomerCode: truncate(r.CustomerCode, 60),
 		Type: r.Type, Severity: r.Severity, Title: r.Title, Detail: r.Detail, Evidence: r.Evidence,
 		Images: string(imagesJSON), Status: StatusOpen, Source: r.Source, OpenedSessionID: r.SessionID, Private: r.SubjectOnly,
+		Stream:    r.stream,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	ev := newEvent(c, "opened", r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)
@@ -379,7 +386,7 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 		}
 		// Staff may have closed it while the model was deciding: a case
 		// that is no longer a candidate is not joined (a new one opens).
-		if !candidate(c, time.Now()) {
+		if !candidate(c, time.Now(), r.settings.ResolvedWindow()) {
 			return errNoCase
 		}
 		now := time.Now()
@@ -392,6 +399,10 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 		if severityRank(r.Severity) > severityRank(c.Severity) {
 			updates["severity"] = r.Severity
 			c.Severity = r.Severity
+		}
+		if c.Stream == "" && r.stream != "" {
+			updates["stream"] = r.stream
+			c.Stream = r.stream
 		}
 		if c.CustomerCode == "" && r.CustomerCode != "" {
 			updates["customer_code"] = r.CustomerCode
@@ -460,13 +471,13 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 }
 
 // candidate reports whether c may still take a new report: open, or
-// resolved within recentResolvedWindow (the Candidates query, re-checked
-// under the row lock).
-func candidate(c models.CustomerCase, now time.Time) bool {
+// resolved within window (the Candidates query, re-checked under the row
+// lock).
+func candidate(c models.CustomerCase, now time.Time, window time.Duration) bool {
 	if IsOpen(c.Status) {
 		return true
 	}
-	return c.Status == StatusResolved && c.ResolvedAt != nil && c.ResolvedAt.After(now.Add(-recentResolvedWindow))
+	return c.Status == StatusResolved && c.ResolvedAt != nil && c.ResolvedAt.After(now.Add(-window))
 }
 
 func sessionAlreadyOnCase(tx *gorm.DB, caseID, sessionID string) bool {

@@ -301,6 +301,13 @@ type CaseAlert struct {
 	// FromSummary: the problem was found when the session was summarized,
 	// not recorded by the bot while chatting.
 	FromSummary bool
+	// StreamName is the complaint stream (bảo hành, marketing...) and
+	// GroupID its alert group; an empty or unusable GroupID falls back to
+	// the channel's handover alert group.
+	StreamName string
+	GroupID    string
+	// MovedBy: staff who moved the case to this stream (Kind "moved").
+	MovedBy string
 }
 
 // BuildCaseAlertMessage renders a case alert. Pure for unit tests. It never
@@ -313,6 +320,12 @@ func BuildCaseAlertMessage(a CaseAlert, at time.Time) string {
 		fmt.Fprintf(&b, "🔁 Khách hỏi lại vấn đề đang chờ xử lý (lần %d)\n", a.FollowupCount)
 	case "reopened":
 		b.WriteString("♻️ Khách báo vấn đề đã xử lý vẫn chưa ổn\n")
+	case "moved":
+		if by := strings.TrimSpace(a.MovedBy); by != "" {
+			fmt.Fprintf(&b, "➡️ %s chuyển khiếu nại sang luồng này\n", by)
+		} else {
+			b.WriteString("➡️ Khiếu nại được chuyển sang luồng này\n")
+		}
 	default:
 		if a.Severity == "high" {
 			b.WriteString("🚨 Khiếu nại mới cần xử lý gấp\n")
@@ -343,6 +356,9 @@ func BuildCaseAlertMessage(a CaseAlert, at time.Time) string {
 	if label == "" {
 		label = "Khác"
 	}
+	if s := strings.TrimSpace(a.StreamName); s != "" {
+		fmt.Fprintf(&b, "Luồng: %s\n", s)
+	}
 	fmt.Fprintf(&b, "Vấn đề: [%s] %s\n", label, truncateRunes(strings.TrimSpace(a.Title), 200))
 	if d := strings.TrimSpace(a.Detail); d != "" && d != strings.TrimSpace(a.Title) {
 		fmt.Fprintf(&b, "Chi tiết: %s\n", truncateRunes(d, 500))
@@ -363,10 +379,14 @@ func BuildCaseAlertMessage(a CaseAlert, at time.Time) string {
 	return b.String()
 }
 
-// NotifyCase sends a case alert to the channel's handover alert group. It
-// reports whether the alert was sent.
+// NotifyCase sends a case alert to the case's stream group, or else the
+// channel's handover alert group. It reports whether the alert was sent.
 func NotifyCase(ctx context.Context, sender HandoverGroupSender, a CaseAlert) bool {
-	groupID := ParseHandoverAlertGroupID(a.Channel.Metadata)
+	handover := ParseHandoverAlertGroupID(a.Channel.Metadata)
+	groupID := strings.TrimSpace(a.GroupID)
+	if groupID == "" {
+		groupID = handover
+	}
 	if groupID == "" {
 		log.Printf("[case-alert] channel %s has no alert group configured; case not alerted", a.Channel.ID)
 		return false
@@ -375,7 +395,16 @@ func NotifyCase(ctx context.Context, sender HandoverGroupSender, a CaseAlert) bo
 		recordHandoverAlertLog(HandoverAlert{TenantID: a.TenantID}, groupID, body, status, errMsg)
 	}
 	var group models.CRMGroup
-	if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, a.TenantID).First(&group).Error; err != nil || strings.TrimSpace(group.ZaloGroupID) == "" {
+	err := db.DB.Where("id = ? AND tenant_id = ?", groupID, a.TenantID).First(&group).Error
+	if (err != nil || strings.TrimSpace(group.ZaloGroupID) == "") && groupID != handover && handover != "" {
+		// The stream's group is gone or unlinked: staff still hear about
+		// the case in the handover group.
+		log.Printf("[case-alert] channel %s stream group %s unusable (%v); using the handover group", a.Channel.ID, groupID, err)
+		groupID = handover
+		group = models.CRMGroup{}
+		err = db.DB.Where("id = ? AND tenant_id = ?", groupID, a.TenantID).First(&group).Error
+	}
+	if err != nil || strings.TrimSpace(group.ZaloGroupID) == "" {
 		log.Printf("[case-alert] channel %s alert group %s misconfigured: %v", a.Channel.ID, groupID, err)
 		logAlert("", "failed", "alert_group_misconfigured")
 		return false

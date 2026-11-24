@@ -111,6 +111,7 @@ export interface CustomerCase {
   customer_name: string
   customer_code: string
   type: string
+  stream: string
   severity: string
   title: string
   detail: string
@@ -189,4 +190,16 @@ export function caseEventIcon(kind: string): string {
 // waitingHours is how long a case has waited since it was opened, in hours.
 export function waitingHours(createdAt: string, now = Date.now()): number {
   return Math.max(0, (now - new Date(createdAt).getTime()) / 3_600_000)
+}
+
+export interface CaseStream {
+  key: string
+  name: string
+}
+
+// streamName shows a case's stream; a stream removed from the settings
+// shows its key.
+export function streamName(streams: CaseStream[], key?: string | null) {
+  if (!key) return ''
+  return streams.find(s => s.key === key)?.name || key
 }

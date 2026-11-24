@@ -8,7 +8,7 @@
       </v-chip-group>
     </div>
     <v-row v-if="!compact" dense class="mb-2">
-      <v-col cols="12" md="6">
+      <v-col cols="12" :md="streams.length ? 4 : 6">
         <v-text-field
           v-model="query"
           :label="$t('cc_search')"
@@ -19,7 +19,10 @@
           @update:model-value="debouncedLoad"
         />
       </v-col>
-      <v-col cols="6" md="3">
+      <v-col v-if="streams.length" cols="12" md="2">
+        <v-select v-model="stream" :items="streamOptions" :label="$t('cc_stream')" density="compact" hide-details data-testid="case-stream-filter" @update:model-value="load(1)" />
+      </v-col>
+      <v-col cols="6" :md="streams.length ? 3 : 3">
         <v-select v-model="type" :items="typeOptions" :label="$t('cc_type')" density="compact" hide-details @update:model-value="load(1)" />
       </v-col>
       <v-col cols="6" md="3">
@@ -57,6 +60,7 @@
             <div class="font-weight-medium text-truncate">{{ c.title }}</div>
             <div class="text-caption text-medium-emphasis">
               {{ $t(issueTypeLabelKey(c.type)) }}
+              <span v-if="c.stream"> · <v-icon size="x-small">mdi-source-fork</v-icon> {{ streamName(streams, c.stream) }}</span>
               <v-icon v-if="parseCaseImages(c.images).length" size="x-small" class="ml-1">mdi-image-outline</v-icon>
               <span v-if="parseCaseImages(c.images).length">{{ parseCaseImages(c.images).length }}</span>
             </div>
@@ -89,7 +93,7 @@
       <v-pagination v-if="total > perPage" v-model="page" :length="Math.ceil(total / perPage)" density="compact" @update:model-value="load" />
     </div>
 
-    <CaseDialog v-model="dialog" :tenant-id="tenantId" :case-id="selectedId" @saved="load()" @open-session="id => $emit('open-session', id)" />
+    <CaseDialog v-model="dialog" :tenant-id="tenantId" :case-id="selectedId" :streams="streams" @saved="load()" @open-session="id => $emit('open-session', id)" />
   </div>
 </template>
 
@@ -99,7 +103,7 @@ import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import CaseDialog from './CaseDialog.vue'
 import {
-  type CustomerCase, caseTypes, caseStatusColor, issueTypeLabelKey, parseCaseImages, severityColor, waitingHours,
+  type CaseStream, type CustomerCase, caseTypes, caseStatusColor, issueTypeLabelKey, parseCaseImages, severityColor, streamName, waitingHours,
 } from './labels'
 
 const props = defineProps<{
@@ -122,6 +126,8 @@ const status = ref(props.compact ? 'all' : 'active')
 const query = ref('')
 const type = ref('')
 const severity = ref('')
+const stream = ref('')
+const streams = ref<CaseStream[]>([])
 const dialog = ref(false)
 const selectedId = ref('')
 
@@ -142,6 +148,11 @@ const typeOptions = computed(() => [
   { title: t('all'), value: '' },
   ...caseTypes.map(v => ({ title: t(issueTypeLabelKey(v)), value: v })),
 ])
+const streamOptions = computed(() => [
+  { title: t('all'), value: '' },
+  ...streams.value.map(s => ({ title: s.name, value: s.key })),
+  { title: t('cc_stream_none'), value: 'none' },
+])
 const severityOptions = computed(() => [
   { title: t('all'), value: '' },
   ...['high', 'medium', 'low'].map(v => ({ title: t(`cm_severity_${v}`), value: v })),
@@ -160,6 +171,7 @@ async function load(p = page.value) {
       params: {
         page: p, per_page: perPage, status: status.value,
         q: query.value || undefined, type: type.value || undefined, severity: severity.value || undefined,
+        stream: stream.value || undefined,
         subject_type: props.subjectType || undefined, subject_id: props.subjectId || undefined,
         customer_code: props.customerCode || undefined,
       },
@@ -168,6 +180,7 @@ async function load(p = page.value) {
     cases.value = data?.data || []
     total.value = data?.total || 0
     counts.value = data?.counts || {}
+    streams.value = Array.isArray(data?.streams) ? data.streams : []
   } catch {
     if (seq === requestSeq) cases.value = []
   } finally {
@@ -202,7 +215,7 @@ function formatDateTime(v?: string | null) {
 watch(() => [props.subjectId, props.customerCode], () => load(1))
 onMounted(() => load(1))
 
-defineExpose({ load, cases, status })
+defineExpose({ load, cases, status, stream, streamOptions })
 </script>
 
 <style scoped>
