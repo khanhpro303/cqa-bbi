@@ -42,7 +42,8 @@ const (
 	ParserLocal        = "local"
 )
 
-// UnstructuredExtensions are the types sent to Unstructured. Images and
+// UnstructuredExtensions are the types sent to a partition endpoint
+// (Transform takes TransformExtensions). Images and
 // legacy Office files are only readable when Unstructured is set up.
 var UnstructuredExtensions = []string{
 	".pdf", ".docx", ".doc", ".odt", ".rtf", ".pptx", ".ppt", ".xlsx", ".xls", ".csv", ".tsv",
@@ -156,7 +157,7 @@ func SupportsExtension(p ParserSettings, fileName string) bool {
 	if containsString(SupportedExtensions, ext) {
 		return true
 	}
-	return p.Enabled() && containsString(UnstructuredExtensions, ext)
+	return p.Enabled() && containsString(p.remoteExtensions(), ext)
 }
 
 // AcceptedExtensions lists the types the upload accepts with p.
@@ -164,7 +165,7 @@ func AcceptedExtensions(p ParserSettings) []string {
 	if !p.Enabled() {
 		return SupportedExtensions
 	}
-	out := append([]string{}, UnstructuredExtensions...)
+	out := append([]string{}, p.remoteExtensions()...)
 	for _, e := range SupportedExtensions {
 		if !containsString(out, e) {
 			out = append(out, e)
@@ -188,7 +189,7 @@ func containsString(list []string, s string) bool {
 // returns a notice saying so.
 func ExtractDocument(ctx context.Context, p ParserSettings, fileName string, data []byte) (text, parser, notice string, err error) {
 	ext := strings.ToLower(filepath.Ext(fileName))
-	if p.Enabled() && containsString(UnstructuredExtensions, ext) {
+	if p.Enabled() && containsString(p.remoteExtensions(), ext) {
 		text, uerr := UnstructuredExtract(ctx, p, fileName, data)
 		if uerr == nil {
 			return text, ParserUnstructured, "", nil
@@ -218,12 +219,16 @@ type unstructuredElement struct {
 	} `json:"metadata"`
 }
 
-// UnstructuredExtract sends the file to the partition API and joins the
+// UnstructuredExtract sends the file to the partition API (or to Transform,
+// see unstructured_transform.go) and joins the
 // returned elements into text: titles and paragraphs as blocks, list items
 // as lines, tables as "a | b" rows, page headers/footers dropped.
 func UnstructuredExtract(ctx context.Context, p ParserSettings, fileName string, data []byte) (string, error) {
 	if err := ValidateUnstructuredURL(p.url()); err != nil {
 		return "", err
+	}
+	if p.IsTransform() {
+		return transformExtract(ctx, p, fileName, data)
 	}
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -258,6 +263,10 @@ func UnstructuredExtract(ctx context.Context, p ParserSettings, fileName string,
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 128<<20))
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("status 404: %s. The API URL is not a partition endpoint (…/general/v0/general); for a Transform key use %s",
+			truncateRunes(strings.TrimSpace(string(raw)), 200), TransformBaseURL)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("status %d: %s", resp.StatusCode, truncateRunes(strings.TrimSpace(string(raw)), 300))
 	}

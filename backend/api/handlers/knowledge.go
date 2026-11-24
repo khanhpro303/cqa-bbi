@@ -448,7 +448,8 @@ func SaveKnowledgeParser(c *gin.Context) {
 	GetKnowledgeParser(c)
 }
 
-// TestKnowledgeParser sends a tiny text file to Unstructured.
+// TestKnowledgeParser checks the Unstructured setup: a partition endpoint
+// reads a tiny text file; Transform (v2) lists one job, which costs nothing.
 func TestKnowledgeParser(c *gin.Context) {
 	p := tenantParser(middleware.GetTenantID(c))
 	if !p.Enabled() {
@@ -457,10 +458,9 @@ func TestKnowledgeParser(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
-	text, err := knowledge.UnstructuredExtract(ctx, p, "cqa-test.txt", []byte("Kiểm tra kết nối Unstructured từ CQA."))
-	if err != nil {
+	if err := knowledge.CheckUnstructured(ctx, p); err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "text": text})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "transform": p.IsTransform()})
 }
