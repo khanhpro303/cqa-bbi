@@ -110,6 +110,9 @@ export interface CustomerCase {
   reporter_name: string
   customer_name: string
   customer_code: string
+  // Complaint stream the decision model filed the case under ("" = none).
+  stream?: string
+  stream_name?: string
   type: string
   severity: string
   title: string

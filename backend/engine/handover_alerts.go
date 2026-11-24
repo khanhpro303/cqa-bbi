@@ -301,6 +301,11 @@ type CaseAlert struct {
 	// FromSummary: the problem was found when the session was summarized,
 	// not recorded by the bot while chatting.
 	FromSummary bool
+	// StreamName: the complaint stream (luồng) the case is filed under.
+	StreamName string
+	// AlertGroupID: the stream's own alert group; empty uses the channel's
+	// handover alert group.
+	AlertGroupID string
 }
 
 // BuildCaseAlertMessage renders a case alert. Pure for unit tests. It never
@@ -343,6 +348,9 @@ func BuildCaseAlertMessage(a CaseAlert, at time.Time) string {
 	if label == "" {
 		label = "Khác"
 	}
+	if s := strings.TrimSpace(a.StreamName); s != "" {
+		fmt.Fprintf(&b, "Luồng: %s\n", s)
+	}
 	fmt.Fprintf(&b, "Vấn đề: [%s] %s\n", label, truncateRunes(strings.TrimSpace(a.Title), 200))
 	if d := strings.TrimSpace(a.Detail); d != "" && d != strings.TrimSpace(a.Title) {
 		fmt.Fprintf(&b, "Chi tiết: %s\n", truncateRunes(d, 500))
@@ -363,22 +371,33 @@ func BuildCaseAlertMessage(a CaseAlert, at time.Time) string {
 	return b.String()
 }
 
-// NotifyCase sends a case alert to the channel's handover alert group. It
-// reports whether the alert was sent.
+// NotifyCase sends a case alert to the case's stream group, or to the
+// channel's handover alert group when the stream has none (or its group is
+// gone). It reports whether the alert was sent.
 func NotifyCase(ctx context.Context, sender HandoverGroupSender, a CaseAlert) bool {
-	groupID := ParseHandoverAlertGroupID(a.Channel.Metadata)
-	if groupID == "" {
-		log.Printf("[case-alert] channel %s has no alert group configured; case not alerted", a.Channel.ID)
-		return false
+	groupID, group, ok := "", models.CRMGroup{}, false
+	if id := strings.TrimSpace(a.AlertGroupID); id != "" {
+		if group, ok = loadAlertGroup(a.TenantID, id); ok {
+			groupID = id
+		} else {
+			log.Printf("[case-alert] channel %s stream group %s misconfigured; using the handover alert group", a.Channel.ID, id)
+			recordHandoverAlertLog(HandoverAlert{TenantID: a.TenantID}, id, "", "failed", "stream_group_misconfigured")
+		}
+	}
+	if !ok {
+		groupID = ParseHandoverAlertGroupID(a.Channel.Metadata)
+		if groupID == "" {
+			log.Printf("[case-alert] channel %s has no alert group configured; case not alerted", a.Channel.ID)
+			return false
+		}
+		if group, ok = loadAlertGroup(a.TenantID, groupID); !ok {
+			log.Printf("[case-alert] channel %s alert group %s misconfigured", a.Channel.ID, groupID)
+			recordHandoverAlertLog(HandoverAlert{TenantID: a.TenantID}, groupID, "", "failed", "alert_group_misconfigured")
+			return false
+		}
 	}
 	logAlert := func(body, status, errMsg string) {
 		recordHandoverAlertLog(HandoverAlert{TenantID: a.TenantID}, groupID, body, status, errMsg)
-	}
-	var group models.CRMGroup
-	if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, a.TenantID).First(&group).Error; err != nil || strings.TrimSpace(group.ZaloGroupID) == "" {
-		log.Printf("[case-alert] channel %s alert group %s misconfigured: %v", a.Channel.ID, groupID, err)
-		logAlert("", "failed", "alert_group_misconfigured")
-		return false
 	}
 	loc, err := time.LoadLocation(tenantTimezone(a.TenantID))
 	if err != nil || loc == nil {
@@ -392,4 +411,14 @@ func NotifyCase(ctx context.Context, sender HandoverGroupSender, a CaseAlert) bo
 	}
 	logAlert(msg, "sent", "")
 	return true
+}
+
+// loadAlertGroup returns the tenant's CRM group when it is linked to a Zalo
+// group the OA can post in.
+func loadAlertGroup(tenantID, groupID string) (models.CRMGroup, bool) {
+	var group models.CRMGroup
+	if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil || strings.TrimSpace(group.ZaloGroupID) == "" {
+		return models.CRMGroup{}, false
+	}
+	return group, true
 }

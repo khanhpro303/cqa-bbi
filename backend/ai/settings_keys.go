@@ -9,6 +9,8 @@ func ProviderAPIKeySettingKey(provider string) string {
 		return "ai_api_key_gemini"
 	case "openai":
 		return "ai_api_key_openai"
+	case ProviderOpenRouter:
+		return "ai_api_key_openrouter"
 	default:
 		return "ai_api_key"
 	}

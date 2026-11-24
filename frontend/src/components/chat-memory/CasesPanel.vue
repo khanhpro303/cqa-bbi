@@ -57,6 +57,7 @@
             <div class="font-weight-medium text-truncate">{{ c.title }}</div>
             <div class="text-caption text-medium-emphasis">
               {{ $t(issueTypeLabelKey(c.type)) }}
+              <span v-if="c.stream_name" data-testid="case-stream"> · {{ $t('case_stream') }}: {{ c.stream_name }}</span>
               <v-icon v-if="parseCaseImages(c.images).length" size="x-small" class="ml-1">mdi-image-outline</v-icon>
               <span v-if="parseCaseImages(c.images).length">{{ parseCaseImages(c.images).length }}</span>
             </div>

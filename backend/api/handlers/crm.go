@@ -774,12 +774,7 @@ func getAIClientForTenant(ctx context.Context, tenantID string) (ai.AIProvider, 
 		return nil, fmt.Errorf("API key not configured for provider %s", provider)
 	}
 
-	model := "claude-haiku-4-5"
-	if provider == "gemini" {
-		model = "gemini-2.0-flash"
-	} else if provider == "openai" {
-		model = "gpt-5-mini"
-	}
+	model := ai.DefaultModel(provider)
 	var modelSetting models.AppSetting
 	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_model'", tenantID).First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
 		model = modelSetting.ValuePlain
@@ -791,16 +786,7 @@ func getAIClientForTenant(ctx context.Context, tenantID string) (ai.AIProvider, 
 		baseURL = baseURLSetting.ValuePlain
 	}
 
-	switch provider {
-	case "claude":
-		return ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL), nil
-	case "gemini":
-		return ai.NewGeminiProvider(apiKey, model, baseURL), nil
-	case "openai":
-		return ai.NewOpenAIProvider(apiKey, model, baseURL), nil
-	default:
-		return nil, fmt.Errorf("unsupported AI provider: %s", provider)
-	}
+	return ai.NewProviderClient(provider, apiKey, model, baseURL, cfg.AIMaxTokens)
 }
 
 // AnalyzeZaloCustomerChat queries the chat history from Astra DB for a customer and runs AI analysis.

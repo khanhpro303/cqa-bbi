@@ -114,7 +114,7 @@ func getSettingValue(settings []models.AppSetting, key, defaultVal string) strin
 func SaveAISettings(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	var req struct {
-		Provider  string `json:"provider" binding:"required,oneof=claude gemini openai"`
+		Provider  string `json:"provider" binding:"required,oneof=claude gemini openai openrouter"`
 		APIKey    string `json:"api_key" binding:"required"`
 		Model     string `json:"model"`
 		BaseURL   string `json:"base_url"`
@@ -546,7 +546,7 @@ func TestAIKey(c *gin.Context) {
 	}
 	if req.Provider != "" {
 		switch req.Provider {
-		case "claude", "gemini", "openai":
+		case "claude", "gemini", "openai", "openrouter":
 			provider = req.Provider
 		default:
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_provider"})
@@ -597,23 +597,15 @@ func TestAIKey(c *gin.Context) {
 		}
 	}
 
-	var providerClient ai.AIProvider
-	switch provider {
-	case "claude":
-		providerClient = ai.NewClaudeProvider(string(apiKey), model, cfg.AIMaxTokens, baseURL)
-	case "gemini":
-		providerClient = ai.NewGeminiProvider(string(apiKey), model, baseURL)
-	case "openai":
-		providerClient = ai.NewOpenAIProvider(string(apiKey), model, baseURL)
-	default:
+	providerClient, err := ai.NewProviderClient(provider, string(apiKey), model, baseURL, cfg.AIMaxTokens)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_provider"})
 		return
 	}
 
 	testCtx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 	defer cancel()
-	_, err := providerClient.AnalyzeChat(testCtx, "Respond with valid JSON only: {\"ok\": true}", "Ping")
-	if err != nil {
+	if _, err := providerClient.AnalyzeChat(testCtx, "Respond with valid JSON only: {\"ok\": true}", "Ping"); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "api_test_failed", "details": err.Error()})
 		return
 	}

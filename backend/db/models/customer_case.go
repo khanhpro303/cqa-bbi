@@ -31,11 +31,15 @@ type CustomerCase struct {
 
 	// Type uses the chat-memory issue types: complaint, delivery,
 	// product_defect, price, payment, staff_request, other.
-	Type     string `gorm:"type:varchar(30);not null;default:'other'" json:"type"`
-	Severity string `gorm:"type:varchar(10);not null;default:'medium'" json:"severity"`
-	Title    string `gorm:"type:varchar(255);not null;default:''" json:"title"`
-	Detail   string `gorm:"type:text" json:"detail"`
-	Evidence string `gorm:"type:text" json:"evidence"`
+	Type string `gorm:"type:varchar(30);not null;default:'other'" json:"type"`
+	// Stream is the complaint stream (channel metadata complaint_streams)
+	// the decision model filed the case under; StreamName is its name then.
+	Stream     string `gorm:"type:varchar(40);not null;default:''" json:"stream"`
+	StreamName string `gorm:"type:varchar(100);not null;default:''" json:"stream_name"`
+	Severity   string `gorm:"type:varchar(10);not null;default:'medium'" json:"severity"`
+	Title      string `gorm:"type:varchar(255);not null;default:''" json:"title"`
+	Detail     string `gorm:"type:text" json:"detail"`
+	Evidence   string `gorm:"type:text" json:"evidence"`
 	// Images is a JSON list of CaseImage: pictures the customer sent about
 	// the problem, with what the AI read in them.
 	Images string `gorm:"type:json" json:"images"`

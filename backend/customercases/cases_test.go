@@ -23,7 +23,7 @@ func TestParseDecision(t *testing.T) {
 		{`not json`, -1, true},
 	}
 	for _, c := range cases {
-		got, _, err := ParseDecision(c.in, 2)
+		got, _, _, err := ParseDecision(c.in, 2, nil)
 		if got != c.want || (err != nil) != c.wantErr {
 			t.Errorf("ParseDecision(%q) = %d, %v; want %d, err=%v", c.in, got, err, c.want, c.wantErr)
 		}
@@ -38,7 +38,7 @@ func TestBuildDecisionInputNumbersCandidates(t *testing.T) {
 		[]models.CustomerCase{
 			{ID: "a", Type: "delivery", Title: "Giao thiếu 2 nón", Status: StatusOpen, CreatedAt: at},
 			{ID: "b", Type: "payment", Title: "Chứng từ DH0565913-3 báo lỗi", Status: StatusResolved, CreatedAt: at, Resolution: "Đã xoá chứng từ cũ"},
-		}, loc)
+		}, nil, loc)
 	for _, want := range []string{"<van_de_moi>", "Loại: Thanh toán, công nợ", "Ảnh khách gửi: Thông báo", "[1] Mới, chưa xử lý · Giao hàng", "[2] Đã xử lý xong", "Cách đã xử lý: Đã xoá chứng từ cũ"} {
 		if !strings.Contains(in, want) {
 			t.Errorf("input missing %q:\n%s", want, in)

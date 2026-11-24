@@ -77,6 +77,7 @@ func alertStaff(ctx context.Context, out *Outcome, r Report) bool {
 	if !EnabledFor(ch.Metadata) {
 		return false
 	}
+	alertGroupID, streamName := streamAlert(StreamsFor(ch.Metadata), c.Stream, c.StreamName)
 	group := ""
 	if c.SubjectType == "group" {
 		group = r.ChatGroup
@@ -89,6 +90,7 @@ func alertStaff(ctx context.Context, out *Outcome, r Report) bool {
 		ReporterName: r.ReporterName, CustomerName: c.CustomerName, CustomerCode: c.CustomerCode, ChatGroup: group,
 		TypeLabel: TypeLabel(c.Type), Severity: c.Severity, Title: c.Title, StatusLabel: StatusLabel(c.Status),
 		FollowupCount: c.FollowupCount, ImageCount: len(parseImages(c.Images)), FromSummary: r.Source == SourceSummary,
+		StreamName: streamName, AlertGroupID: alertGroupID,
 	}
 	if out.Action == ActionCreated {
 		a.Detail, a.Evidence = c.Detail, c.Evidence

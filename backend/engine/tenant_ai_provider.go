@@ -14,7 +14,7 @@ import (
 // LLM calls (intent classification, chat-memory summaries).
 type TenantAIProvider struct {
 	Client   ai.AIProvider
-	Provider string // claude | gemini | openai
+	Provider string // claude | gemini | openai | openrouter
 	Model    string
 }
 
@@ -57,12 +57,7 @@ func ResolveTenantAIProvider(tenantID string, cfg *config.Config) (TenantAIProvi
 		return out, nil
 	}
 
-	model := "claude-haiku-4-5"
-	if provider == "gemini" {
-		model = "gemini-2.0-flash"
-	} else if provider == "openai" {
-		model = "gpt-5-mini"
-	}
+	model := ai.DefaultModel(provider)
 	var modelSetting models.AppSetting
 	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_model'", tenantID).First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
 		model = modelSetting.ValuePlain
@@ -75,15 +70,10 @@ func ResolveTenantAIProvider(tenantID string, cfg *config.Config) (TenantAIProvi
 		baseURL = baseURLSetting.ValuePlain
 	}
 
-	switch provider {
-	case "claude":
-		out.Client = ai.NewClaudeProvider(apiKey, model, cfg.AIMaxTokens, baseURL)
-	case "gemini":
-		out.Client = ai.NewGeminiProvider(apiKey, model, baseURL)
-	case "openai":
-		out.Client = ai.NewOpenAIProvider(apiKey, model, baseURL)
-	default:
-		return out, fmt.Errorf("unsupported AI provider: %s", provider)
+	client, err := ai.NewProviderClient(provider, apiKey, model, baseURL, cfg.AIMaxTokens)
+	if err != nil {
+		return out, err
 	}
+	out.Client = client
 	return out, nil
 }

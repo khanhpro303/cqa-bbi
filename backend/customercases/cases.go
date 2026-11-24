@@ -99,6 +99,10 @@ type Report struct {
 	Detail   string
 	Evidence string
 	Images   []models.CaseImage
+	// Stream, StreamName: the complaint stream the decision model chose
+	// (set by decideAndWrite).
+	Stream     string
+	StreamName string
 }
 
 // Outcome is what Report did.
@@ -214,15 +218,20 @@ func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
+	streams := channelStreams(ctx, r)
 	var out Outcome
 	matched := -1
-	if len(candidates) > 0 {
-		idx, reason, err := Decide(ctx, r, candidates)
+	// With streams the model also files the report under one, so it runs
+	// even when there is no earlier case to compare with.
+	if len(candidates) > 0 || len(streams) > 0 {
+		idx, stream, reason, err := Decide(ctx, r, candidates, streams)
 		if err != nil {
 			// A duplicate case is easier to fix than a lost complaint.
 			log.Printf("[cases] decision model failed for %s/%s (%v); opening a new case", r.SubjectType, r.SubjectID, err)
 		}
 		matched, out.Reason = idx, reason
+		_, r.StreamName = streamAlert(streams, stream, "")
+		r.Stream = stream
 	}
 	if matched >= 0 {
 		c, action, eventID, linkedNotified, repeated, err := join(ctx, candidates[matched].ID, r)
@@ -240,6 +249,18 @@ func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 	}
 	out.Action, out.Case, out.eventID = ActionCreated, c, eventID
 	return out, nil
+}
+
+// channelStreams loads the complaint streams of the report's channel.
+func channelStreams(ctx context.Context, r Report) []Stream {
+	if r.ChannelID == "" {
+		return nil
+	}
+	var ch models.Channel
+	if err := db.DB.WithContext(ctx).Select("id, metadata").Where("id = ? AND tenant_id = ?", r.ChannelID, r.TenantID).First(&ch).Error; err != nil {
+		return nil
+	}
+	return StreamsFor(ch.Metadata)
 }
 
 // Candidates returns the cases a new report may belong to: the chat's (or
@@ -349,6 +370,7 @@ func create(ctx context.Context, r Report) (models.CustomerCase, string, error) 
 		SubjectType: r.SubjectType, SubjectID: r.SubjectID, ZaloUserID: r.ZaloUserID, ZaloGroupID: r.ZaloGroupID,
 		ReporterName: truncate(r.ReporterName, 250), CustomerName: truncate(r.CustomerName, 250), CustomerCode: truncate(r.CustomerCode, 60),
 		Type: r.Type, Severity: r.Severity, Title: r.Title, Detail: r.Detail, Evidence: r.Evidence,
+		Stream: r.Stream, StreamName: r.StreamName,
 		Images: string(imagesJSON), Status: StatusOpen, Source: r.Source, OpenedSessionID: r.SessionID, Private: r.SubjectOnly,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -388,6 +410,11 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 		if imagesJSON, _ := json.Marshal(images); string(imagesJSON) != c.Images {
 			updates["images"] = string(imagesJSON)
 			c.Images = string(imagesJSON)
+		}
+		// A case filed before streams were set up takes the stream now.
+		if c.Stream == "" && r.Stream != "" {
+			updates["stream"], updates["stream_name"] = r.Stream, r.StreamName
+			c.Stream, c.StreamName = r.Stream, r.StreamName
 		}
 		if severityRank(r.Severity) > severityRank(c.Severity) {
 			updates["severity"] = r.Severity

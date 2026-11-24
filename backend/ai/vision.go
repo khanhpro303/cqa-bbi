@@ -74,7 +74,7 @@ func (o *OpenAIProvider) AnalyzeImages(ctx context.Context, systemPrompt, text s
 	if len(images) == 0 {
 		return AIResponse{}, errNoImages
 	}
-	return withRetry(ctx, "openai", func() (AIResponse, error) {
+	return withRetry(ctx, o.providerName(), func() (AIResponse, error) {
 		content := make([]map[string]interface{}, 0, len(images)+1)
 		content = append(content, map[string]interface{}{"type": "text", "text": text})
 		for _, im := range images {
@@ -94,7 +94,9 @@ func (o *OpenAIProvider) AnalyzeImages(ctx context.Context, systemPrompt, text s
 		if err != nil {
 			return AIResponse{}, err
 		}
-		return parseChatCompletion(body, o.model)
+		resp, err := parseChatCompletion(body, o.model)
+		resp.Provider = o.providerName()
+		return resp, err
 	})
 }
 

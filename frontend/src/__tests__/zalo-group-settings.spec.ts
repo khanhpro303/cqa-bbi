@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { describe, expect, it, vi } from 'vitest'
-import { readZaloGroupSettings, zaloGroupSettingsPatch } from '../components/channels/zaloGroupSettings'
+import { readZaloGroupSettings, streamKey, zaloGroupSettingsPatch } from '../components/channels/zaloGroupSettings'
 import { useChannelStore, type Channel } from '../stores/channels'
 
 const api = vi.hoisted(() => ({ put: vi.fn() }))
@@ -70,5 +70,37 @@ describe('complaint cases switch', () => {
   it('is off until turned on', () => {
     expect(readZaloGroupSettings({}).complaint_cases).toBe(false)
     expect(readZaloGroupSettings({ complaint_cases: true }).complaint_cases).toBe(true)
+  })
+})
+
+describe('complaint streams', () => {
+  it('reads streams as copies and saves only named rows with a stable key', () => {
+    const original = {
+      complaint_streams: [{ key: 'bao_hanh', name: 'Bảo hành', description: 'hàng lỗi', alert_group_id: 'g1' }],
+    }
+    const settings = readZaloGroupSettings(original)
+    expect(settings.complaint_streams).toEqual(original.complaint_streams)
+    settings.complaint_streams[0]!.alert_group_id = 'g2'
+    expect(original.complaint_streams[0]!.alert_group_id).toBe('g1')
+
+    settings.complaint_streams.push({ key: '', name: 'Khách hàng VIP', description: '', alert_group_id: '' })
+    settings.complaint_streams.push({ key: '', name: '   ', description: 'bỏ', alert_group_id: '' })
+    expect(zaloGroupSettingsPatch(settings, original)).toEqual({
+      complaint_streams: [
+        { key: 'bao_hanh', name: 'Bảo hành', description: 'hàng lỗi', alert_group_id: 'g2' },
+        { key: 'khach_hang_vip', name: 'Khách hàng VIP', description: '', alert_group_id: '' },
+      ],
+    })
+  })
+
+  it('is empty by default and unchanged streams are not saved', () => {
+    const settings = readZaloGroupSettings({})
+    expect(settings.complaint_streams).toEqual([])
+    expect(zaloGroupSettingsPatch(settings, {})).toEqual({})
+  })
+
+  it('makes slugs from Vietnamese names', () => {
+    expect(streamKey('Bảo hành / Đổi trả')).toBe('bao_hanh_doi_tra')
+    expect(streamKey('  Marketing  ')).toBe('marketing')
   })
 })

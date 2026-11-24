@@ -18,7 +18,22 @@ Khi khách báo một vấn đề cần nhân viên xử lý (hàng lỗi, giao 
 9. **Tin gửi lại**: nếu một tin bị xử lý lại (Zalo gửi lại, lỗi mạng), bot không tính là khách hỏi lại lần nữa.
 8. **Chỉ webhook đã xác thực**: bot chỉ ghi case khi tin nhắn có chữ ký Zalo hợp lệ (cần `ZALO_OA_SECRET_KEY`). Có secret thì webhook mặc định ở chế độ `enforce`.
 
-Cảnh báo case gửi vào **nhóm cảnh báo handover** của kênh (Kênh → Nhóm Zalo).
+Cảnh báo case gửi vào **nhóm cảnh báo handover** của kênh (Kênh → Nhóm Zalo), hoặc vào nhóm của luồng xử lý nếu kênh có chia luồng (xem dưới).
+
+## Luồng xử lý (bảo hành, khách hàng, sản phẩm, marketing…)
+
+Kênh → Nhóm Zalo, dưới công tắc **Ghi khiếu nại thành case**: thêm các luồng xử lý (bấm **Dùng luồng gợi ý** để có sẵn Bảo hành, Chăm sóc khách hàng, Sản phẩm, Marketing rồi sửa tên/mô tả). Mỗi luồng có:
+
+- **Tên** và **Mô tả**: model quyết định (cùng lần gọi quyết định vấn đề cũ hay mới) đọc tên và mô tả để xếp vấn đề mới vào đúng một luồng. Mô tả càng cụ thể càng xếp đúng.
+- **Nhóm nhận báo**: nhóm Zalo (CRM) nhận cảnh báo của luồng đó. Để trống thì báo vào nhóm cảnh báo handover. Nhóm của luồng bị xoá hoặc chưa liên kết Zalo thì cũng báo vào nhóm handover.
+
+Case lưu luồng (`stream`, `stream_name`) và hiện trên danh sách và chi tiết case; cảnh báo có thêm dòng `Luồng: …`. Khách hỏi lại vấn đề cũ thì case giữ luồng ban đầu (case cũ chưa có luồng sẽ nhận luồng lần này). Model không chọn được luồng (hoặc lỗi) thì case không có luồng và báo vào nhóm handover. Không khai luồng nào thì mọi thứ chạy như trước.
+
+Cấu hình nằm trong metadata kênh, khoá `complaint_streams`: `[{"key":"bao_hanh","name":"Bảo hành","description":"hàng lỗi, đổi trả","alert_group_id":"<id nhóm CRM>"}]`. `key` được tạo một lần từ tên và giữ nguyên khi đổi tên.
+
+## Model AI: OpenRouter
+
+Cài đặt → Cấu hình AI → Nhà cung cấp **OpenRouter (model free)**: dán API key OpenRouter, chọn model trong danh sách model free (id đuôi `:free`, lấy trực tiếp từ OpenRouter; model có ghi "đọc ảnh" mới đọc được ảnh khách gửi) hoặc gõ id model bất kỳ. Dùng chung code OpenAI (Chat Completions tại `https://openrouter.ai/api/v1`). Model này dùng cho mọi tác vụ AI nhỏ của tenant: quyết định case và luồng, đọc ảnh, tóm tắt phiên, phân loại ý định. Model free thường bị giới hạn lượt và có thể chậm; nếu đọc ảnh là quan trọng thì chọn model có vision.
 
 ## Nhân viên xử lý
 
@@ -36,7 +51,7 @@ Hồ sơ khách (tab Hồ sơ khách) cũng liệt kê các case của khách đ
 1. Deploy bản mới (bảng `customer_cases`, `customer_case_events` được tạo tự động).
 2. Trong Langflow, trên node **MCP Tools** của cả hai flow v2, bấm làm mới danh sách tool để agent thấy `complaint_record`.
 3. AI Engine phải có system prompt (Ext và Int) thì phần hướng dẫn khiếu nại mới được nối vào. Không có system prompt thì kênh chạy như khi tắt.
-4. Kênh → Nhóm Zalo: chọn nhóm cảnh báo handover, rồi **bật** công tắc **Ghi khiếu nại thành case** (mặc định tắt). Công tắc được kiểm tra cả khi bot gọi công cụ: tắt rồi thì bot không ghi case được nữa.
+4. Kênh → Nhóm Zalo: chọn nhóm cảnh báo handover (và nhóm cho từng luồng nếu chia luồng), rồi **bật** công tắc **Ghi khiếu nại thành case** (mặc định tắt). Công tắc được kiểm tra cả khi bot gọi công cụ: tắt rồi thì bot không ghi case được nữa.
 5. Ảnh chỉ được tải từ máy chủ ảnh của Zalo (https, không trỏ về địa chỉ nội bộ); ảnh từ nơi khác không được lưu hay hiện cho nhân viên. Model AI của tenant phải đọc được ảnh (OpenAI gpt-4o-mini/gpt-4o, Gemini, Claude có vision). Nếu không đọc được, bot nhận `[Ảnh khách gửi: chưa đọc được nội dung ảnh]` và ảnh vẫn được gắn vào case.
 
 ## Bảng

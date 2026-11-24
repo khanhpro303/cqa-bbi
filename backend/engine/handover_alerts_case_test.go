@@ -23,6 +23,13 @@ func TestBuildCaseAlertMessage(t *testing.T) {
 	if !strings.Contains(follow, "lần 3") || !strings.Contains(follow, "Trạng thái: Đang xử lý") || !strings.Contains(follow, "Zalo ID: zu") {
 		t.Errorf("follow-up alert:\n%s", follow)
 	}
+	streamed := BuildCaseAlertMessage(CaseAlert{Kind: "created", Title: "Nón nứt", StreamName: "Bảo hành"}, at)
+	if !strings.Contains(streamed, "Luồng: Bảo hành\n") {
+		t.Errorf("alert should name the stream:\n%s", streamed)
+	}
+	if strings.Contains(created, "Luồng:") {
+		t.Errorf("no stream line expected without a stream:\n%s", created)
+	}
 	reopened := BuildCaseAlertMessage(CaseAlert{Kind: "reopened", Title: "Kính nứt", FromSummary: true}, at)
 	if !strings.Contains(reopened, "vẫn chưa ổn") || !strings.Contains(reopened, "tóm tắt phiên") {
 		t.Errorf("reopened alert:\n%s", reopened)

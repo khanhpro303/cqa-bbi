@@ -12,6 +12,7 @@
           <v-chip size="small" variant="tonal" :color="caseStatusColor(item.status)">{{ $t(`cc_status_${item.status}`) }}</v-chip>
           <v-chip size="small" :color="severityColor(item.severity)">{{ $t(`cm_severity_${item.severity}`) }}</v-chip>
           <v-chip size="small" variant="outlined">{{ $t(issueTypeLabelKey(item.type)) }}</v-chip>
+          <v-chip v-if="item.stream_name" size="small" variant="outlined" prepend-icon="mdi-call-split">{{ $t('case_stream') }}: {{ item.stream_name }}</v-chip>
           <v-chip size="small" variant="outlined" prepend-icon="mdi-source-branch">{{ $t(`cc_source_${item.source}`) }}</v-chip>
           <v-chip v-if="item.followup_count" size="small" color="warning" variant="tonal">{{ $t('cc_followups') }}: {{ item.followup_count }}</v-chip>
         </div>

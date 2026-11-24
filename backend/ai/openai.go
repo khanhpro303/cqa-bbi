@@ -16,6 +16,18 @@ type OpenAIProvider struct {
 	apiKey  string
 	model   string
 	baseURL string
+	// name is the provider reported in responses and cost logs ("" = openai).
+	name string
+	// chatOnly skips the Responses API (OpenAI-compatible services such as
+	// OpenRouter only serve Chat Completions).
+	chatOnly bool
+}
+
+func (o *OpenAIProvider) providerName() string {
+	if o.name == "" {
+		return ProviderOpenAI
+	}
+	return o.name
 }
 
 func NewOpenAIProvider(apiKey, model, baseURL string) *OpenAIProvider {
@@ -49,7 +61,10 @@ func (o *OpenAIProvider) AnalyzeJSONSchema(ctx context.Context, systemPrompt, in
 }
 
 func (o *OpenAIProvider) analyze(ctx context.Context, systemPrompt string, input string, jsonOutput bool, schemas ...map[string]interface{}) (AIResponse, error) {
-	return withRetry(ctx, "openai", func() (AIResponse, error) {
+	return withRetry(ctx, o.providerName(), func() (AIResponse, error) {
+		if o.chatOnly {
+			return o.analyzeWithChatCompletions(ctx, systemPrompt, input, jsonOutput, schemas...)
+		}
 		// Prefer Responses API for modern OpenAI models, then fallback to Chat Completions
 		// for compatible proxies/older deployments.
 		resp, err := o.analyzeWithResponses(ctx, systemPrompt, input, jsonOutput, schemas...)
@@ -202,7 +217,9 @@ func (o *OpenAIProvider) analyzeWithChatCompletions(ctx context.Context, systemP
 		return AIResponse{}, err
 	}
 
-	return parseChatCompletion(body, o.model)
+	resp, err := parseChatCompletion(body, o.model)
+	resp.Provider = o.providerName()
+	return resp, err
 }
 
 // parseChatCompletion reads a Chat Completions response.

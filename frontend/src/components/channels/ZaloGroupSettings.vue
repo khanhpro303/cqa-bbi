@@ -100,6 +100,12 @@
       class="mt-2"
       data-testid="complaint-cases"
     />
+    <ComplaintStreams
+      v-if="settings.complaint_cases"
+      v-model="settings.complaint_streams"
+      :group-options="alertGroupOptions"
+      :loading-groups="loadingAlertGroups"
+    />
   </div>
 </template>
 
@@ -107,6 +113,7 @@
 import { onMounted, ref } from 'vue'
 import api from '../../api'
 import CampaignAlertOutputs from './CampaignAlertOutputs.vue'
+import ComplaintStreams from './ComplaintStreams.vue'
 import type { ZaloGroupSettings } from './zaloGroupSettings'
 
 const props = defineProps<{ tenantId: string; channelId: string }>()
