@@ -22,6 +22,7 @@
       <template v-if="canEdit">
         <v-btn color="primary" prepend-icon="mdi-upload" @click="uploadDialog = true">{{ $t('kb_upload') }}</v-btn>
         <v-btn variant="outlined" prepend-icon="mdi-text-box-plus-outline" @click="textDialog = true">{{ $t('kb_add_text') }}</v-btn>
+        <v-btn variant="outlined" prepend-icon="mdi-link-variant" data-testid="kb-add-link" @click="linkDialog = true">{{ $t('kb_add_link') }}</v-btn>
       </template>
     </div>
 
@@ -55,7 +56,7 @@
             <td>
               <v-chip size="small" :color="statusColor(d.status)" variant="tonal">{{ $t(statusLabel(d)) }}</v-chip>
               <div v-if="d.status === 'failed'" class="text-caption text-medium-emphasis mt-1">
-                {{ $t(d.chunk_count ? 'kb_index_failed' : 'kb_extract_failed') }}
+                {{ $t(d.chunk_count ? 'kb_index_failed' : d.source === 'url' ? 'kb_link_extract_failed' : 'kb_extract_failed') }}
               </div>
             </td>
             <td>
@@ -123,6 +124,36 @@
       </v-card>
     </v-dialog>
 
+    <v-dialog v-model="linkDialog" :aria-label="$t('kb_add_link')" :persistent="savingLink" max-width="560px">
+      <v-card>
+        <v-card-title>{{ $t('kb_add_link') }}</v-card-title>
+        <form data-testid="kb-link-form" novalidate @submit.prevent="saveLink">
+          <v-card-text>
+            <v-alert v-if="firecrawlEnabled === false" type="info" variant="tonal" density="compact" class="mb-4" data-testid="kb-firecrawl-setup">
+              {{ $t('kb_link_setup') }} <router-link :to="`/${tenantId}/ai-engines`">{{ $t('nav_ai_engines') }}</router-link>.
+            </v-alert>
+            <v-alert v-else-if="firecrawlEnabled === null && listError" type="error" variant="tonal" density="compact" class="mb-4">
+              {{ $t('firecrawl_load_failed') }}
+              <v-btn type="button" variant="text" size="small" @click="load">{{ $t('kb_retry') }}</v-btn>
+            </v-alert>
+            <v-text-field v-model="linkForm.url" :label="$t('kb_link_url')" :hint="$t('kb_link_public_hint')" persistent-hint type="url" placeholder="https://example.com" maxlength="2048" density="compact" :disabled="savingLink" data-testid="kb-link-url" />
+            <v-text-field v-model="linkForm.title" :label="$t('kb_link_title')" density="compact" maxlength="250" :disabled="savingLink" data-testid="kb-link-title" />
+            <v-select v-model="linkForm.audience" :items="audienceOptions" :label="$t('kb_col_audience')" density="compact" :disabled="savingLink" data-testid="kb-link-audience" />
+            <v-alert v-if="linkError" type="error" variant="tonal" density="compact" data-testid="kb-link-error">
+              {{ $t(linkError) }}
+            </v-alert>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn type="button" variant="text" :disabled="savingLink" @click="linkDialog = false">{{ $t('cancel') }}</v-btn>
+            <v-btn type="submit" color="primary" variant="flat" :loading="savingLink" :disabled="!firecrawlEnabled || !linkForm.url.trim() || savingLink">
+              {{ $t('kb_link_run') }}
+            </v-btn>
+          </v-card-actions>
+        </form>
+      </v-card>
+    </v-dialog>
+
     <v-dialog v-model="docDialog" :aria-label="selected?.title" max-width="760px" scrollable @after-leave="restoreDocumentFocus">
       <v-card v-if="selected">
         <div class="d-flex align-start justify-space-between ga-3 pa-4 pa-sm-6">
@@ -130,6 +161,9 @@
             <h2 class="text-h6">{{ selected.title }}</h2>
             <div class="d-flex align-center flex-wrap ga-2 mt-2">
               <span class="text-caption text-medium-emphasis">{{ documentSource(selected) }}</span>
+              <a v-if="selectedSourceURL" :href="selectedSourceURL" target="_blank" rel="noopener noreferrer" class="text-caption" data-testid="kb-source-url">
+                {{ $t('kb_link_open_source') }}
+              </a>
               <v-chip size="small" variant="tonal">{{ $t(selected.audience === 'internal' ? 'kb_audience_internal' : 'kb_audience_public') }}</v-chip>
             </div>
           </div>
@@ -147,7 +181,7 @@
               </div>
             </template>
             <p v-else-if="!summaryError && summary?.status !== 'failed'" class="text-body-2 text-medium-emphasis">
-              {{ $t(detailExtracting ? 'kb_status_extracting' : selected.chunk_count ? 'kb_summary_missing' : 'kb_summary_no_text') }}
+              {{ $t(detailExtracting ? statusLabel(selected) : selected.chunk_count ? 'kb_summary_missing' : 'kb_summary_no_text') }}
             </p>
             <v-alert v-if="summaryError || summary?.status === 'failed'" type="error" variant="tonal" density="compact" class="mt-3">
               {{ $t(summaryError || 'kb_summary_failed') }}
@@ -204,6 +238,7 @@ export interface KnowledgeDoc {
   title: string
   file_name: string
   source: string
+  source_url?: string
   audience: 'public' | 'internal'
   enabled: boolean
   status: 'processing' | 'ready' | 'failed' | 'archived'
@@ -230,6 +265,7 @@ const loading = ref(false)
 const listError = ref(false)
 const vectorStore = ref('')
 const parser = ref('')
+const firecrawlEnabled = ref<boolean | null>(null)
 const supported = ref<string[]>(['.pdf', '.docx', '.xlsx', '.txt', '.md', '.csv', '.html'])
 const maxUploadMb = ref(20)
 const acceptTypes = computed(() => supported.value.join(','))
@@ -261,6 +297,7 @@ async function load() {
     listScope = scope
     documents.value = []
     listError.value = false
+    firecrawlEnabled.value = null
   }
   loading.value = true
   try {
@@ -270,6 +307,7 @@ async function load() {
     listError.value = false
     vectorStore.value = data?.vector_store || ''
     parser.value = data?.parser || ''
+    firecrawlEnabled.value = data?.firecrawl_enabled === true
     if (data?.supported_extensions?.length) supported.value = data.supported_extensions
     if (data?.max_upload_mb) maxUploadMb.value = data.max_upload_mb
   } catch {
@@ -354,6 +392,58 @@ async function saveText() {
   }
 }
 
+const linkDialog = ref(false)
+const linkForm = ref({ url: '', title: '', audience: 'public' })
+const savingLink = ref(false)
+const linkError = ref('')
+let linkRequest = 0
+
+function httpURL(raw: string) {
+  if (!/^https?:\/\//i.test(raw)) return null
+  try {
+    const url = new URL(raw)
+    return url.hostname && !url.username && !url.password ? url.href : null
+  } catch {
+    return null
+  }
+}
+
+async function saveLink() {
+  if (savingLink.value || !firecrawlEnabled.value) return
+  const url = linkForm.value.url.trim()
+  if (!httpURL(url) || new TextEncoder().encode(url).length > 2048) {
+    linkError.value = 'kb_link_invalid'
+    return
+  }
+  const request = ++linkRequest
+  const endpoint = base.value
+  savingLink.value = true
+  linkError.value = ''
+  try {
+    await api.post(`${endpoint}/url`, { ...linkForm.value, url, title: linkForm.value.title.trim() })
+    if (request !== linkRequest) return
+    linkDialog.value = false
+    linkForm.value = { url: '', title: '', audience: 'public' }
+    notify(t('kb_link_submitted'))
+    view.value = 'active'
+    await load()
+  } catch (e: any) {
+    if (request !== linkRequest) return
+    switch (e?.response?.data?.error) {
+      case 'firecrawl_not_configured':
+        firecrawlEnabled.value = false
+        break
+      case 'invalid_url':
+        linkError.value = 'kb_link_invalid'
+        break
+      default:
+        linkError.value = 'kb_link_submit_failed'
+    }
+  } finally {
+    if (request === linkRequest) savingLink.value = false
+  }
+}
+
 // Row actions
 async function patchDoc(d: KnowledgeDoc, body: Partial<Pick<KnowledgeDoc, 'title' | 'audience' | 'enabled'>>) {
   try {
@@ -410,6 +500,7 @@ async function purge() {
 // Document dialog
 const docDialog = ref(false)
 const selected = ref<KnowledgeDoc | null>(null)
+const selectedSourceURL = computed(() => httpURL(selected.value?.source_url || ''))
 const summary = ref<Summary | null>(null)
 const loadingDetail = ref(false)
 const generatingSummary = ref(false)
@@ -436,6 +527,11 @@ watch(docDialog, (open) => { if (!open) closeDetail() })
 watch(base, () => {
   closeDetail()
   docDialog.value = false
+  linkRequest++
+  linkDialog.value = false
+  linkForm.value = { url: '', title: '', audience: 'public' }
+  savingLink.value = false
+  linkError.value = ''
   documents.value = []
   view.value = 'active'
   void load()
@@ -555,7 +651,7 @@ function statusColor(s: string) {
 function statusLabel(doc: KnowledgeDoc) {
   if (doc.status === 'processing') {
     if (!doc.enabled) return 'kb_status_paused'
-    if (!doc.chunk_count) return 'kb_status_extracting'
+    if (!doc.chunk_count) return doc.source === 'url' ? 'kb_link_extracting' : 'kb_status_extracting'
   }
   return 'kb_status_' + doc.status
 }
@@ -563,6 +659,7 @@ function documentSource(doc: KnowledgeDoc) {
   return doc.file_name && doc.file_name !== doc.title ? doc.file_name : sourceLabel(doc.source)
 }
 function sourceLabel(s: string) {
+  if (s === 'url') return t('kb_source_link')
   return s === 'text' ? t('kb_source_text') : s === 'astra_import' ? t('kb_source_astra') : t('kb_source_upload')
 }
 function formatDateTime(v: string) {

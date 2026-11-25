@@ -137,6 +137,7 @@
     <TaskPromptsCard :tenant-id="tenantId" />
 
     <DocumentParserCard :tenant-id="tenantId" />
+    <FirecrawlCard :tenant-id="tenantId" />
 
     <!-- Astra DB Config -->
     <v-card class="pa-6 mb-6">
@@ -511,6 +512,7 @@ import ChatbotHealthCard from '../components/ChatbotHealthCard.vue'
 import CloudifyOrderWatchCard from '../components/CloudifyOrderWatchCard.vue'
 import TaskPromptsCard from '../components/TaskPromptsCard.vue'
 import DocumentParserCard from '../components/DocumentParserCard.vue'
+import FirecrawlCard from '../components/FirecrawlCard.vue'
 import { findEndpointsMissingGroups, findEndpointsMissingBrands } from '../utils/erp-permission-validation'
 
 const route = useRoute()

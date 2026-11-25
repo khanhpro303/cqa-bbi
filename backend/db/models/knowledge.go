@@ -12,8 +12,9 @@ type KnowledgeDocument struct {
 	Title    string `gorm:"type:varchar(255);not null" json:"title"`
 	FileName string `gorm:"type:varchar(255)" json:"file_name"`
 	MimeType string `gorm:"type:varchar(100)" json:"mime_type"`
-	// Source is "upload", "text" (typed in the page) or "astra_import".
+	// Source is "upload", "text", "url" or "astra_import".
 	Source    string `gorm:"type:varchar(30);not null;default:'upload'" json:"source"`
+	SourceURL string `gorm:"type:varchar(2048)" json:"source_url,omitempty"`
 	SizeBytes int64  `json:"size_bytes"`
 	// Audience is "public" (customer bot and staff bot) or "internal" (staff
 	// bot only).
@@ -25,7 +26,7 @@ type KnowledgeDocument struct {
 	// (for example "read with the built-in reader because Unstructured
 	// failed").
 	Error string `gorm:"type:text" json:"error,omitempty"`
-	// Parser is how the file was read: "unstructured" or "local".
+	// Parser is how the source was read ("unstructured", "local", or "firecrawl").
 	Parser string `gorm:"type:varchar(20)" json:"parser"`
 	// Summaries are loaded on the document detail endpoint only.
 	Summary          string     `gorm:"type:text" json:"-"`

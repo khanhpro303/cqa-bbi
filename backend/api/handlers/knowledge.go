@@ -42,12 +42,18 @@ func ListKnowledgeDocuments(c *gin.Context) {
 	if parser.Enabled() {
 		parserName = knowledge.ParserUnstructured
 	}
+	firecrawlKey, _, err := loadFirecrawlKey(c.Request.Context(), tenantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"documents":            docs,
 		"vector_store":         svc.IndexName(),
 		"parser":               parserName,
 		"supported_extensions": knowledge.AcceptedExtensions(parser),
 		"max_upload_mb":        knowledge.MaxUploadBytes >> 20,
+		"firecrawl_enabled":    firecrawlKey != "",
 	})
 }
 
@@ -243,7 +249,7 @@ func UpdateKnowledgeDocument(c *gin.Context) {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "vector_delete_failed", "message": err.Error()})
 			return
 		}
-	case reindex && enabled:
+	case reindex && enabled && (doc.Status != knowledge.StatusProcessing || doc.ChunkCount != 0):
 		if err := svc.Reindex(ctx, doc.ID); err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "reindex_failed", "message": err.Error()})
 			return
