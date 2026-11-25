@@ -8,7 +8,7 @@
     <CloudifyOrderWatchCard :tenant-id="tenantId" />
 
     <!-- Langflow Config -->
-    <v-card class="pa-6 mb-6" data-testid="langflow-config">
+    <v-card class="pa-4 pa-sm-6 mb-6" data-testid="langflow-config">
       <div class="text-subtitle-1 font-weight-bold mb-4">
         <v-icon start size="small">mdi-brain</v-icon>
         {{ $t('langflow_config') }}
@@ -92,7 +92,7 @@
     </v-card>
 
     <!-- CRM System Prompts -->
-    <v-card class="pa-6 mb-6" data-testid="crm-system-prompts">
+    <v-card class="pa-4 pa-sm-6 mb-6" data-testid="crm-system-prompts">
       <div class="text-subtitle-1 font-weight-bold mb-4">
         <v-icon start size="small">mdi-account-box-outline</v-icon>
         {{ $t('crm_system_prompts_section') }}
@@ -140,7 +140,7 @@
     <FirecrawlCard :tenant-id="tenantId" />
 
     <!-- Astra DB Config -->
-    <v-card class="pa-6 mb-6">
+    <v-card class="pa-4 pa-sm-6 mb-6">
       <div class="text-subtitle-1 font-weight-bold mb-4 d-flex align-center">
         <v-icon start size="small" color="primary" class="mr-2">mdi-database-cog</v-icon>
         Cấu hình Astra DB (AI Memory & Product Cache)
@@ -199,7 +199,7 @@
     </v-card>
 
     <!-- ERP Config -->
-    <v-card class="pa-6 mb-6">
+    <v-card class="pa-4 pa-sm-6 mb-6">
       <div class="text-subtitle-1 font-weight-bold mb-4 d-flex align-center">
         <v-icon start size="small" color="primary" class="mr-2">mdi-database-sync</v-icon>
         {{ $t('erp_config_title') }}
@@ -336,7 +336,8 @@
           </div>
 
           <v-card variant="outlined" class="rounded-lg pa-1" :bg-color="isDark ? '#2a2a2a' : 'white'">
-            <v-table density="compact">
+            <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+              <v-table density="compact" style="min-width: 650px;">
               <thead>
                 <tr>
                   <th style="width: 22%;">Tài nguyên</th>
@@ -424,7 +425,8 @@
                   </td>
                 </tr>
               </tbody>
-            </v-table>
+              </v-table>
+            </div>
           </v-card>
         </div>
       </v-expand-transition>

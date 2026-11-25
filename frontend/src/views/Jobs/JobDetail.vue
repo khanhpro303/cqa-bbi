@@ -2,13 +2,14 @@
   <ProductGroupingJob v-if="job?.job_type === 'messenger_product_groups'" :job="job" :tenant-id="tenantId" @updated="job = $event" />
   <div v-else>
     <!-- Header -->
-    <div class="d-flex align-center mb-4">
-      <v-btn icon="mdi-arrow-left" variant="text" size="small" :to="`/${tenantId}/jobs`" />
-      <h1 class="text-subtitle-1 text-md-h5 font-weight-bold ml-1 flex-grow-1" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ job?.name || '...' }}</h1>
+    <div class="d-flex align-center mb-4 flex-wrap ga-1" style="min-width: 0;">
+      <v-btn icon="mdi-arrow-left" variant="text" size="small" :to="`/${tenantId}/jobs`" class="flex-shrink-0" />
+      <h1 class="text-subtitle-1 text-md-h5 font-weight-bold ml-1 flex-grow-1 text-truncate" style="min-width: 0;">{{ job?.name || '...' }}</h1>
+      <div class="d-flex align-center flex-shrink-0 ga-1">
       <template v-if="authStore.canEdit('jobs')">
         <v-tooltip v-if="!mdAndUp" text="Sửa" location="bottom">
           <template #activator="{ props }">
-            <v-btn v-bind="props" variant="outlined" icon="mdi-pencil" size="small" :to="`/${tenantId}/jobs/${jobId}/edit`" class="ml-1" />
+            <v-btn v-bind="props" variant="outlined" icon="mdi-pencil" size="small" :to="`/${tenantId}/jobs/${jobId}/edit`" />
           </template>
         </v-tooltip>
         <v-btn v-else variant="outlined" prepend-icon="mdi-pencil" size="small" :to="`/${tenantId}/jobs/${jobId}/edit`" class="ml-2">{{ $t('edit') }}</v-btn>
@@ -16,7 +17,7 @@
         <template v-if="job?.job_type !== 'chatbot_toggle' && job?.job_type !== 'erp_product_cache' && job?.job_type !== 'erp_customer_cache'">
           <v-tooltip v-if="!mdAndUp" text="Chạy thử" location="bottom">
             <template #activator="{ props }">
-              <v-btn v-bind="props" variant="outlined" color="primary" icon="mdi-test-tube" size="small" :loading="isJobRunning" :disabled="isJobRunning" class="ml-1" @click="testRun" />
+              <v-btn v-bind="props" variant="outlined" color="primary" icon="mdi-test-tube" size="small" :loading="isJobRunning" :disabled="isJobRunning" @click="testRun" />
             </template>
           </v-tooltip>
           <v-btn v-else variant="outlined" color="primary" prepend-icon="mdi-test-tube" size="small" :loading="isJobRunning" :disabled="isJobRunning" class="ml-2" @click="testRun">Chạy thử (3 hội thoại)</v-btn>
@@ -24,13 +25,14 @@
 
         <v-tooltip v-if="!mdAndUp" text="Chạy ngay" location="bottom">
           <template #activator="{ props }">
-            <v-btn v-bind="props" color="primary" icon="mdi-play" size="small" :loading="triggering || isJobRunning" class="ml-1" @click="openRunDialog" />
+            <v-btn v-bind="props" color="primary" icon="mdi-play" size="small" :loading="triggering || isJobRunning" @click="openRunDialog" />
           </template>
         </v-tooltip>
         <v-btn v-else color="primary" prepend-icon="mdi-play" size="small" :loading="triggering || isJobRunning" class="ml-2" @click="openRunDialog">{{ $t('run_now') }}</v-btn>
 
-        <v-btn v-if="isJobRunning" color="error" variant="outlined" prepend-icon="mdi-stop" size="small" class="ml-2" :loading="cancelling" @click="cancelJob">{{ mdAndUp ? 'Dừng' : '' }}</v-btn>
+        <v-btn v-if="isJobRunning" color="error" variant="outlined" prepend-icon="mdi-stop" size="small" class="ml-1 ml-sm-2" :loading="cancelling" @click="cancelJob">{{ mdAndUp ? 'Dừng' : '' }}</v-btn>
       </template>
+      </div>
     </div>
 
     <!-- Run options dialog -->
@@ -144,7 +146,7 @@
             {{ job.rules_content === 'true' ? 'Bật Chatbot (ON)' : 'Tắt Chatbot (OFF)' }}
           </v-chip>
         </v-col>
-        <v-col cols="6" sm="3">
+        <v-col cols="12" sm="3">
           <div class="text-caption text-grey">{{ $t('job_wizard_step_analysis_schedule') }}</div>
           <div class="text-body-2">{{ formatJobSchedule(job.schedule_type, job.schedule_cron) }}</div>
         </v-col>
@@ -167,7 +169,7 @@
             <span v-if="!parsedOutputs.length" class="text-body-2 text-grey">—</span>
           </div>
         </v-col>
-        <v-col cols="6" sm="3">
+        <v-col cols="12" sm="3">
           <div class="text-caption text-grey">{{ $t('job_last_run') }}</div>
           <div class="text-body-2" v-if="job.last_run_at">
             {{ formatDateTime(job.last_run_at) }}

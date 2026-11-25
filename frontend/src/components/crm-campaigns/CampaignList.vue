@@ -12,6 +12,7 @@
     </v-alert>
 
     <v-card :loading="loading">
+      <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
       <v-table density="comfortable">
         <thead>
           <tr>
@@ -97,6 +98,7 @@
           </tr>
         </tbody>
       </v-table>
+      </div>
     </v-card>
 
     <!-- Create / edit dialog -->

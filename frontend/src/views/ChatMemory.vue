@@ -32,7 +32,8 @@
           <v-select v-model="profileType" :items="subjectTypeOptions" :label="$t('cm_subject_type')" density="compact" hide-details @update:model-value="loadProfiles(1)" />
         </v-col>
       </v-row>
-      <v-table density="comfortable" hover>
+      <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+        <v-table density="comfortable" hover style="min-width: 600px;">
         <thead>
           <tr>
             <th>{{ $t('cm_customer') }}</th>
@@ -57,7 +58,8 @@
             <td colspan="5" class="text-center text-medium-emphasis py-6">{{ $t('cm_no_profiles') }}</td>
           </tr>
         </tbody>
-      </v-table>
+        </v-table>
+      </div>
       <div class="d-flex justify-end mt-2">
         <v-pagination v-if="profileTotal > perPage" v-model="profilePage" :length="Math.ceil(profileTotal / perPage)" density="compact" @update:model-value="loadProfiles" />
       </div>

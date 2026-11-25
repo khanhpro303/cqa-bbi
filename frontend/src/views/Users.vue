@@ -1,8 +1,8 @@
 <template>
   <div>
-    <div class="d-flex align-center mb-6">
+    <div class="d-flex align-center flex-wrap ga-2 mb-6">
       <h1 class="text-h5 font-weight-bold">{{ $t('nav_users') }}</h1>
-      <v-spacer />
+      <v-spacer class="d-none d-sm-block" />
       <v-btn v-if="currentTab === 'users'" color="primary" prepend-icon="mdi-account-plus" @click="inviteDialog = true">
         {{ $t('create_user') }}
       </v-btn>
@@ -11,7 +11,7 @@
       </v-btn>
     </div>
 
-    <v-tabs v-model="currentTab" color="primary" class="mb-4">
+    <v-tabs v-model="currentTab" color="primary" class="mb-4" show-arrows>
       <v-tab value="users">{{ $t('users_system_tab') }}</v-tab>
       <v-tab value="whitelist">{{ $t('users_whitelist_tab') }}</v-tab>
     </v-tabs>
@@ -19,7 +19,8 @@
     <v-window v-model="currentTab">
       <v-window-item value="users" class="pt-2">
         <v-card>
-          <v-table density="compact">
+          <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+            <v-table density="compact" style="min-width: 550px;">
             <thead>
               <tr>
                 <th>{{ $t('display_name') }}</th>
@@ -72,7 +73,8 @@
                 </td>
               </tr>
             </tbody>
-          </v-table>
+            </v-table>
+          </div>
         </v-card>
       </v-window-item>
 
@@ -82,7 +84,8 @@
         </v-alert>
 
         <v-card>
-          <v-table density="compact">
+          <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+            <v-table density="compact" style="min-width: 650px;">
             <thead>
               <tr>
                 <th>{{ $t('users_whitelist_col_avatar') }}</th>
@@ -146,7 +149,8 @@
                 </td>
               </tr>
             </tbody>
-          </v-table>
+            </v-table>
+          </div>
         </v-card>
       </v-window-item>
     </v-window>

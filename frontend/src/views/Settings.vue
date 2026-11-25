@@ -22,7 +22,7 @@
 
       <v-col cols="12" md="9">
         <!-- AI Config -->
-        <v-card v-if="activeTab === 'ai'" class="pa-6">
+        <v-card v-if="activeTab === 'ai'" class="pa-4 pa-sm-6">
           <div class="text-subtitle-1 font-weight-bold mb-4">
             <v-icon start size="small">mdi-robot</v-icon>
             {{ $t('ai_config') }}
@@ -113,7 +113,7 @@
 
         <!-- General -->
         <!-- Analysis Settings -->
-        <v-card v-if="activeTab === 'analysis'" class="pa-6">
+        <v-card v-if="activeTab === 'analysis'" class="pa-4 pa-sm-6">
           <div class="text-subtitle-1 font-weight-bold mb-4">
             <v-icon start size="small">mdi-chart-bar</v-icon>
             Cài đặt phân tích
@@ -143,7 +143,7 @@
         </v-card>
 
         <!-- General -->
-        <v-card v-if="activeTab === 'general'" class="pa-6">
+        <v-card v-if="activeTab === 'general'" class="pa-4 pa-sm-6">
           <div class="text-subtitle-1 font-weight-bold mb-4">
             <v-icon start size="small">mdi-cog</v-icon>
             {{ $t('general') }}
@@ -184,7 +184,7 @@
           <v-btn color="primary" :loading="savingGeneral" @click="saveGeneral">{{ $t('save_settings') }}</v-btn>
         </v-card>
 
-        <v-card v-if="activeTab === 'facebook'" class="pa-6">
+        <v-card v-if="activeTab === 'facebook'" class="pa-4 pa-sm-6">
           <FacebookAccountManager :active="activeTab === 'facebook'" show-unavailable />
         </v-card>
       </v-col>

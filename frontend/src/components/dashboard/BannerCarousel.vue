@@ -231,6 +231,17 @@ function onPointerUp() {
   pointer-events: auto;
 }
 
+@media (max-width: 600px) {
+  .banner-edit-hint {
+    white-space: normal;
+    text-align: center;
+    max-width: 90%;
+    font-size: 11px;
+    padding: 3px 8px;
+    bottom: 8px;
+  }
+}
+
 .banner-reset {
   margin-left: 8px;
   padding: 1px 8px;

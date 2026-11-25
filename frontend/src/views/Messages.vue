@@ -161,20 +161,20 @@
 
       <!-- Message Detail -->
       <v-col v-if="selectedConvId" cols="12" md="7" lg="8">
-        <v-card variant="outlined" class="d-flex flex-column" style="height: calc(100vh - 140px)">
+        <v-card variant="outlined" class="d-flex flex-column messages-detail-card">
           <!-- Header -->
-          <v-card-title class="d-flex align-center pa-4">
-            <v-btn icon="mdi-arrow-left" variant="text" size="small" class="d-md-none mr-2" @click="closeConversation" />
-            <v-avatar :color="channelTypeColor(selectedConvChannelType)" size="36" class="mr-3">
+          <v-card-title class="d-flex align-center pa-3 pa-sm-4" style="min-width: 0;">
+            <v-btn icon="mdi-arrow-left" variant="text" size="small" class="d-md-none mr-2 flex-shrink-0" :title="$t('back')" @click="closeConversation" />
+            <v-avatar :color="channelTypeColor(selectedConvChannelType)" size="36" class="mr-3 flex-shrink-0">
               <v-icon color="white" size="18">
                 {{ channelTypeIcon(selectedConvChannelType) }}
               </v-icon>
             </v-avatar>
-            <div class="flex-grow-1">
-              <div class="text-subtitle-1 font-weight-medium">
+            <div class="flex-grow-1 text-truncate" style="min-width: 0;">
+              <div class="text-subtitle-1 font-weight-medium text-truncate">
                 {{ conversationStore.currentConversation?.customer_name || $t('msg_unknown_customer') }}
               </div>
-              <div class="text-caption text-grey">
+              <div class="text-caption text-grey text-truncate">
                 <v-chip size="x-small" :color="channelTypeColor(selectedConvChannelType)" variant="tonal" class="mr-1">
                   {{ channelTypeLabel(selectedConvChannelType, $t) }}
                 </v-chip>
@@ -182,9 +182,9 @@
                 {{ conversationStore.currentConversation?.message_count }} {{ $t('msg_messages_count') }}
               </div>
             </div>
-            <v-btn icon="mdi-share-variant" variant="text" size="small" color="primary" @click="shareConversation" />
-            <v-btn icon="mdi-download" variant="text" size="small" color="primary" @click="downloadConversation" />
-            <v-btn icon="mdi-close" variant="text" size="small" :title="$t('back')" @click="closeConversation" />
+            <v-btn icon="mdi-share-variant" variant="text" size="small" color="primary" class="flex-shrink-0" @click="shareConversation" />
+            <v-btn icon="mdi-download" variant="text" size="small" color="primary" class="flex-shrink-0" @click="downloadConversation" />
+            <v-btn icon="mdi-close" variant="text" size="small" class="d-none d-md-inline-flex flex-shrink-0" :title="$t('back')" @click="closeConversation" />
           </v-card-title>
 
           <v-divider />
@@ -226,7 +226,7 @@
                 class="d-flex mb-2"
                 :class="msg.sender_type === 'agent' ? 'justify-end' : 'justify-start'"
               >
-                <div v-if="reminderMessageMap[msg.id]" class="pa-3 rounded-lg reminder-message-card" style="max-width: 75%; word-break: break-word">
+                <div v-if="reminderMessageMap[msg.id]" class="pa-3 rounded-lg reminder-message-card message-bubble-box">
                   <div class="reminder-message-chip">
                     <v-icon size="13" color="deep-orange-darken-2">mdi-calendar-clock</v-icon>
                     <span>Nhắc hẹn</span>
@@ -247,7 +247,7 @@
                     {{ formatMessageTime(msg.sent_at) }}
                   </div>
                 </div>
-                <div v-else-if="thirdPartyLinkMessageMap[msg.id]" class="pa-3 rounded-lg third-party-link-message-card" style="max-width: 75%; word-break: break-word">
+                <div v-else-if="thirdPartyLinkMessageMap[msg.id]" class="pa-3 rounded-lg third-party-link-message-card message-bubble-box">
                   <div class="third-party-link-chip">
                     <v-icon size="13" color="indigo-darken-2">mdi-link-variant</v-icon>
                     <span>Link ngoài</span>
@@ -279,7 +279,7 @@
                     {{ formatMessageTime(msg.sent_at) }}
                   </div>
                 </div>
-                <div v-else-if="imageMessageMap[msg.id]" class="pa-3 rounded-lg image-json-message-card" style="max-width: 75%; word-break: break-word">
+                <div v-else-if="imageMessageMap[msg.id]" class="pa-3 rounded-lg image-json-message-card message-bubble-box">
                   <div v-if="imageMessageMap[msg.id].title" class="image-json-message-title">
                     {{ imageMessageMap[msg.id].title }}
                   </div>
@@ -303,9 +303,8 @@
                 </div>
                 <div
                   v-else
-                  class="pa-2 rounded-lg"
+                  class="pa-2 rounded-lg message-bubble-box"
                   :class="msg.sender_type === 'agent' ? 'bg-primary text-white' : 'bg-surface'"
-                  style="max-width: 75%; word-break: break-word"
                   :style="msg.sender_type !== 'agent' ? 'border: 1px solid rgba(0,0,0,0.12)' : ''"
                 >
                   <div class="text-caption font-weight-medium" :class="msg.sender_type === 'agent' ? 'text-white' : 'text-primary'" style="font-size: 11px">
@@ -1030,6 +1029,25 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.messages-detail-card {
+  height: calc(100vh - 140px);
+  height: calc(100dvh - 140px);
+}
+@media (max-width: 959px) {
+  .messages-detail-card {
+    height: calc(100vh - 100px);
+    height: calc(100dvh - 100px);
+  }
+}
+.message-bubble-box {
+  max-width: 75%;
+  word-break: break-word;
+}
+@media (max-width: 600px) {
+  .message-bubble-box {
+    max-width: 88%;
+  }
+}
 .qc-latest-card {
   border-color: rgba(var(--v-theme-primary), 0.35);
   background: linear-gradient(180deg, rgba(var(--v-theme-primary), 0.045), transparent 52%);

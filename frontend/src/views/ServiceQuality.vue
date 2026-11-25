@@ -36,7 +36,7 @@
 
     <v-card class="dashboard-filter-card mb-4" variant="outlined">
       <v-card-text>
-        <div class="d-flex flex-wrap align-end ga-3">
+        <div class="d-flex flex-wrap align-end ga-3 sq-filter-row">
           <v-select
             v-model="channelId"
             :items="channelOptions"
@@ -46,11 +46,11 @@
             density="compact"
             variant="outlined"
             hide-details
-            style="min-width: 220px; max-width: 320px"
+            class="sq-channel-select"
           />
-          <v-text-field v-model="dateFrom" :label="t('sq_date_from')" type="date" density="compact" variant="outlined" hide-details style="max-width: 170px" />
-          <v-text-field v-model="dateTo" :label="t('sq_date_to')" type="date" density="compact" variant="outlined" hide-details style="max-width: 170px" />
-          <v-btn variant="tonal" color="primary" prepend-icon="mdi-filter" :disabled="!dateRangeValid" @click="loadReport(true)">
+          <v-text-field v-model="dateFrom" :label="t('sq_date_from')" type="date" density="compact" variant="outlined" hide-details class="sq-date-input" />
+          <v-text-field v-model="dateTo" :label="t('sq_date_to')" type="date" density="compact" variant="outlined" hide-details class="sq-date-input" />
+          <v-btn variant="tonal" color="primary" prepend-icon="mdi-filter" class="sq-apply-btn" :disabled="!dateRangeValid" @click="loadReport(true)">
             {{ t('sq_apply') }}
           </v-btn>
           <span v-if="!dateRangeValid" class="text-caption text-error">{{ t('sq_invalid_range') }}</span>
@@ -137,7 +137,7 @@
       </v-alert>
 
       <v-row class="mb-2">
-        <v-col v-for="kpi in kpis" :key="kpi.label" cols="12" sm="6" lg="3">
+        <v-col v-for="kpi in kpis" :key="kpi.label" cols="6" sm="6" lg="3">
           <v-card variant="outlined" class="h-100 kpi-card">
             <v-card-text class="d-flex align-center ga-3">
               <v-avatar :color="kpi.color" variant="tonal" size="44"><v-icon :icon="kpi.icon" /></v-avatar>
@@ -347,10 +347,11 @@
 
     <v-dialog v-model="detailDialog" max-width="760" scrollable>
       <v-card v-if="selectedRow">
-        <v-card-title class="d-flex align-center">
-          {{ t('sq_detail_title', { customer: selectedRow.customer_name || t('sq_customer_fallback') }) }}
-          <v-spacer />
-          <v-btn icon="mdi-close" variant="text" @click="detailDialog = false" />
+        <v-card-title class="d-flex align-center justify-space-between ga-2" style="min-width: 0;">
+          <span class="text-subtitle-1 font-weight-bold text-truncate" style="min-width: 0;">
+            {{ t('sq_detail_title', { customer: selectedRow.customer_name || t('sq_customer_fallback') }) }}
+          </span>
+          <v-btn icon="mdi-close" variant="text" size="small" class="flex-shrink-0" @click="detailDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text>
@@ -1357,7 +1358,31 @@ onBeforeUnmount(() => {
   border-radius: inherit;
 }
 
+.sq-channel-select {
+  min-width: 220px;
+  max-width: 320px;
+}
+.sq-date-input {
+  max-width: 170px;
+}
+
 @media (max-width: 600px) {
+  .sq-filter-row {
+    width: 100%;
+  }
+  .sq-channel-select {
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+  }
+  .sq-date-input {
+    flex: 1 1 calc(50% - 6px);
+    max-width: calc(50% - 6px);
+  }
+  .sq-apply-btn {
+    width: 100%;
+  }
+
   .conversation-queue :deep(.conversation-table thead) {
     display: none;
   }
@@ -1384,29 +1409,41 @@ onBeforeUnmount(() => {
     white-space: normal;
   }
 
-  .conversation-queue :deep(.conversation-table tbody td:nth-child(2)) {
-    grid-column: 1 / 3;
-    grid-row: 2;
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(7)) {
+    grid-column: 2;
+    grid-row: 1;
   }
 
-  .conversation-queue :deep(.conversation-table tbody td:nth-child(3)),
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(2)) {
+    grid-column: 1;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .conversation-queue :deep(.conversation-table tbody td:nth-child(3)) {
+    grid-column: 2;
+    grid-row: 2;
+    text-align: right;
+    font-size: 12px;
+  }
+
   .conversation-queue :deep(.conversation-table tbody td:nth-child(4)) {
-    display: none;
+    grid-column: 1 / 3;
+    grid-row: 3;
+    font-size: 11px;
+    color: rgba(var(--v-theme-on-surface), 0.6);
   }
 
   .conversation-queue :deep(.conversation-table tbody td:nth-child(5)) {
     grid-column: 1 / 3;
-    grid-row: 3;
+    grid-row: 4;
   }
 
   .conversation-queue :deep(.conversation-table tbody td:nth-child(6)) {
     grid-column: 1 / 3;
-    grid-row: 4;
-  }
-
-  .conversation-queue :deep(.conversation-table tbody td:nth-child(7)) {
-    grid-column: 2;
-    grid-row: 1;
+    grid-row: 5;
   }
 }
 </style>

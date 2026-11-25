@@ -1,5 +1,6 @@
 <template>
-  <v-table density="comfortable" hover>
+  <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+    <v-table density="comfortable" hover style="min-width: 600px;">
     <thead>
       <tr>
         <th>{{ $t('cm_time') }}</th>
@@ -33,7 +34,8 @@
         <td :colspan="compact ? 4 : 5" class="text-center text-medium-emphasis py-6">{{ $t('cm_no_sessions') }}</td>
       </tr>
     </tbody>
-  </v-table>
+    </v-table>
+  </div>
 </template>
 
 <script setup lang="ts">

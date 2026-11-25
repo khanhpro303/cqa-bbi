@@ -12,7 +12,8 @@
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
     <v-card :loading="loadingJobs">
-      <v-table v-if="jobStore.jobs.length">
+      <div v-if="jobStore.jobs.length" style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+      <v-table>
         <thead>
           <tr>
             <th>{{ $t('job_name') }}</th>
@@ -50,6 +51,7 @@
           </tr>
         </tbody>
       </v-table>
+      </div>
       <div v-else class="text-center pa-8">
         <v-icon size="48" color="grey-lighten-1" class="mb-3">mdi-briefcase-plus</v-icon>
         <div class="text-grey-darken-1 mb-2">{{ $t('job_empty_desc') }}</div>

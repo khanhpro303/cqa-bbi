@@ -68,6 +68,7 @@
     <!-- Banner image carousel -->
     <BannerCarousel :offsets="bannerOffsets" :can-edit="isAdmin" :tenant-id="tenantId" />
 
+    <h1 class="text-h6 font-weight-bold d-md-none mb-3">{{ $t('dashboard') }}</h1>
     <div class="d-flex flex-wrap align-center mb-4 ga-2">
       <h1 class="text-h5 font-weight-bold d-none d-md-block">{{ $t('dashboard') }}</h1>
       <v-spacer class="d-none d-md-block" />
@@ -166,16 +167,16 @@
                 <v-chip size="x-small" :color="item.severity === 'NGHIEM_TRONG' ? 'error' : 'warning'" variant="tonal" class="mr-2 flex-shrink-0">
                   {{ item.severity === 'NGHIEM_TRONG' ? 'Nghiêm trọng' : 'Cần cải thiện' }}
                 </v-chip>
-                <span class="text-body-2 flex-grow-1" style="overflow: hidden; white-space: nowrap; text-overflow: ellipsis;">{{ item.evidence || item.rule_name }}</span>
+                <span class="text-body-2 flex-grow-1 text-truncate" style="min-width: 0;">{{ item.evidence || item.rule_name }}</span>
               </template>
               <!-- Classification row -->
               <template v-else>
-                <span class="text-body-2 font-weight-medium mr-2 flex-shrink-0">{{ item.customer_name || '—' }}</span>
-                <span class="text-body-2 mr-2 flex-shrink-0" style="color: rgba(var(--v-theme-on-surface), 0.7)">Phân loại:</span>
-                <v-chip size="x-small" color="deep-purple" variant="tonal" class="mr-1 flex-shrink-0">{{ item.rule_name }}</v-chip>
+                <span class="text-body-2 font-weight-medium mr-1 text-truncate" style="max-width: 120px; min-width: 0;">{{ item.customer_name || '—' }}</span>
+                <span class="text-caption mr-1 flex-shrink-0 text-grey-darken-1">Phân loại:</span>
+                <v-chip size="x-small" color="deep-purple" variant="tonal" class="mr-1 text-truncate" style="max-width: 140px;">{{ item.rule_name }}</v-chip>
               </template>
               <v-spacer />
-              <span class="text-caption text-grey text-no-wrap ml-2">{{ timeAgo(item.created_at) }}</span>
+              <span class="text-caption text-grey text-no-wrap ml-2 flex-shrink-0">{{ timeAgo(item.created_at) }}</span>
             </div>
           </div>
           <div v-else class="text-center pa-6 flex-grow-1 d-flex flex-column justify-center align-center">

@@ -1,8 +1,8 @@
 <template>
   <div>
-    <div class="d-flex align-center mb-6">
+    <div class="d-flex align-center flex-wrap ga-2 mb-6">
       <h1 class="text-h5 font-weight-bold">{{ $t('nav_crm') }}</h1>
-      <v-spacer />
+      <v-spacer class="d-none d-sm-block" />
       
       <!-- Action buttons depending on active tab -->
       <template v-if="currentTab === 'campaigns'">
@@ -23,7 +23,7 @@
     </div>
 
     <!-- Navigation Tabs -->
-    <v-tabs v-model="currentTab" color="primary" class="mb-4">
+    <v-tabs v-model="currentTab" color="primary" class="mb-4" show-arrows>
       <v-tab value="groups">
         <v-icon start>mdi-account-group</v-icon>
         {{ $t('crm_groups') }}
@@ -182,6 +182,7 @@
       <!-- TAB 2: ACTIVE ZALO CUSTOMERS -->
       <v-window-item value="customers" class="pt-2">
         <v-card :loading="loadingCustomers">
+          <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
           <v-table density="comfortable">
             <thead>
               <tr>
@@ -228,13 +229,14 @@
               </tr>
             </tbody>
           </v-table>
+          </div>
         </v-card>
       </v-window-item>
 
       <!-- TAB 2.5: CLOUDIFY CUSTOMERS -->
       <v-window-item value="cloudify_customers" class="pt-2">
         <v-card :loading="loadingCloudifyCustomers">
-          <v-card-title class="d-flex align-center py-3 px-4">
+          <v-card-title class="d-flex align-center flex-wrap ga-2 py-3 px-4">
             <v-text-field
               v-model="cloudifySearch"
               prepend-inner-icon="mdi-magnify"
@@ -258,6 +260,7 @@
               Lấy lại dữ liệu
             </v-btn>
           </v-card-title>
+          <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
           <v-table density="compact">
             <thead>
               <tr>
@@ -325,6 +328,7 @@
               </tr>
             </tbody>
           </v-table>
+          </div>
           <v-divider />
           <div class="d-flex align-center justify-space-between py-2 px-4 flex-wrap ga-2">
             <div class="text-caption text-grey">
@@ -347,6 +351,7 @@
       <v-window-item value="approvals" class="pt-2">
         <v-card :loading="loadingCustomers" class="mb-6">
           <v-card-title class="text-subtitle-1 font-weight-bold pb-0">Chờ phê duyệt mã khách hàng</v-card-title>
+          <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
           <v-table density="comfortable">
             <thead>
               <tr>
@@ -388,10 +393,12 @@
               </tr>
             </tbody>
           </v-table>
+          </div>
         </v-card>
 
         <v-card :loading="loadingCustomers">
           <v-card-title class="text-subtitle-1 font-weight-bold pb-0">Yêu cầu liên kết chờ quét QR</v-card-title>
+          <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
           <v-table density="comfortable">
             <thead>
               <tr>
@@ -426,6 +433,7 @@
               </tr>
             </tbody>
           </v-table>
+          </div>
         </v-card>
       </v-window-item>
 

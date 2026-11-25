@@ -2,7 +2,20 @@
   <!-- Mobile app bar -->
   <v-app-bar v-if="!mdAndUp" density="compact" color="primary" flat>
     <v-app-bar-nav-icon @click="drawer = !drawer" />
-    <v-app-bar-title class="text-body-1 font-weight-bold">BBI CRM Agent</v-app-bar-title>
+    <v-app-bar-title class="text-body-2 font-weight-bold d-flex align-center text-truncate" style="min-width: 0">
+      <span class="text-truncate">BBI CRM</span>
+      <v-chip
+        v-if="currentTenantName"
+        size="x-small"
+        color="white"
+        variant="outlined"
+        class="ml-2 font-weight-medium text-truncate"
+        style="max-width: 140px;"
+        @click="drawer = true"
+      >
+        {{ currentTenantName }}
+      </v-chip>
+    </v-app-bar-title>
     <v-spacer />
     <CampaignWarningBell />
   </v-app-bar>
@@ -164,9 +177,9 @@
           <span class="text-caption text-grey mx-2">|</span>
           <span class="text-caption"><a href="https://khanhpro303.github.io/cqa-bbi/guide/installation.html#tu-%C4%91ong-cap-nhat-tuy-chon" target="_blank" class="text-primary">Cài Watchtower</a> để tự động cập nhật.</span>
         </div>
-        <div class="d-flex align-center mt-2 ga-1">
+        <div class="d-flex align-center flex-wrap mt-2 ga-1">
           <span class="text-caption text-grey">Cập nhật thủ công:</span>
-          <code class="text-caption pa-1 rounded" style="user-select: all; background: #f5f5f5; color: #333; border: 1px solid #ddd;">cd /opt/cqa && docker compose pull && docker compose up -d</code>
+          <code class="text-caption pa-1 rounded update-cmd-code" style="user-select: all; word-break: break-all; max-width: 100%;">cd /opt/cqa && docker compose pull && docker compose up -d</code>
           <v-btn icon="mdi-content-copy" size="x-small" variant="text" color="primary" @click="copyUpdateCmd" />
         </div>
       </v-alert>
@@ -186,7 +199,7 @@
         </template>
         
         <div class="d-flex align-center justify-space-between flex-wrap w-100">
-          <div class="flex-grow-1 pr-4">
+          <div class="flex-grow-1 pr-0 pr-sm-4">
             <span class="text-subtitle-2 font-weight-bold">
               Có {{ pendingCustomers.length }} yêu cầu phê duyệt khách hàng Zalo OA đang chờ xử lý!
             </span>
@@ -194,11 +207,11 @@
               Vui lòng phê duyệt và gán mã khách hàng để cho phép nhắn tin với Bot.
             </div>
           </div>
-          <div class="mt-2 mt-sm-0">
+          <div class="mt-2 mt-sm-0 w-100 w-sm-auto">
             <v-btn
               color="warning"
               variant="flat"
-              class="text-none font-weight-bold"
+              class="text-none font-weight-bold w-100 w-sm-auto"
               prepend-icon="mdi-account-check"
               @click="openGlobalApproveModal"
             >
@@ -310,17 +323,16 @@
           >
             <v-expansion-panel-title class="py-3">
               <template #default>
-                <div class="d-flex align-center w-100">
-                  <v-avatar size="36" color="warning-lighten-4" class="mr-3">
+                <div class="d-flex align-center justify-space-between w-100 ga-2" style="min-width: 0;">
+                  <v-avatar size="36" color="warning-lighten-4" class="mr-2 flex-shrink-0">
                     <v-img v-if="c.avatar" :src="c.avatar" />
                     <v-icon v-else color="warning">mdi-account</v-icon>
                   </v-avatar>
-                  <div class="text-left">
-                    <div class="font-weight-bold text-subtitle-2">{{ c.name }}</div>
-                    <div class="text-caption text-grey">SĐT: {{ c.phone_number || '—' }}</div>
+                  <div class="text-left flex-grow-1 text-truncate" style="min-width: 0;">
+                    <div class="font-weight-bold text-subtitle-2 text-truncate">{{ c.name }}</div>
+                    <div class="text-caption text-grey text-truncate">SĐT: {{ c.phone_number || '—' }}</div>
                   </div>
-                  <v-spacer />
-                  <v-chip size="x-small" color="warning" variant="flat" class="mr-2 font-weight-bold">
+                  <v-chip size="x-small" color="warning" variant="flat" class="font-weight-bold flex-shrink-0">
                     Chờ duyệt
                   </v-chip>
                 </div>
@@ -439,6 +451,11 @@ const currentTenantId = ref('')
 const currentTenantInitial = computed(() => {
   const t = tenants.value.find(t => t.id === currentTenantId.value)
   return t ? t.name.charAt(0).toUpperCase() : '?'
+})
+
+const currentTenantName = computed(() => {
+  const t = tenants.value.find(t => t.id === currentTenantId.value)
+  return t ? t.name : ''
 })
 
 // Show permission denied toast when redirected by router guard
@@ -862,6 +879,12 @@ async function deleteGlobalCustomer(customerId: string) {
     border: 1px solid transparent;
     border-radius: 8px;
   }
+}
+
+.update-cmd-code {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+  color: rgb(var(--v-theme-on-surface));
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 .bell-ring-animation {
