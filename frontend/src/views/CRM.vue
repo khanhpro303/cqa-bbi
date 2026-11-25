@@ -553,7 +553,7 @@
         <v-card-text class="px-6 py-2">
           <v-tabs v-model="memberTab" color="teal" class="mb-4">
             <v-tab value="employees">Nhân viên phụ trách ({{ activeGroup?.employees?.length || 0 }})</v-tab>
-            <v-tab value="customers">Khách hàng thuộc nhóm ({{ loadingLiveMembers ? '...' : liveCustomers.length }})</v-tab>
+            <v-tab value="customers">Khách hàng thuộc nhóm ({{ loadingLiveMembers ? '...' : liveCustomers.length + crmCustomersWithoutZaloMatch.length }})</v-tab>
             <v-tab value="pending">Chờ duyệt tham gia ({{ loadingPendingInvites ? '...' : pendingInvites.length }})</v-tab>
           </v-tabs>
 
@@ -648,7 +648,24 @@
                     <v-btn icon="mdi-close" size="small" variant="text" color="error" @click="removeGroupCustomer(cust.id, cust.zalo_user_id)" />
                   </template>
                 </v-list-item>
-                <div v-if="!liveCustomers.length" class="text-center py-6 text-grey text-caption">
+                <v-list-item v-for="cust in crmCustomersWithoutZaloMatch" :key="cust.id">
+                  <v-list-item-title class="font-weight-bold">
+                    {{ cust.name }}
+                    <v-chip size="x-small" color="teal" class="ml-2">Đã thêm vào CRM</v-chip>
+                  </v-list-item-title>
+                  <template #append>
+                    <v-btn
+                      v-if="activeGroup?.zalo_group_link && cust.zalo_user_id"
+                      icon="mdi-send"
+                      size="small"
+                      variant="text"
+                      color="teal"
+                      @click="inviteCustomerToZaloGroup(cust.id)"
+                      title="Gửi tin nhắn mời vào nhóm Zalo"
+                    />
+                  </template>
+                </v-list-item>
+                <div v-if="!liveCustomers.length && !crmCustomersWithoutZaloMatch.length" class="text-center py-6 text-grey text-caption">
                   Chưa có khách hàng nào trong nhóm.
                 </div>
               </v-list>
@@ -1252,6 +1269,7 @@ import { useUserStore } from '../stores/users'
 import { useChannelStore } from '../stores/channels'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
+import { useTenantEventRefresh } from '../composables/useTenantEvents'
 import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
 import CampaignList from '../components/crm-campaigns/CampaignList.vue'
 import CampaignDashboard from '../components/crm-campaigns/CampaignDashboard.vue'
@@ -1424,14 +1442,18 @@ const availableEmployees = computed(() => {
   return whitelistStaff.value.filter((s: any) => s.status === 'active' && !existingIds.has(s.id))
 })
 
+const liveCustomerZaloIds = computed(() => new Set(liveCustomers.value.map(c => c.zalo_user_id).filter(Boolean)))
+const crmCustomersWithoutZaloMatch = computed<any[]>(() =>
+  (activeGroup.value?.customers || []).filter((c: any) => !liveCustomerZaloIds.value.has(c.zalo_user_id)),
+)
+
 const availableCustomers = computed(() => {
   if (!activeGroup.value || !customers.value) return []
-  const existingZaloUserIds = new Set(liveCustomers.value.map(c => c.zalo_user_id).filter(id => !!id))
   // A customer is assignable when any of their mã KH overlaps the group's set
   // (a group can serve several shops; a customer can own several shops).
   const groupSet = new Set(groupCodes(activeGroup.value).map(code => String(code).toLowerCase()))
   return approvedCustomers.value.filter(c =>
-    !existingZaloUserIds.has(c.zalo_user_id) &&
+    !liveCustomerZaloIds.value.has(c.zalo_user_id) &&
     customerCodesOf(c).some(code => groupSet.has(String(code).toLowerCase()))
   )
 })
@@ -1485,20 +1507,37 @@ onUnmounted(() => {
   window.removeEventListener('crm-data-updated', fetchCustomers)
 })
 
+useTenantEventRefresh(() => tenantId.value, 'crm_group_members_updated', async () => {
+  const group = activeGroup.value
+  const requests = [fetchGroups(true)]
+  if (membersDialog.value && group?.zalo_group_id) {
+    requests.push(fetchLiveMembers(group.id, true), fetchPendingInvites(group.id, true))
+  }
+  await Promise.all(requests)
+})
+
 // Load Groups from Backend
-async function fetchGroups() {
-  loadingGroups.value = true
+let groupListRequest = 0
+
+async function fetchGroups(background = false) {
+  const request = ++groupListRequest
+  if (!background) loadingGroups.value = true
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups`)
+    if (request !== groupListRequest) return
     groups.value = data || []
+    if (membersDialog.value) {
+      const updatedGroup = groups.value.find(group => group.id === activeGroup.value?.id)
+      if (updatedGroup) activeGroup.value = updatedGroup
+    }
     if (groupView.value === 'archived') {
       const res = await api.get(`/tenants/${tenantId.value}/crm/groups`, { params: { archived: 1 } })
-      archivedGroups.value = res.data || []
+      if (request === groupListRequest) archivedGroups.value = res.data || []
     }
   } catch (err) {
-    showSnack('Không thể tải danh sách nhóm CRM', 'error')
+    if (!background) showSnack('Không thể tải danh sách nhóm CRM', 'error')
   } finally {
-    loadingGroups.value = false
+    if (!background) loadingGroups.value = false
   }
 }
 
@@ -1791,19 +1830,25 @@ async function clearGroupSession(g: any) {
 }
 
 // Manage Group Members (GMF)
-async function fetchLiveMembers(groupId: string) {
-  loadingLiveMembers.value = true
+let liveMembersRequest = 0
+let pendingInvitesRequest = 0
+
+async function fetchLiveMembers(groupId: string, background = false) {
+  const request = ++liveMembersRequest
+  if (!background) loadingLiveMembers.value = true
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups/${groupId}/members`)
+    if (request !== liveMembersRequest || !membersDialog.value || activeGroup.value?.id !== groupId) return
     liveEmployees.value = data.employees || []
     liveCustomers.value = data.customers || []
   } catch (err: any) {
+    if (background || request !== liveMembersRequest || activeGroup.value?.id !== groupId) return
     const errMsg = err.response?.data?.details || err.response?.data?.error || 'Không thể tải danh sách thành viên live từ Zalo'
     showSnack(errMsg, 'error')
     liveEmployees.value = []
     liveCustomers.value = []
   } finally {
-    loadingLiveMembers.value = false
+    if (!background && activeGroup.value?.id === groupId) loadingLiveMembers.value = false
   }
 }
 
@@ -1817,21 +1862,29 @@ function openManageMembersDialog(g: any) {
   pendingInvites.value = []
   membersDialog.value = true
   fetchWhitelistStaff(g.channel_id)
-  fetchLiveMembers(g.id)
-  fetchPendingInvites(g.id)
+  if (g.zalo_group_id) {
+    fetchLiveMembers(g.id)
+    fetchPendingInvites(g.id)
+  } else {
+    loadingLiveMembers.value = false
+    loadingPendingInvites.value = false
+  }
 }
 
-async function fetchPendingInvites(groupId: string) {
-  loadingPendingInvites.value = true
+async function fetchPendingInvites(groupId: string, background = false) {
+  const request = ++pendingInvitesRequest
+  if (!background) loadingPendingInvites.value = true
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/groups/${groupId}/pending-invites`)
+    if (request !== pendingInvitesRequest || !membersDialog.value || activeGroup.value?.id !== groupId) return
     pendingInvites.value = data || []
   } catch (err: any) {
+    if (background || request !== pendingInvitesRequest || activeGroup.value?.id !== groupId) return
     const errMsg = err.response?.data?.details || err.response?.data?.error || 'Không thể tải danh sách chờ duyệt từ Zalo'
     showSnack(errMsg, 'error')
     pendingInvites.value = []
   } finally {
-    loadingPendingInvites.value = false
+    if (!background && activeGroup.value?.id === groupId) loadingPendingInvites.value = false
   }
 }
 
@@ -1906,16 +1959,17 @@ async function removeGroupEmployee(empID: string) {
 
 async function addGroupCustomer() {
   if (!selectedCustomerToAdd.value || !activeGroup.value) return
+  const groupId = activeGroup.value.id
   try {
-    await api.post(`/tenants/${tenantId.value}/crm/groups/${activeGroup.value.id}/members`, {
+    await api.post(`/tenants/${tenantId.value}/crm/groups/${groupId}/members`, {
       customer_ids: [selectedCustomerToAdd.value.id]
     })
-    if (!activeGroup.value.customers) activeGroup.value.customers = []
-    activeGroup.value.customers.push(selectedCustomerToAdd.value)
-    selectedCustomerToAdd.value = null
-    showSnack('Đã thêm khách hàng vào nhóm', 'success')
-    await fetchGroups()
-    await fetchLiveMembers(activeGroup.value.id)
+    if (activeGroup.value?.id === groupId) selectedCustomerToAdd.value = null
+    showSnack('Đã thêm khách hàng vào nhóm CRM', 'success')
+    await fetchGroups(true)
+    if (membersDialog.value && activeGroup.value?.id === groupId && activeGroup.value.zalo_group_id) {
+      await fetchLiveMembers(groupId, true)
+    }
   } catch (err) {
     showSnack('Lỗi thêm khách hàng', 'error')
   }
@@ -1935,7 +1989,7 @@ async function removeGroupCustomer(custID: string, zaloUserID?: string) {
       data: payload
     })
     if (custID) {
-      activeGroup.value.customers = activeGroup.value.customers.filter((c: any) => c.id !== custID)
+      activeGroup.value.customers = (activeGroup.value.customers || []).filter((c: any) => c.id !== custID)
     }
     showSnack('Đã gỡ khách hàng khỏi nhóm', 'success')
     await fetchGroups()

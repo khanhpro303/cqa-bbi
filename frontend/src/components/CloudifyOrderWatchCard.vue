@@ -31,7 +31,7 @@
       Tự động quét đơn hàng Cloudify và gửi thông báo qua Zalo cho khách hàng.
     </div>
 
-    <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mb-3">{{ error }}</v-alert>
+    <v-alert v-if="error || loadError" type="error" variant="tonal" density="compact" class="mb-3">{{ error || loadError }}</v-alert>
     <v-alert v-if="data?.status.last_error" type="warning" variant="tonal" density="compact" class="mb-3" data-testid="watch-error">
       {{ data.status.last_error }}
     </v-alert>
@@ -302,6 +302,7 @@
 <script setup lang="ts">
 import { ref, shallowRef, reactive, computed, onMounted } from 'vue'
 import api from '../api'
+import { useTenantEventRefresh } from '../composables/useTenantEvents'
 
 const props = defineProps<{ tenantId: string }>()
 
@@ -333,6 +334,7 @@ const form = reactive<Record<string, any>>({
   template_created: '', template_status_changed: '', template_updated: '',
 })
 const error = ref('')
+const loadError = ref('')
 const saving = ref(false)
 const polling = ref(false)
 const rotating = ref(false)
@@ -392,26 +394,50 @@ function message(err: any, fallback: string) {
   return err?.response?.data?.error || fallback
 }
 
-async function load() {
+let watchRequest = 0
+let appliedWatchRequest = 0
+let settingsRevision = 0
+
+async function load(syncForm = true) {
   if (!props.tenantId) return
+  const tenantID = props.tenantId
+  const request = ++watchRequest
+  const revision = settingsRevision
   try {
-    const { data: d } = await api.get(`/tenants/${props.tenantId}/cloudify-orders`)
-    apply(d)
+    const { data: d } = await api.get<WatchData>(`/tenants/${tenantID}/cloudify-orders`)
+    if (tenantID !== props.tenantId || request < appliedWatchRequest) return
+    appliedWatchRequest = request
+    if (data.value && revision !== settingsRevision) {
+      data.value = { ...data.value, status: d.status, events: d.events }
+    } else if (syncForm || !data.value) apply(d)
+    else data.value = d
+    loadError.value = ''
   } catch (err) {
-    error.value = message(err, 'Không tải được cấu hình báo đơn hàng.')
+    if (tenantID === props.tenantId && request >= appliedWatchRequest && (syncForm || !data.value)) {
+      loadError.value = message(err, 'Không tải được cấu hình báo đơn hàng.')
+    }
   }
 }
+
+useTenantEventRefresh(() => props.tenantId, 'cloudify_orders_updated', () => load(false))
 
 async function save() {
   saving.value = true
   error.value = ''
+  const request = ++watchRequest
   try {
-    const { data: d } = await api.put(`/tenants/${props.tenantId}/cloudify-orders`, {
+    const { data: d } = await api.put<WatchData>(`/tenants/${props.tenantId}/cloudify-orders`, {
       ...form,
       window_days: Number(form.window_days),
       poll_seconds: Number(form.poll_seconds),
     })
-    apply(d)
+    settingsRevision++
+    if (data.value && appliedWatchRequest > request) {
+      apply({ ...d, status: data.value.status, events: data.value.events })
+    } else {
+      appliedWatchRequest = request
+      apply(d)
+    }
   } catch (err) {
     error.value = message(err, 'Không lưu được cấu hình.')
   } finally {
@@ -423,7 +449,6 @@ async function pollNow() {
   polling.value = true
   try {
     await api.post(`/tenants/${props.tenantId}/cloudify-orders/poll`)
-    setTimeout(load, 5000)
   } catch (err) {
     error.value = message(err, 'Không gửi được yêu cầu quét.')
   } finally {
@@ -436,6 +461,7 @@ async function rotate() {
   try {
     const { data: d } = await api.post(`/tenants/${props.tenantId}/cloudify-orders/webhook-secret`)
     webhookUrl.value = window.location.origin + d.path
+    settingsRevision++
     if (data.value) data.value.webhook.has_secret = true
   } catch (err) {
     error.value = message(err, 'Không tạo được URL webhook.')

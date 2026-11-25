@@ -12,6 +12,7 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"github.com/vietbui/chat-quality-agent/realtime"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -269,6 +270,39 @@ func TestWatcherTickSeedsThenDetects(t *testing.T) {
 	watch, _ = LoadWatch(database, tenant)
 	if watch.LastError == "" {
 		t.Fatal("poll error must be recorded")
+	}
+}
+
+func TestWatcherPublishesPollStatus(t *testing.T) {
+	database := testDatabase(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tenant := "tenant-live"
+	setSetting(t, database, tenant, KeyWatchEnabled, "true")
+	updates, err := realtime.Subscribe(ctx, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetcher := &fakeFetcher{rows: []map[string]any{sampleRow(1, "ĐH1", "1")}}
+	clock := time.Now().UTC()
+	w := &Watcher{DB: database, NewFetcher: func(string) (Fetcher, error) { return fetcher, nil }, Sender: &fakeSender{}, Now: func() time.Time { return clock }, owner: "watcher"}
+
+	for _, pollErr := range []error{nil, errors.New("offline")} {
+		fetcher.err = pollErr
+		w.Tick(ctx, tenant)
+		select {
+		case event := <-updates:
+			if event != realtime.EventCloudifyOrdersUpdated {
+				t.Fatalf("unexpected event %q", event)
+			}
+		default:
+			t.Fatal("poll must publish a tenant update")
+		}
+		watch, err := LoadWatch(database, tenant)
+		if err != nil || watch.LastPollAt == nil || (watch.LastError != "") != (pollErr != nil) {
+			t.Fatalf("poll status must already be stored: %+v, %v", watch, err)
+		}
+		clock = clock.Add(time.Minute)
 	}
 }
 

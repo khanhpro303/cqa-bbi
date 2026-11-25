@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -26,7 +27,12 @@ func StreamTenantEvents(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	events := realtime.Subscribe(ctx, tenantID)
+	events, err := realtime.Subscribe(ctx, tenantID)
+	if err != nil {
+		log.Printf("[realtime] subscribe for tenant %s failed: %v", tenantID, err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "stream_unavailable"})
+		return
+	}
 
 	h := c.Writer.Header()
 	h.Set("Content-Type", "text/event-stream")
