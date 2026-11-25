@@ -163,7 +163,14 @@ func TestMySQLAddGroupCustomersPublishesCommittedMembership(t *testing.T) {
 		t.Fatal(err)
 	}
 	createFacebookOAuthTenant(t, database, "tenant-a")
-	if err := database.Create(&models.CRMGroup{ID: "grp-1", TenantID: "tenant-a", Name: "Nhóm thử"}).Error; err != nil {
+	channel := models.Channel{
+		ID: "ch-1", TenantID: "tenant-a", ChannelType: "zalo_oa", Name: "OA thử",
+		ExternalID: "oa-1", CredentialsEncrypted: []byte("fixture"), Metadata: "{}",
+	}
+	if err := database.Create(&channel).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&models.CRMGroup{ID: "grp-1", TenantID: "tenant-a", Name: "Nhóm thử", ChannelID: channel.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Create(&models.ZaloCustomer{ID: "cus-1", TenantID: "tenant-a", Name: "Khách thử", Status: "approved"}).Error; err != nil {
