@@ -103,6 +103,47 @@ describe('MessengerJourneyPanel', () => {
     expect(wrapper.text()).toContain('Cũ')
   })
 
+  it('offers more history when the current page contains no displayable events', async () => {
+    apiGet
+      .mockResolvedValueOnce({ data: { events: [], has_more: true, next_cursor: 'next-page' } })
+      .mockResolvedValueOnce(response('older'))
+    wrapper = mountPanel()
+    await flushPromises()
+
+    const toggle = wrapper.get('.journey-toggle')
+    const detail = wrapper.get('.journey-detail')
+    expect(toggle.attributes('aria-controls')).toBe(detail.attributes('id'))
+    await toggle.trigger('click')
+    expect(detail.text()).toContain('Trang này chưa có sự kiện để hiển thị.')
+    await detail.get('button').trigger('click')
+    await flushPromises()
+
+    expect(detail.findAll('.journey-event')).toHaveLength(1)
+    expect(detail.find('button').exists()).toBe(false)
+  })
+
+  it('keeps loaded events visible and retries the same cursor if pagination fails', async () => {
+    apiGet
+      .mockResolvedValueOnce(response('one', true, 'next-page'))
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce(response('older'))
+    wrapper = mountPanel()
+    await flushPromises()
+    await wrapper.get('.journey-toggle').trigger('click')
+    const detail = wrapper.get('.journey-detail')
+    await detail.get('button').trigger('click')
+    await flushPromises()
+
+    expect(detail.findAll('.journey-event')).toHaveLength(1)
+    expect(detail.get('[role="alert"]').text()).toContain('Chưa tải được phần lịch sử tiếp theo.')
+    await detail.get('button').trigger('click')
+    await flushPromises()
+
+    expect(apiGet).toHaveBeenLastCalledWith('/tenants/tenant/conversations/one/journey', { params: { limit: 20, after: 'next-page' } })
+    expect(detail.findAll('.journey-event')).toHaveLength(2)
+    expect(detail.find('[role="alert"]').exists()).toBe(false)
+  })
+
   it('hides an unregistered feature and offers retry for other failures', async () => {
     apiGet.mockRejectedValueOnce({ isAxiosError: true, response: { status: 404 } })
     wrapper = mountPanel()
