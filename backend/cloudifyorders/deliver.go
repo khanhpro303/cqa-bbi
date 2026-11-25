@@ -40,6 +40,10 @@ type Sender interface {
 	Send(ctx context.Context, tenantID string, to Recipient, text string) error
 }
 
+type receiptSender interface {
+	SendReceipt(ctx context.Context, tenantID string, to Recipient, image []byte) error
+}
+
 // ZaloGroupSender messages the customer's linked Zalo group through the OA
 // channel the group belongs to (the same path CRM campaign alerts use).
 type ZaloGroupSender struct{ DB *gorm.DB }
@@ -73,6 +77,14 @@ func (s ZaloGroupSender) Send(ctx context.Context, tenantID string, to Recipient
 	return notifier.Send(ctx, "", text)
 }
 
+func (s ZaloGroupSender) SendReceipt(ctx context.Context, tenantID string, to Recipient, image []byte) error {
+	notifier, err := notifications.BuildZaloGroupNotifier(tenantID, to.ChannelID, to.GroupID)
+	if err != nil {
+		return err
+	}
+	return notifier.SendImage(ctx, image, "xac-nhan-don-hang.png")
+}
+
 // DeliverPending sends (or skips) the tenant's pending events, oldest first.
 // It returns how many events it finished.
 func DeliverPending(ctx context.Context, database *gorm.DB, tenantID string, settings Settings, sender Sender, now time.Time) (int, error) {
@@ -93,7 +105,7 @@ func DeliverPending(ctx context.Context, database *gorm.DB, tenantID string, set
 			// closing message; a second "order created" notice is noise.
 			status, note = DeliverySkipped, "chatbot_order"
 		} else {
-			status, note = deliverOne(ctx, tenantID, event, settings, sender, now)
+			status, note = deliverOne(ctx, database, tenantID, event, settings, sender, now)
 		}
 		updates := map[string]any{"delivery_status": status, "delivery_note": truncate(note, 250), "attempts": event.Attempts + 1}
 		if status == DeliverySent {
@@ -101,15 +113,23 @@ func DeliverPending(ctx context.Context, database *gorm.DB, tenantID string, set
 		}
 		if status == DeliveryPending {
 			updates["next_attempt_at"] = now.Add(retryDelay(event.Attempts + 1))
-		} else {
+		}
+		updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		err := database.WithContext(updateCtx).Model(&models.CloudifyOrderEvent{}).
+			Where("tenant_id = ? AND id = ? AND delivery_status = ?", tenantID, event.ID, DeliveryPending).
+			Updates(updates).Error
+		cancel()
+		if err != nil {
+			return done, err
+		}
+		if status != DeliveryPending {
 			done++
 		}
-		database.Model(&models.CloudifyOrderEvent{}).Where("id = ? AND delivery_status = ?", event.ID, DeliveryPending).Updates(updates)
 	}
 	return done, nil
 }
 
-func deliverOne(ctx context.Context, tenantID string, event models.CloudifyOrderEvent, settings Settings, sender Sender, now time.Time) (string, string) {
+func deliverOne(ctx context.Context, database *gorm.DB, tenantID string, event models.CloudifyOrderEvent, settings Settings, sender Sender, now time.Time) (string, string) {
 	if !settings.NotifyEnabled {
 		return DeliverySkipped, "notify_off"
 	}
@@ -126,13 +146,34 @@ func deliverOne(ctx context.Context, tenantID string, event models.CloudifyOrder
 	if len(recipients) == 0 {
 		return DeliverySkipped, "no_zalo_group"
 	}
-	text := Render(settings.Templates[event.Kind], event)
-	if text == "" {
-		return DeliverySkipped, "empty_template"
+	var send func(Recipient) error
+	if event.Kind == KindCreated && event.ReceiptData != "" && !settings.PaymentAccount.IsEmpty() {
+		imageSender, ok := sender.(receiptSender)
+		if !ok {
+			return retryOrFail(event, "image sender unavailable")
+		}
+		image, err := prepareReceipt(ctx, database, tenantID, event, settings.PaymentAccount)
+		if err != nil {
+			return retryOrFail(event, "receipt image: "+err.Error())
+		}
+		skip, err := checkReceiptDelivery(ctx, database, tenantID, event, settings.PaymentAccount)
+		if err != nil {
+			return retryOrFail(event, "receipt image: "+err.Error())
+		}
+		if skip != "" {
+			return DeliverySkipped, skip
+		}
+		send = func(to Recipient) error { return imageSender.SendReceipt(ctx, tenantID, to, image) }
+	} else {
+		text := Render(settings.Templates[event.Kind], event)
+		if text == "" {
+			return DeliverySkipped, "empty_template"
+		}
+		send = func(to Recipient) error { return sender.Send(ctx, tenantID, to, text) }
 	}
 	sent, failures := 0, []string{}
 	for _, to := range recipients {
-		if err := sender.Send(ctx, tenantID, to, text); err != nil {
+		if err := send(to); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", to.Name, err))
 			continue
 		}

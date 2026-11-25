@@ -26,9 +26,11 @@ type IngestResult struct {
 // Ingest twice with the same rows (or from two sources) is harmless.
 func Ingest(ctx context.Context, database *gorm.DB, tenantID string, rows []map[string]any, source string, opts DiffOptions, now time.Time) (IngestResult, error) {
 	orders := make([]Order, 0, len(rows))
+	rawByFingerprint := make(map[string]map[string]any, len(rows))
 	for _, row := range rows {
 		if order, ok := ParseOrder(row); ok {
 			orders = append(orders, order)
+			rawByFingerprint[order.Fingerprint] = row
 		}
 	}
 	result := IngestResult{Fetched: len(orders)}
@@ -68,6 +70,9 @@ func Ingest(ctx context.Context, database *gorm.DB, tenantID string, rows []map[
 				CustomerName: truncate(change.Order.CustomerName, 255), PrevStatus: truncate(change.PrevStatus, 16),
 				Status: truncate(change.Order.Status, 16), OrderDate: truncate(change.Order.Date, 32),
 				Total: change.Order.Total, DeliveryStatus: DeliveryPending, CreatedAt: now,
+			}
+			if change.Kind == KindCreated {
+				event.ReceiptData = captureReceipt(rawByFingerprint[change.Order.Fingerprint])
 			}
 			res := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "dedup_key"}}, DoNothing: true}).Create(&event)
 			if res.Error != nil {

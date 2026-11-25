@@ -1,0 +1,8 @@
+{
+  "name": "cqa-vietqr",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "vietqr": "1.2.0"
+  }
+}
