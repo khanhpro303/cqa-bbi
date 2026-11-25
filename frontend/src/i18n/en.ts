@@ -431,6 +431,8 @@ export default {
   cost_view_day: 'By day',
   cost_view_channel: 'By channel',
   cost_view_employee: 'By employee',
+  cost_slideshow_pause: 'Pause slideshow',
+  cost_slideshow_play: 'Play slideshow',
   cost_employee_chatbot_only: 'Employee costs are available for the Chatbot source.',
   cost_source: 'Source',
   source_all: 'All',
