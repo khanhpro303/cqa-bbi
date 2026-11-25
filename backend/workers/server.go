@@ -46,10 +46,11 @@ func NewWorkerPool(cfg *config.Config) *WorkerPool {
 	mux := asynq.NewServeMux()
 
 	langflowClient := engine.NewLangflowClient(cfg)
-	
+
 	// Register handlers
 	mux.HandleFunc(TypeZaloWebhook, HandleZaloWebhookTask(cfg, langflowClient))
 	mux.HandleFunc(TypeSessionTimeout, HandleSessionTimeoutTask(cfg))
+	mux.HandleFunc(typeZaloOrderScreenshot, handleZaloOrderScreenshot)
 
 	return &WorkerPool{
 		server: srv,

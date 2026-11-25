@@ -109,6 +109,7 @@ type ZaloWebhookPayload struct {
 	Message struct {
 		Text        string                  `json:"text"`
 		MsgID       string                  `json:"msg_id"`
+		QuoteMsgID  string                  `json:"quote_msg_id,omitempty"`
 		Attachments []ZaloWebhookAttachment `json:"attachments,omitempty"`
 	} `json:"message"`
 	OAID string `json:"oa_id"`
@@ -420,6 +421,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// Setup Zalo adapter for replies
 		adapter := zalotoken.NewAdapter(matchedChannel.ID, zaloCreds, cfg.EncryptionKey)
+		// Order confirmations are received even when conversational auto-reply
+		// is disabled. Only signed messages from linked customers can write them.
+		handled, err := captureOrderConfirmation(ctx, cfg, payload, matchedChannel, resolvedGroup, zaloCreds, adapter)
+		if err != nil {
+			log.Printf("[cloudify-orders] could not record confirmation for tenant %s: %v", matchedChannel.TenantID, err)
+		}
+		if handled {
+			return enqueueZaloOrderScreenshot(ctx, asynqClient, matchedChannel, resolvedGroup, payload.Message.MsgID)
+		}
 
 		userText := strings.TrimSpace(payload.Message.Text)
 		attachmentText := parseAttachmentText(payload.Message.Attachments)

@@ -1071,8 +1071,14 @@ func (z *ZaloOAAdapter) RemoveGMFGroupMembers(ctx context.Context, groupID strin
 	return err
 }
 
-// SendGroupMessage sends a text or custom JSON message to a GMF group chat
+// SendGroupMessage sends a text or custom JSON message to a GMF group chat.
 func (z *ZaloOAAdapter) SendGroupMessage(ctx context.Context, groupID string, content string) error {
+	_, err := z.SendTrackedGroupMessage(ctx, groupID, content)
+	return err
+}
+
+// SendTrackedGroupMessage returns the last message ID when long text spans multiple messages.
+func (z *ZaloOAAdapter) SendTrackedGroupMessage(ctx context.Context, groupID, content string) (string, error) {
 	trimmedContent := strings.TrimSpace(content)
 
 	// JSON template payloads are sent verbatim and are never chunked.
@@ -1084,7 +1090,7 @@ func (z *ZaloOAAdapter) SendGroupMessage(ctx context.Context, groupID string, co
 			} else {
 				payload["recipient"] = map[string]interface{}{"group_id": groupID}
 			}
-			return z.sendGroupPayload(ctx, payload)
+			return z.sendGroupPayload(ctx, groupID, payload)
 		}
 		// Not valid JSON after all — fall through and treat as plain text.
 	}
@@ -1092,34 +1098,48 @@ func (z *ZaloOAAdapter) SendGroupMessage(ctx context.Context, groupID string, co
 	// Plain text: split over-long replies (e.g. a 30+ variant stock breakdown)
 	// so Zalo doesn't reject them with HTTP 200 + a non-zero error code.
 	chunks := chunkMessageText(content, zaloMaxTextRunes)
+	var messageID string
 	for i, chunk := range chunks {
 		payload := map[string]interface{}{
 			"recipient": map[string]interface{}{"group_id": groupID},
 			"message":   map[string]interface{}{"text": chunk},
 		}
-		if err := z.sendGroupPayload(ctx, payload); err != nil {
+		id, err := z.sendGroupPayload(ctx, groupID, payload)
+		if err != nil {
 			if len(chunks) > 1 {
-				return fmt.Errorf("zalo send group message chunk %d/%d failed: %w", i+1, len(chunks), err)
+				return "", fmt.Errorf("zalo send group message chunk %d/%d failed: %w", i+1, len(chunks), err)
 			}
-			return err
+			return "", err
 		}
+		messageID = id
 	}
-	return nil
+	return messageID, nil
 }
 
-// sendGroupPayload posts a prepared group/message payload and surfaces a
-// non-zero Zalo application error (HTTP 200 with error != 0) as a real error.
-func (z *ZaloOAAdapter) sendGroupPayload(ctx context.Context, payload map[string]interface{}) error {
-	result, err := z.doRequestJSON(ctx, "POST", "https://openapi.zalo.me/v3.0/oa/group/message", payload)
+// sendGroupPayload posts a prepared payload and surfaces non-zero Zalo application errors.
+func (z *ZaloOAAdapter) sendGroupPayload(ctx context.Context, groupID string, payload map[string]interface{}) (string, error) {
+	result, err := z.doRequestJSON(ctx, "POST", zaloAPIBaseV3+"/group/message", payload)
 	if err != nil {
-		return fmt.Errorf("zalo send group message failed: %w", err)
+		return "", fmt.Errorf("zalo send group message failed: %w", err)
 	}
 	if errCode, ok := result["error"].(float64); ok && errCode != 0 {
 		msg, _ := result["message"].(string)
-		return fmt.Errorf("zalo send group message api error %v: %s", errCode, msg)
+		return "", fmt.Errorf("zalo send group message api error %v: %s", errCode, msg)
 	}
 	z.notifySent(ctx, payload, result)
-	return nil
+	return trackedGroupMessageID(result, groupID), nil
+}
+
+func trackedGroupMessageID(result map[string]interface{}, groupID string) string {
+	code, hasStatus := result["error"].(float64)
+	data, _ := result["data"].(map[string]interface{})
+	returnedGroup, _ := data["group_id"].(string)
+	id, _ := data["message_id"].(string)
+	if !hasStatus || code != 0 || groupID == "" ||
+		returnedGroup != groupID || id != strings.TrimSpace(id) || len(id) > 255 {
+		return ""
+	}
+	return id
 }
 
 // UploadGroupImage uploads an image to Zalo OA and returns its attachment_id.
@@ -1149,6 +1169,12 @@ func (z *ZaloOAAdapter) UploadGroupImage(ctx context.Context, fileBytes []byte, 
 // uses for media attachments: an attachment of type "template" whose payload is
 // template_type "media" with one image element referencing the attachment_id.
 func (z *ZaloOAAdapter) SendGroupImage(ctx context.Context, groupID, attachmentID string) error {
+	_, err := z.SendTrackedGroupImage(ctx, groupID, attachmentID)
+	return err
+}
+
+// SendTrackedGroupImage returns the message ID for the uploaded image sent to the group.
+func (z *ZaloOAAdapter) SendTrackedGroupImage(ctx context.Context, groupID, attachmentID string) (string, error) {
 	payload := map[string]interface{}{
 		"recipient": map[string]interface{}{"group_id": groupID},
 		"message": map[string]interface{}{
@@ -1166,7 +1192,7 @@ func (z *ZaloOAAdapter) SendGroupImage(ctx context.Context, groupID, attachmentI
 			},
 		},
 	}
-	return z.sendGroupPayload(ctx, payload)
+	return z.sendGroupPayload(ctx, groupID, payload)
 }
 
 // doRequestMultipart POSTs a single file as multipart/form-data with the standard
@@ -1314,6 +1340,46 @@ func (z *ZaloOAAdapter) doRequestQueryParams(ctx context.Context, method, apiURL
 		return result, nil
 	}
 	return nil, fmt.Errorf("zalo api failed after retry")
+}
+
+// GroupMessageFollows checks whether a member's message directly follows the
+// given OA message in the most recent GMF conversation results.
+func (z *ZaloOAAdapter) GroupMessageFollows(ctx context.Context, groupID, inboundID, outboundID string) (bool, error) {
+	if groupID == "" || inboundID == "" || outboundID == "" || inboundID == outboundID {
+		return false, nil
+	}
+	result, err := z.doRequestQueryParams(ctx, "GET", zaloAPIBaseV3+"/group/conversation", map[string]string{
+		"group_id": groupID,
+		"offset":   "0",
+		"count":    "20",
+	})
+	if err != nil {
+		return false, err
+	}
+	status, hasStatus := result["error"].(float64)
+	messages, hasMessages := result["data"].([]interface{})
+	if !hasStatus || status != 0 || !hasMessages {
+		return false, fmt.Errorf("zalo group conversation: invalid response")
+	}
+	for i := 0; i+1 < len(messages); i++ {
+		inbound, _ := messages[i].(map[string]interface{})
+		if !matchesGroupMessage(inbound, groupID, inboundID, 1) {
+			continue
+		}
+		outbound, _ := messages[i+1].(map[string]interface{})
+		if !matchesGroupMessage(outbound, groupID, outboundID, 0) {
+			return false, nil
+		}
+		inboundAt, _ := inbound["time"].(float64)
+		outboundAt, _ := outbound["time"].(float64)
+		return outboundAt > 0 && inboundAt >= outboundAt, nil
+	}
+	return false, nil
+}
+
+func matchesGroupMessage(message map[string]interface{}, groupID, messageID string, source float64) bool {
+	gotSource, hasSource := message["src"].(float64)
+	return hasSource && gotSource == source && message["group_id"] == groupID && message["message_id"] == messageID
 }
 
 // GetGMFGroupMembers fetches the list of members in a GMF group chat.

@@ -41,11 +41,27 @@ func (z *ZaloNotifier) Send(ctx context.Context, subject string, body string) er
 
 // SendImage uploads and sends one image to the resolved GMF group.
 func (z *ZaloNotifier) SendImage(ctx context.Context, image []byte, filename string) error {
+	_, err := z.SendTrackedImage(ctx, image, filename)
+	return err
+}
+
+// ZaloGroupID returns the actual group resolved by the notifier.
+func (z *ZaloNotifier) ZaloGroupID() string {
+	return z.zaloGroupID
+}
+
+// SendTrackedText sends text and returns Zalo's ID for linking a customer reply.
+func (z *ZaloNotifier) SendTrackedText(ctx context.Context, text string) (string, error) {
+	return z.adapter.SendTrackedGroupMessage(ctx, z.zaloGroupID, strings.TrimSpace(text))
+}
+
+// SendTrackedImage uploads an image and returns the ID of its delivered message.
+func (z *ZaloNotifier) SendTrackedImage(ctx context.Context, image []byte, filename string) (string, error) {
 	attachmentID, err := z.adapter.UploadGroupImage(ctx, image, filename)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return z.adapter.SendGroupImage(ctx, z.zaloGroupID, attachmentID)
+	return z.adapter.SendTrackedGroupImage(ctx, z.zaloGroupID, attachmentID)
 }
 
 // HealthCheck is a no-op; the send call itself surfaces auth/permission errors.

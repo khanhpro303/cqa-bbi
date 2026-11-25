@@ -17,7 +17,7 @@
       <v-btn v-else-if="currentTab === 'groups'" color="primary" prepend-icon="mdi-plus-box" @click="openCreateGroupDialog">
         Thêm nhóm mới
       </v-btn>
-      <v-btn v-else color="teal" prepend-icon="mdi-account-plus" @click="openInviteDialog">
+      <v-btn v-else-if="currentTab !== 'order_tracking'" color="teal" prepend-icon="mdi-account-plus" @click="openInviteDialog">
         Tạo mã kích hoạt khách
       </v-btn>
     </div>
@@ -35,6 +35,10 @@
       <v-tab value="cloudify_customers">
         <v-icon start>mdi-database-outline</v-icon>
         {{ $t('crm_cloudify_customers') }}
+      </v-tab>
+      <v-tab value="order_tracking">
+        <v-icon start>mdi-package-variant-closed-check</v-icon>
+        {{ $t('crm_order_tracking') }}
       </v-tab>
       <v-tab value="approvals">
         <v-icon start>mdi-account-clock</v-icon>
@@ -423,6 +427,15 @@
             </tbody>
           </v-table>
         </v-card>
+      </v-window-item>
+
+      <v-window-item value="order_tracking" class="pt-2">
+        <CRMOrderTracking
+          v-if="currentTab === 'order_tracking'"
+          :key="tenantId"
+          :tenant-id="tenantId"
+          :can-attach-evidence="authStore.canEdit('settings')"
+        />
       </v-window-item>
 
       <!-- TAB 5: CRM CAMPAIGNS (Chiến dịch CRM) -->
@@ -1273,6 +1286,7 @@ import { useTenantEventRefresh } from '../composables/useTenantEvents'
 import ProductGroupRequiredModal from '../components/erp-permissions/ProductGroupRequiredModal.vue'
 import CampaignList from '../components/crm-campaigns/CampaignList.vue'
 import CampaignDashboard from '../components/crm-campaigns/CampaignDashboard.vue'
+import CRMOrderTracking from '../components/CRMOrderTracking.vue'
 import { findEndpointsMissingGroups, findEndpointsMissingBrands } from '../utils/erp-permission-validation'
 
 const route = useRoute()
@@ -1290,7 +1304,7 @@ const isOwnerOrAdmin = computed(() => {
 // reserved for the app owner, since it force-resets live bot conversations.
 const isOwner = computed(() => authStore.tenantPerms?.role === 'owner')
 
-const VALID_TABS = ['groups', 'customers', 'cloudify_customers', 'approvals', 'campaigns']
+const VALID_TABS = ['groups', 'customers', 'cloudify_customers', 'order_tracking', 'approvals', 'campaigns']
 const currentTab = ref(
   VALID_TABS.includes(route.query.tab as string) ? (route.query.tab as string) : 'groups',
 )
