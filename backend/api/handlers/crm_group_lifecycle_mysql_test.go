@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/realtime"
 	"gorm.io/gorm"
 )
 
@@ -152,6 +154,55 @@ func TestMySQLCRMGroupArchiveRestoreDelete(t *testing.T) {
 		if n := countRows(t, q); n != 1 {
 			t.Fatalf("history row removed by permanent delete: %v", q.Statement.Table)
 		}
+	}
+}
+
+func TestMySQLAddGroupCustomersPublishesCommittedMembership(t *testing.T) {
+	database := facebookOAuthTestDatabase(t)
+	if err := database.AutoMigrate(&models.ZaloCustomer{}, &models.CRMGroup{}, &models.CRMGroupCustomerCode{}); err != nil {
+		t.Fatal(err)
+	}
+	createFacebookOAuthTenant(t, database, "tenant-a")
+	if err := database.Create(&models.CRMGroup{ID: "grp-1", TenantID: "tenant-a", Name: "Nhóm thử"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&models.ZaloCustomer{ID: "cus-1", TenantID: "tenant-a", Name: "Khách thử", Status: "approved"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates, err := realtime.Subscribe(ctx, "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTenant, err := realtime.Subscribe(ctx, "tenant-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(response)
+	c.Request = httptest.NewRequest(http.MethodPost, "/groups/grp-1/members", strings.NewReader(`{"customer_ids":["cus-1"]}`))
+	c.Params = gin.Params{{Key: "id", Value: "grp-1"}}
+	c.Set("tenant_id", "tenant-a")
+	AddGroupMembers(c)
+	if response.Code != http.StatusOK {
+		t.Fatalf("add members: %d %s", response.Code, response.Body)
+	}
+	select {
+	case event := <-updates:
+		if event != realtime.EventCRMGroupMembersUpdated {
+			t.Fatalf("unexpected event %q", event)
+		}
+	default:
+		t.Fatal("adding a CRM member must publish a tenant update")
+	}
+	select {
+	case event := <-otherTenant:
+		t.Fatalf("another tenant received %q", event)
+	default:
+	}
+	if n := countRows(t, database.Model(&models.CRMGroupCustomer{}).Where("group_id = ? AND zalo_customer_id = ?", "grp-1", "cus-1")); n != 1 {
+		t.Fatalf("expected one committed group member, got %d", n)
 	}
 }
 

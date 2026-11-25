@@ -21,6 +21,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"github.com/vietbui/chat-quality-agent/realtime"
 	"gorm.io/gorm/clause"
 )
 
@@ -59,6 +60,9 @@ func CloudifyOrderWebhookHandler(cfg *config.Config) gin.HandlerFunc {
 					result, err := cloudifyorders.IngestByCode(ctx, db.DB, fetcher, tenantID, code, now)
 					if err == nil && result.Fetched > 0 {
 						log.Printf("[cloudify-orders] webhook tenant %s order %s: %d event(s)", tenantID, code, len(result.Events))
+						if len(result.Events) > 0 {
+							realtime.Publish(ctx, tenantID, realtime.EventCloudifyOrdersUpdated)
+						}
 						return
 					}
 				}

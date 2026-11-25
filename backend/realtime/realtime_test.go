@@ -9,8 +9,14 @@ import (
 func TestLocalPublishReachesOnlySameTenant(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a := Subscribe(ctx, "tenant-a")
-	b := Subscribe(ctx, "tenant-b")
+	a, err := Subscribe(ctx, "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Subscribe(ctx, "tenant-b")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	Publish(ctx, "tenant-a", EventZaloWhitelistUpdated)
 
@@ -31,7 +37,11 @@ func TestLocalPublishReachesOnlySameTenant(t *testing.T) {
 
 func TestSubscribeClosesAfterContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := Subscribe(ctx, "tenant-c")
+	ch, err := Subscribe(ctx, "tenant-c")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
 	cancel()
 	select {
 	case _, ok := <-ch:

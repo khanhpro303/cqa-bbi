@@ -9,6 +9,7 @@ import (
 
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"github.com/vietbui/chat-quality-agent/realtime"
 	"gorm.io/gorm"
 )
 
@@ -126,8 +127,10 @@ func (w *Watcher) Tick(ctx context.Context, tenantID string) {
 	if pollDue(watch, settings, now) {
 		w.poll(ctx, tenantID, watch, settings, now)
 	}
-	if _, err := DeliverPending(ctx, w.DB, tenantID, settings, w.Sender, w.Now()); err != nil {
+	if delivered, err := DeliverPending(ctx, w.DB, tenantID, settings, w.Sender, w.Now()); err != nil {
 		log.Printf("[cloudify-orders] tenant %s delivery failed: %v", tenantID, err)
+	} else if delivered > 0 {
+		realtime.Publish(ctx, tenantID, realtime.EventCloudifyOrdersUpdated)
 	}
 }
 
@@ -147,7 +150,7 @@ func (w *Watcher) poll(ctx context.Context, tenantID string, watch models.Cloudi
 	w.DB.Model(&models.CloudifyOrderWatch{}).Where("tenant_id = ?", tenantID).Update("last_poll_at", now)
 	fetcher, err := w.NewFetcher(tenantID)
 	if err != nil {
-		w.fail(tenantID, err)
+		w.fail(ctx, tenantID, err)
 		return
 	}
 	pollCtx, cancel := context.WithTimeout(ctx, pollTimeout)
@@ -156,13 +159,13 @@ func (w *Watcher) poll(ctx context.Context, tenantID string, watch models.Cloudi
 		return fetcher.ByWindow(now.AddDate(0, 0, -settings.WindowDays), now)
 	})
 	if err != nil {
-		w.fail(tenantID, err)
+		w.fail(ctx, tenantID, err)
 		return
 	}
 	seeding := watch.SeededAt == nil
 	result, err := Ingest(ctx, w.DB, tenantID, rows, SourcePoll, diffOptions(watch), now)
 	if err != nil {
-		w.fail(tenantID, err)
+		w.fail(ctx, tenantID, err)
 		return
 	}
 	updates := map[string]any{"last_ok_at": now, "last_error": "", "last_count": result.Fetched}
@@ -170,7 +173,7 @@ func (w *Watcher) poll(ctx context.Context, tenantID string, watch models.Cloudi
 		updates["seeded_at"] = now
 		log.Printf("[cloudify-orders] tenant %s seeded with %d orders", tenantID, result.Fetched)
 	}
-	w.DB.Model(&models.CloudifyOrderWatch{}).Where("tenant_id = ?", tenantID).Updates(updates)
+	w.updatePollStatus(ctx, tenantID, updates)
 	if len(result.Events) > 0 {
 		log.Printf("[cloudify-orders] tenant %s: %d order change(s) detected", tenantID, len(result.Events))
 	}
@@ -185,13 +188,21 @@ func diffOptions(watch models.CloudifyOrderWatch) DiffOptions {
 	return DiffOptions{CreatedCutoff: watch.SeededAt.AddDate(0, 0, -1)}
 }
 
-func (w *Watcher) fail(tenantID string, err error) {
+func (w *Watcher) fail(ctx context.Context, tenantID string, err error) {
 	message := "Không đọc được đơn hàng từ Cloudify."
 	if errors.Is(err, ErrNotConfigured) {
 		message = "Chưa cấu hình tài khoản Cloudify (Cài đặt → ERP)."
 	}
 	log.Printf("[cloudify-orders] tenant %s poll failed: %v", tenantID, err)
-	w.DB.Model(&models.CloudifyOrderWatch{}).Where("tenant_id = ?", tenantID).Update("last_error", message)
+	w.updatePollStatus(ctx, tenantID, map[string]any{"last_error": message})
+}
+
+func (w *Watcher) updatePollStatus(ctx context.Context, tenantID string, updates map[string]any) {
+	if err := w.DB.Model(&models.CloudifyOrderWatch{}).Where("tenant_id = ?", tenantID).Updates(updates).Error; err != nil {
+		log.Printf("[cloudify-orders] tenant %s could not persist poll status: %v", tenantID, err)
+		return
+	}
+	realtime.Publish(ctx, tenantID, realtime.EventCloudifyOrdersUpdated)
 }
 
 // fetchWithContext stops waiting when ctx ends. The Cloudify client has its

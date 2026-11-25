@@ -11,8 +11,10 @@ package realtime
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/vietbui/chat-quality-agent/db"
@@ -21,6 +23,11 @@ import (
 // EventZaloWhitelistUpdated fires when a staff whitelist entry changes outside
 // the admin UI, e.g. an employee pairs their Zalo account with "verify <code>".
 const EventZaloWhitelistUpdated = "zalo_whitelist_updated"
+
+const (
+	EventCloudifyOrdersUpdated  = "cloudify_orders_updated"
+	EventCRMGroupMembersUpdated = "crm_group_members_updated"
+)
 
 func channelName(tenantID string) string {
 	return "cqa:realtime:" + tenantID
@@ -54,13 +61,27 @@ func Publish(ctx context.Context, tenantID, event string) {
 	}
 }
 
-// Subscribe returns a channel of event names for the tenant. The channel is
-// closed after ctx is done.
-func Subscribe(ctx context.Context, tenantID string) <-chan string {
+// Subscribe returns a ready subscription. The channel closes when ctx ends
+// or Redis resubscribes, so clients can refresh after an interruption.
+func Subscribe(ctx context.Context, tenantID string) (<-chan string, error) {
 	out := make(chan string, 8)
 	if client := db.RedisClient; client != nil {
-		go forwardRedis(ctx, client, tenantID, out)
-		return out
+		const subscribeTimeout = 3 * time.Second
+		readyCtx, cancel := context.WithTimeout(ctx, subscribeTimeout)
+		defer cancel()
+		name := channelName(tenantID)
+		pubsub := client.Subscribe(readyCtx, name)
+		ack, err := pubsub.ReceiveTimeout(readyCtx, subscribeTimeout)
+		if err != nil {
+			pubsub.Close()
+			return nil, err
+		}
+		if sub, ok := ack.(*redis.Subscription); !ok || sub.Kind != "subscribe" || sub.Channel != name {
+			pubsub.Close()
+			return nil, fmt.Errorf("unexpected Redis subscription response: %T", ack)
+		}
+		go forwardRedis(ctx, pubsub, out)
+		return out, nil
 	}
 
 	local.Lock()
@@ -80,25 +101,31 @@ func Subscribe(ctx context.Context, tenantID string) <-chan string {
 		local.Unlock()
 		close(out)
 	}()
-	return out
+	return out, nil
 }
 
-func forwardRedis(ctx context.Context, client *redis.Client, tenantID string, out chan<- string) {
+func forwardRedis(ctx context.Context, pubsub *redis.PubSub, out chan<- string) {
 	defer close(out)
-	pubsub := client.Subscribe(ctx, channelName(tenantID))
 	defer pubsub.Close()
-	msgs := pubsub.Channel()
+	msgs := pubsub.ChannelWithSubscriptions()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg, ok := <-msgs:
+		case update, ok := <-msgs:
 			if !ok {
 				return
 			}
-			select {
-			case out <- msg.Payload:
-			default:
+			switch msg := update.(type) {
+			case *redis.Subscription:
+				// The initial acknowledgement was consumed by Subscribe.
+				// End the stream so the browser reloads a snapshot on reconnect.
+				return
+			case *redis.Message:
+				select {
+				case out <- msg.Payload:
+				default:
+				}
 			}
 		}
 	}

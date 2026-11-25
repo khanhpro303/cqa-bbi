@@ -23,6 +23,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"github.com/vietbui/chat-quality-agent/realtime"
 )
 
 // CRM Group CRUD
@@ -355,7 +356,10 @@ func AddGroupMembers(c *gin.Context) {
 		}
 	}
 
-	tx.Commit()
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_add_group_members"})
+		return
+	}
 
 	// Invite customers to Zalo GMF group chat if group has ZaloGroupID
 	if group.ZaloGroupID != "" && len(req.CustomerIDs) > 0 {
@@ -393,6 +397,9 @@ func AddGroupMembers(c *gin.Context) {
 		}
 	}
 
+	if len(req.CustomerIDs) > 0 {
+		realtime.Publish(context.WithoutCancel(c.Request.Context()), tenantID, realtime.EventCRMGroupMembersUpdated)
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "members_added"})
 }
 
@@ -655,6 +662,7 @@ func ApproveZaloCustomer(c *gin.Context) {
 	customer.CustomerCode = codes[0]
 
 	// Add to groups if provided
+	linkedToGroup := false
 	for _, groupID := range req.GroupIDs {
 		var grp models.CRMGroup
 		if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&grp).Error; err == nil {
@@ -666,11 +674,15 @@ func ApproveZaloCustomer(c *gin.Context) {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_link_customer_to_groups"})
 					return
 				}
+				linkedToGroup = true
 			}
 		}
 	}
 
-	tx.Commit()
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_approve_customer"})
+		return
+	}
 
 	// Invite customer to the selected Zalo GMF groups if they have a linked Zalo account
 	if customer.ZaloUserID != "" && len(req.GroupIDs) > 0 {
@@ -703,6 +715,9 @@ func ApproveZaloCustomer(c *gin.Context) {
 		}
 	}
 
+	if linkedToGroup {
+		realtime.Publish(context.WithoutCancel(c.Request.Context()), tenantID, realtime.EventCRMGroupMembersUpdated)
+	}
 	c.JSON(http.StatusOK, customer)
 }
 
@@ -810,7 +825,7 @@ func AnalyzeZaloCustomerChat(c *gin.Context) {
 
 	// 3. Query chat history from Astra DB
 	url := fmt.Sprintf("%s/api/json/v1/%s/%s", apiEndpoint, keyspace, collection)
-	
+
 	payload := map[string]interface{}{
 		"find": map[string]interface{}{
 			"filter": map[string]interface{}{
@@ -1530,6 +1545,7 @@ func AcceptGroupPendingInvite(c *gin.Context) {
 		}
 	}
 
+	realtime.Publish(context.WithoutCancel(c.Request.Context()), tenantID, realtime.EventCRMGroupMembersUpdated)
 	c.JSON(http.StatusOK, gin.H{"message": "invite_accepted"})
 }
 
