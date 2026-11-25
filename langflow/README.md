@@ -90,3 +90,11 @@ semantics.
 
 Never commit a raw `GET /api/v1/flows/{id}` dump: custom MCP and AstraDB nodes
 can hold literal keys. Always go through the export script.
+
+## Web pages in the knowledge base
+
+CQA runs the URL ingestion flow. When an administrator imports a link, CQA calls
+Firecrawl Scrape v2 with the tenant key saved in AI Engine and indexes the
+resulting Markdown. Both Langflow flows search those passages using their
+existing `search_knowledge` tool and public or private agent token. See
+`docs/admin/knowledge-base.md` for the configuration and import steps.

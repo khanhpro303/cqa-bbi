@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
 import Knowledge from '../views/Knowledge.vue'
 import KnowledgePlayground from '../components/KnowledgePlayground.vue'
 
@@ -11,6 +12,34 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ canEdit: () => true, tenantPerms: { role: 'owner' } }) }))
 
 const doc = { id: 'd1', title: 'Bảo hành', file_name: 'bh.pdf', source: 'upload', audience: 'public', enabled: true, status: 'ready', char_count: 100, chunk_count: 2, created_by: 'a@b', created_at: '2026-11-22T10:00:00Z' }
+const linkDoc = { ...doc, file_name: '', source: 'url', source_url: 'https://example.com/warranty', parser: 'firecrawl' }
+
+const LinkField = defineComponent({
+  props: ['modelValue'],
+  emits: ['update:modelValue'],
+  setup: (props, { emit }) => () => h('input', {
+    value: props.modelValue,
+    onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value),
+  }),
+})
+const AudienceField = defineComponent({
+  props: ['modelValue'],
+  emits: ['update:modelValue'],
+  setup: (props, { emit }) => () => h('select', {
+    value: props.modelValue,
+    onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLSelectElement).value),
+  }, [h('option', { value: 'public' }), h('option', { value: 'internal' })]),
+})
+
+function mountLinkImport() {
+  return shallowMount(Knowledge, {
+    global: {
+      mocks: { $t: (key: string) => key },
+      stubs: { VTextField: LinkField, VSelect: AudienceField },
+      renderStubDefaultSlot: true,
+    },
+  })
+}
 
 describe('Knowledge page', () => {
   beforeEach(() => {
@@ -70,6 +99,73 @@ describe('Knowledge page', () => {
     await flushPromises()
     await (wrapper.vm as any).patchDoc(doc, { enabled: false })
     expect(mocks.patch).toHaveBeenCalledWith('/tenants/tenant-1/knowledge/d1', { enabled: false })
+  })
+
+  it('imports a public URL with the chosen audience and reloads the processing document', async () => {
+    mocks.get
+      .mockResolvedValueOnce({ data: { documents: [], firecrawl_enabled: true } })
+      .mockResolvedValueOnce({ data: { documents: [{ ...linkDoc, status: 'processing', chunk_count: 0 }], firecrawl_enabled: true } })
+      .mockResolvedValueOnce({ data: { document: linkDoc, summary: { status: 'missing' } } })
+    const wrapper = mountLinkImport()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="kb-add-link"]').trigger('click')
+      await wrapper.get('[data-testid="kb-link-url"]').setValue(`  ${linkDoc.source_url}  `)
+      await wrapper.get('[data-testid="kb-link-title"]').setValue(' Bảo hành ')
+      await wrapper.get('[data-testid="kb-link-audience"]').setValue('internal')
+      await wrapper.get('[data-testid="kb-link-form"]').trigger('submit')
+      await flushPromises()
+      expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/knowledge/url', {
+        url: linkDoc.source_url,
+        title: linkDoc.title,
+        audience: 'internal',
+      })
+      expect(wrapper.text()).toContain('kb_link_extracting')
+      expect(wrapper.text()).toContain('kb_source_link')
+      await wrapper.get('.document-link').trigger('click')
+      await flushPromises()
+      const source = wrapper.get('[data-testid="kb-source-url"]')
+      expect(source.attributes('href')).toBe(linkDoc.source_url)
+      expect(source.attributes('rel')).toContain('noopener')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('directs the user to AI Engine when Firecrawl is missing', async () => {
+    const wrapper = mountLinkImport()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="kb-add-link"]').trigger('click')
+      expect(wrapper.get('[data-testid="kb-firecrawl-setup"]').text()).toContain('nav_ai_engines')
+      await wrapper.get('[data-testid="kb-link-url"]').setValue(linkDoc.source_url)
+      await wrapper.get('[data-testid="kb-link-form"]').trigger('submit')
+      expect(mocks.post).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('rejects unsafe URL schemes in the form and as a stored source', async () => {
+    const unsafeURL = 'javascript:alert(1)'
+    const unsafeDoc = { ...linkDoc, source_url: unsafeURL }
+    mocks.get
+      .mockResolvedValueOnce({ data: { documents: [unsafeDoc], firecrawl_enabled: true } })
+      .mockResolvedValueOnce({ data: { document: unsafeDoc, summary: { status: 'missing' } } })
+    const wrapper = mountLinkImport()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="kb-add-link"]').trigger('click')
+      await wrapper.get('[data-testid="kb-link-url"]').setValue(unsafeURL)
+      await wrapper.get('[data-testid="kb-link-form"]').trigger('submit')
+      expect(wrapper.get('[data-testid="kb-link-error"]').text()).toBe('kb_link_invalid')
+      expect(mocks.post).not.toHaveBeenCalled()
+      await wrapper.get('.document-link').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="kb-source-url"]').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('shows a saved summary for an indexing failure without rendering technical errors or chunks', async () => {

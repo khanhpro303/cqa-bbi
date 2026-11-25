@@ -179,25 +179,37 @@ func (s *Service) CreateDocument(in NewDocumentInput) (*models.KnowledgeDocument
 // chunks and indexes the file in the background, so a slow parser (a long
 // scanned PDF through Unstructured) does not hold the upload request.
 func (s *Service) CreateFromFile(in NewDocumentInput, data []byte, parser ParserSettings) (*models.KnowledgeDocument, error) {
-	doc := newDocument(in)
+	return s.createFromReader(newDocument(in), 30*time.Minute, func(ctx context.Context) (parsedDocument, error) {
+		text, parserName, notice, err := ExtractDocument(ctx, parser, in.FileName, data)
+		return parsedDocument{text: text, parser: parserName, notice: notice}, err
+	})
+}
+
+type parsedDocument struct {
+	text   string
+	parser string
+	notice string
+	title  string
+}
+
+func (s *Service) createFromReader(doc *models.KnowledgeDocument, timeout time.Duration, read func(context.Context) (parsedDocument, error)) (*models.KnowledgeDocument, error) {
 	if err := db.DB.Create(doc).Error; err != nil {
 		return nil, err
 	}
 	go func(doc models.KnowledgeDocument) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		text, used, notice, err := ExtractDocument(ctx, parser, in.FileName, data)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		parsed, err := read(ctx)
 		cancel()
 		if err != nil {
 			s.fail(&doc, err)
 			return
 		}
-		in.Text, in.Chunks = text, nil
-		chunks := prepareChunks(in)
+		chunks := prepareChunks(NewDocumentInput{Text: parsed.text})
 		if len(chunks) == 0 {
 			s.fail(&doc, errors.New("document has no text"))
 			return
 		}
-		if err := insertChunks(&doc, chunks, used); err != nil {
+		if err := insertChunks(&doc, chunks, parsed); err != nil {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				s.fail(&doc, fmt.Errorf("save parsed document: %w", err))
 			}
@@ -207,8 +219,8 @@ func (s *Service) CreateFromFile(in NewDocumentInput, data []byte, parser Parser
 			log.Printf("[knowledge] index document %s: %v", doc.ID, err)
 			return
 		}
-		if notice != "" {
-			db.DB.Model(&models.KnowledgeDocument{}).Where("id = ? AND status = ?", doc.ID, StatusReady).Update("error", notice)
+		if parsed.notice != "" {
+			db.DB.Model(&models.KnowledgeDocument{}).Where("id = ? AND status = ?", doc.ID, StatusReady).Update("error", parsed.notice)
 		}
 	}(*doc)
 	return doc, nil
@@ -283,7 +295,7 @@ func saveDocument(doc *models.KnowledgeDocument, chunks []string) error {
 	return tx.Commit().Error
 }
 
-func insertChunks(doc *models.KnowledgeDocument, chunks []string, parser string) error {
+func insertChunks(doc *models.KnowledgeDocument, chunks []string, parsed parsedDocument) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	release, ok := LockDocumentIndex(ctx, doc.TenantID, doc.ID, true)
@@ -293,9 +305,21 @@ func insertChunks(doc *models.KnowledgeDocument, chunks []string, parser string)
 	defer release()
 
 	rows := chunkRows(doc, chunks)
+	updates := map[string]interface{}{
+		"parser": parsed.parser, "char_count": doc.CharCount, "chunk_count": doc.ChunkCount,
+		// Extraction still finishes if the user disables the document.
+		"status": gorm.Expr("CASE WHEN status = ? AND enabled = ? THEN ? ELSE status END", StatusProcessing, false, StatusReady),
+	}
+	if doc.SourceURL != "" {
+		updates["size_bytes"] = len(parsed.text)
+	}
+	if parsed.title != "" {
+		// Adopt the page title only while the provisional title is still present.
+		updates["title"] = gorm.Expr("CASE WHEN title = ? THEN ? ELSE title END", doc.Title, truncateRunes(parsed.title, 250))
+	}
 	return db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.KnowledgeDocument{}).Where("tenant_id = ? AND id = ?", doc.TenantID, doc.ID).
-			Updates(map[string]interface{}{"parser": parser, "char_count": doc.CharCount, "chunk_count": doc.ChunkCount})
+			Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -442,15 +466,14 @@ func (s *Service) Reindex(ctx context.Context, docID string) error {
 	return nil
 }
 
-// ResumePending restarts indexing that a restart interrupted. A file that
-// was still being read is gone with the old process: it is marked failed so
-// staff upload it again.
+// ResumePending restarts indexing that a restart interrupted. Documents
+// whose text was not saved still need to be imported again.
 func (s *Service) ResumePending() {
 	var docs []models.KnowledgeDocument
-	db.DB.Where("status = ? AND enabled = ?", StatusProcessing, true).Find(&docs)
+	db.DB.Where("status = ? AND (enabled = ? OR chunk_count = 0)", StatusProcessing, true).Find(&docs)
 	for i := range docs {
 		if docs[i].ChunkCount == 0 {
-			s.fail(&docs[i], errors.New("máy chủ khởi động lại khi đang đọc tệp; hãy tải lại tệp này"))
+			s.fail(&docs[i], errors.New("máy chủ khởi động lại khi đang đọc tài liệu; hãy nhập lại tài liệu này"))
 			continue
 		}
 		s.IndexAsync(docs[i].ID)

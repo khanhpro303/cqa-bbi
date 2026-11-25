@@ -71,6 +71,21 @@ liệt kê 1 job nên không tốn phí.
   trạng thái. Nếu máy chủ khởi động lại giữa chừng, tài liệu chuyển "Lỗi" và
   cần tải lại.
 
+## Nhập từ link: Firecrawl
+
+Trong **AI Engine → Đọc trang web (Firecrawl)**, nhập API key rồi bấm **Lưu**.
+CQA mã hoá key theo tenant. Nút **Kiểm tra** xác thực key qua API xem số dư
+credit, không chạy scrape. Khi nhập một link, Firecrawl có thể tính credit.
+
+Mở **Tài liệu chatbot → Nhập từ link**, dán URL HTTP(S) công khai và chọn
+**Ai được dùng**. Có thể nhập tiêu đề riêng. Nếu để trống, CQA lấy tiêu đề
+trang từ Firecrawl hoặc dùng tên miền. Tài liệu lưu link gốc để mở lại khi cần.
+
+CQA gửi URL tới [Firecrawl Scrape v2](https://docs.firecrawl.dev/api-reference/endpoint/scrape)
+để lấy Markdown của trang. Việc đọc trang, chia đoạn và lập chỉ mục chạy nền.
+Nếu đọc thất bại, kiểm tra key và credit rồi nhập lại link. Khi tài liệu sẵn
+sàng, cả hai flow Langflow tra qua công cụ `search_knowledge` theo quyền đã chọn.
+
 ## Chia đoạn và nhúng
 
 - Chia đoạn: không dùng model. Cắt theo đoạn văn, ~1.200 ký tự, gối 200 ký tự,
@@ -84,6 +99,7 @@ liệt kê 1 job nên không tốn phí.
 - **Tải tài liệu**: PDF (có lớp chữ, PDF scan cần OCR trước), DOCX, XLSX, TXT,
   MD, CSV, HTML; tối đa 20 MB mỗi tệp. Chọn "Ai được dùng".
 - **Nhập văn bản**: dán nội dung trực tiếp.
+- **Nhập từ link**: đọc nội dung một trang công khai bằng Firecrawl.
 - **Chat thử**: xem câu trả lời từ flow Langflow đã cấu hình trong một phiên thử
   riêng, với flow ID và API key được lưu trong AI Engine của tenant. Phiên này
   có quyền tra tài liệu qua CQA. Chủ tài khoản và quản trị viên có thể thử thêm
