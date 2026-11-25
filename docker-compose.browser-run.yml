@@ -1,0 +1,5 @@
+services:
+  app:
+    env_file:
+      - path: ../.cqa-zalo-browser-run.env
+        required: false

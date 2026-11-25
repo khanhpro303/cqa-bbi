@@ -17,7 +17,10 @@ from pathlib import Path
 ROOT = Path("/home/karien/cqa-personal-zalo")
 ENV_FILE = ROOT.parent / ".cqa-zalo-browser-run.env"
 DEPLOY_LOCK = ROOT.parent / "cqa-backups" / ".deploy.lock"
-COMPOSE = ["docker", "compose", "-p", "cqa-personal-zalo", "-f", "docker-compose.yml"]
+COMPOSE = [
+    "docker", "compose", "-p", "cqa-personal-zalo",
+    "-f", "docker-compose.yml", "-f", "docker-compose.browser-run.yml",
+]
 KEYS = (
     "ZALO_ORDER_SCREENSHOT_CF_ACCOUNT_ID",
     "ZALO_ORDER_SCREENSHOT_CF_API_TOKEN",
@@ -32,9 +35,12 @@ class ConfigurationError(Exception):
     """An error whose message is safe to log."""
 
 
-def validate_settings(settings, group_id):
-    if not SAFE_ID.fullmatch(group_id):
-        raise ConfigurationError("Invalid Zalo test group ID.")
+def validate_settings(settings, group_id, scope="pilot"):
+    if scope == "pilot":
+        if not SAFE_ID.fullmatch(group_id):
+            raise ConfigurationError("Invalid Zalo test group ID.")
+    elif scope != "all_linked_groups" or group_id:
+        raise ConfigurationError("Invalid Browser Run capture scope.")
     if not isinstance(settings, dict) or set(settings) != set(KEYS):
         raise ConfigurationError("Incomplete Browser Run settings.")
     if any(not isinstance(value, str) for value in settings.values()):
@@ -50,8 +56,14 @@ def validate_settings(settings, group_id):
         profile = json.loads(raw_profile)
     except ValueError:
         raise ConfigurationError("The Browser Run profile must be valid JSON.") from None
-    if not isinstance(profile, dict) or profile.get("zalo_group_ids") != [group_id]:
-        raise ConfigurationError("The Browser Run profile must allow exactly the approved test group.")
+    if not isinstance(profile, dict):
+        raise ConfigurationError("The Browser Run profile must be a JSON object.")
+    groups = profile.get("zalo_group_ids", [])
+    all_groups = profile.get("all_linked_groups", False)
+    if scope == "pilot" and (all_groups is not False or groups != [group_id]):
+        raise ConfigurationError("The pilot profile must allow exactly the approved test group.")
+    if scope == "all_linked_groups" and (all_groups is not True or groups != []):
+        raise ConfigurationError("The all-groups profile must explicitly enable all linked groups and omit group IDs.")
     for field in ("tenant_id", "channel_id"):
         value = profile.get(field)
         if not isinstance(value, str) or not SAFE_ID.fullmatch(value):
@@ -230,12 +242,13 @@ def abort(*_):
 def main():
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument("--scope", choices=("pilot", "all_linked_groups"), default="pilot")
     mode.add_argument("--emit", metavar="GROUP_ID")
     mode.add_argument("--apply", nargs=3, metavar=("REVISION", "GROUP_ID", "RUN_ID"))
     args = parser.parse_args()
     try:
         if args.emit:
-            settings = validate_settings({key: os.environ.get(key, "") for key in KEYS}, args.emit)
+            settings = validate_settings({key: os.environ.get(key, "") for key in KEYS}, args.emit, args.scope)
             sys.stdout.write(json.dumps(settings, ensure_ascii=False))
             return
         revision, group_id, run_id = args.apply
@@ -244,7 +257,7 @@ def main():
         payload = sys.stdin.buffer.read(MAX_PAYLOAD_BYTES + 1)
         if len(payload) > MAX_PAYLOAD_BYTES:
             raise ConfigurationError("Browser Run settings payload is too large.")
-        settings = validate_settings(json.loads(payload), group_id)
+        settings = validate_settings(json.loads(payload), group_id, args.scope)
         for signum in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, abort)
         apply_settings(settings, revision, run_id)

@@ -58,6 +58,34 @@ func TestZaloScreenshotCodeVerifiesIdentifiersAndScopesSession(t *testing.T) {
 
 type screenshotRoundTripper func(*http.Request) (*http.Response, error)
 
+func TestZaloScreenshotProfileCaptureScope(t *testing.T) {
+	for _, test := range []struct {
+		name, settings string
+		allowed        bool
+		wantError      bool
+	}{
+		{"pilot", `"zalo_group_ids":["pilot-id"]`, false, false},
+		{"all linked", `"all_linked_groups":true`, true, false},
+		{"ambiguous", `"all_linked_groups":true,"zalo_group_ids":["pilot-id"]`, false, true},
+		{"empty", `"all_linked_groups":false`, false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("ZALO_ORDER_SCREENSHOT_PROFILE", `{"tenant_id":"t","channel_id":"c","zalo_oa_id":"123",`+test.settings+`}`)
+			profile, _, _, err := LoadZaloScreenshotProfile("t", "c")
+			if (err != nil) != test.wantError {
+				t.Fatalf("scope validation error = %v", err)
+			}
+			if profile.AllowsGroup("new-linked-group") != test.allowed || profile.AllowsGroup("bad.group") {
+				t.Fatal("unexpected group scope")
+			}
+			other, _, _, err := LoadZaloScreenshotProfile("t", "other")
+			if err != nil || other.AllowsGroup("new-linked-group") || other.AllowsGroup("pilot-id") {
+				t.Fatal("scope escaped the configured channel")
+			}
+		})
+	}
+}
+
 func (f screenshotRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestBrowserRunPreservesPNGAndClosesSession(t *testing.T) {
