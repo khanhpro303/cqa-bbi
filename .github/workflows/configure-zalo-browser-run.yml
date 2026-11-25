@@ -9,9 +9,17 @@ on:
         type: boolean
         default: false
       zalo_group_id:
-        description: Exact Zalo group ID of the approved test group
-        required: true
+        description: Exact Zalo group ID for pilot scope only
+        required: false
         type: string
+      scope:
+        description: Which linked Zalo groups may be captured
+        required: true
+        type: choice
+        default: pilot
+        options:
+          - pilot
+          - all_linked_groups
 
 permissions:
   contents: read
@@ -37,6 +45,7 @@ jobs:
         env:
           TARGET_SHA: ${{ github.sha }}
           ZALO_GROUP_ID: ${{ inputs.zalo_group_id }}
+          CAPTURE_SCOPE: ${{ inputs.scope }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USERNAME }}
           VPS_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -46,7 +55,12 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ && "$ZALO_GROUP_ID" =~ ^[A-Za-z0-9_-]{1,128}$ ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "$CAPTURE_SCOPE" in
+            pilot) [[ "$ZALO_GROUP_ID" =~ ^[A-Za-z0-9_-]{1,128}$ ]] ;;
+            all_linked_groups) [[ -z "$ZALO_GROUP_ID" ]] ;;
+            *) exit 1 ;;
+          esac
           [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           : "${VPS_HOST:?VPS_HOST is required}" "${VPS_USER:?VPS_USERNAME is required}" "${VPS_KEY:?VPS_SSH_KEY is required}"
           ssh_dir=$(mktemp -d)
@@ -61,6 +75,6 @@ jobs:
             -o HostKeyAlias=cqa-vps-deployment -o StrictHostKeyChecking=yes
             -o UserKnownHostsFile="$ssh_dir/known_hosts" -i "$ssh_dir/key"
           )
-          python3 scripts/configure_zalo_browser_run.py --emit "$ZALO_GROUP_ID" |
+          python3 scripts/configure_zalo_browser_run.py --scope "$CAPTURE_SCOPE" --emit "$ZALO_GROUP_ID" |
             ssh "${ssh_options[@]}" -- "$VPS_HOST" \
-              "cd /home/karien/cqa-personal-zalo && exec python3 scripts/configure_zalo_browser_run.py --apply '$TARGET_SHA' '$ZALO_GROUP_ID' '$GITHUB_RUN_ID'"
+              "cd /home/karien/cqa-personal-zalo && exec python3 scripts/configure_zalo_browser_run.py --scope '$CAPTURE_SCOPE' --apply '$TARGET_SHA' '$ZALO_GROUP_ID' '$GITHUB_RUN_ID'"

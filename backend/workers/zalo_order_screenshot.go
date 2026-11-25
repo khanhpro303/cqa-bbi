@@ -78,6 +78,17 @@ func handleZaloOrderScreenshot(ctx context.Context, task *asynq.Task, encryption
 	if !profile.AllowsGroup(row.ZaloGroupID) {
 		return nil
 	}
+	var group models.CRMGroup
+	err = database.Select("id").Where(
+		"id = ? AND tenant_id = ? AND channel_id = ? AND zalo_group_id = ?",
+		payload.GroupID, row.TenantID, row.ChannelID, row.ZaloGroupID,
+	).Take(&group).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	var channel models.Channel
 	if err := database.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", row.ChannelID, row.TenantID, "zalo_oa", true).Take(&channel).Error; err != nil {
 		return err

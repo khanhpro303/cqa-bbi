@@ -24,6 +24,24 @@ def fixtures():
 
 
 class ConfigureZaloBrowserRunTests(unittest.TestCase):
+    def test_all_groups_requires_explicit_scope_and_no_group_ids(self):
+        raw = fixtures()
+        profile = json.loads(raw[config.KEYS[2]])
+        profile.pop("zalo_group_ids")
+        profile["all_linked_groups"] = True
+        raw[config.KEYS[2]] = json.dumps(profile)
+        settings = config.validate_settings(raw, "", "all_linked_groups")
+        self.assertEqual(json.loads(settings[config.KEYS[2]]), profile)
+        for group_id, scope in (("test-group", "pilot"), ("test-group", "all_linked_groups")):
+            with self.assertRaises(config.ConfigurationError):
+                config.validate_settings(raw, group_id, scope)
+        profile["zalo_group_ids"] = ["test-group"]
+        raw[config.KEYS[2]] = json.dumps(profile)
+        with self.assertRaises(config.ConfigurationError):
+            config.validate_settings(raw, "", "all_linked_groups")
+        with self.assertRaises(config.ConfigurationError):
+            config.validate_settings(fixtures(), "", "all_linked_groups")
+
     def test_expected_group_and_literal_profile(self):
         raw = fixtures()
         settings = config.validate_settings(raw, "test-group")
@@ -38,12 +56,13 @@ class ConfigureZaloBrowserRunTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("docker"), "Docker Compose CLI not installed")
     def test_compose_loads_credentials_only_into_app(self):
         settings = config.validate_settings(fixtures(), "test-group")
-        source = Path(__file__).resolve().parents[1] / "docker-compose.yml"
+        source = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
             root = parent / "project"
             root.mkdir()
-            shutil.copyfile(source, root / "docker-compose.yml")
+            for name in ("docker-compose.yml", "docker-compose.browser-run.yml"):
+                shutil.copyfile(source / name, root / name)
             (root / ".env").write_text("MYSQL_ROOT_PASSWORD=fixture\nDB_PASSWORD=fixture\nSAMPLE=should-not-interpolate\n")
             args = config.COMPOSE + ["config", "--format", "json"]
             before = json.loads(subprocess.check_output(args, cwd=root, stderr=subprocess.DEVNULL))

@@ -31,17 +31,24 @@ var cloudflareAccountID = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)
 
 // ZaloScreenshotProfile scopes an authenticated OA Manager browser to selected groups.
 type ZaloScreenshotProfile struct {
-	TenantID     string          `json:"tenant_id"`
-	ChannelID    string          `json:"channel_id"`
-	ZaloOAID     string          `json:"zalo_oa_id"`
-	ZaloGroupIDs []string        `json:"zalo_group_ids"`
-	StorageState json.RawMessage `json:"storage_state"`
+	TenantID        string          `json:"tenant_id"`
+	ChannelID       string          `json:"channel_id"`
+	ZaloOAID        string          `json:"zalo_oa_id"`
+	ZaloGroupIDs    []string        `json:"zalo_group_ids"`
+	AllLinkedGroups bool            `json:"all_linked_groups"`
+	StorageState    json.RawMessage `json:"storage_state"`
 }
 
-// AllowsGroup keeps Browser Run restricted to groups explicitly enabled for capture.
+// AllowsGroup checks the capture scope for a group already linked to this OA.
 func (p ZaloScreenshotProfile) AllowsGroup(id string) bool {
+	if !screenshotID.MatchString(id) {
+		return false
+	}
+	if p.AllLinkedGroups {
+		return len(p.ZaloGroupIDs) == 0
+	}
 	for _, groupID := range p.ZaloGroupIDs {
-		if id == groupID && screenshotID.MatchString(id) {
+		if id == groupID {
 			return true
 		}
 	}
@@ -58,10 +65,11 @@ func LoadZaloScreenshotProfile(tenantID, channelID string) (ZaloScreenshotProfil
 		return profile, "", "", errors.New("invalid Zalo screenshot profile JSON")
 	}
 	if profile.TenantID != tenantID || profile.ChannelID != channelID {
-		return profile, "", "", nil
+		return ZaloScreenshotProfile{}, "", "", nil
 	}
-	if len(profile.ZaloGroupIDs) == 0 || !screenshotOAID.MatchString(profile.ZaloOAID) {
-		return profile, "", "", errors.New("Zalo screenshot profile must specify a Zalo OA ID and at least one group")
+	hasSelectedGroups := len(profile.ZaloGroupIDs) > 0
+	if !screenshotOAID.MatchString(profile.ZaloOAID) || profile.AllLinkedGroups == hasSelectedGroups {
+		return profile, "", "", errors.New("Zalo screenshot profile requires an OA ID and either selected groups or all linked groups")
 	}
 	accountID := strings.TrimSpace(os.Getenv("ZALO_ORDER_SCREENSHOT_CF_ACCOUNT_ID"))
 	token := strings.TrimSpace(os.Getenv("ZALO_ORDER_SCREENSHOT_CF_API_TOKEN"))

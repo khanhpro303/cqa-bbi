@@ -79,6 +79,18 @@ class DeployWorkflowTest(unittest.TestCase):
         self.assertLess(archive_verified, rollout_started)
         self.assertLess(rollout_started, recreate)
 
+    def test_browser_run_override_follows_the_checked_out_revision(self):
+        self.assertIn('compose+=(-f docker-compose.browser-run.yml)', self.rollout)
+        self.assertIn('use_checkout_compose\nbefore_config=$(compose_snapshot)', self.rollout)
+        self.assertIn(
+            'git switch --detach "$revision"\ncheckout_changed=1\nuse_checkout_compose\nafter_config=$(compose_snapshot)',
+            self.rollout,
+        )
+        self.assertIn(
+            'git switch --detach "$previous_commit" || recovered=0\n    use_checkout_compose',
+            self.rollout,
+        )
+
     def test_retention_runs_after_every_success_gate(self):
         app_health = self.rollout.index('test "$healthy" = 1')
         schema = self.rollout.index('test "$table_count" = 12')

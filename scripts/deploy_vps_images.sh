@@ -14,6 +14,12 @@ cd /home/karien/cqa-personal-zalo
 backup_root=/home/karien/cqa-backups
 backup_dir="$backup_root/$run_id"
 compose=(docker compose -p cqa-personal-zalo -f docker-compose.yml)
+use_checkout_compose() {
+  compose=(docker compose -p cqa-personal-zalo -f docker-compose.yml)
+  if [[ -f docker-compose.browser-run.yml ]]; then
+    compose+=(-f docker-compose.browser-run.yml)
+  fi
+}
 services=(app nginx personal-zalo-gateway)
 declare -A old_tags old_images new_tags new_images rollback_tags
 selected=(app)
@@ -43,6 +49,7 @@ on_exit() {
   set +e
   if (( result != 0 && checkout_changed )); then
     git switch --detach "$previous_commit" || recovered=0
+    use_checkout_compose
   fi
   if (( result != 0 && rollout_started )); then
     echo "Deployment failed. Restoring previous service images." >&2
@@ -139,6 +146,7 @@ check_capacity
 test "$(docker inspect -f '{{.State.Health.Status}}' cqa-db)" = healthy
 app_health >/dev/null
 previous_commit=$(git rev-parse HEAD)
+use_checkout_compose
 before_config=$(compose_snapshot)
 
 git fetch --no-tags origin refs/heads/main
@@ -166,6 +174,7 @@ done
 
 git switch --detach "$revision"
 checkout_changed=1
+use_checkout_compose
 after_config=$(compose_snapshot)
 for service in storage db; do
   if [[ "$(awk -v s="$service" '$1 == s' <<< "$before_config")" != "$(awk -v s="$service" '$1 == s' <<< "$after_config")" ]]; then
