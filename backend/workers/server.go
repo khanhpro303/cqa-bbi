@@ -15,7 +15,7 @@ type WorkerPool struct {
 	cfg    *config.Config
 }
 
-func NewWorkerPool(cfg *config.Config) *WorkerPool {
+func NewWorkerPool(cfg *config.Config, lookupOrderDelivery CurrentOrderDeliveryLookup) *WorkerPool {
 	if cfg.RedisURL == "" {
 		log.Println("[worker] REDIS_URL is not set, task processing will be disabled")
 		return nil
@@ -48,7 +48,7 @@ func NewWorkerPool(cfg *config.Config) *WorkerPool {
 	langflowClient := engine.NewLangflowClient(cfg)
 
 	// Register handlers
-	mux.HandleFunc(TypeZaloWebhook, HandleZaloWebhookTask(cfg, langflowClient))
+	mux.HandleFunc(TypeZaloWebhook, HandleZaloWebhookTask(cfg, langflowClient, lookupOrderDelivery))
 	mux.HandleFunc(TypeSessionTimeout, HandleSessionTimeoutTask(cfg))
 	mux.HandleFunc(typeZaloOrderScreenshot, func(ctx context.Context, task *asynq.Task) error {
 		return handleZaloOrderScreenshot(ctx, task, cfg.EncryptionKey)

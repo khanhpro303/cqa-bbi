@@ -193,6 +193,14 @@ func RecordOutbound(ctx context.Context, channelID string, msg channels.SentMess
 				return
 			}
 		}
+		raw := map[string]interface{}{
+			"cqa_live":       true,
+			"cqa_source":     "chatbot",
+			"cqa_session_id": turn.SessionID,
+		}
+		if ok && msg.GroupID != "" {
+			raw["cqa_reply_to_user"] = turn.ZaloUserID
+		}
 		if err := record(bg, turn, recordedMessage{
 			ExternalID:  msg.MessageID,
 			SenderType:  "agent",
@@ -200,11 +208,7 @@ func RecordOutbound(ctx context.Context, channelID string, msg channels.SentMess
 			Content:     msg.Text,
 			ContentType: msg.ContentType,
 			SentAt:      msg.SentAt,
-			Raw: map[string]interface{}{
-				"cqa_live":       true,
-				"cqa_source":     "chatbot",
-				"cqa_session_id": turn.SessionID,
-			},
+			Raw:         raw,
 		}, false); err != nil {
 			log.Printf("[chat-memory] record outbound session=%s: %v", turn.SessionID, err)
 		}
