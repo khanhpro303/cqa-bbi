@@ -1,5 +1,21 @@
 # Luồng truy vấn đơn hàng khi khách hỏi bot
 
+## Tra đơn trên bot khách
+
+Bot tra ngay đơn phát sinh hôm nay theo giờ Việt Nam khi khách chưa nêu mã đơn
+hoặc khoảng ngày. Kết quả trả trạng thái hiện tại theo phạm vi của khách. Sau
+kết quả, bot gợi ý xem thêm đơn hàng 3, 5 hoặc 7 ngày gần đây. Khách có thể trả
+lời ngắn, ví dụ “5 ngày”. Mã như `DHWS900001` đi thẳng vào tra từng đơn.
+
+Câu “sắp giao” dùng các đơn tạo trong ngày và ưu tiên trạng thái ERP. Ngày hẹn
+giao chỉ bổ sung cho từng đơn có dữ liệu. Backend đọc trường `NGAY_GIAO_HANG`
+trên model đơn Cloudify cho các đơn hôm nay và khi tra theo mã đơn. Báo cáo
+`thth_don_dat_hang/search` lọc theo ngày đặt.
+Xem [quy tắc trả lời của bot](./system-prompt.md#orders--đơn-hàng-response-rules-mandatory).
+
+Các sơ đồ bên dưới ghi lại luồng hỏi khoảng ngày trước đây. Bot nội bộ vẫn dùng
+bước chọn khách và khoảng ngày khi cần.
+
 Tài liệu này mô tả end-to-end luồng xử lý khi khách hàng nhắn cho bot một câu hỏi
 **trạng thái đơn hàng** trên Zalo OA — ví dụ điển hình: **"đơn hàng của tôi tới
 đâu rồi?"**. Tài liệu bám sát **code hiện tại** (nhánh `case "orders"` bên trong

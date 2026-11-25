@@ -46,7 +46,7 @@ var erpMCPTools = []erpMCPTool{
 	newERPMCPTool("inventory_by_sku", "Tra tồn khả dụng 1.KHO-TONG của MỘT biến thể. Khi chỉ có tên dòng và thuộc tính màu/size, dùng search cùng color/size/brand để phân giải SKU. Hỏi tồn của cả dòng thì dùng inventory_by_line; nếu lỡ truyền mã cha, hệ thống trả tổng cả dòng."+erpLookupToolInstruction, "inventory", nil, "sku", "search", "limit", "parent_code", "exact_web_name", "color", "size", "brand"),
 	newERPMCPTool("inventory_by_line", "Cộng tồn khả dụng 1.KHO-TONG của các SKU được phép xem thuộc dòng đã xác nhận (line_name là web_name chính xác, ví dụ LS2 FF818). Nếu tên còn mơ hồ, dùng search_products trước."+erpLookupToolInstruction, "inventory", []string{"line_name"}, "line_name"),
 	newERPMCPTool("find_customer", "Tra thông tin khách hàng theo tên hoặc mã trong phạm vi được phép.", "customers", nil, "search", "limit", "partner_id"),
-	newERPMCPTool("lookup_order", "Tra đơn hàng theo mã đơn hoặc khoảng thời gian trong phạm vi được phép.", "orders", nil, "search", "limit", "partner_id"),
+	newERPMCPTool("lookup_order", "Tra đơn hàng trong phạm vi được phép. Câu hỏi chung hoặc sắp giao dùng search “đơn hàng” để nhận các đơn tạo hôm nay theo giờ Việt Nam và trạng thái hiện tại. Ngày hẹn giao chỉ đi kèm những đơn có ngày hẹn. Dùng mã đơn khi tra một đơn hoặc 3/5/7 ngày gần đây khi xem lịch sử.", "orders", nil, "search", "limit", "partner_id"),
 	newERPMCPTool("lookup_debt", "Tra công nợ theo kỳ và khách hàng trong phạm vi được phép.", "debt", nil, "search", "limit", "partner_id"),
 }
 

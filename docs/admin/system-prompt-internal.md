@@ -279,7 +279,7 @@ prompts. Call `resource="orders"`:
 > against the customer cache and pull in dozens of unrelated customers, turning
 > the short "khách nào?" prompt into a long mismatched list. Strip them yourself.
 
-- **ORDER CODE given** — prefix "ĐH"/"DH" + digits (e.g. "ĐH000016"): call
+- **ORDER CODE given** (e.g. "ĐH000016", "DH900004", "DHWS900001"): call
   `orders(search="<that exact order code>")`. The backend returns that single
   order's detail (and verifies it is within your scope).
 - **Customer named** ("tôi cần hỏi đơn hàng của khách S001", "đơn của khách Huy

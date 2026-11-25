@@ -678,7 +678,7 @@ func ERPQuery(c *gin.Context) {
 		} else {
 			allowedGroups = productGroups
 		}
-		respondWithMockDataV2(c, req.Resource, req.Search, req.Limit, allowedGroups, scopeType, permCtx.CustomerCode, tenantID, permCtx.Groups, permCtx.ZaloUserID)
+		respondWithMockDataV2(c, req.Resource, req.Search, req.Limit, allowedGroups, scopeType, permCtx.CustomerCode, tenantID, permCtx.Groups, permCtx.ZaloUserID, permCtx.AgentType)
 		writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, 0, c.ClientIP())
 		return
 	}
@@ -2528,9 +2528,8 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		}
 
 	case "orders":
-		// Định tuyến dựa thẳng vào `search` mà LLM gửi (đã phân loại theo system
-		// prompt): mã đơn → tra 1 đơn; "N ngày gần đây" → cửa sổ ngày; còn lại
-		// (mơ hồ) → hỏi 3/5/7 ngày. Không cần danh sách cụm từ generic cứng.
+		// An order code takes priority over dates. Public lookups without an
+		// explicit recent window default to today's order creation date.
 		ordersEndpoint := "saorders/search" // default (official Cloudify endpoint)
 		var allowedCodes []string
 		if scopeType == "assigned" {
@@ -2692,10 +2691,22 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		// not exist or is not theirs.
 		if code := extractOrderCode(search); code != "" {
 			code = strings.ToUpper(code)
-			data, err = client.SearchCustomEndpointWithBody(ordersEndpoint, map[string]interface{}{
+			data, err = searchCloudifyOrders(client, ordersEndpoint, map[string]interface{}{
 				"SO_DON_HANG": code,
 			})
-			if err != nil || len(data) == 0 {
+			if err != nil {
+				break
+			}
+
+			var record map[string]interface{}
+			wantedCode := foldDebtSearch(code)
+			for _, item := range data {
+				if foldDebtSearch(orderRecordCode(item)) == wantedCode {
+					record = normalizeOrderRecord(item)
+					break
+				}
+			}
+			if record == nil {
 				writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadRequest, 0, c.ClientIP())
 				c.JSON(http.StatusBadRequest, gin.H{
 					"status":   "error",
@@ -2705,8 +2716,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				return
 			}
 
-			item := data[0]
-			itemCustCode := orderCustomerCode(item)
+			itemCustCode := getMapString(record, "customer_code")
 			ownCodes := ownCustomerCodesLeading(permCtx, tenantID)
 			if !isOrderAuthorized(itemCustCode, scopeType, ownCodes, allowedCodes) {
 				writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadRequest, 0, c.ClientIP())
@@ -2718,7 +2728,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				return
 			}
 
-			record := normalizeOrderRecord(item)
+			addOrderAppointments(c.Request.Context(), client, []map[string]interface{}{record})
 			writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusOK, 1, c.ClientIP())
 			c.JSON(http.StatusOK, gin.H{
 				"status":        "success",
@@ -2726,7 +2736,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				"resource":      "orders",
 				"scope":         scopeType,
 				"customer_code": permCtx.CustomerCode,
-				"order_code":    code,
+				"order_code":    getMapString(record, "order_id"),
 				"count":         1,
 				"orders":        []map[string]interface{}{record},
 				"data":          []map[string]interface{}{record},
@@ -2735,9 +2745,8 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 		}
 
 		days := parseDaysFromSearch(search)
-		if days > 0 {
-			tuNgay := formatDate(time.Now().AddDate(0, 0, -days))
-			denNgay := formatDate(time.Now())
+		if days > 0 || permCtx.AgentType == "public" {
+			tuNgay, denNgay := orderCreationRange(time.Now(), days)
 			// saorders/search accepts only the date window as input — it does
 			// NOT support filtering by MA_KHACH_HANG. Per the official docs we
 			// POST {TU_NGAY, DEN_NGAY} as a JSON body (no limit), pull the full
@@ -2746,7 +2755,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				"TU_NGAY":  tuNgay,
 				"DEN_NGAY": denNgay,
 			}
-			data, err = client.SearchCustomEndpointWithBody(ordersEndpoint, body)
+			data, err = searchCloudifyOrders(client, ordersEndpoint, body)
 			if err == nil {
 				// Mã KH gán cho group GMF là nguồn chân lý. permCtx.CustomerCode
 				// thường đã mang mã này (worker ký vào token); fallback đọc trực
@@ -2772,40 +2781,31 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				}
 				data = filteredData
 
-				// Aggregate per-status totals so the LLM replies with one
-				// summary line (count/total per Đang giao / Đang thực hiện /
-				// Hoàn thành / Hủy) instead of re-counting raw rows and
-				// risking arithmetic errors on long lists.
-				summary := buildOrdersSummary(filteredData)
-				trimmed := trimOrdersForLLM(filteredData, 20)
 				writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusOK, len(filteredData), c.ClientIP())
-				resp := gin.H{
-					"status":         "success",
-					"source":         "cloudify_live",
-					"resource":       "orders",
-					"scope":          scopeType,
-					"customer_code":  permCtx.CustomerCode,
-					"range_days":     days,
-					"from":           tuNgay,
-					"to":             denNgay,
-					"count":          len(filteredData),
-					"orders_summary": summary,
-					"orders":         trimmed,
-					"data":           trimmed,
+				resp := orderCreationSummary(filteredData, days, tuNgay, denNgay)
+				if days == 0 {
+					addOrderAppointments(c.Request.Context(), client, resp["orders"].([]map[string]interface{}))
 				}
+				resp["source"] = "cloudify_live"
+				resp["scope"] = scopeType
+				resp["customer_code"] = permCtx.CustomerCode
 				// When a private query targeted specific customers, surface the
 				// scope-approved codes so the LLM can name whose orders these are.
 				if len(targetCodes) > 0 {
 					resp["customer_codes"] = targetCodes
 				}
+				// Short replies such as "5 ngày" continue this signed chat's
+				// lookup even in groups where the classifier has no history.
+				if days == 0 && permCtx.ChannelID != "" && permCtx.ZaloUserID != "" {
+					key := engine.BuildSessionKey(permCtx.ChannelID, permCtx.ZaloUserID, permCtx.ZaloGroupID)
+					engine.StoreAwaitingFollowup(c.Request.Context(), key, orderCustomerSessionTimeout())
+				}
 				c.JSON(http.StatusOK, resp)
 				return
 			}
 		} else {
-			// Không phải mã đơn, không phải khoảng ngày → câu hỏi mơ hồ.
-			// Backend TỰ gửi tin text hỏi 3/5/7 ngày (giống debt/inventory); agent
-			// trả [RICH_MESSAGE_SENT]. KHÔNG chỉ trả zalo_rich_message trong JSON —
-			// worker không đọc field đó nên khách sẽ không nhận được câu hỏi.
+			// Staff can still choose a recent window after identifying the
+			// customer scope. Keep the existing direct Zalo prompt.
 			promptText := "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\"."
 
 			if adapter, _, adapterErr := loadZaloOAAdapterFor(tenantID, permCtx); adapterErr != nil {
@@ -3263,9 +3263,13 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 	if err != nil {
 		log.Printf("[erp_query_error] tenant=%s resource=%s search=%s error=%v", tenantID, resource, search, err)
+		message := "Chưa thể tra đơn hàng từ Cloudify ERP. Vui lòng thử lại sau."
+		if resource != "orders" {
+			message = fmt.Sprintf("Không thể lấy dữ liệu từ Cloudify ERP: %s", err.Error())
+		}
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error":   "erp_upstream_error",
-			"message": fmt.Sprintf("Không thể lấy dữ liệu từ Cloudify ERP: %s", err.Error()),
+			"message": message,
 		})
 		writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusBadGateway, 0, c.ClientIP())
 		return
@@ -3375,7 +3379,7 @@ func enrichVariantRowsWithStock(ctx context.Context, client *pkg.CloudifyClient,
 	}
 }
 
-func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, allowedGroups []string, scopeType string, customerCode string, tenantID string, groups []engine.GroupPermission, zaloUserID string) {
+func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, allowedGroups []string, scopeType string, customerCode string, tenantID string, groups []engine.GroupPermission, zaloUserID, agentType string) {
 	searchLower := strings.ToLower(search)
 
 	isGroupAllowed := func(groupName string) bool {
@@ -3452,10 +3456,16 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
 
 	case "orders":
-		// Cùng định tuyến như nhánh live: LLM đã phân loại theo system prompt.
-		// Không có khoảng ngày → câu hỏi mơ hồ → hỏi 3/5/7 ngày.
+		if agentType == "public" && extractOrderCode(search) != "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"status":   "error",
+				"resource": "orders",
+				"message":  "Không thể tra đơn theo mã khi chưa kết nối Cloudify ERP.",
+			})
+			return
+		}
 		days := parseDaysFromSearch(search)
-		if days <= 0 {
+		if days == 0 && agentType != "public" {
 			// Same as the live branch: deliver the prompt ourselves so the
 			// customer actually receives the date-range question.
 			promptText := "Bạn muốn xem các đơn hàng phát sinh trong khoảng thời gian nào? Vui lòng nhắn: \"3 ngày gần đây\", \"5 ngày gần đây\" hoặc \"7 ngày gần đây\"."
@@ -3494,13 +3504,14 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 			return
 		}
 
-		allOrders := []gin.H{
-			{"order_id": "ORD-2026-001", "customer_name": "Nguyễn Văn A", "customer_code": "CUST-001", "status": "Đang giao hàng", "total": 560000, "date": time.Now().AddDate(0, 0, -1).Format("2006-01-02 15:04:05")},
-			{"order_id": "ORD-2026-002", "customer_name": "Trần Thị B", "customer_code": "CUST-002", "status": "Đã hoàn thành", "total": 700000, "date": time.Now().AddDate(0, 0, -4).Format("2006-01-02 15:04:05")},
-			{"order_id": "ORD-2026-003", "customer_name": "Lê Văn C", "customer_code": "CUST-003", "status": "Đã hoàn thành", "total": 1200000, "date": time.Now().AddDate(0, 0, -6).Format("2006-01-02 15:04:05")},
+		now := pkg.ToVN(time.Now())
+		allOrders := []map[string]interface{}{
+			{"order_id": "ORD-2026-001", "customer_name": "Nguyễn Văn A", "customer_code": "CUST-001", "status": "5", "status_name": "Đang giao", "total": 560000, "date": now.Format(time.DateOnly)},
+			{"order_id": "ORD-2026-002", "customer_name": "Trần Thị B", "customer_code": "CUST-002", "status": "2", "status_name": "Hoàn thành", "total": 700000, "date": now.AddDate(0, 0, -4).Format(time.DateOnly)},
+			{"order_id": "ORD-2026-003", "customer_name": "Lê Văn C", "customer_code": "CUST-003", "status": "2", "status_name": "Hoàn thành", "total": 1200000, "date": now.AddDate(0, 0, -6).Format(time.DateOnly)},
 		}
-		cutoff := time.Now().AddDate(0, 0, -days)
-		var filtered []gin.H
+		cutoff := now.AddDate(0, 0, -days).Format(time.DateOnly)
+		var filtered []map[string]interface{}
 		for _, o := range allOrders {
 			code := strings.ToLower(o["customer_code"].(string))
 
@@ -3520,17 +3531,16 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 				}
 			}
 
-			orderDate, _ := time.Parse("2006-01-02 15:04:05", o["date"].(string))
-			if !orderDate.After(cutoff) {
+			if getMapString(o, "date") < cutoff {
 				continue
 			}
 
 			filtered = append(filtered, o)
-			if len(filtered) >= limit {
-				break
-			}
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
+		from, to := orderCreationRange(now, days)
+		resp := orderCreationSummary(filtered, days, from, to)
+		resp["source"] = "mock_erp"
+		c.JSON(http.StatusOK, resp)
 
 	case "customers":
 		allCustomers := []gin.H{
