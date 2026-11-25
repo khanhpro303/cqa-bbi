@@ -916,7 +916,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// rest of the turn (classifier, bot, chat memory) sees it as text.
 		var images []inboundImage
 		if urls := imageURLs(payload.Message.Attachments); len(urls) > 0 {
-			images = readInboundImages(ctx, matchedChannel.TenantID, matchedChannel.ID, urls, strings.TrimSpace(payload.Message.Text))
+			var archive func(context.Context, string, ai.ImageInput) (string, error)
+			if payload.SignatureVerified && chatmemory.Enabled() {
+				turnID := complaintTurnID(matchedChannel.ID, payload)
+				archive = func(ctx context.Context, sourceURL string, img ai.ImageInput) (string, error) {
+					return customercases.StageImage(ctx, matchedChannel.TenantID, matchedChannel.ID,
+						payload.Sender.ID, turnID, sourceURL, img.MediaType, img.Data)
+				}
+			}
+			images = readInboundImages(ctx, matchedChannel.TenantID, matchedChannel.ID, urls, strings.TrimSpace(payload.Message.Text), archive)
 			// Reading images can take up to imageReadTimeout of the lock's
 			// lease; renew it so the classifier and Langflow call that follow
 			// still finish under the lock.

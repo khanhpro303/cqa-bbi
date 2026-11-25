@@ -35,10 +35,37 @@
             <template v-if="images.length">
               <div class="text-subtitle-2 mb-1">{{ $t('cc_images') }}</div>
               <div class="d-flex flex-wrap ga-2 mb-3">
-                <a v-for="im in images" :key="im.url" :href="im.url" target="_blank" rel="noopener noreferrer" class="image-link" :title="im.description || ''">
-                  <v-img :src="im.url" width="120" height="120" cover class="rounded border" />
-                  <div v-if="im.description" class="image-desc">{{ im.description }}</div>
-                </a>
+                <div v-for="im in images" :key="im.image_id || im.url" class="image-link">
+                  <template v-if="im.image_id">
+                    <a
+                      v-if="activeImageId === im.image_id && activeImageUrl"
+                      :href="activeImageUrl"
+                      :aria-label="$t('cc_image_full_size')"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="case-image-preview"
+                    >
+                      <v-img :src="activeImageUrl" :alt="im.description || $t('cc_images')" width="120" height="120" class="rounded border" />
+                      <span class="text-caption">{{ $t('cc_image_full_size') }}</span>
+                    </a>
+                    <v-btn
+                      v-else
+                      variant="outlined"
+                      size="small"
+                      block
+                      prepend-icon="mdi-image-search-outline"
+                      :loading="imageLoadingId === im.image_id"
+                      :aria-describedby="im.description ? 'case-image-description-' + im.image_id : undefined"
+                      data-testid="case-image-show"
+                      @click="loadCaseImage(im)"
+                    >{{ imageErrorId === im.image_id ? $t('crm_order_tracking_retry') : $t('cc_view_image') }}</v-btn>
+                    <div v-if="imageErrorId === im.image_id" class="text-error image-error" role="alert">{{ $t('cc_image_unavailable') }}</div>
+                  </template>
+                  <a v-else-if="im.url" :href="im.url" target="_blank" rel="noopener noreferrer" :title="im.description || ''">
+                    <v-img :src="im.url" :alt="im.description || $t('cc_images')" width="120" height="120" cover class="rounded border" />
+                  </a>
+                  <div v-if="im.description" :id="im.image_id ? 'case-image-description-' + im.image_id : undefined" class="image-desc">{{ im.description }}</div>
+                </div>
               </div>
             </template>
             <v-btn
@@ -121,12 +148,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import {
   type CaseEvent, type CaseStream, type CustomerCase, caseEventIcon, caseStatusColor, caseStatuses, caseTypes,
-  issueTypeLabelKey, parseCaseImages, severityColor, streamName,
+  issueTypeLabelKey, mergeCaseImages, parseCaseImages, severityColor, streamName,
 } from './labels'
 
 const props = defineProps<{ modelValue: boolean; tenantId: string; caseId: string; streams?: CaseStream[] }>()
@@ -144,6 +171,11 @@ const saving = ref(false)
 const snack = ref(false)
 const snackText = ref('')
 const snackColor = ref('success')
+const activeImageId = ref('')
+const activeImageUrl = ref('')
+const imageLoadingId = ref('')
+const imageErrorId = ref('')
+let imageRequest: AbortController | undefined
 
 type AssigneeOption = { title: string; value: string }
 const form = reactive({
@@ -152,7 +184,10 @@ const form = reactive({
   customer_update: '', resolution: '', note: '',
 })
 
-const images = computed(() => parseCaseImages(item.value?.images))
+const images = computed(() => mergeCaseImages(
+  parseCaseImages(item.value?.images),
+  ...events.value.map(event => parseCaseImages(event.images)),
+))
 const statusOptions = computed(() => caseStatuses.map(s => ({ title: t(`cc_status_${s}`), value: s })))
 const severityOptions = computed(() => ['high', 'medium', 'low'].map(s => ({ title: t(`cm_severity_${s}`), value: s })))
 const typeOptions = computed(() => caseTypes.map(v => ({ title: t(issueTypeLabelKey(v)), value: v })))
@@ -190,8 +225,44 @@ function fill(c: CustomerCase) {
 // case, or the same case opened again) must not overwrite it.
 let loadSeq = 0
 
+function clearCaseImage() {
+  imageRequest?.abort()
+  imageRequest = undefined
+  if (activeImageUrl.value) URL.revokeObjectURL(activeImageUrl.value)
+  activeImageId.value = ''
+  activeImageUrl.value = ''
+  imageLoadingId.value = ''
+  imageErrorId.value = ''
+}
+
+async function loadCaseImage(image: { image_id?: string }) {
+  const imageId = image.image_id
+  const caseId = item.value?.id
+  if (!imageId || !caseId) return
+  clearCaseImage()
+  const request = new AbortController()
+  imageRequest = request
+  imageLoadingId.value = imageId
+  try {
+    const { data } = await api.get<Blob>(
+      `/tenants/${encodeURIComponent(props.tenantId)}/customer-cases/${encodeURIComponent(caseId)}/images/${encodeURIComponent(imageId)}`,
+      { responseType: 'blob', signal: request.signal },
+    )
+    if (request.signal.aborted) return
+    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(data.type)) throw new Error('Unsupported case image type')
+    activeImageId.value = imageId
+    activeImageUrl.value = URL.createObjectURL(data)
+  } catch {
+    if (!request.signal.aborted) imageErrorId.value = imageId
+  } finally {
+    if (!request.signal.aborted) imageLoadingId.value = ''
+    if (imageRequest === request) imageRequest = undefined
+  }
+}
+
 async function load() {
   if (!props.caseId) return
+  clearCaseImage()
   const seq = ++loadSeq
   item.value = null
   events.value = []
@@ -276,14 +347,20 @@ function formatDateTime(v?: string | null) {
   return new Date(v).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
-watch(() => [props.modelValue, props.caseId], ([open]) => { if (open) load() }, { immediate: true })
+watch(() => [props.modelValue, props.caseId], ([open]) => {
+  clearCaseImage()
+  if (open) load()
+}, { immediate: true })
 
-defineExpose({ form, save, item })
+onBeforeUnmount(clearCaseImage)
+
+defineExpose({ form, save, item, images, loadCaseImage, activeImageUrl, imageErrorId })
 </script>
 
 <style scoped>
 .pre-wrap { white-space: pre-wrap; }
 .image-link { width: 120px; text-decoration: none; color: inherit; }
+.image-link > a { color: inherit; text-decoration: none; }
 .image-desc {
   font-size: 0.75rem;
   line-height: 1.2;
@@ -292,4 +369,5 @@ defineExpose({ form, save, item })
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.image-error { font-size: 0.75rem; line-height: 1.2; }
 </style>

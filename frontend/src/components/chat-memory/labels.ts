@@ -95,7 +95,8 @@ export function sentimentColor(s: string): string {
 }
 
 export interface CaseImage {
-  url: string
+  image_id?: string
+  url?: string
   description?: string
   at?: string
 }
@@ -163,10 +164,51 @@ export function isZaloImageURL(raw: string): boolean {
 export function parseCaseImages(raw: string | null | undefined): CaseImage[] {
   try {
     const v = JSON.parse(raw || '[]')
-    return Array.isArray(v) ? v.filter(x => x && typeof x.url === 'string' && isZaloImageURL(x.url)) : []
+    if (!Array.isArray(v)) return []
+    return v.flatMap((x): CaseImage[] => {
+      if (!x || typeof x !== 'object') return []
+      const imageId = typeof x.image_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(x.image_id)
+        ? x.image_id
+        : undefined
+      const url = typeof x.url === 'string' && isZaloImageURL(x.url) ? x.url : undefined
+      if (!imageId && !url) return []
+      return [{
+        ...(imageId ? { image_id: imageId } : {}),
+        ...(url ? { url } : {}),
+        ...(typeof x.description === 'string' && x.description ? { description: x.description } : {}),
+        ...(typeof x.at === 'string' && x.at ? { at: x.at } : {}),
+      }]
+    })
   } catch {
     return []
   }
+}
+
+// A later case event can attach an archived copy of an image that already
+// appears on the case as a legacy Zalo URL. Keep one card and prefer the
+// archived id, because it remains available after the Zalo URL expires.
+export function mergeCaseImages(...groups: CaseImage[][]): CaseImage[] {
+  const out: CaseImage[] = []
+  const ids = new Set<string>()
+  const urlIndexes = new Map<string, number>()
+  for (const image of groups.flat()) {
+    if (image.image_id) {
+      if (ids.has(image.image_id)) continue
+      ids.add(image.image_id)
+      const legacyIndex = image.url ? urlIndexes.get(image.url) : undefined
+      if (legacyIndex !== undefined && !out[legacyIndex]?.image_id) {
+        out[legacyIndex] = image
+      } else {
+        out.push(image)
+        if (image.url && legacyIndex === undefined) urlIndexes.set(image.url, out.length - 1)
+      }
+      continue
+    }
+    if (!image.url || urlIndexes.has(image.url)) continue
+    urlIndexes.set(image.url, out.length)
+    out.push(image)
+  }
+  return out
 }
 
 export function caseStatusColor(s: string): string {

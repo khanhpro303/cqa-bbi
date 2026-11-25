@@ -27,6 +27,7 @@ const (
 
 // inboundImage is one image a customer sent and what the AI read in it.
 type inboundImage struct {
+	ImageID     string
 	URL         string
 	Description string
 }
@@ -170,7 +171,7 @@ var describeImage = func(ctx context.Context, tenantID, channelID string, img ai
 
 // readInboundImages downloads and reads the images of a message, in
 // parallel. An image that cannot be read keeps its URL with no description.
-func readInboundImages(ctx context.Context, tenantID, channelID string, urls []string, caption string) []inboundImage {
+func readInboundImages(ctx context.Context, tenantID, channelID string, urls []string, caption string, archive func(context.Context, string, ai.ImageInput) (string, error)) []inboundImage {
 	if len(urls) == 0 {
 		return nil
 	}
@@ -187,6 +188,15 @@ func readInboundImages(ctx context.Context, tenantID, channelID string, urls []s
 			if err != nil {
 				log.Printf("[image-reader] download failed: %v", err)
 				return
+			}
+			if archive != nil {
+				archiveCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				id, err := archive(archiveCtx, u, img)
+				cancel()
+				if err != nil {
+					log.Printf("[image-reader] could not store image (%T)", err)
+				}
+				out[i].ImageID = id
 			}
 			desc, err := describeImage(ctx, tenantID, channelID, img, caption)
 			if err != nil {
@@ -217,7 +227,7 @@ func imagesText(images []inboundImage) string {
 func imageAttachments(images []inboundImage) []customercases.ImageAttachment {
 	out := make([]customercases.ImageAttachment, 0, len(images))
 	for _, im := range images {
-		out = append(out, customercases.ImageAttachment{Type: "image", URL: im.URL, Description: im.Description})
+		out = append(out, customercases.ImageAttachment{Type: "image", URL: im.URL, Description: im.Description, ImageID: im.ImageID})
 	}
 	return out
 }

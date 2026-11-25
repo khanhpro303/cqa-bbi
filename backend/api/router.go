@@ -383,6 +383,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			// Complaint cases (Insights khách → Khiếu nại).
 			tenant.GET("/customer-cases", middleware.RequirePermission("messages", "r"), handlers.ListCustomerCases)
 			tenant.GET("/customer-cases/:caseId", middleware.RequirePermission("messages", "r"), handlers.GetCustomerCase)
+			tenant.GET("/customer-cases/:caseId/images/:imageId", middleware.RequirePermission("messages", "r"), handlers.GetCustomerCaseImage)
 			tenant.PATCH("/customer-cases/:caseId", middleware.RequirePermission("messages", "w"), handlers.UpdateCustomerCase)
 			tenant.GET("/chatbot/health", middleware.RequirePermission("settings", "r"), handlers.GetChatbotHealth)
 			tenant.PUT("/settings/analysis", middleware.RequirePermission("settings", "w"), handlers.SaveAnalysisSettings)

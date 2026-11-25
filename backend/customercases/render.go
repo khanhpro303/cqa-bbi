@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -108,6 +109,7 @@ type ImageAttachment struct {
 	Type        string `json:"type"`
 	URL         string `json:"url"`
 	Description string `json:"description,omitempty"`
+	ImageID     string `json:"image_id,omitempty"`
 }
 
 // RecentImages returns the images the customer sent in a chat since since,
@@ -147,7 +149,8 @@ func conversationImages(ctx context.Context, tenantID, conversationID, senderID 
 		q = q.Where("sender_external_id = ?", senderID)
 	}
 	var msgs []models.Message
-	q.Order("sent_at ASC").Limit(maxImagesPerCase).Find(&msgs)
+	q.Order("sent_at DESC, id DESC").Limit(maxImagesPerCase).Find(&msgs)
+	slices.Reverse(msgs)
 	var out []models.CaseImage
 	for _, m := range msgs {
 		var atts []ImageAttachment
@@ -156,9 +159,12 @@ func conversationImages(ctx context.Context, tenantID, conversationID, senderID 
 		}
 		for _, a := range atts {
 			if a.Type == "image" && AllowedImageURL(a.URL) {
-				out = append(out, models.CaseImage{URL: a.URL, Description: a.Description, At: m.SentAt})
+				out = append(out, models.CaseImage{ImageID: a.ImageID, URL: a.URL, Description: a.Description, At: m.SentAt})
 			}
 		}
+	}
+	if len(out) > maxImagesPerCase {
+		out = out[len(out)-maxImagesPerCase:]
 	}
 	return out
 }

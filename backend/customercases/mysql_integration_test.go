@@ -223,7 +223,7 @@ func TestRecentImagesMySQL(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	add("zu-a", "image", `[{"type":"image","url":"https://f1.zdn.vn/mine.jpg","description":"móp"}]`, now.Add(-10*time.Minute))
+	add("zu-a", "image", `[{"type":"image","url":"https://f1.zdn.vn/mine.jpg","description":"móp","image_id":"stored-image"}]`, now.Add(-10*time.Minute))
 	add("zu-b", "image", `[{"type":"image","url":"https://f1.zdn.vn/other.jpg"}]`, now.Add(-5*time.Minute))
 	add("zu-a", "image", `[{"type":"image","url":"https://f1.zdn.vn/old.jpg"}]`, now.Add(-5*time.Hour))
 	add("zu-a", "text", `[]`, now.Add(-time.Minute))
@@ -233,7 +233,7 @@ func TestRecentImagesMySQL(t *testing.T) {
 	add("zu-a", "image", `[{"type":"image","url":"https://f1.zdn.vn/unsigned.jpg"}]`, now.Add(-2*time.Minute))
 
 	got := RecentImages(ctx, tenantID, channelID, "g-9", "zu-a", now.Add(-2*time.Hour))
-	if len(got) != 1 || got[0].URL != "https://f1.zdn.vn/mine.jpg" || got[0].Description != "móp" {
+	if len(got) != 1 || got[0].URL != "https://f1.zdn.vn/mine.jpg" || got[0].Description != "móp" || got[0].ImageID != "stored-image" {
 		t.Fatalf("recent images = %+v", got)
 	}
 	all := ConversationImages(ctx, tenantID, convID, now.Add(-time.Hour), now)

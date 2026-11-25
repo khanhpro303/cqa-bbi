@@ -116,6 +116,8 @@ func AutoMigrate() error {
 		&models.OrderCart{},
 		&models.CustomerCase{},
 		&models.CustomerCaseEvent{},
+		&models.CustomerImageFile{},
+		&models.CustomerCaseImageLink{},
 	)
 	if err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)

@@ -62,7 +62,13 @@ func TestReadInboundImagesKeepsUnreadImages(t *testing.T) {
 		captions = append(captions, caption)
 		return "Màn hình báo: Đơn hàng số <> đã được xử lý bởi chứng từ bán hàng <>", nil
 	}
-	got := readInboundImages(context.Background(), "t", "c", []string{"https://f1.zdn.vn/ok.jpg", "https://f1.zdn.vn/broken.jpg"}, "đang bị gì ạ")
+	archive := func(_ context.Context, url string, image ai.ImageInput) (string, error) {
+		if string(image.Data) != url {
+			t.Error("archive did not receive the downloaded bytes")
+		}
+		return "saved-image", nil
+	}
+	got := readInboundImages(context.Background(), "t", "c", []string{"https://f1.zdn.vn/ok.jpg", "https://f1.zdn.vn/broken.jpg"}, "đang bị gì ạ", archive)
 	if len(got) != 2 || got[0].Description == "" || got[1].Description != "" || got[1].URL != "https://f1.zdn.vn/broken.jpg" {
 		t.Fatalf("images = %+v", got)
 	}
@@ -74,7 +80,7 @@ func TestReadInboundImagesKeepsUnreadImages(t *testing.T) {
 		t.Fatalf("text = %q", text)
 	}
 	atts := imageAttachments(got)
-	if len(atts) != 2 || atts[0].Type != "image" || atts[0].Description == "" {
+	if len(atts) != 2 || atts[0].Type != "image" || atts[0].Description == "" || atts[0].ImageID != "saved-image" || atts[1].ImageID != "" {
 		t.Fatalf("attachments = %+v", atts)
 	}
 }

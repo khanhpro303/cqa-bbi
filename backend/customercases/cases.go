@@ -348,26 +348,37 @@ func sessionNotified(tx *gorm.DB, caseID, sessionID string) bool {
 
 func create(ctx context.Context, r Report) (models.CustomerCase, string, error) {
 	now := time.Now()
-	images := mergeImages(nil, r.Images)
-	imagesJSON, _ := json.Marshal(images)
 	c := models.CustomerCase{
 		ID: pkg.NewUUID(), TenantID: r.TenantID, ChannelID: r.ChannelID,
 		SubjectType: r.SubjectType, SubjectID: r.SubjectID, ZaloUserID: r.ZaloUserID, ZaloGroupID: r.ZaloGroupID,
 		ReporterName: truncate(r.ReporterName, 250), CustomerName: truncate(r.CustomerName, 250), CustomerCode: truncate(r.CustomerCode, 60),
 		Type: r.Type, Severity: r.Severity, Title: r.Title, Detail: r.Detail, Evidence: r.Evidence,
-		Images: string(imagesJSON), Status: StatusOpen, Source: r.Source, OpenedSessionID: r.SessionID, Private: r.SubjectOnly,
+		Images: "[]", Status: StatusOpen, Source: r.Source, OpenedSessionID: r.SessionID, Private: r.SubjectOnly,
 		Stream:    r.stream,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	ev := newEvent(c, "opened", r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)
-	ev.ZaloUserID, ev.TurnID = r.ZaloUserID, r.TurnID
+	var eventID string
 	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&c).Error; err != nil {
 			return err
 		}
+		images, err := linkCaseImagesTx(tx, c.ID, r)
+		if err != nil {
+			return err
+		}
+		if len(images) > 0 {
+			imagesJSON, _ := json.Marshal(mergeImages(nil, images))
+			c.Images = string(imagesJSON)
+			if err := tx.Model(&c).UpdateColumn("images", c.Images).Error; err != nil {
+				return err
+			}
+		}
+		ev := newEvent(c, "opened", r.Source, r.ReporterName, r.SessionID, eventText(r), images)
+		ev.ZaloUserID, ev.TurnID = r.ZaloUserID, r.TurnID
+		eventID = ev.ID
 		return tx.Create(ev).Error
 	})
-	return c, ev.ID, err
+	return c, eventID, err
 }
 
 // join adds a report to an earlier case. The case is re-read and locked
@@ -389,9 +400,21 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 		if !candidate(c, time.Now(), r.settings.ResolvedWindow()) {
 			return errNoCase
 		}
+		// A retried turn must not append a second event or attach more images.
+		if r.TurnID != "" {
+			var prior models.CustomerCaseEvent
+			if err := tx.Select("id, staff_notified").Where("case_id = ? AND turn_id = ?", c.ID, r.TurnID).First(&prior).Error; err == nil {
+				action, repeated, linkedNotified = ActionFollowup, true, prior.StaffNotified
+				return nil
+			}
+		}
+		reportImages, err := linkCaseImagesTx(tx, c.ID, r)
+		if err != nil {
+			return err
+		}
 		now := time.Now()
 		updates := map[string]interface{}{"updated_at": now}
-		images := mergeImages(parseImages(c.Images), r.Images)
+		images := mergeImages(parseImages(c.Images), reportImages)
 		if imagesJSON, _ := json.Marshal(images); string(imagesJSON) != c.Images {
 			updates["images"] = string(imagesJSON)
 			c.Images = string(imagesJSON)
@@ -407,16 +430,6 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 		if c.CustomerCode == "" && r.CustomerCode != "" {
 			updates["customer_code"] = r.CustomerCode
 			c.CustomerCode = r.CustomerCode
-		}
-
-		// A retried message (same turn id) that matches a case it already
-		// reported on adds nothing.
-		if r.TurnID != "" {
-			var prior models.CustomerCaseEvent
-			if err := tx.Select("id, staff_notified").Where("case_id = ? AND turn_id = ?", c.ID, r.TurnID).First(&prior).Error; err == nil {
-				action, repeated, linkedNotified = ActionFollowup, true, prior.StaffNotified
-				return nil
-			}
 		}
 
 		kind := "followup"
@@ -459,7 +472,7 @@ func join(ctx context.Context, caseID string, r Report) (models.CustomerCase, st
 		if err := tx.Model(&models.CustomerCase{}).Where("id = ?", c.ID).Updates(updates).Error; err != nil {
 			return err
 		}
-		ev := newEvent(c, kind, r.Source, r.ReporterName, r.SessionID, eventText(r), r.Images)
+		ev := newEvent(c, kind, r.Source, r.ReporterName, r.SessionID, eventText(r), reportImages)
 		ev.ZaloUserID, ev.TurnID = r.ZaloUserID, r.TurnID
 		eventID = ev.ID
 		if action == ActionLinked {
@@ -538,13 +551,21 @@ func mergeImages(have, add []models.CaseImage) []models.CaseImage {
 	out := append([]models.CaseImage{}, have...)
 	seen := make(map[string]bool, len(have))
 	for _, im := range have {
-		seen[im.URL] = true
+		key := im.URL
+		if key == "" {
+			key = im.ImageID
+		}
+		seen[key] = true
 	}
 	for _, im := range add {
-		if im.URL == "" || seen[im.URL] || len(out) >= maxImagesPerCase {
+		key := im.URL
+		if key == "" {
+			key = im.ImageID
+		}
+		if key == "" || seen[key] || len(out) >= maxImagesPerCase {
 			continue
 		}
-		seen[im.URL] = true
+		seen[key] = true
 		out = append(out, im)
 	}
 	return out

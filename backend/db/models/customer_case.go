@@ -67,7 +67,8 @@ func (CustomerCase) TableName() string { return "customer_cases" }
 
 // CaseImage is one picture attached to a case.
 type CaseImage struct {
-	URL         string    `json:"url"`
+	ImageID     string    `json:"image_id,omitempty"`
+	URL         string    `json:"url,omitempty"`
 	Description string    `json:"description,omitempty"`
 	At          time.Time `json:"at"`
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/chatmemory"
 	"github.com/vietbui/chat-quality-agent/cloudifyorders"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/customercases"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pancakelabels"
@@ -55,6 +56,9 @@ func main() {
 	if err := db.AutoMigrate(); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
+	imageRetentionCtx, stopImageRetention := context.WithCancel(context.Background())
+	defer stopImageRetention()
+	go customercases.RunImageRetention(imageRetentionCtx)
 
 	// Chat memory: record every Zalo OA chatbot turn in MySQL, then summarize
 	// idle sessions into customer profiles, issue alerts and a summary index.

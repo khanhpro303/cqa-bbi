@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import CasesPanel from '../components/chat-memory/CasesPanel.vue'
 import CaseDialog from '../components/chat-memory/CaseDialog.vue'
-import { parseCaseImages, waitingHours } from '../components/chat-memory/labels'
+import { mergeCaseImages, parseCaseImages, waitingHours } from '../components/chat-memory/labels'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn() }))
 vi.mock('../api', () => ({ default: mocks }))
@@ -130,6 +130,69 @@ describe('Complaint cases panel', () => {
     expect((wrapper.vm as any).item.id).toBe('b')
   })
 
+  it('loads archived evidence only when staff asks to view it and releases the blob on close', async () => {
+    const imageId = '27d2a5ad-8d38-4f4f-93c3-d0f7bc673b81'
+    const archivedCase = { ...sampleCase, images: JSON.stringify([{ image_id: imageId, description: 'kính bị nứt' }]) }
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/customer-cases/c1')) return { data: { case: archivedCase, events: [] } }
+      if (url.endsWith('/users')) return { data: [] }
+      if (url.endsWith(`/images/${imageId}`)) return { data: new Blob(['jpeg'], { type: 'image/jpeg' }) }
+      return { data: {} }
+    })
+    const createURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:case-image')
+    const revokeURL = vi.spyOn(URL, 'revokeObjectURL')
+    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1' }, global: { mocks: { $t: (k: string) => k } } })
+    await flushPromises()
+    expect(mocks.get).not.toHaveBeenCalledWith(expect.stringContaining('/images/'), expect.anything())
+
+    await wrapper.get('[data-testid="case-image-show"]').trigger('click')
+    await flushPromises()
+    expect(mocks.get).toHaveBeenLastCalledWith(
+      `/tenants/t1/customer-cases/c1/images/${imageId}`,
+      expect.objectContaining({ responseType: 'blob' }),
+    )
+    expect(createURL).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="case-image-preview"]').attributes('href')).toBe('blob:case-image')
+
+    await wrapper.setProps({ modelValue: false })
+    expect(revokeURL).toHaveBeenCalledWith('blob:case-image')
+  })
+
+  it('does not fall back to an expiring Zalo URL when archived evidence is gone', async () => {
+    const imageId = '27d2a5ad-8d38-4f4f-93c3-d0f7bc673b81'
+    const archivedCase = { ...sampleCase, images: JSON.stringify([{ image_id: imageId, url: 'https://f1.zdn.vn/a.jpg' }]) }
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/customer-cases/c1')) return { data: { case: archivedCase, events: [] } }
+      if (url.endsWith('/users')) return { data: [] }
+      if (url.endsWith(`/images/${imageId}`)) throw new Error('404')
+      return { data: {} }
+    })
+    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1' }, global: { mocks: { $t: (k: string) => k } } })
+    await flushPromises()
+    const vm = wrapper.vm as any
+    await vm.loadCaseImage(vm.images[0])
+    expect(vm.activeImageUrl).toBe('')
+    expect(vm.imageErrorId).toBe(imageId)
+    expect(mocks.get).toHaveBeenCalledTimes(3)
+  })
+
+  it('includes evidence attached on later case events', async () => {
+    const imageId = '27d2a5ad-8d38-4f4f-93c3-d0f7bc673b81'
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/customer-cases/c1')) return {
+        data: {
+          case: { ...sampleCase, images: '[]' },
+          events: [{ id: 'e1', kind: 'followup', images: JSON.stringify([{ image_id: imageId, description: 'ảnh bổ sung' }]) }],
+        },
+      }
+      if (url.endsWith('/users')) return { data: [] }
+      return { data: {} }
+    })
+    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1' }, global: { mocks: { $t: (k: string) => k } } })
+    await flushPromises()
+    expect((wrapper.vm as any).images).toEqual([{ image_id: imageId, description: 'ảnh bổ sung' }])
+  })
+
   it('ignores an older list response that finishes last', async () => {
     let releaseSlow: (v: unknown) => void = () => {}
     mocks.get.mockImplementation(async (url: string, opts: any) => {
@@ -159,6 +222,15 @@ describe('case labels', () => {
       { url: 'https://f1.zdn.vn.evil.example/x.png' }, { url: 'https://user@f1.zdn.vn/x.png' }, { url: 'javascript:alert(1)' },
     ]))).toEqual([])
     expect(parseCaseImages('bad')).toEqual([])
+    expect(parseCaseImages('[{"image_id":"27d2a5ad-8d38-4f4f-93c3-d0f7bc673b81","description":"nứt"}]')).toEqual([
+      { image_id: '27d2a5ad-8d38-4f4f-93c3-d0f7bc673b81', description: 'nứt' },
+    ])
     expect(Math.round(waitingHours(new Date(Date.now() - 3 * 3_600_000).toISOString()))).toBe(3)
+  })
+
+  it('merges case and history evidence and prefers an archived image id', () => {
+    const legacy = { url: 'https://f1.zdn.vn/a.jpg', description: 'cũ' }
+    const archived = { image_id: '27d2a5ad-8d38-4f4f-93c3-d0f7bc673b81', url: legacy.url, description: 'đã lưu' }
+    expect(mergeCaseImages([legacy], [archived], [archived])).toEqual([archived])
   })
 })
