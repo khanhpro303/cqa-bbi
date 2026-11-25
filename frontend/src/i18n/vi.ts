@@ -430,6 +430,8 @@ export default {
   cost_view_day: 'Theo ngày',
   cost_view_channel: 'Theo kênh',
   cost_view_employee: 'Theo nhân viên',
+  cost_slideshow_pause: 'Tạm dừng trình chiếu',
+  cost_slideshow_play: 'Phát trình chiếu',
   cost_employee_chatbot_only: 'Chi phí theo nhân viên có dữ liệu từ nguồn Chatbot.',
   cost_source: 'Nguồn',
   source_all: 'Tất cả',

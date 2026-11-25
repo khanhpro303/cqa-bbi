@@ -1,11 +1,26 @@
 <template>
-  <v-card class="dashboard-chart dashboard-chart--cost">
+  <v-card
+    class="dashboard-chart dashboard-chart--cost"
+    @mouseenter="hovered = true"
+    @mouseleave="hovered = false"
+    @focusin="onFocusIn"
+    @focusout="focused = false"
+  >
     <div class="dashboard-chart__heading">
       <span class="dashboard-chart__icon" aria-hidden="true">
         <v-icon size="20">mdi-chart-line</v-icon>
       </span>
       <h2>{{ title }}</h2>
       <span class="cost-currency">{{ locale === 'vi' ? 'VNĐ' : 'VND' }}</span>
+      <v-btn
+        class="cost-playback"
+        :icon="playing ? 'mdi-pause' : 'mdi-play'"
+        :aria-label="playbackLabel"
+        :title="playbackLabel"
+        size="32"
+        variant="text"
+        @click="playing = !playing"
+      />
     </div>
 
     <div class="cost-views" role="group" :aria-label="$t('ai_cost')">
@@ -55,26 +70,32 @@
       <v-progress-circular indeterminate size="24" width="2" />
       <span>{{ $t('loading') }}</span>
     </div>
-    <div v-else-if="activeRows === null" class="dashboard-chart__state" role="status">
-      <span>{{ $t('dashboard_chart_load_error') }}</span>
-      <v-btn size="small" variant="tonal" @click="reload++">{{ $t('retry') }}</v-btn>
-    </div>
-    <div v-else-if="!activeRows.length" class="dashboard-chart__state" role="status">
-      <v-icon size="28" aria-hidden="true">mdi-chart-box-outline</v-icon>
-      <span>{{ $t(view === 'employee' && source === 'job' ? 'cost_employee_chatbot_only' : 'no_data') }}</span>
-    </div>
-    <DailyTrendChart v-else-if="view === 'day'" :label="title" :dates="dates" :series="series" currency />
-    <ol v-else class="cost-ranking" role="list" :aria-label="title" tabindex="0">
-      <li v-for="(row, index) in rankedRows" :key="index" class="cost-ranking__row">
-        <div class="cost-ranking__caption">
-          <span class="cost-ranking__name">{{ row.label }}</span>
-          <strong>{{ currency.format(row.cost) }}</strong>
+    <div v-else class="cost-slide" @touchstart.passive="playing = false">
+      <Transition name="cost-slide" mode="out-in">
+        <div :key="view" class="cost-slide__content">
+          <div v-if="activeRows === null" class="dashboard-chart__state" role="status">
+            <span>{{ $t('dashboard_chart_load_error') }}</span>
+            <v-btn size="small" variant="tonal" @click="reload++">{{ $t('retry') }}</v-btn>
+          </div>
+          <div v-else-if="!activeRows.length" class="dashboard-chart__state" role="status">
+            <v-icon size="28" aria-hidden="true">mdi-chart-box-outline</v-icon>
+            <span>{{ $t(view === 'employee' && source === 'job' ? 'cost_employee_chatbot_only' : 'no_data') }}</span>
+          </div>
+          <DailyTrendChart v-else-if="view === 'day'" :label="title" :dates="dates" :series="series" currency />
+          <ol v-else class="cost-ranking" role="list" :aria-label="title" tabindex="0">
+            <li v-for="(row, index) in rankedRows" :key="index" class="cost-ranking__row">
+              <div class="cost-ranking__caption">
+                <span class="cost-ranking__name">{{ row.label }}</span>
+                <strong>{{ currency.format(row.cost) }}</strong>
+              </div>
+              <div class="cost-ranking__track" aria-hidden="true">
+                <span :style="{ width: row.share + '%' }" />
+              </div>
+            </li>
+          </ol>
         </div>
-        <div class="cost-ranking__track" aria-hidden="true">
-          <span :style="{ width: row.share + '%' }" />
-        </div>
-      </li>
-    </ol>
+      </Transition>
+    </div>
   </v-card>
 </template>
 
@@ -108,6 +129,9 @@ const groupings = Object.keys(views) as GroupBy[]
 const { t, locale } = useI18n()
 
 const view = ref<GroupBy>('day')
+const playing = ref(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+const hovered = ref(false)
+const focused = ref(false)
 const source = ref<keyof typeof sources>('all')
 const segment = ref<keyof typeof segments>('all')
 const loading = ref(true)
@@ -115,6 +139,7 @@ const reload = ref(0)
 const rows = reactive<Record<GroupBy, CostRow[] | null>>({ day: [], channel: [], employee: [] })
 
 const title = computed(() => t(views[view.value].title))
+const playbackLabel = computed(() => t(playing.value ? 'cost_slideshow_pause' : 'cost_slideshow_play'))
 const currency = computed(() => new Intl.NumberFormat(locale.value, { style: 'currency', currency: 'VND' }))
 const activeRows = computed(() => rows[view.value])
 const dates = computed(() => rows.day?.map(row => row.label) ?? [])
@@ -129,6 +154,20 @@ const rankedRows = computed(() => {
 function toVnd(usd: number): number {
   return Math.round(usd * (props.exchangeRate || 26000))
 }
+
+function onFocusIn(event: FocusEvent) {
+  focused.value = event.target instanceof Element && !event.target.closest('.cost-playback')
+}
+
+watch([view, playing, hovered, focused, loading, activeRows], (_, __, onCleanup) => {
+  if (!playing.value || hovered.value || focused.value || loading.value || activeRows.value === null) return
+
+  const timer = window.setTimeout(() => {
+    const next = (groupings.indexOf(view.value) + 1) % groupings.length
+    view.value = groupings[next]
+  }, 6000)
+  onCleanup(() => window.clearTimeout(timer))
+})
 
 watch(
   [() => props.tenantId, source, segment, reload],
@@ -170,6 +209,44 @@ watch(
   color: rgba(var(--v-theme-on-surface), 0.68);
   font-size: 0.75rem;
   font-weight: 600;
+}
+
+.cost-playback {
+  flex-shrink: 0;
+}
+
+.cost-slide,
+.cost-slide__content {
+  display: flex;
+  flex: 1 0 240px;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cost-slide-enter-active,
+.cost-slide-leave-active {
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.cost-slide-leave-active {
+  pointer-events: none;
+}
+
+.cost-slide-enter-from {
+  transform: translateX(16px);
+  opacity: 0;
+}
+
+.cost-slide-leave-to {
+  transform: translateX(-16px);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cost-slide-enter-active,
+  .cost-slide-leave-active {
+    transition: none;
+  }
 }
 
 .cost-views {
