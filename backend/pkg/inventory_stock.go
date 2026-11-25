@@ -1,7 +1,11 @@
 package pkg
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -120,6 +124,117 @@ func (c *CloudifyClient) InventoryStock(endpoint string, usePost bool, sku strin
 			"SO_LUONG_TON_TONG", "so_luong_ton_tong")
 	}
 	return total, nil
+}
+
+// MainWarehouseAvailableStock returns SO_LUONG_TON_KHA_DUNG for one exact SKU
+// from the main warehouse rows in TON_KHO_CHI_TIET. It never falls back to the
+// product aggregate, physical stock, or another warehouse.
+func (c *CloudifyClient) MainWarehouseAvailableStock(ctx context.Context, sku string) (float64, error) {
+	if strings.TrimSpace(sku) == "" {
+		return 0, fmt.Errorf("inventory available stock: SKU is required")
+	}
+
+	items, err := c.searchCustomEndpointWithBodyContext(ctx, InventoryTotalStockEndpoint, map[string]interface{}{
+		"MA_HANG": sku,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("inventory available stock MA_HANG=%s: %w", sku, err)
+	}
+
+	stock, err := mainWarehouseAvailableStockFromInventoryItems(items, sku)
+	if err != nil {
+		return 0, fmt.Errorf("inventory available stock MA_HANG=%s: %w", sku, err)
+	}
+	return stock, nil
+}
+
+func mainWarehouseAvailableStockFromInventoryItems(items []map[string]interface{}, sku string) (float64, error) {
+	if len(items) == 0 {
+		return 0, fmt.Errorf("ERP returned no product rows")
+	}
+
+	foundSKU := false
+	foundWarehouse := false
+	var total float64
+	for itemIndex, item := range items {
+		itemSKU, ok := item["MA_HANG"].(string)
+		if !ok || itemSKU == "" {
+			return 0, fmt.Errorf("product row %d has missing or invalid MA_HANG", itemIndex)
+		}
+		if itemSKU != sku {
+			continue
+		}
+		foundSKU = true
+
+		details, ok := item["TON_KHO_CHI_TIET"].([]interface{})
+		if !ok {
+			return 0, fmt.Errorf("product row %d has missing or invalid TON_KHO_CHI_TIET", itemIndex)
+		}
+		for detailIndex, detail := range details {
+			row, ok := detail.(map[string]interface{})
+			if !ok {
+				return 0, fmt.Errorf("warehouse row %d.%d has invalid shape", itemIndex, detailIndex)
+			}
+			warehouse, ok := row["TEN_KHO"].(string)
+			if !ok || strings.TrimSpace(warehouse) == "" {
+				return 0, fmt.Errorf("warehouse row %d.%d has missing or invalid TEN_KHO", itemIndex, detailIndex)
+			}
+			if !isInventoryMainWarehouse(warehouse) {
+				continue
+			}
+
+			available, ok := strictInventoryNumber(row["SO_LUONG_TON_KHA_DUNG"])
+			if !ok {
+				return 0, fmt.Errorf("main warehouse row %d.%d has missing or invalid SO_LUONG_TON_KHA_DUNG", itemIndex, detailIndex)
+			}
+			foundWarehouse = true
+			total += available
+			if math.IsNaN(total) || math.IsInf(total, 0) {
+				return 0, fmt.Errorf("main warehouse available stock total is not finite")
+			}
+		}
+	}
+
+	if !foundSKU {
+		return 0, fmt.Errorf("ERP returned no exact SKU match")
+	}
+	if !foundWarehouse {
+		return 0, fmt.Errorf("ERP returned no main warehouse row")
+	}
+	return total, nil
+}
+
+func isInventoryMainWarehouse(name string) bool {
+	key := NormalizeWarehouseName(name)
+	return key == NormalizeWarehouseName(InventoryTotalWarehouseName) || key == NormalizeWarehouseName("1.KHO-TONG")
+}
+
+func strictInventoryNumber(value interface{}) (float64, bool) {
+	var number float64
+	switch value := value.(type) {
+	case float64:
+		number = value
+	case json.Number:
+		parsed, err := value.Float64()
+		if err != nil {
+			return 0, false
+		}
+		number = parsed
+	case string:
+		trimmed := strings.TrimSpace(value)
+		parsed, err := strconv.ParseFloat(trimmed, 64)
+		if err != nil || trimmed == "" {
+			return 0, false
+		}
+		number = parsed
+	default:
+		return 0, false
+	}
+
+	if math.IsNaN(number) || math.IsInf(number, 0) {
+		return 0, false
+	}
+	return number, true
 }
 
 // inventoryMapString returns the first non-empty string value among keys.

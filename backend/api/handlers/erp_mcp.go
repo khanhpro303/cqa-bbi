@@ -38,11 +38,13 @@ func newERPMCPTool(name, description, resource string, required []string, fields
 	return erpMCPTool{Name: name, Description: description, resource: resource, InputSchema: schema}
 }
 
+const erpLookupToolInstruction = " Khi lookup_outcome=no_visible_match, dùng customer_message theo nội dung khách hỏi và dừng tra mục đó. Không yêu cầu gửi lại mã hoặc ảnh, không tra lại qua search_knowledge. Kết quả này không xác nhận tồn kho hay sự tồn tại của sản phẩm."
+
 var erpMCPTools = []erpMCPTool{
-	newERPMCPTool("search_products", "Tìm dòng sản phẩm, giá, hoặc các dòng trùng tên. search là tên hoặc mã người dùng hỏi. intent là price hoặc stock. Tool này không trả tồn kho: hỏi tồn của cả dòng thì gọi tiếp inventory_by_line với line_name là web_name tìm được, không lấy parent_codes để gọi inventory_by_sku.", "products", []string{"search"}, "search", "limit", "intent", "exact_web_name", "color", "size", "brand", "parent_code"),
-	newERPMCPTool("search_product_variants", "Tra màu, size hoặc giá biến thể của mã cha đã xác định. include_stock đính kèm tồn 1.KHO-TONG.", "product_variants", []string{"parent_code"}, "search", "parent_code", "limit", "color", "size", "brand", "include_stock"),
-	newERPMCPTool("inventory_by_sku", "Tra tồn 1.KHO-TONG của MỘT biến thể (SKU có màu/size cụ thể). Khi chỉ có tên dòng và thuộc tính màu/size, dùng search cùng color/size/brand để phân giải SKU. Hỏi tồn của cả dòng thì dùng inventory_by_line; nếu lỡ truyền mã cha, hệ thống trả tổng cả dòng.", "inventory", nil, "sku", "search", "limit", "parent_code", "exact_web_name", "color", "size", "brand"),
-	newERPMCPTool("inventory_by_line", "Cộng tồn 1.KHO-TONG của toàn bộ SKU thuộc các mã cha của tên dòng đã xác nhận (line_name là web_name chính xác, ví dụ LS2 FF818). Dùng cho mọi câu hỏi tồn của cả dòng. Nếu tên còn mơ hồ, dùng search_products trước.", "inventory", []string{"line_name"}, "line_name"),
+	newERPMCPTool("search_products", "Tìm dòng sản phẩm, giá, hoặc các dòng trùng tên. search là tên hoặc mã người dùng hỏi. intent là price hoặc stock. Tool này không trả tồn kho: hỏi tồn của cả dòng thì gọi tiếp inventory_by_line với line_name là web_name tìm được, không lấy parent_codes để gọi inventory_by_sku."+erpLookupToolInstruction, "products", []string{"search"}, "search", "limit", "intent", "exact_web_name", "color", "size", "brand", "parent_code"),
+	newERPMCPTool("search_product_variants", "Tra màu, size hoặc giá biến thể của mã cha đã xác định. include_stock đính kèm tồn khả dụng 1.KHO-TONG khi tra được. Biến thể thiếu ton_kho chưa có kết quả tồn."+erpLookupToolInstruction, "product_variants", []string{"parent_code"}, "search", "parent_code", "limit", "color", "size", "brand", "include_stock"),
+	newERPMCPTool("inventory_by_sku", "Tra tồn khả dụng 1.KHO-TONG của MỘT biến thể. Khi chỉ có tên dòng và thuộc tính màu/size, dùng search cùng color/size/brand để phân giải SKU. Hỏi tồn của cả dòng thì dùng inventory_by_line; nếu lỡ truyền mã cha, hệ thống trả tổng cả dòng."+erpLookupToolInstruction, "inventory", nil, "sku", "search", "limit", "parent_code", "exact_web_name", "color", "size", "brand"),
+	newERPMCPTool("inventory_by_line", "Cộng tồn khả dụng 1.KHO-TONG của các SKU được phép xem thuộc dòng đã xác nhận (line_name là web_name chính xác, ví dụ LS2 FF818). Nếu tên còn mơ hồ, dùng search_products trước."+erpLookupToolInstruction, "inventory", []string{"line_name"}, "line_name"),
 	newERPMCPTool("find_customer", "Tra thông tin khách hàng theo tên hoặc mã trong phạm vi được phép.", "customers", nil, "search", "limit", "partner_id"),
 	newERPMCPTool("lookup_order", "Tra đơn hàng theo mã đơn hoặc khoảng thời gian trong phạm vi được phép.", "orders", nil, "search", "limit", "partner_id"),
 	newERPMCPTool("lookup_debt", "Tra công nợ theo kỳ và khách hàng trong phạm vi được phép.", "debt", nil, "search", "limit", "partner_id"),
@@ -180,13 +182,51 @@ func ERPMCP(c *gin.Context) {
 				reply(erpMCPResult([]byte(`{"error":"erp_data_unavailable","message":"Chưa thể lấy dữ liệu ERP. Vui lòng thử lại sau."}`), true))
 				return
 			}
-			reply(erpMCPResult(rec.Body.Bytes(), rec.Code >= 400))
+			result := rec.Body.Bytes()
+			if rec.Code == http.StatusOK {
+				result = describeERPProductLookup(tool.resource, result)
+			}
+			reply(erpMCPResult(result, rec.Code >= 400))
 			return
 		}
 		fail(-32602, "Unknown ERP tool")
 	default:
 		fail(-32601, "Method not found")
 	}
+}
+
+// Label an empty scoped read without checking the unrestricted catalog. The
+// caller gets the same outcome for an unknown product and an excluded one.
+func describeERPProductLookup(resource string, body []byte) []byte {
+	if resource != "products" && resource != "product_variants" && resource != "inventory" {
+		return body
+	}
+	var result struct {
+		Status          string            `json:"status"`
+		Data            []json.RawMessage `json:"data"`
+		Count           int               `json:"count"`
+		RichInventory   bool              `json:"is_inventory_rich"`
+		AvailableColors []string          `json:"available_colors"`
+		AvailableSizes  []string          `json:"available_sizes"`
+		AvailableBrands []string          `json:"available_brands"`
+	}
+	if json.Unmarshal(body, &result) != nil || result.Status != "success" || result.Data == nil ||
+		len(result.Data) != 0 || result.Count != 0 || result.RichInventory ||
+		len(result.AvailableColors)+len(result.AvailableSizes)+len(result.AvailableBrands) != 0 {
+		return body
+	}
+
+	what := "thông tin sản phẩm"
+	if resource == "inventory" {
+		what = "tồn kho"
+	}
+	// Only pass fields independent of internal matches made before filtering.
+	encoded, _ := json.Marshal(gin.H{
+		"status": "success", "data": result.Data, "count": 0, "resource": resource,
+		"lookup_outcome":   "no_visible_match",
+		"customer_message": "Dạ em chưa xác nhận được " + what + " của mẫu này trong dữ liệu em có thể tra cứu. Anh/chị có thể hỏi nhân viên phụ trách để được kiểm tra thêm ạ.",
+	})
+	return encoded
 }
 
 func erpMCPResult(body []byte, failed bool) gin.H {

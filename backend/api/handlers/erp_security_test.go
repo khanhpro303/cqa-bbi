@@ -28,8 +28,8 @@ func TestERPQueryRequiresPermissionToken(t *testing.T) {
 			t.Errorf("agent %s without permission token: got %d %s, want 403 forbidden_token", agent, res.Code, res.Body.String())
 		}
 	}
-	if *calls != 0 {
-		t.Errorf("Cloudify was called %d times without a permission token", *calls)
+	if got := calls.Load(); got != 0 {
+		t.Errorf("Cloudify was called %d times without a permission token", got)
 	}
 }
 
@@ -58,7 +58,7 @@ func TestPublicDebtWithoutCustomerCodeIsRefused(t *testing.T) {
 	if res.Code != http.StatusForbidden || !strings.Contains(res.Body.String(), "forbidden_scope") {
 		t.Errorf("got %d %s, want 403 forbidden_scope", res.Code, res.Body.String())
 	}
-	if *calls != 0 {
-		t.Errorf("Cloudify debt report was requested %d times with no customer code", *calls)
+	if got := calls.Load(); got != 0 {
+		t.Errorf("Cloudify debt report was requested %d times with no customer code", got)
 	}
 }

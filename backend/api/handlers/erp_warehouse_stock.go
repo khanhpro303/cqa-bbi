@@ -74,33 +74,33 @@ func respondWithWarehouseStock(c *gin.Context, client *pkg.CloudifyClient, permi
 
 	brands, allBrands := permissions.ResolveBrandFilter("inventory")
 	products := filterWarehouseProducts(cachedProductsToMaps(catalog), groups, brands, allBrands)
-	if len(products) == 0 {
+	skus := make([]string, 0, len(products))
+	for _, product := range products {
+		if code := strings.TrimSpace(getMapString(product, "MA", "ma")); code != "" {
+			skus = append(skus, code)
+		}
+	}
+	if len(skus) == 0 {
 		writeAuditLog(tenantID, permissions, "inventory", scope, groups, term, http.StatusOK, 0, c.ClientIP())
 		c.JSON(http.StatusOK, gin.H{"status": "success", "data": []gin.H{}, "count": 0, "warehouse": engine.MainWarehouseCode})
 		return
 	}
 
-	totals, err := engine.MainWarehouseStock(ctx, tenantID, client)
+	totals, err := engine.WarehouseAvailableStock(ctx, client, skus)
 	if err != nil {
 		writeAuditLog(tenantID, permissions, "inventory", scope, groups, term, http.StatusBadGateway, 0, c.ClientIP())
 		c.JSON(http.StatusBadGateway, gin.H{"error": "warehouse_stock_unavailable"})
 		return
 	}
-	seen := make(map[string]struct{}, len(products))
 	var total float64
-	for _, product := range products {
-		code := getMapString(product, "MA", "ma")
-		if _, duplicate := seen[code]; duplicate || code == "" {
-			continue
-		}
-		seen[code] = struct{}{}
-		total += totals[code]
+	for _, quantity := range totals {
+		total += quantity
 	}
 
 	item := gin.H{"name": term, "ton_kho": total}
 	if byLine {
 		item["line_name"] = term
-		item["sku_count"] = len(seen)
+		item["sku_count"] = len(totals)
 		if mode == warehouseByParent {
 			item["parent_code"] = term
 			if web := getMapString(products[0], "TEN_DONG_BO_WEB", "ten_dong_bo_web"); web != "" {
@@ -112,7 +112,7 @@ func respondWithWarehouseStock(c *gin.Context, client *pkg.CloudifyClient, permi
 		item["ten"] = getMapString(products[0], "TEN", "ten")
 	}
 	writeAuditLog(tenantID, permissions, "inventory", scope, groups, term, http.StatusOK, 1, c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{"status": "success", "data": []gin.H{item}, "count": 1, "warehouse": engine.MainWarehouseCode})
+	c.JSON(http.StatusOK, gin.H{"status": "success", "data": []gin.H{item}, "count": 1, "warehouse": engine.MainWarehouseCode, "stock_metric": "available"})
 }
 
 func filterWarehouseProducts(products []map[string]any, groups, brands []string, allBrands bool) []map[string]any {

@@ -136,18 +136,11 @@ token next to a product code/name (e.g. "FF800 **trắng L**", "FF901 **đen bó
 This is the first-turn version of nhánh B/C in the Hybrid / Chained Query Rules below;
 those rules give the full step-by-step and the bilingual / empty-result handling.
 
-### Empty product search → use the knowledge base (CRITICAL)
+### Lookup results for price, SKU and stock
 
-NEVER call `resource="products"` with an empty or whitespace-only `search`. The
-backend no longer lists the whole catalog for an empty keyword — it returns
-`status="success"`, `data=[]`, `count=0`, and `source="empty_search_use_knowledge"`
-with a `message` telling you to switch tools.
-
-When you receive a products response carrying `source="empty_search_use_knowledge"`
-(or any products response with empty `data` because you had no concrete keyword),
-do NOT report "không có sản phẩm". Instead, answer the user's request with the
-**Astra DB Retrieval Tool** (knowledge base). Only call `products` again once you
-have a real product code / name / keyword to pass as `search`.
+- Search ERP using the product name or code from the current turn or recent conversation. Ask for an identifier when the conversation has none.
+- If `lookup_outcome="no_visible_match"`, use the tool's `customer_message` for that item and stop the lookup. The scoped lookup could not confirm it. Do not infer zero stock or retry through the knowledge base.
+- If ERP sends a Zalo picker or supplies permitted variant choices, follow that interaction. `ton_kho` reports available stock at Kho Tổng. A value at or below zero confirms there is no stock available to sell. An empty result gives no stock count.
 
 ### Disambiguation Payload Semantics (CRITICAL — never confuse with stock)
 
@@ -229,8 +222,8 @@ When the user's latest message is a short numeric reply (`1`, `2`, `3`, `4`, `5`
 
 **A. STOCK using a natural description and there is NO `parent_code` in history:**
 
-- Step 1 — Astra DB Retrieval Tool to resolve the description to a specific SKU (`MA`) or a parent product line code (`MA_CHA`).
-- Step 2 — ERP API Caller Tool with `resource="inventory"` and `search=<resolved MA or MA_CHA>`.
+- Step 1 — `search_products` with the product name or code and `intent="stock"`.
+- Step 2 — Use `inventory_by_sku` for an identified SKU or `inventory_by_line` for an identified line. For color and size, follow the variant lookup below. Stop if ERP returns `no_visible_match`.
 
 **B. STOCK of a SPECIFIC variant (color/size given, e.g., "FF800 đen bóng size L tồn bao nhiêu"):**
 
