@@ -239,6 +239,7 @@ func includesCustomerCode(codes []string, primary, want string) bool {
 }
 
 func classifyOrderApproval(ctx context.Context, cfg *config.Config, tenantID, code, text string) (bool, error) {
+	text = channels.NormalizeGMFMessageText(text)
 	if isDirectOrderApproval(text, code) {
 		return true, nil
 	}

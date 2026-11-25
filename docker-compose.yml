@@ -27,6 +27,8 @@ services:
       - "8080"
     env_file:
       - .env
+      - path: ../.cqa-zalo-browser-run.env
+        required: false
     environment:
       - APP_ENV=production
       - DB_HOST=db

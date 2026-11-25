@@ -10,9 +10,12 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/vietbui/chat-quality-agent/channels"
+	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/cloudifyorders"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/pkg"
 	"github.com/vietbui/chat-quality-agent/realtime"
 	"gorm.io/gorm"
 )
@@ -48,7 +51,7 @@ func enqueueZaloOrderScreenshot(ctx context.Context, client *asynq.Client, chann
 	return err
 }
 
-func handleZaloOrderScreenshot(ctx context.Context, task *asynq.Task) error {
+func handleZaloOrderScreenshot(ctx context.Context, task *asynq.Task, encryptionKey string) error {
 	var payload zaloOrderScreenshotTask
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
 		return asynq.SkipRetry
@@ -62,7 +65,7 @@ func handleZaloOrderScreenshot(ctx context.Context, task *asynq.Task) error {
 	}
 	database := db.DB.WithContext(ctx)
 	var row models.CloudifyOrderConfirmation
-	err = database.Select("id", "tenant_id", "channel_id", "zalo_group_id", "outbound_message_id", "message_id", "text").
+	err = database.Select("id", "tenant_id", "channel_id", "zalo_group_id", "outbound_message_id", "message_id", "sender_id", "text").
 		Where("tenant_id = ? AND channel_id = ? AND group_id = ? AND message_id = ?", payload.TenantID, payload.ChannelID, payload.GroupID, payload.MessageID).
 		Where("confirmed_at IS NOT NULL AND evidence_content_type = '' AND outbound_message_id <> ''").
 		Take(&row).Error
@@ -75,7 +78,33 @@ func handleZaloOrderScreenshot(ctx context.Context, task *asynq.Task) error {
 	if !profile.AllowsGroup(row.ZaloGroupID) {
 		return nil
 	}
-	screenshot, err := cloudifyorders.CaptureZaloOrderScreenshot(ctx, profile, accountID, token, row)
+	var channel models.Channel
+	if err := database.Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", row.ChannelID, row.TenantID, "zalo_oa", true).Take(&channel).Error; err != nil {
+		return err
+	}
+	plain, err := pkg.Decrypt(channel.CredentialsEncrypted, encryptionKey)
+	if err != nil {
+		return fmt.Errorf("decrypt Zalo OA credentials: %w", err)
+	}
+	var creds channels.ZaloOACredentials
+	if err := json.Unmarshal(plain, &creds); err != nil {
+		return errors.New("invalid Zalo OA credentials")
+	}
+	oaID := creds.OAId
+	if oaID == "" {
+		oaID = channel.ExternalID
+	}
+	if oaID != profile.ZaloOAID {
+		return errors.New("Zalo screenshot profile does not match the CRM channel OA")
+	}
+	historyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	adapter := zalotoken.NewAdapter(channel.ID, creds, encryptionKey)
+	evidence, err := adapter.OrderEvidenceMessages(historyCtx, row.ZaloGroupID, row.OutboundMessageID, row.MessageID, row.SenderID, row.Text)
+	cancel()
+	if err != nil {
+		return err
+	}
+	screenshot, err := cloudifyorders.CaptureZaloOrderScreenshot(ctx, profile, accountID, token, row, evidence)
 	if err != nil {
 		return err
 	}
