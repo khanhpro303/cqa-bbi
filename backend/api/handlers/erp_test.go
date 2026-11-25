@@ -943,10 +943,13 @@ func TestOrderStatusDisplayName(t *testing.T) {
 		"1":              "Đang thực hiện",
 		"2":              "Hoàn thành",
 		"3":              "Hủy bỏ",
-		"4":              "Đang giao",
-		"":   "Không xác định",
-		"7":  "Khác (mã 7)",
-		"99": "Khác (mã 99)",
+		"4":              "Chờ giao",
+		"5":              "Đang giao",
+		"Chờ giao":       "Chờ giao",
+		"Đang giao":      "Đang giao",
+		"":               "Không xác định",
+		"7":              "Khác (mã 7)",
+		"99":             "Khác (mã 99)",
 	}
 	for code, want := range cases {
 		if got := orderStatusDisplayName(code); got != want {
@@ -1070,7 +1073,7 @@ func TestBuildOrdersSummary(t *testing.T) {
 			wantTotalValue:    1100000.0,
 			wantTotalQuantity: 11.5,
 			wantBuckets: []OrdersStatusBucket{
-				{Status: "4", StatusName: "Đang giao", Count: 1, Quantity: 4.0, Value: 400000.0},
+				{Status: "4", StatusName: "Chờ giao", Count: 1, Quantity: 4.0, Value: 400000.0},
 				{Status: "1", StatusName: "Đang thực hiện", Count: 2, Quantity: 3.5, Value: 350000.0},
 				{Status: "0", StatusName: "Chưa thực hiện", Count: 1, Quantity: 1.0, Value: 50000.0},
 				{Status: "2", StatusName: "Hoàn thành", Count: 1, Quantity: 3.0, Value: 300000.0},
@@ -1081,14 +1084,14 @@ func TestBuildOrdersSummary(t *testing.T) {
 			items: []map[string]interface{}{
 				{"trang_thai": "7", "total": 70000.0},
 				{"trang_thai": "1", "total": 100000.0},
-				{"trang_thai": "5", "total": 50000.0},
+				{"trang_thai": "6", "total": 50000.0},
 			},
 			wantTotalOrders:   3,
 			wantTotalValue:    220000.0,
 			wantTotalQuantity: 0,
 			wantBuckets: []OrdersStatusBucket{
 				{Status: "1", StatusName: "Đang thực hiện", Count: 1, Quantity: 0, Value: 100000.0},
-				{Status: "5", StatusName: "Khác (mã 5)", Count: 1, Quantity: 0, Value: 50000.0},
+				{Status: "6", StatusName: "Khác (mã 6)", Count: 1, Quantity: 0, Value: 50000.0},
 				{Status: "7", StatusName: "Khác (mã 7)", Count: 1, Quantity: 0, Value: 70000.0},
 			},
 		},

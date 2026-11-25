@@ -14,13 +14,19 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Session cache — in-memory, keyed by "baseURL|login"
+// Session cache — in-memory, scoped to the Cloudify database and login
 // ---------------------------------------------------------------------------
 
 var (
-	cloudifySessionCache   = make(map[string]*cloudifySessionEntry)
+	cloudifySessionCache   = make(map[cloudifySessionKey]*cloudifySessionEntry)
 	cloudifySessionCacheMu sync.Mutex
 )
+
+type cloudifySessionKey struct {
+	baseURL  string
+	database string
+	login    string
+}
 
 type cloudifySessionEntry struct {
 	Cookie    string // raw "session_id=<value>" cookie header
@@ -41,8 +47,8 @@ type CloudifyClient struct {
 	Password string
 }
 
-func (c *CloudifyClient) cacheKey() string {
-	return c.BaseURL + "|" + c.Login
+func (c *CloudifyClient) cacheKey() cloudifySessionKey {
+	return cloudifySessionKey{baseURL: c.BaseURL, database: c.DB, login: c.Login}
 }
 
 func (c *CloudifyClient) getDataBaseURL() string {

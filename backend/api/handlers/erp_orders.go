@@ -2,25 +2,22 @@ package handlers
 
 import (
 	"fmt"
-	"github.com/vietbui/chat-quality-agent/cloudifyorders"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/vietbui/chat-quality-agent/pkg"
 )
 
-// orderCodeRe matches an ERP order code: the "ĐH"/"DH" prefix followed by
-// digits (e.g. "ĐH000016"). The (?i) flag folds Unicode case, so it also
-// matches "đh"/"dh"/"DH" variants. Used to route a customer message that
-// carries a concrete order code into the single-order lookup branch.
-var orderCodeRe = regexp.MustCompile(`(?i)[ĐD]H\d+`)
+// orderCodeRe matches standard and web order codes without matching part of a SKU.
+var orderCodeRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])([ĐD]H(?:WS)?[0-9]+)(?:$|[^\p{L}\p{N}_])`)
 
-// extractOrderCode returns the first order code found anywhere in the search
-// string (so "đơn ĐH000016 sao rồi" still resolves), or "" when none is
-// present — letting the caller fall through to the generic / date-window
-// branches.
 func extractOrderCode(search string) string {
-	return strings.TrimSpace(orderCodeRe.FindString(search))
+	if parts := orderCodeRe.FindStringSubmatch(search); len(parts) > 0 {
+		return parts[1]
+	}
+	return ""
 }
 
 // isOrderAuthorized reports whether an order with customer code itemCustCode
@@ -55,7 +52,7 @@ func isOrderAuthorized(itemCustCode, scopeType string, ownCodes []string, allowe
 func normalizeOrderRecord(item map[string]interface{}) map[string]interface{} {
 	status := getMapString(item, "TRANG_THAI", "trang_thai", "status")
 	return map[string]interface{}{
-		"order_id":              getMapString(item, "SO_DON_HANG", "so_don_hang", "MA_HOA_DON", "ma_hoa_don", "MA_SO", "ma_so", "MA", "ma", "order_id", "name", "id"),
+		"order_id":              orderRecordCode(item),
 		"customer_name":         getMapString(item, "TEN_KHACH_HANG", "ten_khach_hang", "TEN_KH", "ten_kh", "TEN_DT", "ten_dt", "customer_name"),
 		"customer_code":         orderCustomerCode(item),
 		"status":                status,
@@ -68,22 +65,32 @@ func normalizeOrderRecord(item map[string]interface{}) map[string]interface{} {
 	}
 }
 
-// parseDaysFromSearch extracts a recent-window in days when the customer
-// includes "3 ngày", "7 ngày", "1 tuần" or accent-stripped equivalents in
-// the search query. Returns 0 when nothing matches so the caller can fall
-// back to a default window.
+func orderRecordCode(item map[string]interface{}) string {
+	return getFirstNonEmptyMapString(item, "SO_DON_HANG", "so_don_hang", "MA_HOA_DON", "ma_hoa_don", "MA_SO", "ma_so", "MA", "ma", "order_id", "name", "id")
+}
+
+var orderRecentDaysRe = regexp.MustCompile(`\b(?:([357])\s+ngay|1\s+tuan)\b(?:\s+(toi|nua|sau|ke tiep|sap toi)\b)?`)
+
+// parseDaysFromSearch recognizes the supported recent windows.
+// An unqualified "3 ngày" also works as a reply to the lookback suggestion.
 func parseDaysFromSearch(search string) int {
-	s := strings.ToLower(search)
-	if strings.Contains(s, "3 ngày") || strings.Contains(s, "3 ngay") {
+	parts := orderRecentDaysRe.FindStringSubmatch(foldDebtSearch(search))
+	if len(parts) == 0 || parts[2] != "" {
+		return 0
+	}
+	switch parts[1] {
+	case "3":
 		return 3
-	}
-	if strings.Contains(s, "5 ngày") || strings.Contains(s, "5 ngay") {
+	case "5":
 		return 5
-	}
-	if strings.Contains(s, "7 ngày") || strings.Contains(s, "7 ngay") || strings.Contains(s, "1 tuần") || strings.Contains(s, "1 tuan") {
+	default:
 		return 7
 	}
-	return 0
+}
+
+func orderCreationRange(now time.Time, days int) (from, to string) {
+	today := pkg.ToVN(now)
+	return formatDate(today.AddDate(0, 0, -days)), formatDate(today)
 }
 
 // formatDate renders a date in DD/MM/YYYY for customer-facing replies.
@@ -142,28 +149,35 @@ type OrdersSummary struct {
 	ByStatus      []OrdersStatusBucket `json:"by_status"`
 }
 
-// orderStatusName maps BBI ERP TRANG_THAI codes to the Vietnamese label
-// surfaced to customers.
-// Keep in sync with cloudifyorders.statusNames (confirmed by the user on
-// 2026-11-18: 0 chưa thực hiện, 1 đang thực hiện, 2 hoàn thành, 3 huỷ bỏ,
-// 4 đang giao).
+// orderStatusName follows the BBI order model's TINH_TRANG selection.
+// Live saorders/search checks on 2026-11-25 confirmed that it returns the
+// same codes for both Chờ giao and Đang giao.
 var orderStatusName = map[string]string{
 	"0": "Chưa thực hiện",
 	"1": "Đang thực hiện",
 	"2": "Hoàn thành",
 	"3": "Hủy bỏ",
-	"4": "Đang giao",
+	"4": "Chờ giao",
+	"5": "Đang giao",
 }
 
-// orderStatusReportOrder is the canonical order ByStatus is emitted in:
-// in-flight first, then not started, finished, cancelled last.
-var orderStatusReportOrder = []string{"4", "1", "0", "2", "3"}
+var orderStatusReportOrder = []string{"5", "4", "1", "0", "2", "3"}
+
+func normalizeOrderLookupStatus(value string) string {
+	value = strings.TrimSpace(value)
+	for code, name := range orderStatusName {
+		if strings.EqualFold(name, value) {
+			return code
+		}
+	}
+	return value
+}
 
 // orderStatusDisplayName resolves a TRANG_THAI code to its display label,
 // falling back to "Không xác định" for empty and "Khác (mã X)" for any
 // code outside the canonical set.
 func orderStatusDisplayName(code string) string {
-	code = cloudifyorders.NormalizeStatus(code)
+	code = normalizeOrderLookupStatus(code)
 	if name, ok := orderStatusName[code]; ok {
 		return name
 	}
@@ -278,7 +292,7 @@ func buildOrdersSummary(items []map[string]interface{}) OrdersSummary {
 	summary := OrdersSummary{}
 	buckets := map[string]*OrdersStatusBucket{}
 	for _, item := range items {
-		status := cloudifyorders.NormalizeStatus(getMapString(item, "trang_thai", "TRANG_THAI", "status"))
+		status := normalizeOrderLookupStatus(getFirstNonEmptyMapString(item, "trang_thai", "TRANG_THAI", "status"))
 		value := getMapFloat(item, "total", "TONG_TIEN", "tong_tien")
 		qty := sumOrderLineQuantity(item)
 
@@ -340,4 +354,33 @@ func trimOrdersForLLM(items []map[string]interface{}, max int) []map[string]inte
 		return sorted[:max]
 	}
 	return sorted
+}
+
+func searchCloudifyOrders(client *pkg.CloudifyClient, endpoint string, body map[string]interface{}) ([]map[string]interface{}, error) {
+	rows, err := client.SearchCustomEndpointWithBody(endpoint, body)
+	if err == nil && rows == nil {
+		return nil, fmt.Errorf("Cloudify không trả dữ liệu đơn hàng")
+	}
+	return rows, err
+}
+
+func orderCreationSummary(items []map[string]interface{}, days int, from, to string) map[string]interface{} {
+	trimmed := trimOrdersForLLM(items, 20)
+	resp := map[string]interface{}{
+		"status":         "success",
+		"resource":       "orders",
+		"range_days":     days,
+		"from":           from,
+		"to":             to,
+		"date_basis":     "order_created",
+		"count":          len(items),
+		"orders_summary": buildOrdersSummary(items),
+		"orders":         trimmed,
+		"data":           trimmed,
+	}
+	if days == 0 {
+		resp["suggested_range_days"] = []int{3, 5, 7}
+		resp["followup_question"] = "Anh/chị muốn em xem thêm đơn hàng 3, 5 hoặc 7 ngày gần đây không ạ?"
+	}
+	return resp
 }
