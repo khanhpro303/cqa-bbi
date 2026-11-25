@@ -93,8 +93,9 @@ func zaloScreenshotCode(profile ZaloScreenshotProfile, row models.CloudifyOrderC
 	if !profile.AllowsGroup(row.ZaloGroupID) {
 		return "", errors.New("Zalo group is outside the browser screenshot profile")
 	}
+	replyText := channels.NormalizeGMFMessageText(row.Text)
 	if !screenshotOAID.MatchString(profile.ZaloOAID) || evidence.SentAtMillis <= 0 ||
-		evidence.ReplyAtMillis <= evidence.SentAtMillis || strings.TrimSpace(row.Text) == "" {
+		evidence.ReplyAtMillis <= evidence.SentAtMillis || replyText == "" {
 		return "", errors.New("Zalo screenshot is missing the verified OA or message details")
 	}
 	if evidence.SentType != "photo" && (evidence.SentType != "text" || strings.TrimSpace(evidence.SentText) == "") {
@@ -111,7 +112,7 @@ func zaloScreenshotCode(profile ZaloScreenshotProfile, row models.CloudifyOrderC
 		"replyAt":      evidence.ReplyAtMillis,
 		"sentType":     evidence.SentType,
 		"sentText":     evidence.SentText,
-		"replyText":    strings.TrimSpace(row.Text),
+		"replyText":    replyText,
 	})
 	if err != nil {
 		return "", err

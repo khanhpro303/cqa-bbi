@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -25,7 +26,7 @@ type GMFOrderEvidence struct {
 // needed to locate the corresponding messages in the Zalo OA chat interface.
 func (z *ZaloOAAdapter) OrderEvidenceMessages(ctx context.Context, groupID, sentID, replyID, replySenderID, replyText string) (GMFOrderEvidence, error) {
 	const pageSize, maxPages = 20, 3
-	wantReply := normalizeGMFEvidenceText(replyText)
+	wantReply := NormalizeGMFMessageText(replyText)
 	if groupID == "" || sentID == "" || replyID == "" || sentID == replyID || replySenderID == "" || wantReply == "" {
 		return GMFOrderEvidence{}, errors.New("zalo order evidence: incomplete message identity")
 	}
@@ -53,8 +54,9 @@ func (z *ZaloOAAdapter) OrderEvidenceMessages(ctx context.Context, groupID, sent
 				at := gmfEvidenceTimestamp(message["time"])
 				kind, _ := message["type"].(string)
 				value, _ := message["message"].(string)
+				value = NormalizeGMFMessageText(value)
 				if at == 0 || (kind != "text" && kind != "photo") ||
-					(kind == "text" && normalizeGMFEvidenceText(value) == "") {
+					(kind == "text" && value == "") {
 					return GMFOrderEvidence{}, errors.New("zalo order evidence: invalid original OA message")
 				}
 				if evidence.SentAtMillis != 0 && (evidence.SentAtMillis != at || evidence.SentType != kind || evidence.SentText != value) {
@@ -66,7 +68,7 @@ func (z *ZaloOAAdapter) OrderEvidenceMessages(ctx context.Context, groupID, sent
 				at := gmfEvidenceTimestamp(message["time"])
 				text, _ := message["message"].(string)
 				if at == 0 || message["type"] != "text" || message["from_id"] != replySenderID ||
-					normalizeGMFEvidenceText(text) != wantReply {
+					NormalizeGMFMessageText(text) != wantReply {
 					return GMFOrderEvidence{}, errors.New("zalo order evidence: reply does not match the verified confirmation")
 				}
 				if evidence.ReplyAtMillis != 0 && evidence.ReplyAtMillis != at {
@@ -100,6 +102,11 @@ func gmfEvidenceTimestamp(value any) int64 {
 	return int64(ms)
 }
 
-func normalizeGMFEvidenceText(text string) string {
+var gmfMention = regexp.MustCompile(`\[@[A-Za-z0-9_-]+\]`)
+
+// NormalizeGMFMessageText removes Zalo's API mention markers, which the web
+// chat renders as names. Original webhook text remains in the audit record.
+func NormalizeGMFMessageText(text string) string {
+	text = gmfMention.ReplaceAllString(text, " ")
 	return strings.Join(strings.Fields(norm.NFC.String(text)), " ")
 }

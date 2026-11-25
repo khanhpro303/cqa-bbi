@@ -3,6 +3,7 @@ async ({ browser }) => {
   const context = await browser.newContext({
     storageState: settings.storageState,
     viewport: { width: 1440, height: 1080 },
+    timezoneId: 'Asia/Ho_Chi_Minh',
   })
   try {
     const page = await context.newPage()
