@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	reconcileEvery = 30 * time.Second
-	tenantTick     = 3 * time.Second
-	leaseFor       = 90 * time.Second
-	pollTimeout    = 2 * time.Minute
+	reconcileEvery  = 30 * time.Second
+	tenantTick      = 3 * time.Second
+	leaseFor        = 90 * time.Second
+	pollTimeout     = 2 * time.Minute
+	deliveryTimeout = 40 * time.Second
 )
 
 // Watcher runs one polling loop per tenant that turned the watcher on. A
@@ -126,8 +127,20 @@ func (w *Watcher) Tick(ctx context.Context, tenantID string) {
 	}
 	if pollDue(watch, settings, now) {
 		w.poll(ctx, tenantID, watch, settings, now)
+		// Polling can outlive the lease or a settings edit.
+		now = w.Now()
+		if !Claim(w.DB, tenantID, w.owner, now, leaseFor) {
+			return
+		}
+		settings, err = LoadSettings(w.DB, tenantID)
+		if err != nil || !settings.WatchEnabled {
+			return
+		}
 	}
-	if delivered, err := DeliverPending(ctx, w.DB, tenantID, settings, w.Sender, w.Now()); err != nil {
+	// Finish the delivery batch within the remaining lease window.
+	deliveryCtx, cancel := context.WithTimeout(ctx, deliveryTimeout)
+	defer cancel()
+	if delivered, err := DeliverPending(deliveryCtx, w.DB, tenantID, settings, w.Sender, now); err != nil {
 		log.Printf("[cloudify-orders] tenant %s delivery failed: %v", tenantID, err)
 	} else if delivered > 0 {
 		realtime.Publish(ctx, tenantID, realtime.EventCloudifyOrdersUpdated)

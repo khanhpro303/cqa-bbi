@@ -39,6 +39,11 @@ Vào **AI Engine**, mục **Báo đơn hàng Cloudify cho khách qua Zalo**:
 | Quét đơn trong | 7 ngày | Đơn tạo trước khoảng này sẽ không được theo dõi đổi trạng thái. |
 | Báo khi | Đơn mới, Đổi trạng thái | |
 | Mẫu tin | xem `settings.go` | Biến: `{ma_don} {khach_hang} {trang_thai} {trang_thai_cu} {tong_tien} {ngay}` |
+| VietQR cho phiếu xác nhận | chưa cấu hình | Điền mã BIN, số tài khoản hoặc bí danh và tên chủ tài khoản trong **Cấu hình chi tiết**. Khi bật báo đơn mới, CQA gửi một ảnh xác nhận có chi tiết đơn, ảnh sản phẩm có trong cache và QR điền sẵn số tiền và nội dung chuyển khoản. Xóa cả ba mục để dùng lại mẫu tin văn bản. |
+
+Phiếu xác nhận dùng giá và số lượng ghi nhận lúc tạo đơn. Nếu CQA đã ghi nhận đổi mã khách hàng, đổi mã đơn, hủy đơn hoặc đổi tổng tiền trước khi gửi, phiếu ban đầu được bỏ qua. Đơn mới có tổng tiền bằng 0 được gửi ảnh phiếu xác nhận không kèm QR.
+
+Nội dung chuyển khoản là mã khách hàng Cloudify. Ví dụ, khách hàng `S084 - Chợ Bảo Hộ` có nội dung chuyển khoản `S084`.
 
 Biến môi trường `CQA_CLOUDIFY_ORDER_WATCH_ENABLED` (mặc định `true`) bật hoặc tắt vòng quét cho cả máy chủ.
 

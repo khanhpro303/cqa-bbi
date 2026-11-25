@@ -39,6 +39,15 @@ func (z *ZaloNotifier) Send(ctx context.Context, subject string, body string) er
 	return z.adapter.SendGroupMessage(ctx, z.zaloGroupID, msg)
 }
 
+// SendImage uploads and sends one image to the resolved GMF group.
+func (z *ZaloNotifier) SendImage(ctx context.Context, image []byte, filename string) error {
+	attachmentID, err := z.adapter.UploadGroupImage(ctx, image, filename)
+	if err != nil {
+		return err
+	}
+	return z.adapter.SendGroupImage(ctx, z.zaloGroupID, attachmentID)
+}
+
 // HealthCheck is a no-op; the send call itself surfaces auth/permission errors.
 func (z *ZaloNotifier) HealthCheck(_ context.Context) error { return nil }
 

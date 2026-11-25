@@ -62,6 +62,8 @@ type CloudifyOrderEvent struct {
 	Status       string `gorm:"type:varchar(16);not null;default:''"`
 	OrderDate    string `gorm:"type:varchar(32);not null;default:''"`
 	Total        float64
+	// ReceiptData holds the created event's line items and discount at detection time.
+	ReceiptData string `gorm:"type:longtext" json:"-"`
 	// DeliveryStatus: pending | sent | skipped | failed.
 	DeliveryStatus string `gorm:"type:varchar(16);not null;default:'pending';index:idx_coe_tenant_status,priority:2"`
 	DeliveryNote   string `gorm:"type:varchar(255);not null;default:''"`

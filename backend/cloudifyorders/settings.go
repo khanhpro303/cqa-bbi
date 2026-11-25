@@ -11,19 +11,25 @@ import (
 
 // Setting keys (app_settings, per tenant).
 const (
-	KeyWatchEnabled  = "cloudify_order_watch_enabled"
-	KeyNotifyEnabled = "cloudify_order_notify_enabled"
-	KeyNotifyKinds   = "cloudify_order_notify_kinds"
-	KeyWindowDays    = "cloudify_order_window_days"
-	KeyPollSeconds   = "cloudify_order_poll_seconds"
-	KeyTplCreated    = "cloudify_order_tpl_created"
-	KeyTplStatus     = "cloudify_order_tpl_status_changed"
-	KeyTplUpdated    = "cloudify_order_tpl_updated"
-	KeyWebhookSecret = "cloudify_order_webhook_secret"
+	KeyWatchEnabled       = "cloudify_order_watch_enabled"
+	KeyNotifyEnabled      = "cloudify_order_notify_enabled"
+	KeyNotifyKinds        = "cloudify_order_notify_kinds"
+	KeyWindowDays         = "cloudify_order_window_days"
+	KeyPollSeconds        = "cloudify_order_poll_seconds"
+	KeyTplCreated         = "cloudify_order_tpl_created"
+	KeyTplStatus          = "cloudify_order_tpl_status_changed"
+	KeyTplUpdated         = "cloudify_order_tpl_updated"
+	KeyWebhookSecret      = "cloudify_order_webhook_secret"
+	KeyPaymentBankBIN     = "cloudify_order_payment_bank_bin"
+	KeyPaymentAccountNo   = "cloudify_order_payment_account_no"
+	KeyPaymentAccountName = "cloudify_order_payment_account_name"
 )
 
 // AllKeys lists every setting this package reads.
-var AllKeys = []string{KeyWatchEnabled, KeyNotifyEnabled, KeyNotifyKinds, KeyWindowDays, KeyPollSeconds, KeyTplCreated, KeyTplStatus, KeyTplUpdated}
+var AllKeys = []string{
+	KeyWatchEnabled, KeyNotifyEnabled, KeyNotifyKinds, KeyWindowDays, KeyPollSeconds,
+	KeyTplCreated, KeyTplStatus, KeyTplUpdated, KeyPaymentBankBIN, KeyPaymentAccountNo, KeyPaymentAccountName,
+}
 
 // Default templates. Placeholders: {ma_don} {khach_hang} {trang_thai}
 // {trang_thai_cu} {tong_tien} {ngay}.
@@ -44,12 +50,13 @@ const (
 
 // Settings is the effective per-tenant configuration.
 type Settings struct {
-	WatchEnabled  bool
-	NotifyEnabled bool
-	NotifyKinds   map[string]bool
-	WindowDays    int
-	PollInterval  time.Duration
-	Templates     map[string]string
+	WatchEnabled   bool
+	NotifyEnabled  bool
+	NotifyKinds    map[string]bool
+	WindowDays     int
+	PollInterval   time.Duration
+	Templates      map[string]string
+	PaymentAccount PaymentAccount
 }
 
 // ParseSettings builds Settings from raw plain values, applying defaults and
@@ -61,6 +68,11 @@ func ParseSettings(values map[string]string) Settings {
 		NotifyKinds:   map[string]bool{},
 		WindowDays:    clampInt(values[KeyWindowDays], DefaultWindowDays, 1, MaxWindowDays),
 		PollInterval:  time.Duration(clampInt(values[KeyPollSeconds], DefaultPollSeconds, MinPollSeconds, MaxPollSeconds)) * time.Second,
+		PaymentAccount: PaymentAccount{
+			BankBIN:     values[KeyPaymentBankBIN],
+			AccountNo:   values[KeyPaymentAccountNo],
+			AccountName: values[KeyPaymentAccountName],
+		},
 		Templates: map[string]string{
 			KindCreated:       orDefault(values[KeyTplCreated], DefaultTplCreated),
 			KindStatusChanged: orDefault(values[KeyTplStatus], DefaultTplStatus),

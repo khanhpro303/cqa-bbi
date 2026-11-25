@@ -64,7 +64,8 @@
             color="primary"
             density="compact"
             hide-details
-            @update:model-value="save"
+            :disabled="saving"
+            @update:model-value="save()"
           />
         </div>
       </div>
@@ -87,8 +88,9 @@
             color="primary"
             density="compact"
             hide-details
+            :disabled="saving"
             data-testid="notify-switch"
-            @update:model-value="save"
+            @update:model-value="save()"
           />
         </div>
       </div>
@@ -109,6 +111,7 @@
             size="small"
             :color="form.notify_kinds.includes(k.value) ? 'primary' : undefined"
             :variant="form.notify_kinds.includes(k.value) ? 'flat' : 'outlined'"
+            :disabled="saving"
             style="cursor: pointer;"
             @click="toggleKind(k.value)"
           >
@@ -121,7 +124,7 @@
     <!-- Bottom link to detail config panel -->
     <div class="d-flex align-center justify-space-between mt-3 pt-1">
       <span class="text-caption text-grey">
-        Nhấn biểu tượng <v-icon size="14">mdi-cog-outline</v-icon> để chỉnh mẫu tin, chu kỳ & webhook
+        Nhấn biểu tượng <v-icon size="14">mdi-cog-outline</v-icon> để chỉnh mẫu tin, VietQR, chu kỳ và webhook
       </span>
       <v-btn
         size="small"
@@ -237,8 +240,64 @@
         class="mb-3"
       />
 
+      <v-divider class="my-4" />
+
+      <section aria-labelledby="cloudify-order-payment-heading">
+        <h3 id="cloudify-order-payment-heading" class="text-subtitle-2 font-weight-bold mb-2">
+          VietQR cho phiếu xác nhận
+        </h3>
+        <p class="text-caption mb-3">
+          Khi đã bật theo dõi và nhắn Zalo, chọn sự kiện “Đơn mới” và điền đủ ba mục để gửi một ảnh có chi tiết đơn và QR chuyển khoản.
+          Nội dung chuyển khoản là mã khách hàng Cloudify. Để trống cả ba mục để gửi tin nhắn văn bản.
+          <a
+            href="https://www.vietqr.io/api-bank/demo"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-primary"
+            aria-label="Tra cứu mã BIN ngân hàng VietQR (mở thẻ mới)"
+          >Tra cứu mã BIN.</a>
+        </p>
+        <v-row dense>
+          <v-col cols="12" sm="6">
+            <v-text-field
+              v-model="paymentForm.payment_bank_bin"
+              label="Mã BIN ngân hàng"
+              placeholder="Ví dụ 970436 (Vietcombank)"
+              inputmode="numeric"
+              maxlength="6"
+              density="compact"
+              variant="outlined"
+              :disabled="!data || saving"
+            />
+          </v-col>
+          <v-col cols="12" sm="6">
+            <v-text-field
+              v-model="paymentForm.payment_account_no"
+              label="Số tài khoản hoặc bí danh"
+              autocomplete="off"
+              maxlength="25"
+              spellcheck="false"
+              density="compact"
+              variant="outlined"
+              :disabled="!data || saving"
+            />
+          </v-col>
+          <v-col cols="12">
+            <v-text-field
+              v-model="paymentForm.payment_account_name"
+              label="Tên chủ tài khoản"
+              autocomplete="off"
+              maxlength="50"
+              density="compact"
+              variant="outlined"
+              :disabled="!data || saving"
+            />
+          </v-col>
+        </v-row>
+      </section>
+
       <div class="d-flex justify-end mb-4">
-        <v-btn color="primary" :loading="saving" @click="save" data-testid="save-watch">
+        <v-btn color="primary" :loading="saving" :disabled="!data || saving" @click="save(true)" data-testid="save-watch">
           Lưu cấu hình
         </v-btn>
       </div>
@@ -291,7 +350,7 @@
         <v-btn variant="tonal" color="grey" @click="panelOpen = false">
           Đóng
         </v-btn>
-        <v-btn color="primary" :loading="saving" @click="save">
+        <v-btn color="primary" :loading="saving" :disabled="!data || saving" @click="save(true)">
           Lưu cấu hình
         </v-btn>
       </div>
@@ -310,8 +369,13 @@ interface WatchEvent {
   ID: string; Kind: string; OrderCode: string; CustomerCode: string; PrevStatus: string; Status: string
   DeliveryStatus: string; DeliveryNote: string; CreatedAt: string
 }
+interface PaymentFields {
+  payment_bank_bin: string
+  payment_account_no: string
+  payment_account_name: string
+}
 interface WatchData {
-  settings: Record<string, any>
+  settings: Record<string, any> & Partial<PaymentFields>
   status: { seeded_at: string | null; last_poll_at: string | null; last_ok_at: string | null; last_error: string; last_count: number }
   webhook: { has_secret: boolean; path: string }
   events: WatchEvent[]
@@ -326,6 +390,8 @@ const kindItems = [
 const notes: Record<string, string> = {
   notify_off: 'Chưa bật nhắn khách', kind_off: 'Loại này không báo', stale: 'Quá cũ, bỏ qua',
   no_zalo_group: 'Mã KH chưa gắn nhóm Zalo', empty_template: 'Mẫu tin trống',
+  order_customer_changed: 'Đơn đã đổi khách hàng', order_code_changed: 'Đơn đã đổi mã',
+  order_cancelled: 'Đơn đã bị hủy', order_total_changed: 'Đơn đã đổi tổng tiền',
 }
 
 const data = ref<WatchData | null>(null)
@@ -333,6 +399,8 @@ const form = reactive<Record<string, any>>({
   watch_enabled: false, notify_enabled: false, notify_kinds: ['created', 'status_changed'], window_days: 7, poll_seconds: 30,
   template_created: '', template_status_changed: '', template_updated: '',
 })
+let savedPayment = normalizePayment({})
+const paymentForm = reactive<PaymentFields>({ ...savedPayment })
 const error = ref('')
 const loadError = ref('')
 const saving = ref(false)
@@ -368,9 +436,22 @@ function toggleKind(kind: string) {
   save()
 }
 
-function apply(d: WatchData) {
+function normalizePayment(fields: Partial<PaymentFields>): PaymentFields {
+  return {
+    payment_bank_bin: fields.payment_bank_bin?.trim() ?? '',
+    payment_account_no: fields.payment_account_no?.trim() ?? '',
+    payment_account_name: fields.payment_account_name?.trim() ?? '',
+  }
+}
+
+function apply(d: WatchData, syncPayment = true) {
   data.value = d
-  Object.assign(form, d.settings)
+  const { payment_bank_bin, payment_account_no, payment_account_name, ...watchSettings } = d.settings
+  Object.assign(form, watchSettings)
+  if (syncPayment) {
+    savedPayment = normalizePayment({ payment_bank_bin, payment_account_no, payment_account_name })
+    Object.assign(paymentForm, savedPayment)
+  }
 }
 
 function fmt(s: string | null) {
@@ -421,7 +502,14 @@ async function load(syncForm = true) {
 
 useTenantEventRefresh(() => props.tenantId, 'cloudify_orders_updated', () => load(false))
 
-async function save() {
+async function save(fromDialog = false) {
+  if (saving.value) return
+  const payment = normalizePayment(paymentForm)
+  const includePayment = fromDialog && (
+    payment.payment_bank_bin !== savedPayment.payment_bank_bin ||
+    payment.payment_account_no !== savedPayment.payment_account_no ||
+    payment.payment_account_name !== savedPayment.payment_account_name
+  )
   saving.value = true
   error.value = ''
   const request = ++watchRequest
@@ -430,13 +518,14 @@ async function save() {
       ...form,
       window_days: Number(form.window_days),
       poll_seconds: Number(form.poll_seconds),
+      ...(includePayment ? payment : {}),
     })
     settingsRevision++
     if (data.value && appliedWatchRequest > request) {
-      apply({ ...d, status: data.value.status, events: data.value.events })
+      apply({ ...d, status: data.value.status, events: data.value.events }, fromDialog)
     } else {
       appliedWatchRequest = request
-      apply(d)
+      apply(d, fromDialog)
     }
   } catch (err) {
     error.value = message(err, 'Không lưu được cấu hình.')

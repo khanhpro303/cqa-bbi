@@ -7,9 +7,11 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -123,14 +125,17 @@ func cloudifyOrderCodeFromBody(body []byte) string {
 }
 
 type cloudifyOrderSettingsBody struct {
-	WatchEnabled  *bool    `json:"watch_enabled"`
-	NotifyEnabled *bool    `json:"notify_enabled"`
-	NotifyKinds   []string `json:"notify_kinds"`
-	WindowDays    *int     `json:"window_days"`
-	PollSeconds   *int     `json:"poll_seconds"`
-	TplCreated    *string  `json:"template_created"`
-	TplStatus     *string  `json:"template_status_changed"`
-	TplUpdated    *string  `json:"template_updated"`
+	WatchEnabled       *bool    `json:"watch_enabled"`
+	NotifyEnabled      *bool    `json:"notify_enabled"`
+	NotifyKinds        []string `json:"notify_kinds"`
+	WindowDays         *int     `json:"window_days"`
+	PollSeconds        *int     `json:"poll_seconds"`
+	TplCreated         *string  `json:"template_created"`
+	TplStatus          *string  `json:"template_status_changed"`
+	TplUpdated         *string  `json:"template_updated"`
+	PaymentBankBIN     *string  `json:"payment_bank_bin"`
+	PaymentAccountNo   *string  `json:"payment_account_no"`
+	PaymentAccountName *string  `json:"payment_account_name"`
 }
 
 // GetCloudifyOrderWatch returns settings, watcher status and recent events.
@@ -144,7 +149,7 @@ func GetCloudifyOrderWatch(c *gin.Context) {
 	var watch models.CloudifyOrderWatch
 	db.DB.Where("tenant_id = ?", tenantID).First(&watch)
 	var events []models.CloudifyOrderEvent
-	db.DB.Where("tenant_id = ?", tenantID).Order("created_at DESC").Limit(50).Find(&events)
+	db.DB.Omit("receipt_data").Where("tenant_id = ?", tenantID).Order("created_at DESC").Limit(50).Find(&events)
 	kinds := []string{}
 	for _, k := range []string{cloudifyorders.KindCreated, cloudifyorders.KindStatusChanged, cloudifyorders.KindUpdated} {
 		if settings.NotifyKinds[k] {
@@ -163,6 +168,9 @@ func GetCloudifyOrderWatch(c *gin.Context) {
 			"template_created":        settings.Templates[cloudifyorders.KindCreated],
 			"template_status_changed": settings.Templates[cloudifyorders.KindStatusChanged],
 			"template_updated":        settings.Templates[cloudifyorders.KindUpdated],
+			"payment_bank_bin":        settings.PaymentAccount.BankBIN,
+			"payment_account_no":      settings.PaymentAccount.AccountNo,
+			"payment_account_name":    settings.PaymentAccount.AccountName,
 		},
 		"status": gin.H{
 			"seeded_at":    watch.SeededAt,
@@ -240,14 +248,55 @@ func SaveCloudifyOrderWatch(c *gin.Context) {
 			values[key] = strings.TrimSpace(*tpl)
 		}
 	}
-	for key, value := range values {
-		if err := upsertPlainSetting(tenantID, key, value); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "không lưu được cài đặt"})
-			return
-		}
+	if err := applyCloudifyPaymentSettings(body, values); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := saveCloudifyWatchValues(c.Request.Context(), tenantID, values); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "không lưu được cài đặt"})
+		return
 	}
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "cloudify_orders.settings_saved", "tenant", tenantID, "", "", c.ClientIP())
 	GetCloudifyOrderWatch(c)
+}
+
+func applyCloudifyPaymentSettings(body cloudifyOrderSettingsBody, values map[string]string) error {
+	if body.PaymentBankBIN == nil && body.PaymentAccountNo == nil && body.PaymentAccountName == nil {
+		return nil
+	}
+	if body.PaymentBankBIN == nil || body.PaymentAccountNo == nil || body.PaymentAccountName == nil {
+		return errors.New("cần gửi đủ mã BIN, số tài khoản và tên chủ tài khoản")
+	}
+	account := cloudifyorders.PaymentAccount{
+		BankBIN:     strings.TrimSpace(*body.PaymentBankBIN),
+		AccountNo:   strings.TrimSpace(*body.PaymentAccountNo),
+		AccountName: strings.TrimSpace(*body.PaymentAccountName),
+	}
+	if !account.IsEmpty() {
+		if err := account.Validate(); err != nil {
+			return err
+		}
+	}
+	values[cloudifyorders.KeyPaymentBankBIN] = account.BankBIN
+	values[cloudifyorders.KeyPaymentAccountNo] = account.AccountNo
+	values[cloudifyorders.KeyPaymentAccountName] = account.AccountName
+	return nil
+}
+
+func saveCloudifyWatchValues(ctx context.Context, tenantID string, values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	now := time.Now()
+	rows := make([]models.AppSetting, 0, len(values))
+	for key, value := range values {
+		rows = append(rows, models.AppSetting{ID: pkg.NewUUID(), TenantID: tenantID, SettingKey: key, ValuePlain: value, CreatedAt: now, UpdatedAt: now})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].SettingKey < rows[j].SettingKey })
+	return db.DB.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "setting_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value_plain", "value_encrypted", "updated_at"}),
+	}).Create(&rows).Error
 }
 
 // RotateCloudifyOrderWebhookSecret creates a new webhook secret and returns it
