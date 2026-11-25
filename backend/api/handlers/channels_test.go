@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,6 +9,41 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/db/models"
 )
+
+func TestNormalizeUnansweredHandoverSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata string
+		want     string
+		wantErr  bool
+	}{
+		{name: "omitted", metadata: `{}`, want: `{}`},
+		{name: "enable without group", metadata: `{"unanswered_handover_enabled":true}`, want: `{"unanswered_handover_enabled":true}`},
+		{name: "clear group", metadata: `{"unanswered_handover_group_id":"  "}`, want: `{"unanswered_handover_group_id":""}`},
+		{name: "string toggle", metadata: `{"unanswered_handover_enabled":"true"}`, wantErr: true},
+		{name: "null toggle", metadata: `{"unanswered_handover_enabled":null}`, wantErr: true},
+		{name: "numeric group", metadata: `{"unanswered_handover_group_id":123}`, wantErr: true},
+		{name: "null group", metadata: `{"unanswered_handover_group_id":null}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata, err := decodeMetadataObject(tt.metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = normalizeUnansweredHandoverSettings(t.Context(), models.Channel{ChannelType: "zalo_oa"}, metadata)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validation error = %v, want error %v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				got, err := json.Marshal(metadata)
+				if err != nil || string(got) != tt.want {
+					t.Fatalf("normalized metadata = %s (%v), want %s", got, err, tt.want)
+				}
+			}
+		})
+	}
+}
 
 func TestGetBaseURLHonorsForwardedHTTPS(t *testing.T) {
 	tests := []struct {

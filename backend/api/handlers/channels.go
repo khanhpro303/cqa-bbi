@@ -186,6 +186,22 @@ func CreateChannel(c *gin.Context) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	if channel.ChannelType == "zalo_oa" {
+		metadata, err := decodeMetadataObject(channel.Metadata)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata", "details": err.Error()})
+			return
+		}
+		if err := normalizeUnansweredHandoverSettings(c.Request.Context(), channel, metadata); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_unanswered_handover", "details": err.Error()})
+			return
+		}
+		// Only rewrite the incoming metadata when this feature is configured.
+		if _, configured := metadata["unanswered_handover_group_id"]; configured {
+			raw, _ := json.Marshal(metadata)
+			channel.Metadata = string(raw)
+		}
+	}
 
 	if err := db.DB.Create(&channel).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "create_channel_failed"})
@@ -273,7 +289,16 @@ func UpdateChannel(c *gin.Context) {
 			// Merge incoming keys over existing so the campaign-alert config
 			// (campaign_alerts_enabled / campaign_alert_group_id) never clobbers
 			// other zalo_oa metadata.
-			merged, err := mergeChannelMetadata(channel.Metadata, req.Metadata)
+			incoming, err := decodeMetadataObject(req.Metadata)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata", "details": err.Error()})
+				return
+			}
+			if err := normalizeUnansweredHandoverSettings(c.Request.Context(), channel, incoming); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_unanswered_handover", "details": err.Error()})
+				return
+			}
+			merged, err := mergeChannelMetadata(channel.Metadata, incoming)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata", "details": err.Error()})
 				return
@@ -328,21 +353,42 @@ func UpdateChannel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "updated"})
 }
 
-// mergeChannelMetadata decodes existing + incoming channel metadata JSON and
-// returns the merge with incoming keys winning. Either side may be empty.
-func mergeChannelMetadata(existingRaw, incomingRaw string) (map[string]interface{}, error) {
+// mergeChannelMetadata merges an incoming patch over existing channel metadata.
+func mergeChannelMetadata(existingRaw string, incoming map[string]interface{}) (map[string]interface{}, error) {
 	existing, err := decodeMetadataObject(existingRaw)
 	if err != nil {
 		return nil, fmt.Errorf("existing metadata: %w", err)
-	}
-	incoming, err := decodeMetadataObject(incomingRaw)
-	if err != nil {
-		return nil, fmt.Errorf("incoming metadata: %w", err)
 	}
 	for k, v := range incoming {
 		existing[k] = v
 	}
 	return existing, nil
+}
+
+// Validate changed handover settings only. Recipients are also checked at
+// delivery time because group membership or linkage can change after a save.
+func normalizeUnansweredHandoverSettings(ctx context.Context, channel models.Channel, metadata map[string]interface{}) error {
+	if enabled, exists := metadata["unanswered_handover_enabled"]; exists {
+		if _, ok := enabled.(bool); !ok {
+			return fmt.Errorf("unanswered_handover_enabled must be a boolean")
+		}
+	}
+	raw, exists := metadata["unanswered_handover_group_id"]
+	if !exists {
+		return nil
+	}
+	groupID, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("unanswered_handover_group_id must be a string")
+	}
+	groupID = strings.TrimSpace(groupID)
+	if groupID != "" {
+		if _, err := engine.FindUnansweredHandoverGroup(ctx, channel, groupID); err != nil {
+			return err
+		}
+	}
+	metadata["unanswered_handover_group_id"] = groupID
+	return nil
 }
 
 // normalizeComplaintSettings checks the complaint case settings in merged

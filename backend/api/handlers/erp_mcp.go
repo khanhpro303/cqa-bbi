@@ -136,7 +136,11 @@ func ERPMCP(c *gin.Context) {
 			return
 		}
 		if params.Name == knowledgeMCPToolName {
-			reply(handleKnowledgeTool(c.Request.Context(), tenantID, agentType, params.Arguments))
+			result := handleKnowledgeTool(c.Request.Context(), tenantID, agentType, params.Arguments)
+			if !preview && result["isError"] == false {
+				recordUnansweredLookup(c.Request.Context(), tenantID, agentType, c.GetHeader("X-Permission-Token"))
+			}
+			reply(result)
 			return
 		}
 		if preview {
@@ -185,6 +189,9 @@ func ERPMCP(c *gin.Context) {
 			result := rec.Body.Bytes()
 			if rec.Code == http.StatusOK {
 				result = describeERPProductLookup(tool.resource, result)
+				if unresolvedERPProductResult(tool.resource, result) {
+					recordUnansweredLookup(c.Request.Context(), tenantID, agentType, permissionToken)
+				}
 			}
 			reply(erpMCPResult(result, rec.Code >= 400))
 			return

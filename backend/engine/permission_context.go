@@ -18,15 +18,15 @@ import (
 // across all their CRM groups. This is encoded into a signed JWT and passed
 // through Langflow tweaks to the ERP Gateway for server-side enforcement.
 type GroupPermissionContext struct {
-	TenantID     string            `json:"tenant_id"`
-	ZaloUserID   string            `json:"zalo_user_id"`
-	CustomerCode string            `json:"customer_code"`
+	TenantID     string `json:"tenant_id"`
+	ZaloUserID   string `json:"zalo_user_id"`
+	CustomerCode string `json:"customer_code"`
 	// CustomerCodes carries the FULL set of mã KH bound to the caller when they
 	// own multiple shops (the worker signs it into the token). CustomerCode stays
 	// the primary for backward-compat; readers prefer CustomerCodes and fall back
 	// to [CustomerCode]. Omitted from old tokens → still decodes.
-	CustomerCodes []string          `json:"customer_codes,omitempty"`
-	AgentType     string            `json:"agent_type"` // "public" | "private"
+	CustomerCodes []string `json:"customer_codes,omitempty"`
+	AgentType     string   `json:"agent_type"` // "public" | "private"
 	// ChannelID / ZaloGroupID pin the exact chat the question came from (set by
 	// the worker before signing). The ERP handler uses them to push prompts
 	// through the same OA and into the same chat (ZaloGroupID "" = 1:1).
@@ -40,14 +40,16 @@ type GroupPermissionContext struct {
 	// TurnID identifies the chat turn the token was signed for; complaint
 	// reports carry it so the worker can tell what this turn recorded.
 	TurnID string `json:"turn_id,omitempty"`
+	// UnansweredLookupID is unique to the current signed chatbot attempt.
+	UnansweredLookupID string `json:"unanswered_lookup_id,omitempty"`
 	// Complaints: complaint handling is on for this turn (channel switch and
 	// a system prompt carrying the complaint guide). complaint_record refuses
 	// tokens without it.
 	Complaints bool `json:"complaints,omitempty"`
 	// Retry: the worker is processing this message again (an earlier attempt
 	// failed after the bot may have recorded complaints).
-	Retry bool `json:"retry,omitempty"`
-	Groups        []GroupPermission `json:"groups"`
+	Retry  bool              `json:"retry,omitempty"`
+	Groups []GroupPermission `json:"groups"`
 }
 
 // GroupPermission holds the permissions for a single CRM group.
@@ -59,12 +61,12 @@ type GroupPermission struct {
 
 // ResourcePermission holds the access config for a single ERP resource within a group.
 type ResourcePermission struct {
-	Resource      string   `json:"resource"`        // products|inventory|orders|customers|debt
+	Resource      string   `json:"resource"` // products|inventory|orders|customers|debt
 	IsEnabled     bool     `json:"is_enabled"`
-	ScopeType     string   `json:"scope_type"`      // all|own|assigned
-	ProductGroups []string `json:"product_groups"`   // filtered VTHH groups
-	Brands        []string `json:"brands"`           // filtered brand (nhãn hiệu) names, lowercase, exact-match
-	AllBrands     bool     `json:"all_brands"`       // true = no brand filter for this resource
+	ScopeType     string   `json:"scope_type"`     // all|own|assigned
+	ProductGroups []string `json:"product_groups"` // filtered VTHH groups
+	Brands        []string `json:"brands"`         // filtered brand (nhãn hiệu) names, lowercase, exact-match
+	AllBrands     bool     `json:"all_brands"`     // true = no brand filter for this resource
 }
 
 // resourcePermissionFromEndpoint converts a stored ERPEndpoint row into the

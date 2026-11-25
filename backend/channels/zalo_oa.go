@@ -665,7 +665,11 @@ func (z *ZaloOAAdapter) sendCSPayload(ctx context.Context, payload map[string]in
 	if err != nil {
 		return fmt.Errorf("zalo send message failed: %w", err)
 	}
-	if errCode, ok := result["error"].(float64); ok && errCode != 0 {
+	errCode, ok := result["error"].(float64)
+	if !ok {
+		return errors.New("Zalo did not confirm direct message delivery")
+	}
+	if errCode != 0 {
 		msg, _ := result["message"].(string)
 		return fmt.Errorf("zalo send message api error %v: %s", errCode, msg)
 	}

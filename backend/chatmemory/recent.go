@@ -51,6 +51,19 @@ type recentRow struct {
 // the current message is dropped by its text. It returns nil when chat memory
 // is off or nothing is found; callers then classify without context.
 func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText string, limit int) []RecentTurn {
+	return recentTurns(ctx, sessionID, currentMsgID, currentText, "", limit)
+}
+
+// RecentTurnsForSender limits a shared group session to this sender's messages
+// and bot replies explicitly associated with them.
+func RecentTurnsForSender(ctx context.Context, sessionID, currentMsgID, currentText, senderID string, limit int) []RecentTurn {
+	if senderID == "" {
+		return nil
+	}
+	return recentTurns(ctx, sessionID, currentMsgID, currentText, senderID, limit)
+}
+
+func recentTurns(ctx context.Context, sessionID, currentMsgID, currentText, senderID string, limit int) []RecentTurn {
 	if !Enabled() || db.DB == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
@@ -77,6 +90,10 @@ func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText strin
 		Where("tenant_id = ? AND conversation_id = ? AND sent_at >= ?",
 			sess.TenantID, sess.ConversationID, sess.StartedAt.Add(-recentClockSlack)).
 		Where("JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_session_id')) = ?", sessionID)
+	if senderID != "" {
+		q = q.Where(`(sender_type = 'customer' AND sender_external_id = ?) OR
+			(sender_type = 'agent' AND JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_reply_to_user')) = ?)`, senderID, senderID)
+	}
 	var current models.Message
 	if currentMsgID != "" && db.DB.WithContext(ctx).Select("id, created_at").
 		Where("tenant_id = ? AND conversation_id = ? AND external_message_id = ?", sess.TenantID, sess.ConversationID, currentMsgID).

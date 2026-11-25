@@ -97,7 +97,7 @@ func main() {
 	}
 
 	// Start worker pool (Asynq server)
-	workerPool := workers.NewWorkerPool(cfg)
+	workerPool := workers.NewWorkerPool(cfg, handlers.LookupCurrentZaloOrderDelivery)
 	if workerPool != nil {
 		go func() {
 			if err := workerPool.Start(); err != nil {

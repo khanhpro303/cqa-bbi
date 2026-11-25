@@ -176,6 +176,9 @@ type ChannelMetadata struct {
 	// trigger word, it reads the whole group and answers only when needed.
 	// See group_assistant.go.
 	GroupAssistant bool `json:"group_assistant_mode"`
+
+	UnansweredHandoverEnabled bool   `json:"unanswered_handover_enabled"`
+	UnansweredHandoverGroupID string `json:"unanswered_handover_group_id"`
 	// GroupStaffCallOnly: in a customer group a staff message reaches the bot
 	// only when it calls the bot or the staff member is already talking with
 	// it. Unset means on. See group_staff.go.
@@ -311,7 +314,7 @@ func erpAgentTokenFor(tenantID, agentType string) string {
 }
 
 // HandleZaloWebhookTask processes the webhook task
-func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowClient) asynq.HandlerFunc {
+func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowClient, lookupOrderDelivery CurrentOrderDeliveryLookup) asynq.HandlerFunc {
 	var asynqClient *asynq.Client
 	if cfg.RedisURL != "" {
 		opt, err := asynq.ParseRedisURI(cfg.RedisURL)
@@ -1023,22 +1026,32 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// below routes small talk to the agent as IN_SCOPE, but small talk
 		// must still not consume the variant-line lock further down.
 		var intent, classified string
-		// Recent session turns of a 1:1 chat, read at most once: for the
-		// classifier and, on a long small-talk run, for the short reply.
-		var history func() []chatmemory.RecentTurn
-		if matchedGroup.ZaloGroupID == "" {
-			msgID, sessionID := payload.Message.MsgID, activeSessionID
-			history = onceTurns(func() []chatmemory.RecentTurn {
-				return chatmemory.RecentTurns(ctx, sessionID, msgID, userText, 0)
-			})
-		}
+		// Read at most once and keep keyword-group history scoped to the
+		// sender. Group assistant classification uses its own shared log.
+		msgID, sessionID, input := payload.Message.MsgID, activeSessionID, userText
+		history := onceTurns(func() []chatmemory.RecentTurn {
+			if matchedGroup.ZaloGroupID != "" {
+				if !meta.UnansweredHandoverEnabled {
+					return nil
+				}
+				return chatmemory.RecentTurnsForSender(ctx, sessionID, msgID, input, payload.Sender.ID, 0)
+			}
+			return chatmemory.RecentTurns(ctx, sessionID, msgID, input, 0)
+		})
 		staffTurnKind := staffTurnUngated
 		if staffGated {
 			staffTurnKind = classifyStaffTurn(ctx, meta, matchedChannel.TenantID, sessionKey, workKey, payload.Sender.ID, userText)
 		}
-		if engine.TakeAwaitingFollowup(ctx, workKey) {
+		publicChat := !isWhitelisted || matchedGroup.ZaloGroupID != ""
+		orderPeriodKey := "current_order_period:" + matchedChannel.ID + ":" + activeSessionID + ":" + payload.Sender.ID
+		orderDays := orderFollowupDays(input)
+		orderPeriod := lookupOrderDelivery != nil && meta.UnansweredHandoverEnabled && payload.SignatureVerified &&
+			publicChat && orderDays > 0 && hasOrderPeriodChoice(ctx, orderPeriodKey)
+		awaiting := engine.TakeAwaitingFollowup(ctx, workKey)
+		if (awaiting && !meta.UnansweredHandoverEnabled) ||
+			(staffTurnKind != staffTurnNotForBot && (orderPeriod || (awaiting && isExpectedLookupFollowup(userText)))) {
 			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
-			intent = "IN_SCOPE"
+			intent, classified = "IN_SCOPE", "IN_SCOPE"
 		} else if staffTurnKind == staffTurnCalled {
 			// A staff member called the bot by name: answer without asking
 			// the classifier, which could read the call as group chatter.
@@ -1050,26 +1063,22 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[group-staff] group %s staff %s did not call the bot; staying silent", matchedGroup.ZaloGroupID, payload.Sender.ID)
 			intent, classified = "CASUAL", "CASUAL"
 		} else if groupAssistant {
-			intent = classifyGroupMessage(ctx, matchedChannel.TenantID, workKey, recentGroupLines(ctx, sessionKey), groupName, groupRole, userText)
+			intent = classifyGroupMessage(ctx, matchedChannel.TenantID, workKey, recentGroupLines(ctx, sessionKey), groupName, groupRole, userText, meta.UnansweredHandoverEnabled)
 			log.Printf("[group-assistant] group %s sender %s: %s", matchedGroup.ZaloGroupID, payload.Sender.ID, intent)
 			classified = intent
-			if keepOrderConversation(ctx, matchedChannel.TenantID, workKey, intent) {
+			if (!meta.UnansweredHandoverEnabled || intent != "OUT_OF_SCOPE") && keepOrderConversation(ctx, matchedChannel.TenantID, workKey, intent) {
 				log.Printf("[worker] chat has an open order cart; treating %s reply as IN_SCOPE", intent)
 				intent = "IN_SCOPE"
 			}
 		} else {
 			var err error
-			// Only a 1:1 chat reads the session's recent turns (history is
-			// nil in a group): in a keyword group the shared log has no
-			// speakers, so one member's "ok" could be read as the answer to a
-			// question the bot asked someone else.
-			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history)
+			intent, err = classifyMessageIntent(ctx, matchedChannel.TenantID, userText, history, meta.UnansweredHandoverEnabled)
 			if err != nil {
 				log.Printf("[worker] error classifying message intent: %v. Proceeding as IN_SCOPE.", err)
 				intent = "IN_SCOPE"
 			}
 			classified = intent
-			if keepOrderConversation(ctx, matchedChannel.TenantID, workKey, intent) {
+			if (!meta.UnansweredHandoverEnabled || intent != "OUT_OF_SCOPE") && keepOrderConversation(ctx, matchedChannel.TenantID, workKey, intent) {
 				log.Printf("[worker] chat has an open order cart; treating %s reply as IN_SCOPE", intent)
 				intent = "IN_SCOPE"
 			}
@@ -1098,8 +1107,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// the signed token) to this turn. It comes from the Zalo message id,
 		// so a retried message is the same turn and does not report twice.
 		turnID := complaintTurnID(matchedChannel.ID, payload)
+		complaintHandover := intent == "HANDOVER"
 		if complaintCases {
-			handover := intent == "HANDOVER"
+			handover := complaintHandover
 			if handover {
 				log.Printf("[cases] HANDOVER from %s goes to the bot to record a case", payload.Sender.ID)
 				intent = "IN_SCOPE"
@@ -1132,11 +1142,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}()
 		}
 
+		unansweredEnabled := meta.UnansweredHandoverEnabled && payload.SignatureVerified && !complaintHandover && publicChat
+		directOrder := lookupOrderDelivery != nil && unansweredEnabled && intent == "IN_SCOPE" &&
+			(orderPeriod || isCurrentOrderDeliveryTurn(input, history))
 		if groupAssistant {
 			// Every message joins the group log the classifier reads. Messages
 			// that will not reach Langflow as a question are also queued for
 			// it, so the next answer knows what the group said meanwhile.
-			rememberGroupLine(ctx, sessionKey, newGroupLine(groupName, groupRole, userText), intent != "IN_SCOPE", sessionTTL)
+			rememberGroupLine(ctx, sessionKey, newGroupLine(groupName, groupRole, userText), intent != "IN_SCOPE" || directOrder, sessionTTL)
 		}
 
 		if intent == "HANDOVER" {
@@ -1200,11 +1213,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				if route == casualToAgent {
 					break
 				}
-				var recent []chatmemory.RecentTurn
-				if history != nil {
-					recent = history()
-				}
-				reply, err := replyToCasualTurn(ctx, matchedChannel.TenantID, recent, userText, isWhitelisted,
+				reply, err := replyToCasualTurn(ctx, matchedChannel.TenantID, history(), userText, isWhitelisted,
 					casualModeFor(route, streak, budget), casualCallDeadline(turnStart, time.Now()))
 				if err == nil && reply.Result.HasUsage {
 					casualAgentType := "public"
@@ -1250,6 +1259,34 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return fmt.Errorf("failed to send out-of-scope reply to Zalo: %w", err)
 			}
 			return nil
+		}
+
+		requestUnansweredHelp := func() string {
+			// Keep internal alerts out of chatbot history. This adapter still
+			// coordinates token rotation through the same channel store.
+			staffAdapter := zalotoken.NewAdapter(matchedChannel.ID, zaloCreds, cfg.EncryptionKey)
+			staffAdapter.SetSentObserver(nil)
+			question := strings.TrimSpace(payload.Message.Text)
+			if question == "" {
+				question = "Tin nhắn có tệp đính kèm."
+			}
+			alert := engine.HandoverAlert{
+				TenantID: matchedChannel.TenantID, Channel: *matchedChannel,
+				ZaloUserID: payload.Sender.ID, ChatGroup: matchedGroup.Name, Message: question,
+			}
+			if isCustomer {
+				alert.CustomerName = customerRec.Name
+				alert.CustomerCode = customerCode
+			}
+			return unansweredCustomerReply(engine.NotifyUnansweredHandover(ctx, staffAdapter, *matchedChannel,
+				meta.UnansweredHandoverGroupID, matchedGroup.ZaloGroupID, turnID, alert))
+		}
+		sendStockFailure := func(err error) error {
+			reply := stockLookupFailureMessage(err)
+			if unansweredEnabled && errors.Is(err, errNoVisibleStock) {
+				reply = requestUnansweredHelp()
+			}
+			return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, reply)
 		}
 
 		if staffGated && intent == "IN_SCOPE" {
@@ -1303,6 +1340,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		permCtx.GroupGuest = groupGuest
 		permCtx.TurnID = turnID
 		permCtx.Complaints = complaintCases
+		if unansweredEnabled && intent == "IN_SCOPE" && classified != "OUT_OF_SCOPE" {
+			permCtx.UnansweredLookupID = uuid.NewString()
+		}
 		if n, ok := asynq.GetRetryCount(ctx); ok && n > 0 {
 			permCtx.Retry = true
 		}
@@ -1314,6 +1354,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		if systemPromptToUse != "" {
 			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
+			if meta.UnansweredHandoverEnabled && agentType == "public" {
+				systemPromptToUse += "\n\n" + publicOrderLookupInstruction
+			}
+			if permCtx.UnansweredLookupID != "" {
+				systemPromptToUse += "\n\n" + unansweredHandoverInstruction
+			}
 		}
 
 		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
@@ -1367,7 +1413,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				}
 			}
 			if len(visible) == 0 {
-				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockUnconfirmedMessage)
+				return sendStockFailure(errNoVisibleStock)
 			}
 
 			// Group the matched products by TEN_DONG_BO_WEB (synced web name);
@@ -1498,7 +1544,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// Fetch variants
 			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha)
 			if err != nil {
-				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
+				return sendStockFailure(err)
 			}
 
 			// Extract unique web sync names
@@ -1521,7 +1567,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				// No web names found, perform direct realtime inventory lookup for this MA_CHA
 				stock, details, err := sumInventoryByParentWithDKCopy(ctx, matchedChannel.TenantID, &permCtx, maCha)
 				if err != nil {
-					return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
+					return sendStockFailure(err)
 				}
 				reply := fmt.Sprintf("Tồn khả dụng dòng %s tại Kho Tổng: %g\n\nChi tiết:\n%s", maCha, stock, strings.Join(details, "\n"))
 				if matchedGroup.ZaloGroupID != "" {
@@ -1541,7 +1587,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				// Only 1 option, run stock lookup immediately
 				stock, details, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, maCha, webNames[0])
 				if err != nil {
-					return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
+					return sendStockFailure(err)
 				}
 				reply := fmt.Sprintf("Tồn khả dụng của %s tại Kho Tổng: %g\n\nChi tiết:\n%s", webNames[0], stock, strings.Join(details, "\n"))
 				if matchedGroup.ZaloGroupID != "" {
@@ -1600,7 +1646,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				Distinct().Pluck("ma_cha", &maChas).Error
 			if err != nil {
 				log.Printf("[stock-pick] failed to resolve parent codes for web=%q: %v", webName, err)
-				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
+				return sendStockFailure(err)
 			}
 
 			stockCtx, cancel := context.WithTimeout(ctx, engine.WarehouseAvailabilityTimeout)
@@ -1629,7 +1675,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botUnavailableMessage)
 			}
 			if okCount == 0 {
-				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockUnconfirmedMessage)
+				return sendStockFailure(errNoVisibleStock)
 			}
 
 			log.Printf("[stock-pick] inventory-by-web web=%q done: %d ma_cha ok, %d failed, total=%.1f, %d detail lines", webName, okCount, errCount, totalStock, len(details))
@@ -1663,7 +1709,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			stock, _, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, parsed.MaCha, parsed.WebName)
 			if err != nil {
-				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
+				return sendStockFailure(err)
 			}
 
 			// Concise reply: chỉ tổng tồn cả dòng, bỏ liệt kê biến thể (tránh tin dài).
@@ -1714,7 +1760,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				if !errors.Is(err, errNoVisibleStock) {
 					log.Printf("[worker] error summing inventory: %v", err)
 				}
-				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
+				return sendStockFailure(err)
 			}
 
 			reply := fmt.Sprintf("Tồn khả dụng của dòng %s (mã %s) tại Kho Tổng là %g.", displayName, clickPayload.MaCha, totalStock)
@@ -1897,6 +1943,38 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// permission token; both reach Langflow as request-scoped global variables.
 		erpAgentToken := erpAgentTokenFor(matchedChannel.TenantID, agentType)
 
+		// A clear customer delivery question goes through the same signed ERP
+		// lookup as Langflow before any date picker or model-generated answer.
+		if directOrder {
+			reply := "Dạ, anh/chị nhắn riêng cho OA để em kiểm tra đơn hàng của mình nhé."
+			if matchedGroup.ZaloGroupID == "" || (groupMember && matchedGroup.CustomerCode != "") {
+				if !orderPeriod {
+					orderDays = 0
+				}
+				var unresolved bool
+				var lookupErr error
+				reply, unresolved, lookupErr = lookupOrderDelivery(ctx, matchedChannel.TenantID, erpAgentToken, permissionToken, orderDays)
+				if lookupErr != nil {
+					log.Printf("[worker] scoped order delivery lookup failed for channel %s: %v", matchedChannel.ID, lookupErr)
+					reply = botUnavailableMessage
+				} else {
+					if orderDays == 0 {
+						rememberOrderPeriodChoice(ctx, orderPeriodKey, sessionTTL)
+					}
+					if unresolved {
+						reply += "\n" + requestUnansweredHelp()
+					}
+				}
+			}
+			if err := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, reply); err != nil {
+				return fmt.Errorf("failed to send order delivery reply to Zalo: %w", err)
+			}
+			if groupAssistant {
+				rememberGroupLine(ctx, sessionKey, newGroupLine("Bot", groupRoleBot, reply), true, sessionTTL)
+			}
+			return nil
+		}
+
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
 		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, langflowInput, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
 		// Self-heal: a per-channel Langflow override that Langflow rejects (bad
@@ -1949,29 +2027,51 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// (orders/debt date-range prompts, inventory dòng-vs-SKU). Suppress the
 		// Agent's prose so the customer doesn't receive a duplicate — often
 		// hallucinated — answer alongside the backend-pushed prompt.
-		if strings.Contains(replyText, "[RICH_MESSAGE_SENT]") {
+		action := isUnansweredHandoverAction(lfRes.Text)
+		rich := strings.Contains(replyText, "[RICH_MESSAGE_SENT]")
+		if rich || action {
 			// The Agent says "sent" whether or not the ERP handler's push to Zalo
 			// actually succeeded. Check the handler's receipt: if the push failed,
 			// deliver the prompt ourselves through the channel we already hold.
 			delivered, undelivered, known := engine.TakePromptDelivery(ctx, workKey)
-			switch {
-			case delivered:
-				log.Printf("[worker] suppressing Langflow reply: backend already sent rich message (sentinel, receipt ok)")
-			case undelivered != "":
-				log.Printf("[worker] sentinel but backend push FAILED; resending prompt via worker channel (sender=%s)", payload.Sender.ID)
-				if sendErr := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, undelivered); sendErr != nil {
-					return fmt.Errorf("failed to resend undelivered prompt to Zalo: %w", sendErr)
+			if rich || known {
+				switch {
+				case delivered:
+					log.Printf("[worker] suppressing Langflow reply: backend already sent rich message (sentinel, receipt ok)")
+				case undelivered != "":
+					log.Printf("[worker] sentinel but backend push FAILED; resending prompt via worker channel (sender=%s)", payload.Sender.ID)
+					if sendErr := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, undelivered); sendErr != nil {
+						return fmt.Errorf("failed to resend undelivered prompt to Zalo: %w", sendErr)
+					}
+				case !known:
+					log.Printf("[worker] suppressing Langflow reply on sentinel without delivery receipt (legacy path?) sender=%s", payload.Sender.ID)
 				}
-			case !known:
-				log.Printf("[worker] suppressing Langflow reply on sentinel without delivery receipt (legacy path?) sender=%s", payload.Sender.ID)
+				// The backend just pushed a prompt expecting the customer's next
+				// message as the answer (debt period, orders date range, inventory
+				// dòng-vs-SKU). Mark the session so that reply — which arrives as
+				// ordinary short text — bypasses the CASUAL classifier once instead
+				// of being dropped as small talk.
+				engine.StoreAwaitingFollowup(ctx, workKey, meta.SessionTimeout)
+				return nil
 			}
-			// The backend just pushed a prompt expecting the customer's next
-			// message as the answer (debt period, orders date range, inventory
-			// dòng-vs-SKU). Mark the session so that reply — which arrives as
-			// ordinary short text — bypasses the CASUAL classifier once instead
-			// of being dropped as small talk.
-			engine.StoreAwaitingFollowup(ctx, workKey, meta.SessionTimeout)
-			return nil
+		}
+
+		if !action && strings.Contains(replyText, unansweredHandoverAction) {
+			replyText = botEmptyAnswerMessage
+		}
+		if action {
+			replyText = botEmptyAnswerMessage
+			if engine.HasUnansweredLookup(ctx, &permCtx) {
+				recorded := false
+				if complaintCases {
+					recorded, _ = customercases.TurnCaseState(ctx, matchedChannel.TenantID, turnID)
+				}
+				if recorded {
+					replyText = caseRecordedReply
+				} else {
+					replyText = requestUnansweredHelp()
+				}
+			}
 		}
 
 		// Customers are never given a ticket or case number, whatever the
@@ -2443,17 +2543,16 @@ func loadCloudifyCredentials(tenantID string, cfg *config.Config) (erpURL, erpDB
 // history, when set, loads the last turns of the session so the model can tell
 // a reply to the bot's own question from small talk. It is only called when
 // the model is, so the fast paths below cost no database read.
-func classifyMessageIntent(ctx context.Context, tenantID, message string, history func() []chatmemory.RecentTurn) (string, error) {
+func classifyMessageIntent(ctx context.Context, tenantID, message string, history func() []chatmemory.RecentTurn, businessRouting bool) (string, error) {
 	// 0. Fast-path: structural disambiguation reply (digit 1–9 or SPxxxxxx[_TL])
 	//    must not be re-classified by the LLM. The classifier prompt teaches
 	//    short tokens like "1"/"dạ"/"ok" as CASUAL and skip the customer's pick.
 	if isDisambiguationReply(message) {
 		return "IN_SCOPE", nil
 	}
-	// 0b. Fast-path: an obvious ERP lookup (a product/model code like "FF805",
-	//     or a stock/price/order/debt keyword) is IN_SCOPE without paying for
-	//     an LLM call — and can never be mislabelled CASUAL.
-	if isObviousBusinessQuery(message) {
+	// Ambiguous lookup words ("giá", "size") can also appear in unrelated
+	// questions, so only relatively specific ERP cues bypass classification.
+	if (businessRouting && isExplicitERPLookup(message)) || (!businessRouting && isObviousBusinessQuery(message)) {
 		return "IN_SCOPE", nil
 	}
 
@@ -2461,7 +2560,10 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string, histor
 	if history != nil {
 		recent = history()
 	}
-	content, err := classifyWithTaskPrompt(ctx, tenantID, engine.PromptIntentClassifier, intentClassifierInput(recent, message))
+	if businessRouting && isCurrentOrderFollowup(message, recent) {
+		return "IN_SCOPE", nil
+	}
+	content, err := classifyWithTaskPrompt(ctx, tenantID, engine.PromptIntentClassifier, intentClassifierInput(recent, message), businessRouting)
 	if err != nil || content == "" {
 		return "IN_SCOPE", err
 	}
@@ -2471,7 +2573,7 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string, histor
 // classifyWithTaskPrompt asks the tenant's AI provider to label input with
 // the given task prompt and returns the raw answer. It returns "" without an
 // error when no provider is configured, so each caller picks its own fallback.
-func classifyWithTaskPrompt(ctx context.Context, tenantID, promptKey, input string) (string, error) {
+func classifyWithTaskPrompt(ctx context.Context, tenantID, promptKey, input string, businessRouting bool) (string, error) {
 	// Resolve the tenant's AI provider (settings → key → model → base URL).
 	cfg, _ := config.Load()
 	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
@@ -2482,6 +2584,9 @@ func classifyWithTaskPrompt(ctx context.Context, tenantID, promptKey, input stri
 		return "", nil
 	}
 	systemPrompt := engine.BuildTaskPrompt(tenantID, promptKey, nil)
+	if businessRouting {
+		systemPrompt += "\n\n" + businessClassifierInstruction
+	}
 
 	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -2498,11 +2603,11 @@ func classifyWithTaskPrompt(ctx context.Context, tenantID, promptKey, input stri
 // talking to each other stay CASUAL (silent). Without a working classifier
 // the bot answers only obvious business questions: answering every message
 // in a busy group would be worse than missing one.
-func classifyGroupMessage(ctx context.Context, tenantID, workKey string, recent []groupLine, name, role, message string) string {
+func classifyGroupMessage(ctx context.Context, tenantID, workKey string, recent []groupLine, name, role, message string, businessRouting bool) string {
 	if isDisambiguationReply(message) && hasPendingOptions(ctx, workKey) {
 		return "IN_SCOPE"
 	}
-	content, err := classifyWithTaskPrompt(ctx, tenantID, engine.PromptGroupClassifier, groupClassifierInput(recent, name, role, message))
+	content, err := classifyWithTaskPrompt(ctx, tenantID, engine.PromptGroupClassifier, groupClassifierInput(recent, name, role, message), businessRouting)
 	if err != nil {
 		log.Printf("[group-assistant] classifier error: %v; using keyword fallback", err)
 	}
