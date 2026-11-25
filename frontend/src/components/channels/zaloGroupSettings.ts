@@ -68,8 +68,6 @@ export function readZaloGroupSettings(metadata: Record<string, unknown> = {}) {
       ? (metadata.campaign_alert_outputs as AlertOutput[]).map((output) => ({ ...output }))
       : [],
     handover_alert_group_id: typeof metadata.handover_alert_group_id === 'string' ? metadata.handover_alert_group_id : '',
-    unanswered_handover_enabled: metadata.unanswered_handover_enabled === true,
-    unanswered_handover_group_id: typeof metadata.unanswered_handover_group_id === 'string' ? metadata.unanswered_handover_group_id.trim() : '',
     chat_memory_issue_alerts: metadata.chat_memory_issue_alerts !== false,
     chat_memory_profile_in_prompt: metadata.chat_memory_profile_in_prompt === true,
     complaint_cases: metadata.complaint_cases === true,
@@ -87,7 +85,6 @@ export function zaloGroupSettingsPatch(settings: ZaloGroupSettings, metadata: Re
     campaign_alert_group_id: settings.campaign_alerts_enabled ? settings.campaign_alert_group_id || '' : '',
     campaign_alert_outputs: settings.campaign_alerts_enabled ? settings.campaign_alert_outputs : [],
     handover_alert_group_id: settings.handover_alert_group_id || '',
-    unanswered_handover_group_id: settings.unanswered_handover_group_id?.trim() || '',
     complaint_resolved_days: readResolvedDays(Number(settings.complaint_resolved_days)),
     complaint_streams: normalizeStreams(settings.complaint_streams),
   }

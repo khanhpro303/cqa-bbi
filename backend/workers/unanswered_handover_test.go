@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -94,5 +95,24 @@ func TestCurrentOrderDeliveryTurn(t *testing.T) {
 				t.Fatalf("current order lookup = %t, want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestUnansweredHandoverUsesExistingChannelGroup(t *testing.T) {
+	for _, tc := range []struct {
+		metadata  string
+		wantGroup string
+	}{
+		{`{"handover_alert_group_id":"management","unanswered_handover_enabled":true}`, "management"},
+		{`{"campaign_alerts_enabled":true,"campaign_alert_group_id":"campaign","unanswered_handover_enabled":true}`, ""},
+	} {
+		var meta ChannelMetadata
+		if err := json.Unmarshal([]byte(tc.metadata), &meta); err != nil {
+			t.Fatal(err)
+		}
+		if meta.HandoverAlertGroupID != tc.wantGroup || !meta.UnansweredHandoverEnabled {
+			t.Fatalf("got group %q, rollout=%t, want group %q and rollout enabled", meta.HandoverAlertGroupID,
+				meta.UnansweredHandoverEnabled, tc.wantGroup)
+		}
 	}
 }

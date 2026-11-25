@@ -25,9 +25,9 @@ type unansweredHandoverSender interface {
 	SendTextMessage(ctx context.Context, userID, content string) error
 }
 
-// FindUnansweredHandoverGroup resolves a linked, internal CRM group for this OA.
+// findUnansweredHandoverGroup resolves a linked, internal CRM group for this OA.
 // A new customer assignment or a group archive invalidates the destination.
-func FindUnansweredHandoverGroup(ctx context.Context, channel models.Channel, groupID string) (models.CRMGroup, error) {
+func findUnansweredHandoverGroup(ctx context.Context, channel models.Channel, groupID string) (models.CRMGroup, error) {
 	var group models.CRMGroup
 	if db.DB == nil || channel.ChannelType != "zalo_oa" || channel.TenantID == "" || channel.ID == "" {
 		return group, errors.New("a Zalo OA channel is required")
@@ -69,7 +69,7 @@ func NotifyUnansweredHandover(ctx context.Context, sender unansweredHandoverSend
 	}
 	var destinations []unansweredHandoverDestination
 	if groupID = strings.TrimSpace(groupID); groupID != "" {
-		group, err := FindUnansweredHandoverGroup(ctx, channel, groupID)
+		group, err := findUnansweredHandoverGroup(ctx, channel, groupID)
 		if err != nil || strings.TrimSpace(group.ZaloGroupID) == strings.TrimSpace(originatingZaloGroupID) {
 			log.Printf("[unanswered-handover] channel %s management group %s invalid: %v", channel.ID, groupID, err)
 			recordUnansweredHandoverLog(ctx, channel.TenantID, groupID, "", errors.New("invalid_management_group"))

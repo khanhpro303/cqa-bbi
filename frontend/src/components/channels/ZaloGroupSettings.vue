@@ -68,27 +68,6 @@
       :hint="$t('handover_alert_group_hint')"
       persistent-hint
     />
-    <v-switch
-      v-model="settings.unanswered_handover_enabled"
-      :label="$t('unanswered_handover_enabled')"
-      :hint="$t('unanswered_handover_enabled_hint')"
-      persistent-hint
-      density="compact"
-      color="primary"
-      class="mt-2"
-    />
-    <v-select
-      v-if="settings.unanswered_handover_enabled || settings.unanswered_handover_group_id"
-      v-model="settings.unanswered_handover_group_id"
-      :items="managementGroupOptions"
-      :loading="loadingAlertGroups"
-      :no-data-text="loadingAlertGroups ? $t('loading') : $t('unanswered_handover_no_groups')"
-      :label="$t('unanswered_handover_group_label')"
-      density="compact"
-      clearable
-      :hint="$t('unanswered_handover_group_hint')"
-      persistent-hint
-    />
 
     <v-divider class="my-3" />
     <div class="text-body-2 font-weight-medium mb-1">{{ $t('chat_memory_settings_title') }}</div>
@@ -150,21 +129,16 @@ import { MAX_COMPLAINT_RESOLVED_DAYS, type ZaloGroupSettings } from './zaloGroup
 const props = defineProps<{ tenantId: string; channelId: string }>()
 const settings = defineModel<ZaloGroupSettings>({ required: true })
 const alertGroupOptions = ref<Array<{ title: string; value: string }>>([])
-const managementGroupOptions = ref<Array<{ title: string; value: string }>>([])
 const loadingAlertGroups = ref(true)
 
 onMounted(async () => {
   try {
     const { data } = await api.get(`/tenants/${props.tenantId}/crm/groups`)
-    const groups = (Array.isArray(data) ? data : [])
+    alertGroupOptions.value = (Array.isArray(data) ? data : [])
       .filter((group) => group.zalo_group_id && (!group.channel_id || group.channel_id === props.channelId))
-    alertGroupOptions.value = groups.map((group) => ({ title: group.name, value: group.id }))
-    managementGroupOptions.value = groups
-      .filter((group) => !group.customer_code?.trim() && !group.customer_codes?.length && !group.customers?.length)
       .map((group) => ({ title: group.name, value: group.id }))
   } catch {
     alertGroupOptions.value = []
-    managementGroupOptions.value = []
   } finally {
     loadingAlertGroups.value = false
   }

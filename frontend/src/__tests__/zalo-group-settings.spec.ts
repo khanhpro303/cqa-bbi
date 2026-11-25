@@ -73,36 +73,6 @@ describe('complaint cases switch', () => {
   })
 })
 
-describe('unanswered business questions', () => {
-  it('enables the staff fallback without choosing another alert group', () => {
-    const original = { handover_alert_group_id: 'complaints', campaign_alerts_enabled: true, campaign_alert_group_id: 'campaign' }
-    const settings = readZaloGroupSettings(original)
-    expect(settings.unanswered_handover_enabled).toBe(false)
-    expect(settings.unanswered_handover_group_id).toBe('')
-
-    settings.unanswered_handover_enabled = true
-    expect(zaloGroupSettingsPatch(settings, original)).toEqual({ unanswered_handover_enabled: true })
-
-    settings.unanswered_handover_group_id = 'management'
-    expect(zaloGroupSettingsPatch(settings, original)).toEqual({
-      unanswered_handover_enabled: true,
-      unanswered_handover_group_id: 'management',
-    })
-  })
-
-  it('keeps the selected group when disabled and allows clearing it separately', () => {
-    const original = { unanswered_handover_enabled: true, unanswered_handover_group_id: 'management' }
-    const settings = readZaloGroupSettings(original)
-    settings.unanswered_handover_enabled = false
-    expect(zaloGroupSettingsPatch(settings, original)).toEqual({ unanswered_handover_enabled: false })
-    settings.unanswered_handover_group_id = ''
-    expect(zaloGroupSettingsPatch(settings, original)).toEqual({
-      unanswered_handover_enabled: false,
-      unanswered_handover_group_id: '',
-    })
-  })
-})
-
 describe('complaint days and streams', () => {
   it('reads defaults and clamps days', () => {
     expect(readZaloGroupSettings({}).complaint_resolved_days).toBe(14)

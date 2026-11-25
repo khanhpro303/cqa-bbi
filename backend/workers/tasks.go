@@ -177,8 +177,9 @@ type ChannelMetadata struct {
 	// See group_assistant.go.
 	GroupAssistant bool `json:"group_assistant_mode"`
 
-	UnansweredHandoverEnabled bool   `json:"unanswered_handover_enabled"`
-	UnansweredHandoverGroupID string `json:"unanswered_handover_group_id"`
+	HandoverAlertGroupID string `json:"handover_alert_group_id"`
+	// Backend rollout gate for BBI OA; admin group routing uses the existing field.
+	UnansweredHandoverEnabled bool `json:"unanswered_handover_enabled"`
 	// GroupStaffCallOnly: in a customer group a staff message reaches the bot
 	// only when it calls the bot or the staff member is already talking with
 	// it. Unset means on. See group_staff.go.
@@ -1279,7 +1280,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				alert.CustomerCode = customerCode
 			}
 			return unansweredCustomerReply(engine.NotifyUnansweredHandover(ctx, staffAdapter, *matchedChannel,
-				meta.UnansweredHandoverGroupID, matchedGroup.ZaloGroupID, turnID, alert))
+				meta.HandoverAlertGroupID, matchedGroup.ZaloGroupID, turnID, alert))
 		}
 		sendStockFailure := func(err error) error {
 			reply := stockLookupFailureMessage(err)
