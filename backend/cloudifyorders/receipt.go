@@ -20,27 +20,39 @@ type receiptDetails struct {
 // An empty object represents a malformed Cloudify detail payload. An empty
 // string identifies outbox rows created before receipt details were captured.
 func captureReceipt(raw map[string]any) string {
-	rawLines, ok := raw["DON_DAT_HANG_CHI_TIET"].([]any)
+	details, ok := readReceiptDetails(raw)
 	if !ok {
 		return "{}"
+	}
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+func readReceiptDetails(raw map[string]any) (receiptDetails, bool) {
+	rawLines, ok := raw["DON_DAT_HANG_CHI_TIET"].([]any)
+	if !ok {
+		return receiptDetails{}, false
 	}
 	var discount float64
 	if value := raw["GIAM_GIA_HOA_DON"]; value != nil && value != false {
 		discount, ok = asFloat(value)
-		if !ok {
-			return "{}"
+		if !ok || math.IsNaN(discount) || math.IsInf(discount, 0) {
+			return receiptDetails{}, false
 		}
 	}
 	details := receiptDetails{Lines: make([]ReceiptLine, 0, len(rawLines)), Discount: discount}
 	for _, entry := range rawLines {
 		line, ok := entry.(map[string]any)
 		if !ok {
-			return "{}"
+			return receiptDetails{}, false
 		}
 		quantity, haveQuantity := asFloat(line["SO_LUONG"])
 		price, havePrice := asFloat(line["DON_GIA"])
-		if !haveQuantity || !havePrice {
-			return "{}"
+		if !haveQuantity || !havePrice || math.IsNaN(quantity) || math.IsNaN(price) || math.IsInf(quantity, 0) || math.IsInf(price, 0) {
+			return receiptDetails{}, false
 		}
 		sku, _, _ := strings.Cut(receiptRelationLabel(line["MA_HANG"]), " - ")
 		details.Lines = append(details.Lines, ReceiptLine{
@@ -48,11 +60,7 @@ func captureReceipt(raw map[string]any) string {
 			Unit: receiptRelationLabel(line["DVT"]), Quantity: quantity, UnitPrice: price,
 		})
 	}
-	encoded, err := json.Marshal(details)
-	if err != nil {
-		return "{}"
-	}
-	return string(encoded)
+	return details, true
 }
 
 func receiptRelationLabel(value any) string {

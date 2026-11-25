@@ -74,6 +74,7 @@ func AutoMigrate() error {
 		&models.CloudifyOrderWatch{},
 		&models.CloudifyOrderSnapshot{},
 		&models.CloudifyOrderEvent{},
+		&models.CloudifyOrderConfirmation{},
 		&models.MessengerIntakeAttribution{},
 		&models.MessengerJourneySequence{},
 		&models.MessengerJourneyReceipt{},

@@ -44,6 +44,11 @@ type receiptSender interface {
 	SendReceipt(ctx context.Context, tenantID string, to Recipient, image []byte) error
 }
 
+type trackedOrderSender interface {
+	sendTrackedText(ctx context.Context, tenantID string, to Recipient, text string) (zaloGroupID, messageID string, err error)
+	sendTrackedReceipt(ctx context.Context, tenantID string, to Recipient, image []byte) (zaloGroupID, messageID string, err error)
+}
+
 // ZaloGroupSender messages the customer's linked Zalo group through the OA
 // channel the group belongs to (the same path CRM campaign alerts use).
 type ZaloGroupSender struct{ DB *gorm.DB }
@@ -147,6 +152,8 @@ func deliverOne(ctx context.Context, database *gorm.DB, tenantID string, event m
 		return DeliverySkipped, "no_zalo_group"
 	}
 	var send func(Recipient) error
+	tracked, track := sender.(trackedOrderSender)
+	track = track && event.Kind == KindCreated && event.OrderID > 0 && event.OrderCode != "" && event.CustomerCode != ""
 	if event.Kind == KindCreated && event.ReceiptData != "" && !settings.PaymentAccount.IsEmpty() {
 		imageSender, ok := sender.(receiptSender)
 		if !ok {
@@ -164,12 +171,26 @@ func deliverOne(ctx context.Context, database *gorm.DB, tenantID string, event m
 			return DeliverySkipped, skip
 		}
 		send = func(to Recipient) error { return imageSender.SendReceipt(ctx, tenantID, to, image) }
+		if track {
+			send = func(to Recipient) error {
+				return sendOrderConfirmation(ctx, database, event, to, func() (string, string, error) {
+					return tracked.sendTrackedReceipt(ctx, tenantID, to, image)
+				})
+			}
+		}
 	} else {
 		text := Render(settings.Templates[event.Kind], event)
 		if text == "" {
 			return DeliverySkipped, "empty_template"
 		}
 		send = func(to Recipient) error { return sender.Send(ctx, tenantID, to, text) }
+		if track {
+			send = func(to Recipient) error {
+				return sendOrderConfirmation(ctx, database, event, to, func() (string, string, error) {
+					return tracked.sendTrackedText(ctx, tenantID, to, text)
+				})
+			}
+		}
 	}
 	sent, failures := 0, []string{}
 	for _, to := range recipients {

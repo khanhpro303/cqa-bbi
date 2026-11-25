@@ -63,3 +63,30 @@ CQA không tin nội dung webhook. Nó chỉ dùng mã đơn để đọc lại 
 - Chỉ nhắn vào **nhóm Zalo** đã gắn mã KH. Khách chỉ chat 1:1 với OA chưa được nhắn, vì Zalo OA giới hạn tin chủ động ngoài khung tương tác.
 - Đơn bị xoá không được báo: không phân biệt được "bị xoá" với "nằm ngoài cửa sổ".
 - Mỗi lượt quét đọc toàn bộ đơn trong cửa sổ. Nếu số đơn lớn, nên tăng chu kỳ hoặc giảm số ngày.
+
+## Theo dõi khách xác nhận đơn hàng
+
+Mở **CRM khách hàng → Theo dõi Đơn hàng**. Tab hiển thị mỗi lượt gửi phiếu đến một nhóm Zalo đã liên kết từ khi tính năng được bật. Trạng thái Cloudify và trạng thái khách xác nhận được hiển thị riêng. Khi mở một đơn, CRM gọi trực tiếp Cloudify theo mã đơn để đọc trạng thái, chi tiết sản phẩm, chiết khấu và tổng tiền hiện tại.
+
+Khách có thể dùng **Trả lời** trên phiếu trong nhóm rồi nhắn “OK”, “duyệt”, hoặc ghi rõ mã đơn trong tin nhắn. Với tin nhắn không có trích dẫn hay mã đơn, bot chỉ ghi nhận khi lịch sử GMF cho thấy khách nhắn ngay sau phiếu. Tài khoản Zalo của khách cần được duyệt trong CRM, có trong nhóm và được gắn đúng mã khách hàng. LLM của tenant phân loại câu xác nhận tự nhiên. CRM lưu nguyên văn, người gửi, thời điểm và mã tin nhắn từ webhook đã xác thực.
+
+### Ảnh chụp hội thoại Zalo
+
+CRM có thể lưu ảnh PNG do Cloudflare Browser Run chụp trực tiếp trên **Zalo OA Manager**. Việc chụp chạy sau khi lưu xác nhận. Nhân viên có quyền sửa Cài đặt cũng có thể đính kèm ảnh chụp PNG hoặc JPEG tối đa 5 MiB. CRM giữ nguyên tệp đầu tiên được lưu.
+
+Để bật Cloudflare trên máy chạy worker CQA:
+
+1. Tạo token Cloudflare cấp quyền **Browser Run - Edit** cho tài khoản chạy trình duyệt. Cấu hình `ZALO_ORDER_SCREENSHOT_CF_ACCOUNT_ID` và `ZALO_ORDER_SCREENSHOT_CF_API_TOKEN` trong môi trường worker.
+2. Đăng nhập [Zalo OA Manager](https://oa.zalo.me/chatv2) bằng một trình duyệt riêng có quyền đọc nhóm của OA cần theo dõi. Xuất Playwright storage state bằng `context.storageState({ indexedDB: true })`. Dùng phiên riêng của OA, vì trạng thái này chứa thông tin đăng nhập.
+3. Cấu hình biến môi trường bí mật `ZALO_ORDER_SCREENSHOT_PROFILE` dưới dạng JSON một dòng. Điền `tenant_id` và `channel_id` đúng với kênh Zalo OA trong CRM. Điền `zalo_group_ids` bằng danh sách ID nhóm Zalo được phép chụp, chỉ gồm nhóm thử nghiệm trong lần chạy đầu tiên. Đặt đối tượng Playwright storage state vào `storage_state`. Trong phiên Zalo thật, kiểm tra và điền các trường selector sau.
+
+   | Trường | Phần tử cần chọn |
+   | --- | --- |
+   | `open_group_selector` | Nút mở nhóm, chứa placeholder `{group_id}`. |
+   | `active_conversation_selector` | Khung hội thoại đang mở, chứa placeholder `{group_id}`. |
+   | `message_selector` | Bong bóng tin nhắn trong khung chat, chứa placeholder `{message_id}`. |
+
+   Dùng selector khớp chính xác ID mà Zalo API trả về, chẳng hạn cấu trúc `[data-…="{message_id}"]` với tên thuộc tính lấy từ giao diện thật. Tên thuộc tính trên đây chỉ minh họa cú pháp. Hồ sơ cấu hình hiện áp dụng cho một cặp tenant và kênh OA trên mỗi worker.
+4. Khởi động lại worker và kiểm tra bằng một đơn thử gửi đến nhóm thử nghiệm. Kiểm tra ID hai bong bóng trong OA Manager và xác minh CRM lưu đúng vùng ảnh có phiếu cùng câu xác nhận. Thu hồi hoặc làm mới phiên trình duyệt khi tài khoản đăng xuất hay hết hạn.
+
+Cloudflare nhận trạng thái đăng nhập và xử lý trang Zalo trong trình duyệt từ xa. Hạn chế quyền của tài khoản Zalo dùng để chụp và để các biến cấu hình trong nơi lưu bí mật của hệ thống. Nếu thiếu phiên hợp lệ, thiếu thuộc tính ID trên giao diện, hoặc hai tin nhắn không cùng hiển thị, worker bỏ ảnh và giữ lại xác nhận trong CRM. Xem [Cloudflare Browser Run custom scripts](https://developers.cloudflare.com/browser-run/script/) và [webhook nhóm GMF](https://stc-developers.zdn.vn/docs/v2/official-account/webhook/nhom-chat-gmf/message_webhook).

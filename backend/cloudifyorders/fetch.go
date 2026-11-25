@@ -43,6 +43,14 @@ func (f *cloudifyFetcher) ByCode(code string) ([]map[string]any, error) {
 // NewCloudifyFetcher builds a Fetcher from the tenant's ERP settings (the same
 // erp_api_* keys the chatbot gateway uses).
 func NewCloudifyFetcher(database *gorm.DB, tenantID, encryptionKey string) (Fetcher, error) {
+	fetcher, err := newCloudifyFetcher(database, tenantID, encryptionKey)
+	if err != nil {
+		return nil, err
+	}
+	return fetcher, nil
+}
+
+func newCloudifyFetcher(database *gorm.DB, tenantID, encryptionKey string) (*cloudifyFetcher, error) {
 	var rows []models.AppSetting
 	keys := []string{"erp_api_url", "erp_api_db", "erp_api_username", "erp_api_password"}
 	if err := database.Where("tenant_id = ? AND setting_key IN ?", tenantID, keys).Find(&rows).Error; err != nil {

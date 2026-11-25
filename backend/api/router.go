@@ -290,6 +290,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.DELETE("/zalo-whitelist/:id", middleware.RequireRole("owner", "admin"), handlers.DeleteZaloWhitelist)
 
 			// CRM & GMF Routes
+			tenant.GET("/crm/order-tracking", middleware.RequirePermission("settings", "r"), handlers.ListCRMOrderTracking)
+			tenant.GET("/crm/order-tracking/:id", middleware.RequirePermission("settings", "r"), handlers.GetCRMTrackedOrder(cfg))
+			tenant.GET("/crm/order-tracking/:id/evidence", middleware.RequirePermission("settings", "r"), handlers.GetCRMOrderConfirmationEvidence)
+			tenant.POST("/crm/order-tracking/:id/evidence", middleware.RequirePermission("settings", "w"), handlers.UploadCRMOrderConfirmationEvidence)
 			tenant.GET("/crm/groups", handlers.ListCRMGroups)
 			tenant.POST("/crm/groups", middleware.RequireRole("owner", "admin"), handlers.CreateCRMGroup)
 			tenant.PUT("/crm/groups/:id", middleware.RequireRole("owner", "admin"), handlers.UpdateCRMGroup)
