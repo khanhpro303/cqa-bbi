@@ -847,7 +847,6 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 	if len(slim) == 0 && hasVariantAttribute(color, size, brand) {
 		if resolved := engine.RealParentOf(resolveParentMaCha(ctx, tenantID, parentCode, brand)); resolved != "" && !strings.EqualFold(resolved, parentCode) {
 			effectiveParent = resolved
-			response["resolved_parent"] = resolved
 			resolvedVariants, resolvedErr := searchVariantsByAttributes(ctx, tenantID, effectiveParent, color, size, brand, limit, scopes...)
 			if resolvedErr != nil {
 				log.Printf("[erp_query] variant search after parent resolve error: %v", resolvedErr)
@@ -855,6 +854,7 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 				resolvedSlim := slimVariantsForLLM(withoutDKCopies(filterProductsByBrands(filterProductsByGroups(resolvedVariants, productGroups), allowedBrands, allBrands)))
 				if len(resolvedSlim) > 0 {
 					slim = resolvedSlim
+					response["resolved_parent"] = resolved
 					response["data"] = resolvedSlim
 					response["count"] = len(resolvedSlim)
 					response["source"] = "astradb_cache_variants_resolved"
@@ -894,6 +894,9 @@ func buildVariantResponse(ctx context.Context, tenantID, parentCode, color, size
 			log.Printf("[erp_query] variant fallback lookup error: %v", allErr)
 		} else {
 			allowed := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(allVariants, productGroups), allowedBrands, allBrands))
+			if len(allowed) > 0 && effectiveParent != parentCode {
+				response["resolved_parent"] = effectiveParent
+			}
 			availColors, availSizes, availBrands := collectAvailableAttributes(allowed)
 
 			matchedColor, matchedSize, matchedBrand, matchErr := fuzzyMatchAttributesWithLLM(

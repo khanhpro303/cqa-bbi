@@ -62,3 +62,17 @@ func TestSelectSystemPrompt(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeLangflowReply(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"No relevant supporting sources were found for that request.", botEmptyAnswerMessage},
+		{"  NO RELEVANT SUPPORTING SOURCES WERE FOUND FOR THAT REQUEST\n", botEmptyAnswerMessage},
+		{"Dạ mẫu này hiện hết hàng ạ.", "Dạ mẫu này hiện hết hàng ạ."},
+		{"[RICH_MESSAGE_SENT]", "[RICH_MESSAGE_SENT]"},
+		{"Here is the quote: No relevant supporting sources were found for that request.", "Here is the quote: No relevant supporting sources were found for that request."},
+	} {
+		if got := normalizeLangflowReply(tc.input); got != tc.want {
+			t.Errorf("normalizeLangflowReply(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}

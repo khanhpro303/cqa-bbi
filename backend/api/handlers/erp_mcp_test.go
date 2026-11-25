@@ -194,3 +194,73 @@ func TestERPMCPWarehouseAndPermission(t *testing.T) {
 		t.Errorf("unexpected tool list: %d %s", discovery.Code, discovery.Body.String())
 	}
 }
+
+func TestERPMCPWarehouseScopedMiss(t *testing.T) {
+	_, calls := setupWarehouseFixture(t)
+	permission, err := engine.SignPermissionToken(engine.GroupPermissionContext{
+		TenantID: stockFixtureTenant, AgentType: "public", ZaloUserID: "fixture-zalo",
+		Groups: []engine.GroupPermission{{GroupID: "fixture-group", Resources: []engine.ResourcePermission{
+			{Resource: "inventory", IsEnabled: true, ScopeType: "own", ProductGroups: []string{"giày"}},
+		}}},
+	}, stockFixtureSigningKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.POST("/mcp/erp/:tenantId", ERPMCP)
+	request := httptest.NewRequest(http.MethodPost, "/mcp/erp/"+stockFixtureTenant, strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inventory_by_sku","arguments":{"sku":"SP457996"}}}`,
+	))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Agent-Token", "fixture-public-token")
+	request.Header.Set("X-Permission-Token", permission)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	var response struct {
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct{ Text string }
+		}
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || recorder.Code != http.StatusOK || response.Result.IsError || len(response.Result.Content) != 1 {
+		t.Fatalf("expected a successful scoped miss, got %d %s", recorder.Code, recorder.Body.String())
+	}
+	body := response.Result.Content[0].Text
+	if !strings.Contains(body, `"lookup_outcome":"no_visible_match"`) || !strings.Contains(body, `"data":[]`) ||
+		!strings.Contains(body, "chưa xác nhận được tồn kho") || strings.Contains(body, "SP457996") || strings.Contains(body, "Bulldog") {
+		t.Errorf("unexpected scoped-miss payload: %s", body)
+	}
+	if *calls != 0 {
+		t.Errorf("queried live stock %d times for an excluded SKU", *calls)
+	}
+}
+
+func TestDescribeERPProductLookup(t *testing.T) {
+	for _, tc := range []struct {
+		name, resource, body, outcome string
+	}{
+		{"catalog miss", "products", `{"status":"success","data":[],"count":0,"parent_codes":[],"source":"astradb_cache"}`, "no_visible_match"},
+		{"variant miss", "product_variants", `{"status":"success","data":[],"count":0,"available_colors":[],"resolved_parent":"internal-parent"}`, "no_visible_match"},
+		{"stock miss", "inventory", `{"status":"success","data":[],"count":0}`, "no_visible_match"},
+		{"zero stock", "inventory", `{"status":"success","data":[{"ton_kho":0}],"count":1}`, ""},
+		{"variant options", "product_variants", `{"status":"success","data":[],"count":0,"available_sizes":["L"]}`, ""},
+		{"rich picker", "inventory", `{"status":"success","data":[],"count":0,"is_inventory_rich":true}`, ""},
+		{"other ERP resource", "orders", `{"status":"success","data":[],"count":0}`, ""},
+		{"access denied", "inventory", `{"error":"forbidden_scope"}`, ""},
+		{"no data field", "inventory", `{"status":"success","count":0}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := string(describeERPProductLookup(tc.resource, []byte(tc.body)))
+			if tc.outcome == "" {
+				if got != tc.body {
+					t.Errorf("unexpected change: %s", got)
+				}
+				return
+			}
+			if !strings.Contains(got, `"lookup_outcome":"`+tc.outcome+`"`) || !strings.Contains(got, `"data":[]`) ||
+				!strings.Contains(got, `"customer_message":`) || strings.Contains(got, "internal-parent") {
+				t.Errorf("unexpected lookup result: %s", got)
+			}
+		})
+	}
+}

@@ -210,7 +210,7 @@ func selectSystemPrompt(agentType, publicPrompt, internalPrompt string) string {
 
 const (
 	botUnavailableMessage = "Dạ hệ thống tra cứu đang bận nên em chưa trả lời được câu này. Anh/chị vui lòng nhắn lại sau ít phút giúp em ạ."
-	botEmptyAnswerMessage = "Dạ em chưa tìm được câu trả lời phù hợp. Anh/chị nói rõ hơn giúp em (ví dụ mã sản phẩm, màu, size) nhé."
+	botEmptyAnswerMessage = "Dạ em chưa có đủ thông tin để xác nhận câu này. Anh/chị có thể hỏi em câu khác hoặc liên hệ nhân viên phụ trách để được hỗ trợ ạ."
 	botOutOfScopeMessage  = "Dạ em chưa thể hỗ trợ câu hỏi này. Anh/chị có thể hỏi em câu khác nhé."
 	// caseRecordedReply replaces a reply that was nothing but a ticket number.
 	// It promises nothing: whether staff were told is not known here.
@@ -220,7 +220,21 @@ const (
 	handoverNoStaffMessage       = "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Anh/chị vui lòng nhắn trực tiếp cho nhân viên phụ trách để được hỗ trợ ngay giúp em nhé ạ!"
 )
 
-const langflowUnansweredInstruction = `Nếu câu hỏi ngoài phạm vi hỗ trợ hoặc dữ liệu được phép tra cứu không đủ để trả lời, hãy nói ngắn gọn rằng em chưa thể trả lời câu hỏi này và mời người dùng hỏi tiếp. Chỉ nói em không được phép trả lời khi công cụ báo từ chối quyền rõ ràng. Khi kết quả tra cứu rỗng, không suy đoán nguyên nhân và không lấy dữ liệu từ nguồn khác để vượt phạm vi quyền. Giữ cuộc trò chuyện mở để người dùng hỏi tiếp.`
+const langflowUnansweredInstruction = `QUY TẮC TRẢ LỜI KHI THIẾU DỮ LIỆU
+Áp dụng các quy tắc dưới đây nếu hướng dẫn khác trong prompt có nội dung mâu thuẫn. Trả lời khách bằng ngôn ngữ họ đang dùng, dùng tiếng Việt cho hội thoại tiếng Việt.
+- Tra giá, mã sản phẩm và tồn kho bằng ERP. Với câu hỏi nối tiếp, giữ đúng sản phẩm, màu và size đã nêu. Khi khách chỉ hỏi còn hay hết, trả lời còn/hết nếu ERP xác nhận tồn của đúng sản phẩm và loại tồn khách đang hỏi. Số tồn 0 có dữ liệu khác với kết quả rỗng hoặc thiếu trường tồn.
+- Khi công cụ sản phẩm hoặc tồn kho của ERP trả lookup_outcome=no_visible_match, hoặc trả data rỗng với truy vấn có tên/mã và không có lựa chọn hay thông báo đã gửi qua Zalo, kết thúc tra cứu mục đó. Diễn đạt customer_message theo điều khách hỏi, hoặc nói ngắn gọn rằng em chưa xác nhận được từ dữ liệu hiện có và có thể hướng khách hỏi nhân viên phụ trách. Không kết luận sản phẩm không tồn tại, sai mã hay hết hàng. Không yêu cầu khách gửi lại mã, ảnh, màu hoặc size để giải quyết kết quả rỗng này. Không gọi search_knowledge, Astra, SQL hay nguồn khác để tìm lại thông tin ERP cho mục đó.
+- Khi tra sản phẩm, chỉ hỏi bổ sung nếu còn thiếu thông tin nhận diện hoặc ERP trả lựa chọn hợp lệ cần khách chọn. Tiếp tục xử lý các câu hỏi khác trong cùng tin nhắn theo đúng nguồn của từng câu hỏi. Chỉ nói về giới hạn quyền khi công cụ trả lỗi từ chối quyền rõ ràng. Nếu công cụ báo lỗi tạm thời, nói chưa tra được và mời thử lại sau.`
+
+// Some saved flow prompts still return this standalone fallback. Do not let
+// older prompt wording reach Zalo as an English error in a Vietnamese bot.
+func normalizeLangflowReply(reply string) string {
+	const legacyNoSources = "No relevant supporting sources were found for that request"
+	if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(reply), "."), legacyNoSources) {
+		return botEmptyAnswerMessage
+	}
+	return reply
+}
 
 // sendChatReply sends text into the chat the message came from: the Zalo group
 // when there is one, otherwise the 1:1 thread.
@@ -1248,9 +1262,6 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if groupAssistant {
 			systemPromptToUse = appendGroupAssistantContext(matchedChannel.TenantID, systemPromptToUse)
 		}
-		if systemPromptToUse != "" {
-			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
-		}
 
 		// A customer who sits in someone else's Zalo group without being a CRM
 		// member of it keeps their own permissions. The group's permissions
@@ -1279,6 +1290,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// A guest's reply goes to the whole group: their own cases (and
 			// staff updates on them) stay out of the prompt.
 			systemPromptToUse = appendComplaintContext(ctx, matchedChannel.TenantID, matchedChannel.ID, caseSubjectType, caseSubjectID, customerCode, !groupGuest, systemPromptToUse)
+		}
+		if systemPromptToUse != "" {
+			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
 		}
 
 		// Resolve a bare-number reply ("1"/"2"/"3") against the most recently
@@ -1879,7 +1893,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] langflow error (will retry) sender=%s flow=%s: %v", payload.Sender.ID, flowIDToUse, err)
 			return fmt.Errorf("langflow error: %w", err)
 		}
-		replyText := lfRes.Text
+		replyText := normalizeLangflowReply(lfRes.Text)
 		if groupAssistant {
 			markGroupLinesSeen(ctx, sessionKey, unseenGroupRaw)
 		}
