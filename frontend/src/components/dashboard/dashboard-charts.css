@@ -1,0 +1,51 @@
+.dashboard-chart.v-card {
+  --chart-accent: #365bc4;
+  --chart-tint: rgba(54, 91, 196, 0.09);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  padding: clamp(14px, 2vw, 22px);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.09);
+}
+
+.dashboard-chart__heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.dashboard-chart__heading h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.dashboard-chart__icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--chart-tint);
+  color: var(--chart-accent);
+}
+
+.dashboard-chart__state {
+  display: grid;
+  flex: 1;
+  min-height: 240px;
+  justify-items: center;
+  align-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+  font-size: 0.875rem;
+  color: rgba(var(--v-theme-on-surface), 0.68);
+}
+
+.v-theme--dark .dashboard-chart.v-card {
+  --chart-accent: #aac4ff;
+  --chart-tint: rgba(144, 180, 255, 0.13);
+}
