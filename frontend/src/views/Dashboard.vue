@@ -215,7 +215,7 @@
             </thead>
             <tbody>
               <tr v-for="day in costByDay.slice(0, 7)" :key="day.date">
-                <td>{{ formatDisplayDate(day.date) }}</td>
+                <td>{{ formatDashboardDate(day.date, true) }}</td>
                 <td class="text-right text-caption">{{ (day.input_tokens + day.output_tokens).toLocaleString() }}</td>
                 <td class="text-right">{{ Math.round(day.total_cost * exchangeRate).toLocaleString('vi-VN') }}đ</td>
               </tr>
@@ -246,22 +246,27 @@
 
     <!-- Charts Row -->
     <v-row class="mt-4">
-      <v-col cols="12" md="6">
-        <v-card class="pa-4 h-100 d-flex flex-column">
-          <div class="text-subtitle-1 font-weight-bold mb-3 flex-shrink-0">
-            <v-icon start size="small" color="primary">mdi-message-text-clock</v-icon>
-            {{ $t('messages_by_day') }}
+      <v-col cols="12" lg="6">
+        <v-card class="dashboard-chart">
+          <div class="dashboard-chart__heading">
+            <span class="dashboard-chart__icon" aria-hidden="true">
+              <v-icon size="20">mdi-message-text-clock-outline</v-icon>
+            </span>
+            <h2>{{ $t('messages_by_day') }}</h2>
           </div>
-          <div v-if="messagesChartData.labels.length" class="flex-grow-1" style="position: relative; min-height: 250px">
-            <Line :data="messagesChartData" :options="chartOptions" style="height: 100%" />
-          </div>
-          <div v-else class="text-center text-grey pa-4 flex-grow-1 d-flex flex-column justify-center align-center" style="min-height: 250px">
-            <v-icon size="40" color="grey-lighten-2" class="mb-2">mdi-chart-box-outline</v-icon>
-            <div>{{ $t('no_data') }}</div>
+          <DailyTrendChart
+            v-if="messagesByDay.length"
+            :label="$t('messages_by_day')"
+            :dates="messageDates"
+            :series="messageSeries"
+          />
+          <div v-else class="dashboard-chart__state">
+            <v-icon size="28" aria-hidden="true">mdi-chart-box-outline</v-icon>
+            <span>{{ $t('no_data') }}</span>
           </div>
         </v-card>
       </v-col>
-      <v-col cols="12" md="6">
+      <v-col cols="12" lg="6">
         <AiCostCarousel :tenant-id="tenantId" :exchange-rate="exchangeRate" />
       </v-col>
     </v-row>
@@ -272,15 +277,14 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Line } from 'vue-chartjs'
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend } from 'chart.js'
 import api from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useChatbotStore } from '../stores/chatbot'
 import AiCostCarousel from '../components/dashboard/AiCostCarousel.vue'
 import BannerCarousel from '../components/dashboard/BannerCarousel.vue'
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Filler, Legend)
+import DailyTrendChart from '../components/dashboard/DailyTrendChart.vue'
+import { formatDashboardDate } from '../components/dashboard/chartDate'
+import '../components/dashboard/dashboard-charts.css'
 
 const route = useRoute()
 const router = useRouter()
@@ -407,55 +411,12 @@ function applyPreset(preset: string) {
   loadDashboard()
 }
 
-function formatDisplayDate(dateStr: string) {
-  if (!dateStr) return ''
-  // Handle "2026-03-21" or "2026-03-21T00:00:00Z"
-  const parts = dateStr.split('T')[0].split('-')
-  if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`
-  return dateStr
-}
-
-function formatChartDate(dateStr: string) {
-  if (!dateStr) return ''
-  const parts = dateStr.split('T')[0].split('-')
-  if (parts.length === 3) return `${parseInt(parts[2])}/${parseInt(parts[1])}`
-  return dateStr
-}
-
-const messagesChartData = computed(() => ({
-  labels: messagesByDay.value.map(d => formatChartDate(d.date)),
-  datasets: [
-    {
-      label: t('total_messages'),
-      data: messagesByDay.value.map(d => d.count),
-      borderColor: '#5C6BC0',
-      backgroundColor: 'rgba(92,107,192,0.1)',
-      fill: false,
-      tension: 0.3,
-    },
-    {
-      label: 'Cuộc chat',
-      data: messagesByDay.value.map(d => d.chat_count || 0),
-      borderColor: '#66BB6A',
-      fill: false,
-      tension: 0.3,
-    },
-    {
-      label: 'Trả lời NV',
-      data: messagesByDay.value.map(d => d.reply_count || 0),
-      borderColor: '#FFA726',
-      fill: false,
-      tension: 0.3,
-    },
-  ],
-}))
-
-const chartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: { legend: { display: true, position: 'bottom' as const } },
-  scales: { y: { beginAtZero: true } },
-}
+const messageDates = computed(() => messagesByDay.value.map(day => day.date))
+const messageSeries = computed(() => [
+  { label: t('total_messages'), values: messagesByDay.value.map(day => day.count) },
+  { label: t('dashboard_chat_count'), values: messagesByDay.value.map(day => day.chat_count || 0) },
+  { label: t('dashboard_staff_replies'), values: messagesByDay.value.map(day => day.reply_count || 0) },
+])
 
 async function loadDashboard() {
   try {

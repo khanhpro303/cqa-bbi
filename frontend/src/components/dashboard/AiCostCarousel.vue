@@ -1,294 +1,314 @@
 <template>
-  <v-card class="pa-4 h-100 d-flex flex-column">
-    <!-- Header + filters -->
-    <div class="d-flex flex-wrap align-center justify-space-between mb-2 flex-shrink-0 ga-2">
-      <div class="text-subtitle-1 font-weight-bold">
-        <v-icon start size="small" color="warning">mdi-chart-multiple</v-icon>
-        {{ slideTitle }}
-      </div>
-      <div class="d-flex flex-wrap ga-3 align-center">
-        <div class="d-flex align-center">
-          <span class="text-caption text-grey mr-1">{{ $t('cost_source') }}:</span>
-          <v-chip-group v-model="source" mandatory selected-class="text-warning" density="comfortable">
-            <v-chip size="x-small" value="all" variant="tonal">{{ $t('source_all') }}</v-chip>
-            <v-chip size="x-small" value="job" variant="tonal">{{ $t('source_job') }}</v-chip>
-            <v-chip size="x-small" value="chatbot" variant="tonal">{{ $t('source_chatbot') }}</v-chip>
-          </v-chip-group>
-        </div>
-        <div class="d-flex align-center">
-          <span class="text-caption text-grey mr-1">{{ $t('cost_segment') }}:</span>
-          <v-chip-group v-model="segment" mandatory selected-class="text-warning" density="comfortable">
-            <v-chip size="x-small" value="all" variant="tonal">{{ $t('segment_all') }}</v-chip>
-            <v-chip size="x-small" value="public" variant="tonal">{{ $t('segment_public') }}</v-chip>
-            <v-chip size="x-small" value="private" variant="tonal">{{ $t('segment_private') }}</v-chip>
-          </v-chip-group>
-        </div>
-      </div>
+  <v-card class="dashboard-chart dashboard-chart--cost">
+    <div class="dashboard-chart__heading">
+      <span class="dashboard-chart__icon" aria-hidden="true">
+        <v-icon size="20">mdi-chart-line</v-icon>
+      </span>
+      <h2>{{ title }}</h2>
+      <span class="cost-currency">{{ locale === 'vi' ? 'VNĐ' : 'VND' }}</span>
     </div>
 
-    <!-- Segmented progress: active slide = deep orange, others = pale orange -->
-    <div class="d-flex ga-1 mb-3 flex-shrink-0">
+    <div class="cost-views" role="group" :aria-label="$t('ai_cost')">
       <button
-        v-for="(s, i) in slides"
-        :key="s.key"
+        v-for="(option, key) in views"
+        :key="key"
         type="button"
-        class="cost-seg"
-        :class="{ 'cost-seg--active': i === slide }"
-        :aria-label="s.title"
-        @click="slide = i"
-      />
+        :aria-pressed="view === key"
+        @click="view = key"
+      >
+        {{ $t(option.label) }}
+      </button>
     </div>
 
-    <!-- Auto-rotating carousel of chart topics; pauses on hover -->
-    <div
-      class="flex-grow-1"
-      style="min-height: 270px"
-      @mouseenter="paused = true"
-      @mouseleave="paused = false"
-    >
-      <v-carousel
-        v-model="slide"
-        :cycle="!paused"
-        :interval="6000"
-        height="270"
-        hide-delimiter-background
-        show-arrows="hover"
-      >
-        <v-carousel-item v-for="(s, i) in slides" :key="s.key" :value="i">
-          <div class="px-2 pt-2" style="height: 240px">
-            <component
-              :is="s.component"
-              v-if="s.hasData"
-              :data="s.data"
-              :options="s.options"
-            />
-            <div
-              v-else
-              class="text-center text-grey pa-4 h-100 d-flex flex-column justify-center align-center"
-            >
-              <v-icon size="40" color="grey-lighten-2" class="mb-2">mdi-chart-box-outline</v-icon>
-              <div>{{ $t('no_data') }}</div>
-            </div>
-          </div>
-        </v-carousel-item>
-      </v-carousel>
+    <div class="cost-filters">
+      <div class="cost-filter" role="group" :aria-label="$t('cost_source')">
+        <span class="cost-filter__label">{{ $t('cost_source') }}</span>
+        <div class="cost-filter__options">
+          <button
+            v-for="(label, key) in sources"
+            :key="key"
+            type="button"
+            :aria-pressed="source === key"
+            @click="source = key"
+          >
+            {{ $t(label) }}
+          </button>
+        </div>
+      </div>
+      <div class="cost-filter" role="group" :aria-label="$t('cost_segment')">
+        <span class="cost-filter__label">{{ $t('cost_segment') }}</span>
+        <div class="cost-filter__options">
+          <button
+            v-for="(label, key) in segments"
+            :key="key"
+            type="button"
+            :aria-pressed="segment === key"
+            @click="segment = key"
+          >
+            {{ $t(label) }}
+          </button>
+        </div>
+      </div>
     </div>
+
+    <div v-if="loading" class="dashboard-chart__state" role="status">
+      <v-progress-circular indeterminate size="24" width="2" />
+      <span>{{ $t('loading') }}</span>
+    </div>
+    <div v-else-if="activeRows === null" class="dashboard-chart__state" role="status">
+      <span>{{ $t('dashboard_chart_load_error') }}</span>
+      <v-btn size="small" variant="tonal" @click="reload++">{{ $t('retry') }}</v-btn>
+    </div>
+    <div v-else-if="!activeRows.length" class="dashboard-chart__state" role="status">
+      <v-icon size="28" aria-hidden="true">mdi-chart-box-outline</v-icon>
+      <span>{{ $t(view === 'employee' && source === 'job' ? 'cost_employee_chatbot_only' : 'no_data') }}</span>
+    </div>
+    <DailyTrendChart v-else-if="view === 'day'" :label="title" :dates="dates" :series="series" currency />
+    <ol v-else class="cost-ranking" role="list" :aria-label="title" tabindex="0">
+      <li v-for="(row, index) in rankedRows" :key="index" class="cost-ranking__row">
+        <div class="cost-ranking__caption">
+          <span class="cost-ranking__name">{{ row.label }}</span>
+          <strong>{{ currency.format(row.cost) }}</strong>
+        </div>
+        <div class="cost-ranking__track" aria-hidden="true">
+          <span :style="{ width: row.share + '%' }" />
+        </div>
+      </li>
+    </ol>
   </v-card>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Line, Bar } from 'vue-chartjs'
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  Title,
-  Tooltip,
-  Filler,
-  Legend,
-} from 'chart.js'
 import api from '../../api'
-
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  Title,
-  Tooltip,
-  Filler,
-  Legend
-)
+import DailyTrendChart from './DailyTrendChart.vue'
 
 interface CostRow {
   label: string
   total_cost: number
-  input_tokens: number
-  output_tokens: number
-  call_count: number
 }
 
 const props = withDefaults(
   defineProps<{ tenantId: string; exchangeRate?: number }>(),
-  { exchangeRate: 26000 }
+  { exchangeRate: 26000 },
 )
 
-const { t } = useI18n()
+const views = {
+  day: { label: 'cost_view_day', title: 'cost_by_day_chart' },
+  channel: { label: 'cost_view_channel', title: 'cost_by_channel_chart' },
+  employee: { label: 'cost_view_employee', title: 'cost_by_employee_chart' },
+} as const
 
-const source = ref<'all' | 'job' | 'chatbot'>('all')
-const segment = ref<'all' | 'public' | 'private'>('all')
-const slide = ref(0)
-const paused = ref(false)
+const sources = { all: 'source_all', job: 'source_job', chatbot: 'source_chatbot' } as const
+const segments = { all: 'segment_all', public: 'segment_public', private: 'segment_private' } as const
 
-const dayRows = ref<CostRow[]>([])
-const channelRows = ref<CostRow[]>([])
-const employeeRows = ref<CostRow[]>([])
+type GroupBy = keyof typeof views
+const groupings = Object.keys(views) as GroupBy[]
+const { t, locale } = useI18n()
 
-const ORANGE = '#FFA726'
+const view = ref<GroupBy>('day')
+const source = ref<keyof typeof sources>('all')
+const segment = ref<keyof typeof segments>('all')
+const loading = ref(true)
+const reload = ref(0)
+const rows = reactive<Record<GroupBy, CostRow[] | null>>({ day: [], channel: [], employee: [] })
+
+const title = computed(() => t(views[view.value].title))
+const currency = computed(() => new Intl.NumberFormat(locale.value, { style: 'currency', currency: 'VND' }))
+const activeRows = computed(() => rows[view.value])
+const dates = computed(() => rows.day?.map(row => row.label) ?? [])
+const series = computed(() => [{ label: t('cost'), values: rows.day?.map(row => toVnd(row.total_cost)) ?? [] }])
+const rankedRows = computed(() => {
+  const entries = (activeRows.value ?? []).map(row => ({ label: row.label, cost: toVnd(row.total_cost) }))
+  const max = entries.reduce((highest, row) => Math.max(highest, row.cost), 0)
+
+  return entries.map(row => ({ ...row, share: max > 0 ? Math.max(0, row.cost) / max * 100 : 0 }))
+})
 
 function toVnd(usd: number): number {
   return Math.round(usd * (props.exchangeRate || 26000))
 }
 
-function formatDay(d: string): string {
-  // label arrives as YYYY-MM-DD; show DD/MM
-  const parts = d.split('-')
-  return parts.length === 3 ? `${parts[2]}/${parts[1]}` : d
-}
+watch(
+  [() => props.tenantId, source, segment, reload],
+  async ([tenantId, selectedSource, selectedSegment], _, onCleanup) => {
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+    loading.value = true
 
-const tooltipVnd = {
-  callbacks: {
-    label: (ctx: { parsed: { x?: number | null; y?: number | null } }) => {
-      const v = ctx.parsed.y ?? ctx.parsed.x ?? 0
-      return ` ${v.toLocaleString('vi-VN')}đ`
-    },
-  },
-}
+    const results = await Promise.allSettled(groupings.map(groupBy => api.get<{ rows?: CostRow[] | null }>(
+      `/tenants/${tenantId}/analytics/ai-cost`,
+      { params: { group_by: groupBy, source: selectedSource, segment: selectedSegment }, signal: controller.signal },
+    )))
+    if (controller.signal.aborted) return
 
-const dayData = computed(() => ({
-  labels: dayRows.value.map((r) => formatDay(r.label)),
-  datasets: [
-    {
-      label: t('cost'),
-      data: dayRows.value.map((r) => toVnd(r.total_cost)),
-      borderColor: ORANGE,
-      backgroundColor: 'rgba(255,167,38,0.12)',
-      fill: true,
-      tension: 0.3,
-    },
-  ],
-}))
-
-const channelData = computed(() => ({
-  labels: channelRows.value.map((r) => r.label),
-  datasets: [
-    {
-      label: t('cost'),
-      data: channelRows.value.map((r) => toVnd(r.total_cost)),
-      backgroundColor: '#42A5F5',
-      borderRadius: 6,
-    },
-  ],
-}))
-
-const employeeData = computed(() => ({
-  labels: employeeRows.value.map((r) => r.label),
-  datasets: [
-    {
-      label: t('cost'),
-      data: employeeRows.value.map((r) => toVnd(r.total_cost)),
-      backgroundColor: '#66BB6A',
-      borderRadius: 6,
-    },
-  ],
-}))
-
-const lineOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: { legend: { display: false }, tooltip: tooltipVnd },
-  scales: { y: { beginAtZero: true } },
-}
-
-const barOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: { legend: { display: false }, tooltip: tooltipVnd },
-  scales: { y: { beginAtZero: true } },
-}
-
-// Horizontal bars read better for an employee leaderboard.
-const employeeOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  indexAxis: 'y' as const,
-  plugins: { legend: { display: false }, tooltip: tooltipVnd },
-  scales: { x: { beginAtZero: true } },
-}
-
-const slides = computed(() => [
-  {
-    key: 'day',
-    title: t('cost_by_day_chart'),
-    component: Line,
-    data: dayData.value,
-    options: lineOptions,
-    hasData: dayRows.value.length > 0,
-  },
-  {
-    key: 'channel',
-    title: t('cost_by_channel_chart'),
-    component: Bar,
-    data: channelData.value,
-    options: barOptions,
-    hasData: channelRows.value.length > 0,
-  },
-  {
-    key: 'employee',
-    title: t('cost_by_employee_chart'),
-    component: Bar,
-    data: employeeData.value,
-    options: employeeOptions,
-    hasData: employeeRows.value.length > 0,
-  },
-])
-
-const slideTitle = computed(() => slides.value[slide.value]?.title ?? t('ai_cost'))
-
-async function fetchGroup(groupBy: 'day' | 'channel' | 'employee'): Promise<CostRow[]> {
-  try {
-    const { data } = await api.get(`/tenants/${props.tenantId}/analytics/ai-cost`, {
-      params: { group_by: groupBy, source: source.value, segment: segment.value },
+    results.forEach((result, index) => {
+      rows[groupings[index]] = result.status === 'fulfilled' ? result.value.data?.rows ?? [] : null
     })
-    return (data?.rows as CostRow[]) || []
-  } catch {
-    return []
-  }
-}
-
-async function loadAll() {
-  const [day, channel, employee] = await Promise.all([
-    fetchGroup('day'),
-    fetchGroup('channel'),
-    fetchGroup('employee'),
-  ])
-  dayRows.value = day
-  channelRows.value = channel
-  employeeRows.value = employee
-}
-
-watch([source, segment], loadAll)
-onMounted(loadAll)
+    loading.value = false
+  },
+  { immediate: true },
+)
 </script>
 
 <style scoped>
-/* Deep orange = active, pale orange = inactive, in step with the slide */
-.cost-seg {
-  flex: 1;
-  height: 4px;
-  padding: 0;
-  border: none;
-  border-radius: 2px;
-  background: rgba(255, 167, 38, 0.22);
-  cursor: pointer;
-  transition: background 0.35s ease;
-}
-.cost-seg--active {
-  background: #ef6c00;
+.dashboard-chart--cost.v-card {
+  --chart-accent: #91420b;
+  --chart-tint: rgba(191, 91, 20, 0.10);
+  --ranking-bar: #c46c31;
 }
 
-/* Bottom delimiter dots inherit the same orange language */
-:deep(.v-carousel__controls__item) {
-  color: rgba(255, 167, 38, 0.35);
-  opacity: 1;
+:global(.v-theme--dark) .dashboard-chart--cost.v-card {
+  --chart-accent: #ffc38c;
+  --chart-tint: rgba(255, 180, 99, 0.14);
+  --ranking-bar: #e0a46e;
 }
-:deep(.v-carousel__controls__item.v-btn--active) {
-  color: #ef6c00;
+
+.cost-currency {
+  margin-inline-start: auto;
+  color: rgba(var(--v-theme-on-surface), 0.68);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.cost-views {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(var(--v-theme-on-surface), 0.05);
+}
+
+.cost-views button,
+.cost-filter__options button {
+  appearance: none;
+  min-height: 34px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.cost-views button {
+  border-radius: 7px;
+}
+
+.cost-views button[aria-pressed='true'] {
+  border-color: rgba(var(--v-theme-on-surface), 0.09);
+  background: rgb(var(--v-theme-surface));
+  color: var(--chart-accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.cost-filters {
+  display: grid;
+  row-gap: 4px;
+  margin: 12px 0 14px;
+}
+
+.cost-filter {
+  display: grid;
+  grid-template-columns: 65px minmax(0, 1fr);
+  gap: 4px 8px;
+}
+
+@media (max-width: 480px) {
+  .cost-filter {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cost-views button {
+    padding-inline: 4px;
+  }
+}
+
+.cost-filter__label {
+  align-self: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.68);
+}
+
+.cost-filter__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cost-filter__options button {
+  border-color: rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 7px;
+  font-weight: 500;
+}
+
+.cost-filter__options button[aria-pressed='true'] {
+  border-color: currentColor;
+  background: var(--chart-tint);
+  color: var(--chart-accent);
+  font-weight: 600;
+}
+
+.cost-views button:hover:not([aria-pressed='true']),
+.cost-filter__options button:hover:not([aria-pressed='true']) {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.cost-views button:focus-visible,
+.cost-filter__options button:focus-visible,
+.cost-ranking:focus-visible {
+  outline: 2px solid var(--chart-accent);
+  outline-offset: 2px;
+}
+
+.cost-ranking {
+  flex: 1;
+  min-height: 240px;
+  max-height: 286px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 3px 6px 3px 0;
+  list-style: none;
+}
+
+.cost-ranking__row + .cost-ranking__row {
+  margin-top: 14px;
+}
+
+.cost-ranking__caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+}
+
+.cost-ranking__name {
+  overflow-wrap: anywhere;
+}
+
+.cost-ranking__caption strong {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-ranking__track {
+  height: 7px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(var(--v-theme-on-surface), 0.07);
+}
+
+.cost-ranking__track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ranking-bar);
 }
 </style>
