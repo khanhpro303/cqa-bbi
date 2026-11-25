@@ -16,4 +16,4 @@ Generation prompt set:
 - Social preview: premium abstract SaaS share-card background using the logo's coral-pink, warm-orange, and near-black palette; translucent rounded panels and connected data lights; quiet center-left copy area; no text or redrawn logo.
 - App icons: minimal square app-icon background using the same palette; near-black quiet center, warm glowing perimeter, safe central logo area; no text or redrawn logo.
 
-Public references use a `?v=1` cache key. Increment it in `frontend/index.html` and `site.webmanifest` whenever a branded bitmap is replaced.
+Public references use a `?v=` cache key. Increment the key wherever the replaced asset is referenced. The sidebar uses `icons/icon-192.png`, and the share card uses the same app icon.

@@ -412,8 +412,9 @@ import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import CampaignWarningBell from '../components/CampaignWarningBell.vue'
 import api from '../api'
-import logoUrl from '../assets/bbi-logo.ico'
 import FacebookAccountManager from '../components/FacebookAccountManager.vue'
+
+const logoUrl = '/assets/brand/icons/icon-192.png?v=2'
 
 const route = useRoute()
 const router = useRouter()
