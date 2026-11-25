@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/db/models"
 )
 
@@ -25,18 +26,16 @@ var zaloScreenshotScript string
 const maxZaloScreenshotBytes = 5 << 20
 
 var screenshotID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+var screenshotOAID = regexp.MustCompile(`^[0-9]{1,30}$`)
 var cloudflareAccountID = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)
 
-// ZaloScreenshotProfile is installation-specific. Its selectors must reference
-// actual Zalo OA Manager DOM attributes and match a unique live element.
+// ZaloScreenshotProfile scopes an authenticated OA Manager browser to selected groups.
 type ZaloScreenshotProfile struct {
-	TenantID                   string          `json:"tenant_id"`
-	ChannelID                  string          `json:"channel_id"`
-	ZaloGroupIDs               []string        `json:"zalo_group_ids"`
-	OpenGroupSelector          string          `json:"open_group_selector"`
-	ActiveConversationSelector string          `json:"active_conversation_selector"`
-	MessageSelector            string          `json:"message_selector"`
-	StorageState               json.RawMessage `json:"storage_state"`
+	TenantID     string          `json:"tenant_id"`
+	ChannelID    string          `json:"channel_id"`
+	ZaloOAID     string          `json:"zalo_oa_id"`
+	ZaloGroupIDs []string        `json:"zalo_group_ids"`
+	StorageState json.RawMessage `json:"storage_state"`
 }
 
 // AllowsGroup keeps Browser Run restricted to groups explicitly enabled for capture.
@@ -61,19 +60,19 @@ func LoadZaloScreenshotProfile(tenantID, channelID string) (ZaloScreenshotProfil
 	if profile.TenantID != tenantID || profile.ChannelID != channelID {
 		return profile, "", "", nil
 	}
-	if len(profile.ZaloGroupIDs) == 0 {
-		return profile, "", "", errors.New("Zalo screenshot profile must specify at least one group")
+	if len(profile.ZaloGroupIDs) == 0 || !screenshotOAID.MatchString(profile.ZaloOAID) {
+		return profile, "", "", errors.New("Zalo screenshot profile must specify a Zalo OA ID and at least one group")
 	}
 	accountID := strings.TrimSpace(os.Getenv("ZALO_ORDER_SCREENSHOT_CF_ACCOUNT_ID"))
 	token := strings.TrimSpace(os.Getenv("ZALO_ORDER_SCREENSHOT_CF_API_TOKEN"))
 	return profile, accountID, token, nil
 }
 
-func CaptureZaloOrderScreenshot(ctx context.Context, profile ZaloScreenshotProfile, accountID, token string, row models.CloudifyOrderConfirmation) ([]byte, error) {
+func CaptureZaloOrderScreenshot(ctx context.Context, profile ZaloScreenshotProfile, accountID, token string, row models.CloudifyOrderConfirmation, evidence channels.GMFOrderEvidence) ([]byte, error) {
 	if !cloudflareAccountID.MatchString(accountID) || token == "" || strings.ContainsAny(token, "\r\n") {
 		return nil, errors.New("invalid Cloudflare Browser Run credentials")
 	}
-	script, err := zaloScreenshotCode(profile, row)
+	script, err := zaloScreenshotCode(profile, row, evidence)
 	if err != nil {
 		return nil, err
 	}
@@ -87,36 +86,31 @@ func CaptureZaloOrderScreenshot(ctx context.Context, profile ZaloScreenshotProfi
 	}, "https://api.cloudflare.com/client/v4/accounts/"+accountID+"/browser-run", token, request)
 }
 
-func zaloScreenshotCode(profile ZaloScreenshotProfile, row models.CloudifyOrderConfirmation) (string, error) {
+func zaloScreenshotCode(profile ZaloScreenshotProfile, row models.CloudifyOrderConfirmation, evidence channels.GMFOrderEvidence) (string, error) {
 	if row.TenantID == "" || row.ChannelID == "" || row.TenantID != profile.TenantID || row.ChannelID != profile.ChannelID {
 		return "", errors.New("Zalo screenshot profile does not match this tenant and channel")
 	}
 	if !profile.AllowsGroup(row.ZaloGroupID) {
 		return "", errors.New("Zalo group is outside the browser screenshot profile")
 	}
-	if !screenshotID.MatchString(row.OutboundMessageID) ||
-		!screenshotID.MatchString(row.MessageID) || row.OutboundMessageID == row.MessageID ||
-		strings.TrimSpace(row.Text) == "" {
-		return "", errors.New("Zalo screenshot is missing the exact group and message identifiers")
+	if !screenshotOAID.MatchString(profile.ZaloOAID) || evidence.SentAtMillis <= 0 ||
+		evidence.ReplyAtMillis <= evidence.SentAtMillis || strings.TrimSpace(row.Text) == "" {
+		return "", errors.New("Zalo screenshot is missing the verified OA or message details")
+	}
+	if evidence.SentType != "photo" && (evidence.SentType != "text" || strings.TrimSpace(evidence.SentText) == "") {
+		return "", errors.New("Zalo screenshot is missing the original order content")
 	}
 	if err := validateZaloStorageState(profile.StorageState); err != nil {
 		return "", err
 	}
-	for _, template := range []struct{ text, placeholder string }{
-		{profile.OpenGroupSelector, "{group_id}"},
-		{profile.ActiveConversationSelector, "{group_id}"},
-		{profile.MessageSelector, "{message_id}"},
-	} {
-		if len(template.text) > 1024 || strings.Count(template.text, template.placeholder) != 1 {
-			return "", errors.New("Zalo screenshot selector must contain its exact identifier placeholder")
-		}
-	}
 	params, err := json.Marshal(map[string]any{
 		"storageState": profile.StorageState,
-		"openGroup":    strings.Replace(profile.OpenGroupSelector, "{group_id}", row.ZaloGroupID, 1),
-		"conversation": strings.Replace(profile.ActiveConversationSelector, "{group_id}", row.ZaloGroupID, 1),
-		"original":     strings.Replace(profile.MessageSelector, "{message_id}", row.OutboundMessageID, 1),
-		"reply":        strings.Replace(profile.MessageSelector, "{message_id}", row.MessageID, 1),
+		"oaID":         profile.ZaloOAID,
+		"groupID":      row.ZaloGroupID,
+		"sentAt":       evidence.SentAtMillis,
+		"replyAt":      evidence.ReplyAtMillis,
+		"sentType":     evidence.SentType,
+		"sentText":     evidence.SentText,
 		"replyText":    strings.TrimSpace(row.Text),
 	})
 	if err != nil {

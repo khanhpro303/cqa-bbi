@@ -78,15 +78,7 @@ CRM có thể lưu ảnh PNG do Cloudflare Browser Run chụp trực tiếp trê
 
 1. Tạo token Cloudflare cấp quyền **Browser Run - Edit** cho tài khoản chạy trình duyệt. Cấu hình `ZALO_ORDER_SCREENSHOT_CF_ACCOUNT_ID` và `ZALO_ORDER_SCREENSHOT_CF_API_TOKEN` trong môi trường worker.
 2. Đăng nhập [Zalo OA Manager](https://oa.zalo.me/chatv2) bằng một trình duyệt riêng có quyền đọc nhóm của OA cần theo dõi. Xuất Playwright storage state bằng `context.storageState({ indexedDB: true })`. Dùng phiên riêng của OA, vì trạng thái này chứa thông tin đăng nhập.
-3. Cấu hình biến môi trường bí mật `ZALO_ORDER_SCREENSHOT_PROFILE` dưới dạng JSON một dòng. Điền `tenant_id` và `channel_id` đúng với kênh Zalo OA trong CRM. Điền `zalo_group_ids` bằng danh sách ID nhóm Zalo được phép chụp, chỉ gồm nhóm thử nghiệm trong lần chạy đầu tiên. Đặt đối tượng Playwright storage state vào `storage_state`. Trong phiên Zalo thật, kiểm tra và điền các trường selector sau.
+3. Cấu hình biến môi trường bí mật `ZALO_ORDER_SCREENSHOT_PROFILE` dưới dạng JSON một dòng. Điền `tenant_id` và `channel_id` đúng với kênh Zalo OA trong CRM, `zalo_oa_id` bằng ID chính thức của OA và `zalo_group_ids` bằng danh sách nhóm được phép chụp. Chỉ cấu hình nhóm thử nghiệm trong lần chạy đầu tiên. Đặt đối tượng Playwright storage state vào `storage_state`.
+4. Áp dụng cấu hình cho worker và kiểm tra bằng một đơn gửi đến nhóm thử nghiệm. Worker tra cứu hai ID tin nhắn trong lịch sử GMF rồi đối chiếu thời điểm và nội dung với giao diện OA Manager trước khi chụp. Thu hồi hoặc làm mới phiên trình duyệt khi tài khoản đăng xuất hay hết hạn.
 
-   | Trường | Phần tử cần chọn |
-   | --- | --- |
-   | `open_group_selector` | Nút mở nhóm, chứa placeholder `{group_id}`. |
-   | `active_conversation_selector` | Khung hội thoại đang mở, chứa placeholder `{group_id}`. |
-   | `message_selector` | Bong bóng tin nhắn trong khung chat, chứa placeholder `{message_id}`. |
-
-   Dùng selector khớp chính xác ID mà Zalo API trả về, chẳng hạn cấu trúc `[data-…="{message_id}"]` với tên thuộc tính lấy từ giao diện thật. Tên thuộc tính trên đây chỉ minh họa cú pháp. Hồ sơ cấu hình hiện áp dụng cho một cặp tenant và kênh OA trên mỗi worker.
-4. Khởi động lại worker và kiểm tra bằng một đơn thử gửi đến nhóm thử nghiệm. Kiểm tra ID hai bong bóng trong OA Manager và xác minh CRM lưu đúng vùng ảnh có phiếu cùng câu xác nhận. Thu hồi hoặc làm mới phiên trình duyệt khi tài khoản đăng xuất hay hết hạn.
-
-Cloudflare nhận trạng thái đăng nhập và xử lý trang Zalo trong trình duyệt từ xa. Hạn chế quyền của tài khoản Zalo dùng để chụp và để các biến cấu hình trong nơi lưu bí mật của hệ thống. Nếu thiếu phiên hợp lệ, thiếu thuộc tính ID trên giao diện, hoặc hai tin nhắn không cùng hiển thị, worker bỏ ảnh và giữ lại xác nhận trong CRM. Xem [Cloudflare Browser Run custom scripts](https://developers.cloudflare.com/browser-run/script/) và [webhook nhóm GMF](https://stc-developers.zdn.vn/docs/v2/official-account/webhook/nhom-chat-gmf/message_webhook).
+Cloudflare nhận trạng thái đăng nhập và xử lý trang Zalo trong trình duyệt từ xa. Hạn chế quyền của tài khoản Zalo dùng để chụp và để các biến cấu hình trong nơi lưu bí mật của hệ thống. Worker giữ lại xác nhận trong CRM khi phiên hết hạn, lịch sử GMF không còn hai tin liên quan hoặc hai bong bóng không thể hiển thị cùng lúc. Xem [Cloudflare Browser Run custom scripts](https://developers.cloudflare.com/browser-run/script/) và [lịch sử nhóm GMF](https://stc-developers.zdn.vn/docs/v2/official-account/nhom-chat-gmf/quan-ly/group_conversation).

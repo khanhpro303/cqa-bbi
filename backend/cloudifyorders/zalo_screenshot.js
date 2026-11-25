@@ -6,41 +6,48 @@ async ({ browser }) => {
   })
   try {
     const page = await context.newPage()
-    await page.goto('https://oa.zalo.me/chatv2', { waitUntil: 'domcontentloaded', timeout: 12000 })
-    const atOAManager = () => {
-      const url = new URL(page.url())
-      return url.origin === 'https://oa.zalo.me' &&
-        (url.pathname === '/chatv2' || url.pathname.startsWith('/chatv2/'))
+    const chatURL = new URL('https://oa.zalo.me/chat')
+    chatURL.searchParams.set('gid', settings.groupID)
+    chatURL.searchParams.set('oaid', settings.oaID)
+    const matchesGroup = () => {
+      const active = new URL(page.url())
+      return active.origin === chatURL.origin && active.pathname === chatURL.pathname &&
+        active.searchParams.get('gid') === settings.groupID && active.searchParams.get('oaid') === settings.oaID
     }
-    if (!atOAManager()) throw new Error('OA Manager login required')
-    const group = page.locator(settings.openGroup)
-    await group.click({ timeout: 5000 })
-    if (!atOAManager()) throw new Error('Unexpected OA Manager navigation')
-    const conversation = page.locator(settings.conversation)
-    await conversation.waitFor({ state: 'visible', timeout: 5000 })
-    const reply = conversation.locator(settings.reply)
-    await reply.evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }), null, { timeout: 5000 })
-    const original = conversation.locator(settings.original)
-    await original.evaluate(element => Promise.all(
-      Array.from(element.querySelectorAll('img'), image => image.decode()),
-    ), null, { timeout: 5000 })
+    await page.goto(chatURL.toString(), { waitUntil: 'domcontentloaded', timeout: 12000 })
+    if (!matchesGroup()) throw new Error('OA Manager login or group access required')
 
-    // Resolve both original message elements in the currently selected group.
-    // Refuse off-screen or clipped messages, which would yield partial evidence.
+    // OA Manager uses a timestamp-prefixed DOM ID. The timestamps were
+    // obtained from official GMF history using the exact recorded message IDs.
+    const conversation = page.locator('#content_chat')
+    const sent = conversation.locator(`[data-message-id^="${settings.sentAt}."]`)
+    const reply = conversation.locator(`[data-message-id^="${settings.replyAt}."]`)
+    await reply.evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }), null, { timeout: 7000 })
+    if (settings.sentType === 'photo') {
+      await sent.evaluate(async element => {
+        const images = [...element.querySelectorAll('img')]
+        if (images.length === 0) throw new Error('The original order image is missing')
+        await Promise.all(images.map(image => image.decode()))
+      }, null, { timeout: 5000 })
+    }
+
+    const normalize = text => text.normalize('NFC').replace(/\s+/g, ' ').trim()
     async function bounds() {
-      if (!atOAManager()) throw new Error('Unexpected OA Manager navigation')
-      const chatBox = await conversation.boundingBox()
-      const originalBox = await original.boundingBox({ timeout: 2000 })
-      const replyBox = await reply.boundingBox({ timeout: 2000 })
-      const normalize = text => text.normalize('NFC').replace(/\s+/g, ' ').trim()
-      if (!chatBox || !originalBox || !replyBox ||
-          !normalize(await reply.innerText({ timeout: 2000 })).includes(normalize(settings.replyText))) {
-        throw new Error('Could not verify the visible Zalo messages')
+      if (!matchesGroup()) throw new Error('Zalo group or OA changed during capture')
+      if (settings.sentType === 'text' && !normalize(await sent.innerText({ timeout: 2000 })).includes(normalize(settings.sentText))) {
+        throw new Error('The visible order message does not match official history')
       }
-      const x = Math.floor(Math.min(originalBox.x, replyBox.x))
-      const y = Math.floor(Math.min(originalBox.y, replyBox.y))
-      const right = Math.ceil(Math.max(originalBox.x + originalBox.width, replyBox.x + replyBox.width))
-      const bottom = Math.ceil(Math.max(originalBox.y + originalBox.height, replyBox.y + replyBox.height))
+      if (!normalize(await reply.innerText({ timeout: 2000 })).includes(normalize(settings.replyText))) {
+        throw new Error('The visible reply does not match the recorded confirmation')
+      }
+      const chatBox = await conversation.boundingBox()
+      const sentBox = await sent.boundingBox({ timeout: 2000 })
+      const replyBox = await reply.boundingBox({ timeout: 2000 })
+      if (!chatBox || !sentBox || !replyBox) throw new Error('Both Zalo messages must be visible')
+      const x = Math.floor(Math.min(sentBox.x, replyBox.x))
+      const y = Math.floor(Math.min(sentBox.y, replyBox.y))
+      const right = Math.ceil(Math.max(sentBox.x + sentBox.width, replyBox.x + replyBox.width))
+      const bottom = Math.ceil(Math.max(sentBox.y + sentBox.height, replyBox.y + replyBox.height))
       const viewport = page.viewportSize()
       if (x < Math.max(0, Math.floor(chatBox.x)) || y < Math.max(0, Math.floor(chatBox.y)) ||
           right > Math.min(viewport.width, Math.ceil(chatBox.x + chatBox.width)) ||

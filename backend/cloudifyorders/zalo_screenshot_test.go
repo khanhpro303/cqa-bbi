@@ -11,48 +11,48 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/db/models"
 )
 
 func TestZaloScreenshotCodeVerifiesIdentifiersAndScopesSession(t *testing.T) {
 	profile := ZaloScreenshotProfile{
-		TenantID: "tenant-a", ChannelID: "oa-a", ZaloGroupIDs: []string{"group-a"},
-		OpenGroupSelector: `button[data-g="{group_id}"]`, ActiveConversationSelector: `main[data-g="{group_id}"]`,
-		MessageSelector: `[data-m="{message_id}"]`,
-		StorageState:    json.RawMessage(`{"cookies":[{"name":"example","value":"fixture","domain":".zalo.me"}],"origins":[]}`),
+		TenantID: "tenant-a", ChannelID: "oa-a", ZaloOAID: "123456", ZaloGroupIDs: []string{"group-a"},
+		StorageState: json.RawMessage(`{"cookies":[{"name":"example","value":"fixture","domain":".zalo.me"}],"origins":[]}`),
 	}
 	row := models.CloudifyOrderConfirmation{
 		TenantID: profile.TenantID, ChannelID: profile.ChannelID, ZaloGroupID: "group-a",
 		OutboundMessageID: "sent-a", MessageID: "reply-a", Text: "duyệt nhé",
 	}
-	code, err := zaloScreenshotCode(profile, row)
+	evidence := channels.GMFOrderEvidence{SentAtMillis: 1795596006396, ReplyAtMillis: 1795596060000, SentText: "Phiếu đơn mẫu", SentType: "text"}
+	code, err := zaloScreenshotCode(profile, row, evidence)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []string{"group-a", "sent-a", "reply-a", "duyệt nhé", "page.screenshot", "https://oa.zalo.me/chatv2"} {
+	for _, part := range []string{"group-a", "123456", "1795596006396", "1795596060000", "Phiếu đơn mẫu", "duyệt nhé", "page.screenshot", "https://oa.zalo.me/chat"} {
 		if !strings.Contains(code, part) {
 			t.Errorf("missing %q in capture script", part)
 		}
 	}
 	old := row.TenantID
 	row.TenantID = "another-tenant"
-	if _, err := zaloScreenshotCode(profile, row); err == nil {
+	if _, err := zaloScreenshotCode(profile, row, evidence); err == nil {
 		t.Fatal("attempt to use a different tenant's browser session was accepted")
 	}
 	row.TenantID = old
 	row.ZaloGroupID = "another-group"
-	if _, err := zaloScreenshotCode(profile, row); err == nil {
+	if _, err := zaloScreenshotCode(profile, row, evidence); err == nil {
 		t.Fatal("a group outside the screenshot profile was accepted")
 	}
 	row.ZaloGroupID = "group-a"
-	row.MessageID = "reply-a[\""
-	if _, err := zaloScreenshotCode(profile, row); err == nil {
-		t.Fatal("invalid Zalo message identifier was accepted")
+	badEvidence := evidence
+	badEvidence.ReplyAtMillis = badEvidence.SentAtMillis
+	if _, err := zaloScreenshotCode(profile, row, badEvidence); err == nil {
+		t.Fatal("ambiguous Zalo message timestamps were accepted")
 	}
-	row.MessageID = "reply-a"
-	profile.MessageSelector = "main"
-	if _, err := zaloScreenshotCode(profile, row); err == nil {
-		t.Fatal("selector that cannot check exact message identity was accepted")
+	profile.ZaloOAID = "unexpected"
+	if _, err := zaloScreenshotCode(profile, row, evidence); err == nil {
+		t.Fatal("invalid Zalo OA identifier was accepted")
 	}
 }
 
