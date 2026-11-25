@@ -573,6 +573,7 @@ func ERPQuery(c *gin.Context) {
 					if erpURL, erpDB, erpLogin, erpPassword, credErr := loadCloudifyCredentials(tenantID, cfg); credErr == nil && erpURL != "" && erpLogin != "" && erpPassword != "" && len(eligible) > 0 {
 						stockClient := &pkg.CloudifyClient{BaseURL: erpURL, DB: erpDB, Login: erpLogin, Password: erpPassword}
 						enrichVariantsWithLiveStock(c.Request.Context(), stockClient, tenantID, eligible)
+						response["stock_metric"] = "available"
 					} else if credErr != nil {
 						log.Printf("[erp_query] include_stock skipped, credential error: %v", credErr)
 					}
@@ -2110,10 +2111,12 @@ func resolveVariantStockDirect(
 		if childSKU == "" {
 			continue
 		}
-		skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, tenantID, childSKU)
+		skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, childSKU)
 		if errQuery != nil {
 			log.Printf("[inventory_query] variant stock error for SKU %s: %v", childSKU, errQuery)
-			continue
+			writeAuditLog(tenantID, permCtx, "inventory", scopeType, productGroups, search, http.StatusBadGateway, 0, c.ClientIP())
+			c.JSON(http.StatusBadGateway, gin.H{"error": "warehouse_stock_unavailable"})
+			return true
 		}
 		variantData = append(variantData, map[string]interface{}{
 			"MA":                 childSKU,
@@ -2142,11 +2145,12 @@ func resolveVariantStockDirect(
 	}
 	writeAuditLog(tenantID, permCtx, "inventory", scopeType, productGroups, search, http.StatusOK, len(variantData), c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{
-		"status":   "success",
-		"data":     variantData,
-		"source":   "cloudify_live_exact_web_variant",
-		"resource": "inventory",
-		"count":    len(variantData),
+		"status":       "success",
+		"data":         variantData,
+		"source":       "cloudify_live_exact_web_variant",
+		"resource":     "inventory",
+		"count":        len(variantData),
+		"stock_metric": "available",
 	})
 	return true
 }
@@ -2167,23 +2171,27 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 	switch resource {
 	case "inventory":
-		c.Request = c.Request.WithContext(engine.WithWarehouseStock(c.Request.Context(), tenantID))
+		stockCtx, cancel := context.WithTimeout(c.Request.Context(), engine.WarehouseAvailabilityTimeout)
+		defer cancel()
+		c.Request = c.Request.WithContext(stockCtx)
 
 		if parentCode != "" && search != "" {
 			matchedProducts, errSearch := searchProductsFromCacheWithFilter(c.Request.Context(), tenantID, search, parentCode, 20)
 			if errSearch == nil && len(matchedProducts) > 0 {
 				matchedProducts = filterWarehouseProducts(matchedProducts, productGroups, brandFilter, allBrands)
-				var variantData []map[string]interface{}
+				variantData := make([]map[string]interface{}, 0, len(matchedProducts))
 				for _, child := range matchedProducts {
 					childSKU := getMapString(child, "MA", "ma", "ma_hang")
 					if childSKU == "" {
 						continue
 					}
 
-					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, tenantID, childSKU)
+					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, childSKU)
 					if errQuery != nil {
 						log.Printf("[inventory_query_filtered] error querying stock for SKU %s: %v", childSKU, errQuery)
-						continue
+						writeAuditLog(tenantID, permCtx, "inventory", scopeType, productGroups, search, http.StatusBadGateway, 0, c.ClientIP())
+						c.JSON(http.StatusBadGateway, gin.H{"error": "warehouse_stock_unavailable"})
+						return
 					}
 
 					record := map[string]interface{}{
@@ -2210,11 +2218,12 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 					variantData = append(variantData, record)
 				}
 				c.JSON(http.StatusOK, gin.H{
-					"status":   "success",
-					"data":     variantData,
-					"source":   "cloudify_live_filtered",
-					"resource": resource,
-					"count":    len(variantData),
+					"status":       "success",
+					"data":         variantData,
+					"source":       "cloudify_live_filtered",
+					"resource":     resource,
+					"count":        len(variantData),
+					"stock_metric": "available",
 				})
 				return
 			}
@@ -2341,7 +2350,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				log.Printf("[inventory_query] fuzzy pinpointed specific SKU for tenant=%s search=%s → %s", tenantID, search, specificSKU)
 				search = specificSKU
 			} else {
-				matchedProducts = rows
+				matchedProducts = filterWarehouseProducts(rows, productGroups, brandFilter, allBrands)
 				log.Printf("[inventory_query] Astra DB search for tenant=%s search=%s returned %d products", tenantID, search, len(matchedProducts))
 				if len(matchedProducts) > 1 {
 					// STOCK short-circuit guard (mirrors the exact-web Branch-0 guard
@@ -2441,7 +2450,8 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						})
 						return
 					}
-				} else if len(matchedProducts) == 1 {
+				} else if len(matchedProducts) == 1 && (!hasVariantAttribute(color, size, brand) ||
+					len(filterVariantsByAttributes(matchedProducts, color, size, brand)) == 1) {
 					skuVal := getMapString(matchedProducts[0], "MA", "ma_hang", "ma")
 					if skuVal != "" {
 						search = skuVal
@@ -2470,10 +2480,10 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						continue
 					}
 
-					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, tenantID, childSKU)
+					skuStock, errQuery := fetchInventoryStockForSKU(c.Request.Context(), client, childSKU)
 					if errQuery != nil {
-						log.Printf("[inventory_query] error querying stock for SKU %s: %v", childSKU, errQuery)
-						continue
+						err = errQuery
+						break
 					}
 
 					record := map[string]interface{}{
@@ -2507,7 +2517,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				data = filterWarehouseProducts(data, productGroups, brandFilter, allBrands)
 				for _, product := range data {
 					sku := getMapString(product, "ma", "MA")
-					total, stockErr := fetchInventoryStockForSKU(c.Request.Context(), client, tenantID, sku)
+					total, stockErr := fetchInventoryStockForSKU(c.Request.Context(), client, sku)
 					if stockErr != nil {
 						err = stockErr
 						break
@@ -3307,21 +3317,28 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 
 	writeAuditLog(tenantID, permCtx, resource, scopeType, productGroups, search, http.StatusOK, len(data), c.ClientIP())
 
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"status":   "success",
 		"data":     data,
 		"source":   "cloudify_live",
 		"resource": resource,
 		"count":    len(data),
-	})
+	}
+	if resource == "inventory" {
+		response["stock_metric"] = "available"
+	}
+	c.JSON(http.StatusOK, response)
 }
 
-func fetchInventoryStockForSKU(ctx context.Context, client *pkg.CloudifyClient, tenantID, sku string) (float64, error) {
-	totals, err := engine.MainWarehouseStock(ctx, tenantID, client)
+func fetchInventoryStockForSKU(ctx context.Context, client *pkg.CloudifyClient, sku string) (float64, error) {
+	totals, err := engine.WarehouseAvailableStock(ctx, client, []string{sku})
 	if err != nil {
 		return 0, err
 	}
-	return totals[sku], nil
+	if stock, ok := totals[strings.TrimSpace(sku)]; ok {
+		return stock, nil
+	}
+	return 0, fmt.Errorf("no available stock data for SKU")
 }
 
 // maxVariantStockEnrichment caps how many variant SKUs get a live stock lookup
@@ -3338,25 +3355,23 @@ const maxVariantStockEnrichment = 12
 // per-SKU inventory round trips. A per-SKU lookup error is logged and that row is
 // left without ton_kho rather than failing the whole response.
 func enrichVariantsWithLiveStock(ctx context.Context, client *pkg.CloudifyClient, tenantID string, rows []map[string]interface{}) {
-	ctx = engine.WithWarehouseStock(ctx, tenantID)
 	enrichVariantRowsWithStock(ctx, client, tenantID, rows)
 }
 
 func enrichVariantRowsWithStock(ctx context.Context, client *pkg.CloudifyClient, tenantID string, rows []map[string]interface{}) {
+	rows = rows[:min(len(rows), maxVariantStockEnrichment)]
+	skus := make([]string, len(rows))
 	for i, row := range rows {
-		if i >= maxVariantStockEnrichment {
-			break
+		skus[i] = strings.TrimSpace(getFirstNonEmptyMapString(row, "ma", "MA", "ma_hang"))
+	}
+	totals, err := engine.WarehouseAvailableStock(ctx, client, skus)
+	if err != nil {
+		log.Printf("[erp_query] include_stock lookup incomplete tenant=%s: %v", tenantID, err)
+	}
+	for i, row := range rows {
+		if stock, ok := totals[skus[i]]; ok {
+			row["ton_kho"] = stock
 		}
-		sku := getFirstNonEmptyMapString(row, "ma", "MA", "ma_hang")
-		if strings.TrimSpace(sku) == "" {
-			continue
-		}
-		stock, err := fetchInventoryStockForSKU(ctx, client, tenantID, sku)
-		if err != nil {
-			log.Printf("[erp_query] include_stock lookup failed sku=%s: %v", sku, err)
-			continue
-		}
-		row["ton_kho"] = stock
 	}
 }
 

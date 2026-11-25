@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -209,9 +210,10 @@ func selectSystemPrompt(agentType, publicPrompt, internalPrompt string) string {
 }
 
 const (
-	botUnavailableMessage = "Dạ hệ thống tra cứu đang bận nên em chưa trả lời được câu này. Anh/chị vui lòng nhắn lại sau ít phút giúp em ạ."
-	botEmptyAnswerMessage = "Dạ em chưa có đủ thông tin để xác nhận câu này. Anh/chị có thể hỏi em câu khác hoặc liên hệ nhân viên phụ trách để được hỗ trợ ạ."
-	botOutOfScopeMessage  = "Dạ em chưa thể hỗ trợ câu hỏi này. Anh/chị có thể hỏi em câu khác nhé."
+	botUnavailableMessage   = "Dạ hệ thống tra cứu đang bận nên em chưa trả lời được câu này. Anh/chị vui lòng nhắn lại sau ít phút giúp em ạ."
+	botEmptyAnswerMessage   = "Dạ em chưa có đủ thông tin để xác nhận câu này. Anh/chị có thể hỏi em câu khác hoặc liên hệ nhân viên phụ trách để được hỗ trợ ạ."
+	botOutOfScopeMessage    = "Dạ em chưa thể hỗ trợ câu hỏi này. Anh/chị có thể hỏi em câu khác nhé."
+	stockUnconfirmedMessage = "Dạ em chưa xác nhận được tồn khả dụng của mẫu này trong dữ liệu em có thể tra cứu. Anh/chị có thể hỏi nhân viên phụ trách để được kiểm tra thêm ạ."
 	// caseRecordedReply replaces a reply that was nothing but a ticket number.
 	// It promises nothing: whether staff were told is not known here.
 	caseRecordedReply = "Dạ em đã nhận được thông tin của anh/chị ạ."
@@ -220,9 +222,18 @@ const (
 	handoverNoStaffMessage       = "Dạ, em xin lỗi về trải nghiệm không tốt của mình ạ. Anh/chị vui lòng nhắn trực tiếp cho nhân viên phụ trách để được hỗ trợ ngay giúp em nhé ạ!"
 )
 
+var errNoVisibleStock = errors.New("no eligible stock SKUs in scope")
+
+func stockLookupFailureMessage(err error) string {
+	if errors.Is(err, errNoVisibleStock) {
+		return stockUnconfirmedMessage
+	}
+	return botUnavailableMessage
+}
+
 const langflowUnansweredInstruction = `QUY TẮC TRẢ LỜI KHI THIẾU DỮ LIỆU
 Áp dụng các quy tắc dưới đây nếu hướng dẫn khác trong prompt có nội dung mâu thuẫn. Trả lời khách bằng ngôn ngữ họ đang dùng, dùng tiếng Việt cho hội thoại tiếng Việt.
-- Tra giá, mã sản phẩm và tồn kho bằng ERP. Với câu hỏi nối tiếp, giữ đúng sản phẩm, màu và size đã nêu. Khi khách chỉ hỏi còn hay hết, trả lời còn/hết nếu ERP xác nhận tồn của đúng sản phẩm và loại tồn khách đang hỏi. Số tồn 0 có dữ liệu khác với kết quả rỗng hoặc thiếu trường tồn.
+- Tra giá, mã sản phẩm và tồn kho bằng ERP. Chỉ dùng tồn khả dụng tại Kho Tổng để trả lời về tồn hoặc còn/hết hàng. Với câu hỏi nối tiếp, giữ đúng sản phẩm, màu và size đã nêu. Tồn khả dụng lớn hơn 0 xác nhận còn hàng; 0 hoặc âm xác nhận hiện không có hàng khả dụng. Kết quả rỗng hoặc thiếu trường tồn chưa xác nhận được. Nếu khách hỏi riêng tồn vật lý thì nói rõ công cụ đang tra tồn khả dụng.
 - Khi công cụ sản phẩm hoặc tồn kho của ERP trả lookup_outcome=no_visible_match, hoặc trả data rỗng với truy vấn có tên/mã và không có lựa chọn hay thông báo đã gửi qua Zalo, kết thúc tra cứu mục đó. Diễn đạt customer_message theo điều khách hỏi, hoặc nói ngắn gọn rằng em chưa xác nhận được từ dữ liệu hiện có và có thể hướng khách hỏi nhân viên phụ trách. Không kết luận sản phẩm không tồn tại, sai mã hay hết hàng. Không yêu cầu khách gửi lại mã, ảnh, màu hoặc size để giải quyết kết quả rỗng này. Không gọi search_knowledge, Astra, SQL hay nguồn khác để tìm lại thông tin ERP cho mục đó.
 - Khi tra sản phẩm, chỉ hỏi bổ sung nếu còn thiếu thông tin nhận diện hoặc ERP trả lựa chọn hợp lệ cần khách chọn. Tiếp tục xử lý các câu hỏi khác trong cùng tin nhắn theo đúng nguồn của từng câu hỏi. Chỉ nói về giới hạn quyền khi công cụ trả lỗi từ chối quyền rõ ràng. Nếu công cụ báo lỗi tạm thời, nói chưa tra được và mời thử lại sau.`
 
@@ -1327,17 +1338,32 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Intercept Zalo OA interactive button clicks
 		// A. Choose Flow Type: dongsp or skucuthe
 		if strings.HasPrefix(userText, "#choose_flow_type:dongsp:") {
+			allowed, _, groups := permCtx.IsResourceAllowed("inventory")
+			if !allowed {
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, "Tài khoản của anh/chị chưa có quyền xem tồn kho.")
+			}
 			keyword := strings.TrimPrefix(userText, "#choose_flow_type:dongsp:")
 			matchedProducts, errSearch := searchProductsByWebNameFromCache(ctx, matchedChannel.TenantID, keyword)
-			if errSearch != nil || len(matchedProducts) == 0 {
-				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy dòng sản phẩm nào khớp với từ khóa '%s'.", keyword))
-				return nil
+			if errSearch != nil {
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botUnavailableMessage)
+			}
+			brands, allBrands := permCtx.ResolveBrandFilter("inventory")
+			visible := matchedProducts[:0]
+			for _, product := range matchedProducts {
+				group := getMapString(product, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh")
+				brand := getMapString(product, "NHAN_HIEU_NAME", "nhan_hieu_name")
+				if engine.WarehouseProductAllowed(group, brand, groups, brands, allBrands) {
+					visible = append(visible, product)
+				}
+			}
+			if len(visible) == 0 {
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockUnconfirmedMessage)
 			}
 
 			// Group the matched products by TEN_DONG_BO_WEB (synced web name);
 			// fall back to MA_CHA when a product has no web name so legacy SKUs
 			// still appear.
-			webGroups := engine.RankProductWebGroups(matchedProducts)
+			webGroups := engine.RankProductWebGroups(visible)
 
 			buttons := make([]channels.ZaloOAButton, 0, 3)
 			for i, g := range webGroups {
@@ -1454,17 +1480,26 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// 1. Parent Code Options Selection (#show_macha_options:<MA_CHA>)
 		if strings.HasPrefix(userText, "#show_macha_options:") {
 			maCha := strings.TrimPrefix(userText, "#show_macha_options:")
+			allowed, _, groups := permCtx.IsResourceAllowed("inventory")
+			if !allowed {
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, "Tài khoản của anh/chị chưa có quyền xem tồn kho.")
+			}
+			brands, allBrands := permCtx.ResolveBrandFilter("inventory")
 			// Fetch variants
 			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha)
-			if err != nil || len(childProducts) == 0 {
-				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Không tìm thấy thông tin chi tiết của dòng sản phẩm.")
-				return nil
+			if err != nil {
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
 			}
 
 			// Extract unique web sync names
 			webNamesMap := make(map[string]bool)
 			var webNames []string
 			for _, p := range childProducts {
+				group := getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+				brand := getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")
+				if !engine.WarehouseProductAllowed(group, brand, groups, brands, allBrands) {
+					continue
+				}
 				wName := getMapString(p, "TEN_DONG_BO_WEB", "ten_dong_bo_web")
 				if wName != "" && !webNamesMap[wName] {
 					webNamesMap[wName] = true
@@ -1476,10 +1511,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				// No web names found, perform direct realtime inventory lookup for this MA_CHA
 				stock, details, err := sumInventoryByParentWithDKCopy(ctx, matchedChannel.TenantID, &permCtx, maCha)
 				if err != nil {
-					_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi truy vấn tồn kho dòng sản phẩm.")
-					return nil
+					return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
 				}
-				reply := fmt.Sprintf("Tổng tồn kho dòng %s: %.1f\n\nChi tiết:\n%s", maCha, stock, strings.Join(details, "\n"))
+				reply := fmt.Sprintf("Tồn khả dụng dòng %s tại Kho Tổng: %g\n\nChi tiết:\n%s", maCha, stock, strings.Join(details, "\n"))
 				if matchedGroup.ZaloGroupID != "" {
 					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
 				} else {
@@ -1497,10 +1531,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				// Only 1 option, run stock lookup immediately
 				stock, details, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, maCha, webNames[0])
 				if err != nil {
-					_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi truy vấn tồn kho sản phẩm.")
-					return nil
+					return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
 				}
-				reply := fmt.Sprintf("Tổng tồn kho của %s: %.1f\n\nChi tiết:\n%s", webNames[0], stock, strings.Join(details, "\n"))
+				reply := fmt.Sprintf("Tồn khả dụng của %s tại Kho Tổng: %g\n\nChi tiết:\n%s", webNames[0], stock, strings.Join(details, "\n"))
 				if matchedGroup.ZaloGroupID != "" {
 					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
 				} else {
@@ -1557,21 +1590,19 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				Distinct().Pluck("ma_cha", &maChas).Error
 			if err != nil {
 				log.Printf("[stock-pick] failed to resolve parent codes for web=%q: %v", webName, err)
-				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy sản phẩm nào trong dòng '%s'.", webName))
-				return nil
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
 			}
 
-			if len(maChas) == 0 {
-				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không xác định được mã cha cho dòng '%s'.", webName))
-				return nil
-			}
-
-			stockCtx := engine.WithWarehouseStock(ctx, matchedChannel.TenantID)
+			stockCtx, cancel := context.WithTimeout(ctx, engine.WarehouseAvailabilityTimeout)
+			defer cancel()
 			var totalStock float64
 			var details []string
 			var okCount, errCount int
 			for _, mc := range maChas {
 				stock, lines, sumErr := sumInventoryByMaChaAndWebName(stockCtx, matchedChannel.TenantID, &permCtx, mc, "")
+				if errors.Is(sumErr, errNoVisibleStock) {
+					continue
+				}
 				if sumErr != nil {
 					errCount++
 					log.Printf("[zalo_webhook] inventory error ma_cha=%s web=%s: %v", mc, webName, sumErr)
@@ -1582,22 +1613,20 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				details = append(details, lines...)
 			}
 
-			// A sum that omits any parent is incomplete.
+			// A read error can hide eligible stock. Parents with no eligible
+			// SKUs do not contribute to the scoped total.
 			if errCount > 0 {
-				errMsg := fmt.Sprintf("Hệ thống tồn kho đang tạm thời gặp sự cố nên em chưa lấy được số liệu cho dòng %s. Anh/chị vui lòng thử lại sau ít phút giúp em ạ.", webName)
-				if matchedGroup.ZaloGroupID != "" {
-					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, errMsg)
-				} else {
-					_ = adapter.SendMessage(ctx, payload.Sender.ID, errMsg)
-				}
-				return nil
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botUnavailableMessage)
+			}
+			if okCount == 0 {
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockUnconfirmedMessage)
 			}
 
 			log.Printf("[stock-pick] inventory-by-web web=%q done: %d ma_cha ok, %d failed, total=%.1f, %d detail lines", webName, okCount, errCount, totalStock, len(details))
 			// Concise customer reply: chỉ tổng tồn cả dòng + gợi ý hỏi tiếp theo
 			// màu/size. Chi tiết từng biến thể (details) chỉ dùng cho log nội bộ —
 			// không đẩy lên Zalo để tránh tin nhắn dài bị từ chối.
-			reply := fmt.Sprintf("Dòng %s hiện còn %.0f cái tại 1.KHO-TONG. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", webName, totalStock)
+			reply := fmt.Sprintf("Tồn khả dụng của dòng %s tại Kho Tổng là %g. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", webName, totalStock)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
@@ -1624,12 +1653,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			stock, _, err := sumInventoryByMaChaAndWebName(ctx, matchedChannel.TenantID, &permCtx, parsed.MaCha, parsed.WebName)
 			if err != nil {
-				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Có lỗi xảy ra khi tính toán tồn kho sản phẩm.")
-				return nil
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
 			}
 
 			// Concise reply: chỉ tổng tồn cả dòng, bỏ liệt kê biến thể (tránh tin dài).
-			reply := fmt.Sprintf("Dòng %s hiện còn %.0f cái tại 1.KHO-TONG. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", parsed.WebName, stock)
+			reply := fmt.Sprintf("Tồn khả dụng của dòng %s tại Kho Tổng là %g. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", parsed.WebName, stock)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
@@ -1673,18 +1701,13 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			totalStock, err := sumInventoryByMaCha(ctx, matchedChannel.TenantID, &permCtx, clickPayload.MaCha)
 			if err != nil {
-				log.Printf("[worker] error summing inventory: %v", err)
-				var sendErr error
-				if matchedGroup.ZaloGroupID != "" {
-					sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, "Đã có lỗi xảy ra khi tính toán tồn kho dòng sản phẩm.")
-				} else {
-					sendErr = adapter.SendMessage(ctx, payload.Sender.ID, "Đã có lỗi xảy ra khi tính toán tồn kho dòng sản phẩm.")
+				if !errors.Is(err, errNoVisibleStock) {
+					log.Printf("[worker] error summing inventory: %v", err)
 				}
-				_ = sendErr
-				return nil
+				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, stockLookupFailureMessage(err))
 			}
 
-			reply := fmt.Sprintf("Tổng tồn kho của dòng sản phẩm %s (Mã: %s) tại 1.KHO-TONG hiện là %.1f", displayName, clickPayload.MaCha, totalStock)
+			reply := fmt.Sprintf("Tồn khả dụng của dòng %s (mã %s) tại Kho Tổng là %g.", displayName, clickPayload.MaCha, totalStock)
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
@@ -2155,7 +2178,7 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 	var allowedSKUs []string
 	seen := make(map[string]struct{})
 	for _, p := range childProducts {
-		sku := getMapString(p, "MA", "code", "ma")
+		sku := strings.TrimSpace(getMapString(p, "MA", "code", "ma"))
 		group := getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
 
 		brand := getMapString(p, "NHAN_HIEU_NAME", "nhan_hieu_name")
@@ -2168,9 +2191,8 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 		}
 	}
 
-	// If the user has permission to see none of the variants, return 0 stock
 	if len(allowedSKUs) == 0 {
-		return 0, nil
+		return 0, errNoVisibleStock
 	}
 
 	// 3. Load ERP credentials
@@ -2191,7 +2213,7 @@ func sumInventoryByMaCha(ctx context.Context, tenantID string, permCtx *engine.G
 		Password: erpPassword,
 	}
 
-	totals, err := engine.MainWarehouseStock(ctx, tenantID, client)
+	totals, err := engine.WarehouseAvailableStock(ctx, client, allowedSKUs)
 	if err != nil {
 		return 0, err
 	}
@@ -2880,26 +2902,22 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 // Only this call site adds the copy: the by-web-name sum already reads every
 // parent of the web name, copy included.
 func sumInventoryByParentWithDKCopy(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, maCha string) (float64, []string, error) {
-	// One warehouse report serves both parents.
-	ctx = engine.WithWarehouseStock(ctx, tenantID)
+	ctx, cancel := context.WithTimeout(ctx, engine.WarehouseAvailabilityTimeout)
+	defer cancel()
 	stock, details, err := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, maCha, "")
-	if err != nil {
+	if err != nil && !errors.Is(err, errNoVisibleStock) {
 		return 0, nil, err
 	}
 	dkParent := engine.DKCopyParentOf(maCha)
 	if dkParent == strings.TrimSpace(maCha) {
-		return stock, details, nil
+		return stock, details, err
 	}
-	var copies int64
-	if err := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).Where("tenant_id = ? AND ma_cha = ?", tenantID, dkParent).Count(&copies).Error; err != nil {
-		return 0, nil, fmt.Errorf("local MySQL cache query failed: %w", err)
+	copyStock, copyDetails, copyErr := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, dkParent, "")
+	if copyErr != nil && !errors.Is(copyErr, errNoVisibleStock) {
+		return 0, nil, copyErr
 	}
-	if copies == 0 {
-		return stock, details, nil
-	}
-	copyStock, copyDetails, err := sumInventoryByMaChaAndWebName(ctx, tenantID, permCtx, dkParent, "")
-	if err != nil {
-		return 0, nil, err
+	if err != nil && copyErr != nil {
+		return 0, nil, errNoVisibleStock
 	}
 	return stock + copyStock, append(details, copyDetails...), nil
 }
@@ -2937,10 +2955,6 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 			}
 		}
 	}
-	if webName == "" && len(products) == 0 {
-		return 0, nil, fmt.Errorf("no cached SKUs for ma_cha=%s", maCha)
-	}
-
 	childProducts := make([]map[string]interface{}, len(products))
 	for i, p := range products {
 		childProducts[i] = map[string]interface{}{
@@ -2981,7 +2995,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	var allowedSKUs []allowedSKU
 	seen := make(map[string]struct{})
 	for _, p := range childProducts {
-		sku := getMapString(p, "MA", "code", "ma")
+		sku := strings.TrimSpace(getMapString(p, "MA", "code", "ma"))
 		group := getMapString(p, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
 		name := getMapString(p, "TEN", "ten_hang", "ten")
 
@@ -2998,9 +3012,8 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		}
 	}
 
-	// User may be permitted to see none of the variants → genuine 0 stock.
 	if len(allowedSKUs) == 0 {
-		return 0, nil, nil
+		return 0, nil, errNoVisibleStock
 	}
 
 	// 3. Load ERP credentials
@@ -3021,7 +3034,11 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 		Password: erpPassword,
 	}
 
-	totals, err := engine.MainWarehouseStock(ctx, tenantID, client)
+	skus := make([]string, 0, len(allowedSKUs))
+	for _, sku := range allowedSKUs {
+		skus = append(skus, sku.Code)
+	}
+	totals, err := engine.WarehouseAvailableStock(ctx, client, skus)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3031,7 +3048,7 @@ func sumInventoryByMaChaAndWebName(ctx context.Context, tenantID string, permCtx
 	for _, sku := range allowedSKUs {
 		stock := totals[sku.Code]
 		totalStock += stock
-		details = append(details, fmt.Sprintf("- %s: %.1f", sku.Name, stock))
+		details = append(details, fmt.Sprintf("- %s: %g", sku.Name, stock))
 		log.Printf("[stock-pick] warehouse=%s ma_cha=%s sku=%s stock=%.1f", engine.MainWarehouseCode, maCha, sku.Code, stock)
 	}
 

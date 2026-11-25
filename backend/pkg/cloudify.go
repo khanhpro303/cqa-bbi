@@ -520,7 +520,55 @@ func (c *CloudifyClient) restSearchPostWithBody(endpoint string, body interface{
 	return data, nil
 }
 
+// searchCustomEndpointWithBodyContext is the context-aware JSON-body transport
+// used by bounded ERP lookups. The established public body-search wrappers stay
+// unchanged so their existing callers retain the same behavior.
+func (c *CloudifyClient) searchCustomEndpointWithBodyContext(ctx context.Context, endpoint string, body interface{}) ([]map[string]interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	session, err := c.getSession()
+	if err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	data, statusCode, err := c.doRESTPostWithBodyContext(ctx, endpoint, body, session)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode != http.StatusUnauthorized && statusCode != http.StatusForbidden {
+		return data, nil
+	}
+
+	c.InvalidateSession()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	session, err = c.getSession()
+	if err != nil {
+		return nil, fmt.Errorf("re-authenticate after session expiry: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	data, statusCode, err = c.doRESTPostWithBodyContext(ctx, endpoint, body, session)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("Cloudify refused authorization for %s after re-authentication", endpoint)
+	}
+	return data, nil
+}
+
 func (c *CloudifyClient) doRESTPostWithBody(endpoint string, body interface{}, session string) ([]map[string]interface{}, int, error) {
+	return c.doRESTPostWithBodyContext(context.Background(), endpoint, body, session)
+}
+
+func (c *CloudifyClient) doRESTPostWithBodyContext(ctx context.Context, endpoint string, body interface{}, session string) ([]map[string]interface{}, int, error) {
 	baseURL := strings.TrimRight(c.BaseURL, "/")
 	apiURL := fmt.Sprintf("%s/rest_api/private/%s", baseURL, endpoint)
 
@@ -529,7 +577,7 @@ func (c *CloudifyClient) doRESTPostWithBody(endpoint string, body interface{}, s
 		return nil, 0, fmt.Errorf("marshal body: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
@@ -550,6 +598,9 @@ func (c *CloudifyClient) doRESTPostWithBody(endpoint string, body interface{}, s
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		if requestErr, ok := err.(*url.Error); ok {
+			err = requestErr.Err
+		}
 		return nil, 0, fmt.Errorf("Cloudify API request to %s failed: %w", endpoint, err)
 	}
 	defer resp.Body.Close()

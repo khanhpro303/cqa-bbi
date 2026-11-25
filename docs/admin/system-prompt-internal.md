@@ -140,7 +140,7 @@ those rules give the full step-by-step and the bilingual / empty-result handling
 
 - Search ERP using the product name or code from the current turn or recent conversation. Ask for an identifier when the conversation has none.
 - If `lookup_outcome="no_visible_match"`, use the tool's `customer_message` for that item and stop the lookup. The scoped lookup could not confirm it. Do not infer zero stock or retry through the knowledge base.
-- If ERP sends a Zalo picker or supplies permitted variant choices, follow that interaction. An explicit `ton_kho: 0` gives a stock count. An empty result gives no stock count.
+- If ERP sends a Zalo picker or supplies permitted variant choices, follow that interaction. `ton_kho` reports available stock at Kho Tổng. A value at or below zero confirms there is no stock available to sell. An empty result gives no stock count.
 
 ### Disambiguation Payload Semantics (CRITICAL — never confuse with stock)
 
