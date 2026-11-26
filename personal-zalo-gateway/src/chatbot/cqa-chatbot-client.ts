@@ -4,7 +4,6 @@ import { logger } from '../logger.js';
 import { signInternalRequestBody } from '../sync/cqa-client.js';
 import type { GatewayAccountRecord, IncomingGatewayMessage } from '../types.js';
 
-const chatbotSchemaVersion = 'personal-zalo-chatbot-v1';
 const chatbotTimeoutMs = 55_000;
 const friendSystemEvent = /^(bạn và .* đã trở thành bạn bè|các bạn đã trở thành bạn bè|hai bạn đã trở thành bạn bè|đã chấp nhận yêu cầu kết bạn|you are now connected with|đã trở thành bạn bè trên zalo)/i;
 const zaloUID = /^\d{1,64}$/;
@@ -27,14 +26,17 @@ export function chatbotEndpoint(baseUrl: string): string | null {
 export function isChatbotEligibleMessage(message: IncomingGatewayMessage, now = Date.now()): boolean {
   const text = message.content.trim();
   const ageMs = now - message.timestamp;
-  return message.threadType === 'user' &&
+  const validThread = message.threadType === 'user'
+    ? message.threadId === message.senderUid
+    : message.threadType === 'group' && message.threadId !== message.senderUid;
+  return validThread &&
     !message.isSelf &&
     message.sourceContentIsString === true &&
     message.sourceTimestampIsValid === true &&
     message.contentType === 'text' &&
     message.rawData?.message_type === 'webchat' &&
     zaloUID.test(message.senderUid) &&
-    message.threadId === message.senderUid &&
+    zaloUID.test(message.threadId) &&
     zaloMessageID.test(message.msgId) &&
     text.length > 0 &&
     message.content.length <= 2_000 &&
@@ -63,12 +65,14 @@ export function buildChatbotRequest(
 
   const requestId = randomUUID();
   const body = JSON.stringify({
-    schema_version: chatbotSchemaVersion,
+    schema_version: message.threadType === 'group' ? 'personal-zalo-chatbot-v2' : 'personal-zalo-chatbot-v1',
     request_id: requestId,
     tenant_id: account.tenantId,
     channel_id: account.channelId,
     account_external_id: accountExternalId,
     thread_id: message.threadId,
+    thread_type: message.threadType,
+    sender_id: message.senderUid,
     message_id: message.msgId,
     sent_at: new Date(message.timestamp).toISOString(),
     text: message.content,

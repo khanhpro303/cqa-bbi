@@ -40,7 +40,7 @@ export interface ListenerContext {
   onDisconnected: (accountId: string) => Promise<void>;
   onConnected?: () => void;
   onLiveMessage?: (message: IncomingGatewayMessage) => Promise<void>;
-  onSelfMessage?: (threadId: string, text: string) => void;
+  onSelfMessage?: (threadId: string, threadType: ThreadType, text: string) => void;
 }
 
 async function persistMessage(
@@ -124,8 +124,12 @@ export function attachZaloListener(ctx: ListenerContext): void {
 
   listener.on('message', async (message: any) => {
     try {
-      if (onSelfMessage && message.isSelf && message.type === 0) {
-        onSelfMessage(String(message.threadId || ''), messageContentToString(message.data?.content));
+      if (onSelfMessage && message.isSelf && (message.type === 0 || message.type === 1)) {
+        onSelfMessage(
+          String(message.threadId || ''),
+          message.type === 1 ? 'group' : 'user',
+          messageContentToString(message.data?.content),
+        );
       }
       const persisted = await persistMessage(store, accountId, api, message);
       if (persisted.inserted && !persisted.message.isSelf && onLiveMessage) {

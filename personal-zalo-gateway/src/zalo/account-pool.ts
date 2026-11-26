@@ -21,6 +21,8 @@ interface ZaloInstance {
 
 interface ActiveChatbotThread {
   cancelled: boolean;
+  threadId: string;
+  threadType: IncomingGatewayMessage['threadType'];
   latest?: IncomingGatewayMessage;
 }
 
@@ -209,12 +211,15 @@ export class ZaloAccountPool {
         return this.handleDisconnect(id);
       },
       onLiveMessage: instance.chatbot ? (message) => this.handleLiveMessage(accountId, ownId, instance, message) : undefined,
-      onSelfMessage: instance.chatbot ? (threadId, text) => {
-        const active = instance.chatbot?.threads.get(threadId);
-        if (!active) return;
-        if (instance.chatbot?.guards.echoShield.isEcho(threadId, text)) return;
-        active.cancelled = true;
-        active.latest = undefined;
+      onSelfMessage: instance.chatbot ? (threadId, threadType, text) => {
+        const threadKey = chatbotThreadKey(threadType, threadId);
+        if (instance.chatbot?.guards.echoShield.isEcho(threadKey, text)) return;
+        for (const [key, active] of instance.chatbot?.threads ?? []) {
+          if (key === threadKey || (threadType === 'group' && active.threadType === 'group' && active.threadId === threadId)) {
+            active.cancelled = true;
+            active.latest = undefined;
+          }
+        }
       } : undefined,
     });
   }
@@ -227,10 +232,11 @@ export class ZaloAccountPool {
   ): Promise<void> {
     const chatbot = instance.chatbot;
     if (!chatbot || !this.canSendChatbotReply(accountId, instance) ||
-        message.threadId === ownId || !isChatbotEligibleMessage(message)) {
+        message.senderUid === ownId || message.threadId === ownId || !isChatbotEligibleMessage(message)) {
       return;
     }
-    const existing = chatbot.threads.get(message.threadId);
+    const threadKey = chatbotThreadKey(message.threadType, message.threadId, message.senderUid);
+    const existing = chatbot.threads.get(threadKey);
     if (chatbot.guards.floodDetector.isFlooding(message.senderUid)) {
       if (existing) {
         existing.cancelled = true;
@@ -238,15 +244,20 @@ export class ZaloAccountPool {
       }
       return;
     }
-    if (chatbot.guards.echoShield.isEcho(message.threadId, message.content)) return;
+    if (chatbot.guards.echoShield.isEcho(chatbotThreadKey(message.threadType, message.threadId), message.content)) return;
     if (existing) {
       if (!existing.latest || message.timestamp >= existing.latest.timestamp) existing.latest = message;
       return;
     }
-    if (chatbot.threads.size >= 3) return;
+    const activeOfType = [...chatbot.threads.values()].filter((active) => active.threadType === message.threadType).length;
+    if (activeOfType >= 3) return;
 
-    const active: ActiveChatbotThread = { cancelled: false };
-    chatbot.threads.set(message.threadId, active);
+    const active: ActiveChatbotThread = {
+      cancelled: false,
+      threadId: message.threadId,
+      threadType: message.threadType,
+    };
+    chatbot.threads.set(threadKey, active);
     try {
       let current: IncomingGatewayMessage | undefined = message;
       while (current && this.canSendChatbotReply(accountId, instance)) {
@@ -257,13 +268,13 @@ export class ZaloAccountPool {
             !active.cancelled && this.canSendChatbotReply(accountId, instance)) {
           const reply = await requestPersonalZaloChatbotReply(account, current);
           if (reply && !active.cancelled) {
-            await this.sendChatbotReply(chatbot, active, instance, account, current.threadId, reply);
+            await this.sendChatbotReply(chatbot, active, instance, account, current, reply);
           }
         }
         current = active.latest;
       }
     } finally {
-      chatbot.threads.delete(message.threadId);
+      chatbot.threads.delete(threadKey);
     }
   }
 
@@ -276,7 +287,7 @@ export class ZaloAccountPool {
     active: ActiveChatbotThread,
     instance: ZaloInstance,
     expectedAccount: GatewayAccountRecord,
-    threadId: string,
+    message: IncomingGatewayMessage,
     reply: string,
   ): Promise<void> {
     const accountId = expectedAccount.id;
@@ -285,15 +296,15 @@ export class ZaloAccountPool {
       await rateLimiter.schedule(async (recordAttempt) => {
         if (active.cancelled || !this.canSendChatbotReply(accountId, instance)) return;
         const account = await this.store.getAccount(accountId);
-        if (active.cancelled || !this.canSendChatbotReply(accountId, instance) || floodDetector.isMuted(threadId) ||
+        if (active.cancelled || !this.canSendChatbotReply(accountId, instance) || floodDetector.isMuted(message.senderUid) ||
             account?.status !== 'connected' || account.zaloUid !== expectedAccount.zaloUid ||
             account.tenantId !== expectedAccount.tenantId || account.channelId !== expectedAccount.channelId ||
             account.accountExternalId !== expectedAccount.accountExternalId || account.importSecret !== expectedAccount.importSecret) {
           return;
         }
-        echoShield.recordSent(threadId, reply);
+        echoShield.recordSent(chatbotThreadKey(message.threadType, message.threadId), reply);
         recordAttempt();
-        await instance.api.sendMessage(reply, threadId, 0);
+        await instance.api.sendMessage(reply, message.threadId, message.threadType === 'group' ? 1 : 0);
       });
     } catch (error) {
       logger.warn(`[zalo:${accountId}] chatbot send failed`, error);
@@ -327,4 +338,9 @@ export class ZaloAccountPool {
       await this.reconnect(accountId, account.sessionData);
     }, 30_000);
   }
+}
+
+function chatbotThreadKey(threadType: IncomingGatewayMessage['threadType'], threadId: string, senderUid = ''): string {
+  if (threadType === 'group' && senderUid) return `group:${threadId}:${senderUid}`;
+  return `${threadType}:${threadId}`;
 }

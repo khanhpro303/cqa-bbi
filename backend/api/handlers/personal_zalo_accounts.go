@@ -195,34 +195,6 @@ func encodePersonalZaloAccountOwners(raw string, owners []contracts.PersonalZalo
 	return string(encoded), nil
 }
 
-func mergePersonalZaloMetadataPreservingAccountOwners(existingRaw, incomingRaw string) (string, error) {
-	incoming, err := decodeMetadataObject(incomingRaw)
-	if err != nil {
-		return "", err
-	}
-	if _, exists := incoming[personalZaloAccountOwnersKey]; exists {
-		encoded, err := json.Marshal(incoming)
-		if err != nil {
-			return "", err
-		}
-		return string(encoded), nil
-	}
-
-	existing, err := decodeMetadataObject(existingRaw)
-	if err != nil {
-		return "", err
-	}
-	if value, exists := existing[personalZaloAccountOwnersKey]; exists {
-		incoming[personalZaloAccountOwnersKey] = value
-	}
-
-	encoded, err := json.Marshal(incoming)
-	if err != nil {
-		return "", err
-	}
-	return string(encoded), nil
-}
-
 func resolvePersonalZaloAccountOwner(tenantID string, channel *models.Channel, accountExternalID string) (*contracts.PersonalZaloAccountOwner, string, error) {
 	if channel == nil || channel.ChannelType != "personal_zalo_import" {
 		return nil, "", nil

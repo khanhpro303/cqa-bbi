@@ -120,7 +120,7 @@ test('a new direct text requests one CQA reply and sends it to the same Zalo use
   assert.equal(JSON.parse(String(request.body)).thread_id, '20002');
 });
 
-test('old, group, self and disabled chatbot turns never send a Zalo reply', async (t) => {
+test('old, self, malformed and disabled chatbot turns never send a Zalo reply', async (t) => {
   t.after(() => {
     delete process.env.PERSONAL_ZALO_CHATBOT_BASE_URL;
     delete process.env.PERSONAL_ZALO_CHATBOT_SECRET;
@@ -149,7 +149,6 @@ test('old, group, self and disabled chatbot turns never send a Zalo reply', asyn
   };
 
   await listener.oldMessages([baseMessage]);
-  await listener.message({ ...baseMessage, type: 1, threadId: '50005', data: { ...baseMessage.data, msgId: '40005' } });
   await listener.message({ ...baseMessage, isSelf: true, data: { ...baseMessage.data, msgId: '40006' } });
   await listener.message({ ...baseMessage, data: { ...baseMessage.data, msgId: '40007' } });
   await listener.message({ ...baseMessage, data: { ...baseMessage.data, msgId: '40008', ts: undefined } });
@@ -182,6 +181,96 @@ function directMessage(msgId: string, threadId = '20002') {
     data: { uidFrom: threadId, content: 'Xin chào', msgType: 'webchat', msgId, ts: String(Date.now()) },
   };
 }
+
+function groupMessage(msgId: string, senderId = '20002', threadId = '50005') {
+  return {
+    type: 1,
+    threadId,
+    isSelf: false,
+    data: { uidFrom: senderId, content: 'bot ơi tư vấn giúp', msgType: 'webchat', msgId, ts: String(Date.now()) },
+  };
+}
+
+test('a new group text is signed with sender identity and replies to the originating group', async (t) => {
+  configureTestChatbot(t);
+  let sent!: { text: string; threadId: string; type: number };
+  const sendMessage = async (text: string, threadId: string, type: number) => {
+    sent = { text, threadId, type };
+  };
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: 'Chào cả nhóm' }));
+  const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
+
+  await listener.message(groupMessage('41001'));
+
+  assert.deepEqual(sent, { text: 'Chào cả nhóm', threadId: '50005', type: 1 });
+  const request = fetchMock.mock.calls[0]?.arguments[1] as RequestInit;
+  const payload = JSON.parse(String(request.body));
+  assert.equal(payload.thread_type, 'group');
+  assert.equal(payload.thread_id, '50005');
+  assert.equal(payload.sender_id, '20002');
+});
+
+test('a manual group reply cancels pending bot replies for every sender in that group', { timeout: 2000 }, async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async () => ({}));
+  const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
+  let startedCount = 0;
+  let notifyStarted!: () => void;
+  let finishRequests!: (response: Response) => void;
+  const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+  const pending = new Promise<Response>((resolve) => { finishRequests = resolve; });
+  t.mock.method(globalThis, 'fetch', async () => {
+    startedCount++;
+    if (startedCount === 2) notifyStarted();
+    return (await pending).clone();
+  });
+
+  const first = listener.message(groupMessage('42001', '20002'));
+  const second = listener.message(groupMessage('42002', '20003'));
+  await started;
+  await listener.message({
+    ...groupMessage('42003', '10001'),
+    isSelf: true,
+    data: { ...groupMessage('42003', '10001').data, content: 'Nhân viên đang hỗ trợ' },
+  });
+  finishRequests(Response.json({ reply: 'Tin bot đang chờ' }));
+  await Promise.all([first, second]);
+
+  assert.equal(sendMessage.mock.callCount(), 0);
+});
+
+test('busy group senders keep separate latest-follow-up slots', { timeout: 2000 }, async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async () => ({}));
+  const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
+  let finishFirst!: (response: Response) => void;
+  let notifyFirst!: () => void;
+  const firstStarted = new Promise<void>((resolve) => { notifyFirst = resolve; });
+  const firstPending = new Promise<Response>((resolve) => { finishFirst = resolve; });
+  const processed: Array<{ messageId: string; senderId: string }> = [];
+  t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) => {
+    const body = JSON.parse(String(request.body));
+    processed.push({ messageId: body.message_id, senderId: body.sender_id });
+    if (body.message_id === '43001') {
+      notifyFirst();
+      return firstPending;
+    }
+    return new Response(null, { status: 204 });
+  });
+
+  const first = listener.message(groupMessage('43001', '20002'));
+  await firstStarted;
+  await listener.message(groupMessage('43002', '20003'));
+  await listener.message(groupMessage('43003', '20002'));
+  finishFirst(new Response(null, { status: 204 }));
+  await first;
+
+  assert.deepEqual(processed, [
+    { messageId: '43001', senderId: '20002' },
+    { messageId: '43002', senderId: '20003' },
+    { messageId: '43003', senderId: '20002' },
+  ]);
+});
 
 for (const change of ['manual reply', 'socket close', 'account reassignment'] as const) {
   test(`suppresses in-flight chatbot reply after ${change}`, { timeout: 2000 }, async (t) => {

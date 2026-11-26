@@ -50,11 +50,15 @@ Sidecar mỏng cho `chat-quality-agent` để ingest `Zalo cá nhân`.
 3. Trong **AI Engine** của CQA, cấu hình Langflow và **public flow** dùng để trả lời khách hàng.
 4. Tạo kênh Zalo cá nhân với phạm vi đồng bộ `direct` hoặc `all`, kết nối tài khoản bằng QR và xác nhận trạng thái đã kết nối.
 5. Bật công tắc chatbot toàn tenant, sau đó bật **Tự động trả lời** trên chính kênh Zalo cá nhân.
-6. Gửi một tin nhắn văn bản 1:1 mới tới tài khoản. Tin lịch sử, tin nhóm, ảnh/tệp, tin do chính tài khoản gửi và bản ghi trùng không kích hoạt chatbot.
+6. Gửi một tin nhắn văn bản 1:1 mới tới tài khoản. Tin lịch sử, ảnh/tệp, tin do chính tài khoản gửi và bản ghi trùng không kích hoạt chatbot.
+
+**Kênh chat → Chỉnh sửa → Chatbot & Session** cho phép đặt từ khóa mở/đóng phiên, lời chào, lời kết và số phút không hoạt động. Dùng dấu `;` để nhập nhiều từ khóa. Khi đặt từ khóa mở, bot 1:1 chờ từ khóa trước khi bắt đầu phiên. Bỏ trống từ khóa mở để bot trả lời ngay.
+
+**Kênh chat → Chỉnh sửa → Nhóm Zalo** cho phép bật trả lời nhóm và đặt tên gọi bot. Chọn phạm vi đồng bộ có nhóm, sau đó nhắn `Bot ơi, tư vấn giúp` trong nhóm có tài khoản cá nhân đó. Mỗi người gửi có phiên riêng. Có thể chọn một nhóm nhân viên đã liên kết OA hoặc một nhân viên trong whitelist để nhận yêu cầu chuyển tiếp. Trong nhóm, gọi bot kèm yêu cầu, ví dụ `Bot ơi, cho tôi gặp nhân viên`.
 
 Luồng này dùng public flow của CQA. Bản hiện tại chưa truyền quyền ERP có phạm vi cho tài khoản Zalo cá nhân.
 
-Gateway xử lý tối đa ba hội thoại đồng thời trên mỗi phiên Zalo và giữ tin mới nhất đang chờ trong từng hội thoại. Nếu tài khoản tự gửi tin trong cùng hội thoại khi bot đang xử lý, gateway hủy phản hồi đang chờ.
+Gateway xử lý tối đa ba lượt 1:1 và ba lượt nhóm đồng thời trên mỗi phiên Zalo. Mỗi người gửi trong một hội thoại có một tin mới nhất đang chờ. Khi tài khoản tự nhắn vào cùng hội thoại, gateway hủy phản hồi đang chờ trong hội thoại đó.
 
 Ba lớp bảo vệ áp dụng trên từng tài khoản:
 - Giãn cách tối thiểu 3 giây và tối đa 20 lần gửi trong bất kỳ cửa sổ 60 giây nào.
