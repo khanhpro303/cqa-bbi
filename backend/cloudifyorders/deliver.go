@@ -2,6 +2,7 @@ package cloudifyorders
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -41,12 +42,12 @@ type Sender interface {
 }
 
 type receiptSender interface {
-	SendReceipt(ctx context.Context, tenantID string, to Recipient, image []byte) error
+	SendReceiptPages(ctx context.Context, tenantID string, to Recipient, pages []receiptPage) error
 }
 
 type trackedOrderSender interface {
 	sendTrackedText(ctx context.Context, tenantID string, to Recipient, text string) (zaloGroupID, messageID string, err error)
-	sendTrackedReceipt(ctx context.Context, tenantID string, to Recipient, image []byte) (zaloGroupID, messageID string, err error)
+	openTrackedReceipt(ctx context.Context, tenantID string, to Recipient) (string, sendReceiptImage, error)
 }
 
 // ZaloGroupSender messages the customer's linked Zalo group through the OA
@@ -82,12 +83,23 @@ func (s ZaloGroupSender) Send(ctx context.Context, tenantID string, to Recipient
 	return notifier.Send(ctx, "", text)
 }
 
-func (s ZaloGroupSender) SendReceipt(ctx context.Context, tenantID string, to Recipient, image []byte) error {
+type receiptPage struct {
+	png      []byte
+	filename string
+	itemEnd  int
+}
+
+func (s ZaloGroupSender) SendReceiptPages(ctx context.Context, tenantID string, to Recipient, pages []receiptPage) error {
 	notifier, err := notifications.BuildZaloGroupNotifier(tenantID, to.ChannelID, to.GroupID)
 	if err != nil {
 		return err
 	}
-	return notifier.SendImage(ctx, image, "xac-nhan-don-hang.png")
+	for _, page := range pages {
+		if err := notifier.SendImage(ctx, page.png, page.filename); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeliverPending sends (or skips) the tenant's pending events, oldest first.
@@ -154,12 +166,13 @@ func deliverOne(ctx context.Context, database *gorm.DB, tenantID string, event m
 	var send func(Recipient) error
 	tracked, track := sender.(trackedOrderSender)
 	track = track && event.Kind == KindCreated && event.OrderID > 0 && event.OrderCode != "" && event.CustomerCode != ""
-	if event.Kind == KindCreated && event.ReceiptData != "" && !settings.PaymentAccount.IsEmpty() {
+	isReceipt := event.Kind == KindCreated && event.ReceiptData != "" && !settings.PaymentAccount.IsEmpty()
+	if isReceipt {
 		imageSender, ok := sender.(receiptSender)
 		if !ok {
 			return retryOrFail(event, "image sender unavailable")
 		}
-		image, err := prepareReceipt(ctx, database, tenantID, event, settings.PaymentAccount)
+		pages, err := prepareReceipt(ctx, database, tenantID, event, settings.PaymentAccount)
 		if err != nil {
 			return retryOrFail(event, "receipt image: "+err.Error())
 		}
@@ -170,12 +183,10 @@ func deliverOne(ctx context.Context, database *gorm.DB, tenantID string, event m
 		if skip != "" {
 			return DeliverySkipped, skip
 		}
-		send = func(to Recipient) error { return imageSender.SendReceipt(ctx, tenantID, to, image) }
+		send = func(to Recipient) error { return imageSender.SendReceiptPages(ctx, tenantID, to, pages) }
 		if track {
 			send = func(to Recipient) error {
-				return sendOrderConfirmation(ctx, database, event, to, func() (string, string, error) {
-					return tracked.sendTrackedReceipt(ctx, tenantID, to, image)
-				})
+				return sendReceiptConfirmation(ctx, database, event, to, tracked, pages, settings.PaymentAccount)
 			}
 		}
 	} else {
@@ -186,7 +197,10 @@ func deliverOne(ctx context.Context, database *gorm.DB, tenantID string, event m
 		send = func(to Recipient) error { return sender.Send(ctx, tenantID, to, text) }
 		if track {
 			send = func(to Recipient) error {
-				return sendOrderConfirmation(ctx, database, event, to, func() (string, string, error) {
+				return sendOrderConfirmation(ctx, database, event, to, func(current models.CloudifyOrderConfirmation, _ recordReceiptPage) (string, string, error) {
+					if current.ReceiptDelivery != nil {
+						return "", "", errors.New("payment settings changed during receipt delivery")
+					}
 					return tracked.sendTrackedText(ctx, tenantID, to, text)
 				})
 			}
@@ -203,6 +217,8 @@ func deliverOne(ctx context.Context, database *gorm.DB, tenantID string, event m
 	switch {
 	case sent > 0 && len(failures) == 0:
 		return DeliverySent, fmt.Sprintf("sent to %d group(s)", sent)
+	case sent > 0 && track && isReceipt:
+		return retryOrFail(event, strings.Join(failures, "; "))
 	case sent > 0:
 		// Some groups got it; retrying would message them twice.
 		return DeliverySent, fmt.Sprintf("sent to %d, failed %d: %s", sent, len(failures), strings.Join(failures, "; "))

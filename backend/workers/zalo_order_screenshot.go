@@ -65,9 +65,9 @@ func handleZaloOrderScreenshot(ctx context.Context, task *asynq.Task, encryption
 	}
 	database := db.DB.WithContext(ctx)
 	var row models.CloudifyOrderConfirmation
-	err = database.Select("id", "tenant_id", "channel_id", "zalo_group_id", "outbound_message_id", "message_id", "sender_id", "text").
+	err = database.Select("id", "tenant_id", "channel_id", "zalo_group_id", "outbound_message_id", "quote_message_id", "message_id", "sender_id", "text").
 		Where("tenant_id = ? AND channel_id = ? AND group_id = ? AND message_id = ?", payload.TenantID, payload.ChannelID, payload.GroupID, payload.MessageID).
-		Where("confirmed_at IS NOT NULL AND evidence_content_type = '' AND outbound_message_id <> ''").
+		Where("confirmed_at IS NOT NULL AND evidence_content_type = '' AND (outbound_message_id <> '' OR quote_message_id <> '')").
 		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
@@ -110,7 +110,11 @@ func handleZaloOrderScreenshot(ctx context.Context, task *asynq.Task, encryption
 	}
 	historyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	adapter := zalotoken.NewAdapter(channel.ID, creds, encryptionKey)
-	evidence, err := adapter.OrderEvidenceMessages(historyCtx, row.ZaloGroupID, row.OutboundMessageID, row.MessageID, row.SenderID, row.Text)
+	sourceMessageID := row.OutboundMessageID
+	if row.QuoteMessageID != "" {
+		sourceMessageID = row.QuoteMessageID
+	}
+	evidence, err := adapter.OrderEvidenceMessages(historyCtx, row.ZaloGroupID, sourceMessageID, row.MessageID, row.SenderID, row.Text)
 	cancel()
 	if err != nil {
 		return err

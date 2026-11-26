@@ -7,6 +7,7 @@ import (
 	"image/draw"
 	"image/png"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -28,19 +29,19 @@ func TestRenderReceiptPNGWithCachedPhotoAndQR(t *testing.T) {
 	}
 	payment := ReceiptPayment{QR: qr, AccountNo: "0000123456", AccountName: "CÔNG TY BÌNH MINH", TransferMemo: "S084"}
 
-	encoded, err := renderReceiptPNG(order, lines, 50000, payment)
+	encoded, err := renderReceiptPages(order, lines, 50000, payment)
+	if err != nil || len(encoded) != 1 {
+		t.Fatalf("expected one page with payment, got %d: %v", len(encoded), err)
+	}
+	canvas, err := png.Decode(bytes.NewReader(encoded[0].png))
 	if err != nil {
 		t.Fatal(err)
 	}
-	canvas, err := png.Decode(bytes.NewReader(encoded))
-	if err != nil {
-		t.Fatal(err)
+	textOnly, err := renderReceiptPages(order, lines, 50000, ReceiptPayment{})
+	if err != nil || len(textOnly) != 1 {
+		t.Fatalf("expected one page without payment, got %d: %v", len(textOnly), err)
 	}
-	textOnly, err := renderReceiptPNG(order, lines, 50000, ReceiptPayment{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain, err := png.DecodeConfig(bytes.NewReader(textOnly))
+	plain, err := png.DecodeConfig(bytes.NewReader(textOnly[0].png))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,16 +89,98 @@ func TestReceiptFontsAndLongVietnameseWords(t *testing.T) {
 	}
 }
 
-func TestRenderReceiptPNGRejectsOversizedAndInvalidOrders(t *testing.T) {
-	for _, test := range []struct {
-		lines []ReceiptLine
-		order Order
-	}{
-		{lines: make([]ReceiptLine, 200)},
-		{order: Order{Total: math.NaN()}},
+func TestRenderReceiptPagesRejectsOversizedAndInvalidOrders(t *testing.T) {
+	for _, order := range []Order{
+		{CustomerName: strings.Repeat("Khách Hàng ", 4000)},
+		{Total: math.NaN()},
 	} {
-		if _, err := renderReceiptPNG(test.order, test.lines, 0, ReceiptPayment{}); err == nil {
+		if _, err := renderReceiptPages(order, nil, 0, ReceiptPayment{}); err == nil {
 			t.Error("expected render to reject the order")
 		}
+	}
+}
+
+func TestRenderReceiptPagesMultiPage(t *testing.T) {
+	qr := image.NewGray(image.Rect(0, 0, 48, 48))
+	order := Order{
+		ID: 42, Code: "ĐH000042", CustomerCode: "KH200", CustomerName: "Khách Hàng Nhiều SP",
+		Status: "0", Date: "2026-11-25", Total: 100000,
+	}
+	// Create enough items to force multiple pages.
+	lines := make([]ReceiptLine, 40)
+	for i := range lines {
+		lines[i] = ReceiptLine{
+			SKU:  "SP" + strings.Repeat("0", 3-len(strconv.Itoa(i+1))) + strconv.Itoa(i+1),
+			Name: "Sản phẩm mẫu " + strconv.Itoa(i+1) + " với tên dài để test wrap",
+			Unit: "Cái", Quantity: float64(i + 1), UnitPrice: 2500,
+		}
+	}
+	payment := ReceiptPayment{QR: qr, AccountNo: "0000123456", AccountName: "CÔNG TY TEST", TransferMemo: "KH200"}
+
+	pages, err := renderReceiptPages(order, lines, 0, payment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) < 2 {
+		t.Fatalf("expected multiple pages for %d items, got %d page(s)", len(lines), len(pages))
+	}
+	// Every page must be a valid PNG.
+	for i, page := range pages {
+		cfg, err := png.DecodeConfig(bytes.NewReader(page.png))
+		if err != nil {
+			t.Fatalf("page %d is not a valid PNG: %v", i+1, err)
+		}
+		if cfg.Width != receiptWidth {
+			t.Fatalf("page %d width = %d, want %d", i+1, cfg.Width, receiptWidth)
+		}
+		// Pages should have roughly similar heights (not exact because
+		// item counts per page can differ by one).
+		if cfg.Height < 400 || cfg.Height > receiptPageHeight+500 {
+			t.Fatalf("page %d height = %d out of reasonable range", i+1, cfg.Height)
+		}
+	}
+	for i := range lines {
+		lines[i].Image = qr
+	}
+	withPhotos, err := renderReceiptPages(order, lines, 0, payment)
+	if err != nil || len(withPhotos) != len(pages) {
+		t.Fatalf("product photos changed pagination: %d pages, want %d: %v", len(withPhotos), len(pages), err)
+	}
+	lastItem := 0
+	for i, page := range pages {
+		if page.itemEnd <= lastItem || page.itemEnd != withPhotos[i].itemEnd {
+			t.Fatalf("unexpected item boundary on page %d: %d", i+1, page.itemEnd)
+		}
+		lastItem = page.itemEnd
+	}
+	if lastItem != len(lines) {
+		t.Fatalf("ended after %d items, want %d", lastItem, len(lines))
+	}
+
+}
+
+func TestRenderReceiptPagesSinglePageForSmallOrders(t *testing.T) {
+	order := Order{ID: 1, Code: "ĐH001", CustomerCode: "KH1", Status: "0", Total: 10000}
+	lines := []ReceiptLine{
+		{SKU: "A", Name: "Sản phẩm A", Unit: "Cái", Quantity: 1, UnitPrice: 10000},
+	}
+	pages, err := renderReceiptPages(order, lines, 0, ReceiptPayment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("small order should produce 1 page, got %d", len(pages))
+	}
+}
+
+func TestRenderReceiptPagesWithoutItems(t *testing.T) {
+	order := Order{Code: "ĐH001", CustomerName: strings.Repeat("Khách Hàng ", 600)}
+	pages, err := renderReceiptPages(order, nil, 0, ReceiptPayment{})
+	if err != nil || len(pages) != 1 {
+		t.Fatalf("expected one page for an order without items, got %d: %v", len(pages), err)
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(pages[0].png))
+	if err != nil || cfg.Height <= receiptPageHeight {
+		t.Fatalf("expected a valid PNG taller than the page target, got height %d: %v", cfg.Height, err)
 	}
 }
