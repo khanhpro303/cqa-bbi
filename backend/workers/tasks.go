@@ -1984,6 +1984,28 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return nil
 		}
 
+		var adviceImages []models.ProductAdvisoryImage
+		if intent == "IN_SCOPE" && !complaintHandover && !strings.HasPrefix(userText, "#") {
+			advice, adviceErr := productAdviceForTurn(ctx, &permCtx, input, func() []chatmemory.RecentTurn {
+				if matchedGroup.ZaloGroupID != "" {
+					return chatmemory.RecentTurnsForSender(ctx, sessionID, msgID, input, payload.Sender.ID, 2)
+				}
+				return history()
+			})
+			if adviceErr != nil {
+				log.Printf("[product-advisory] catalog lookup for channel %s failed: %v", matchedChannel.ID, adviceErr)
+			}
+			var adviceContext string
+			adviceContext, adviceImages = productAdviceContext(advice, payload.SignatureVerified)
+			if adviceContext != "" {
+				if systemPromptToUse != "" {
+					systemPromptToUse += "\n\n" + adviceContext
+				} else {
+					langflowInput += "\n\n" + adviceContext
+				}
+			}
+		}
+
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
 		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, langflowInput, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
 		// Self-heal: a per-channel Langflow override that Langflow rejects (bad
@@ -2013,7 +2035,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] langflow error (will retry) sender=%s flow=%s: %v", payload.Sender.ID, flowIDToUse, err)
 			return fmt.Errorf("langflow error: %w", err)
 		}
-		replyText := normalizeLangflowReply(lfRes.Text)
+		modelText, adviceImage := parseAdviceImage(lfRes.Text, adviceImages)
+		replyText := normalizeLangflowReply(modelText)
 		if groupAssistant {
 			markGroupLinesSeen(ctx, sessionKey, unseenGroupRaw)
 		}
@@ -2036,7 +2059,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// (orders/debt date-range prompts, inventory dòng-vs-SKU). Suppress the
 		// Agent's prose so the customer doesn't receive a duplicate — often
 		// hallucinated — answer alongside the backend-pushed prompt.
-		action := isUnansweredHandoverAction(lfRes.Text)
+		action := isUnansweredHandoverAction(modelText)
 		rich := strings.Contains(replyText, "[RICH_MESSAGE_SENT]")
 		if rich || action {
 			// The Agent says "sent" whether or not the ERP handler's push to Zalo
@@ -2067,9 +2090,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		if !action && strings.Contains(replyText, unansweredHandoverAction) {
 			replyText = botEmptyAnswerMessage
+			adviceImage = models.ProductAdvisoryImage{}
 		}
 		if action {
 			replyText = botEmptyAnswerMessage
+			adviceImage = models.ProductAdvisoryImage{}
 			if engine.HasUnansweredLookup(ctx, &permCtx) {
 				recorded := false
 				if complaintCases {
@@ -2091,6 +2116,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				replyText = cleaned
 				if strings.TrimSpace(replyText) == "" {
 					replyText = caseRecordedReply
+					adviceImage = models.ProductAdvisoryImage{}
 				}
 			}
 		}
@@ -2116,10 +2142,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if matchedGroup.ZaloGroupID != "" {
 			sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, replyText)
 		} else {
-			sendErr = adapter.SendMessage(ctx, payload.Sender.ID, replyText)
+			sendErr = adapter.SendTextMessage(ctx, payload.Sender.ID, replyText)
 		}
 		if sendErr != nil {
 			return fmt.Errorf("failed to send reply to Zalo: %w", sendErr)
+		}
+		if adviceImage.ID != "" && replyText != botEmptyAnswerMessage {
+			if err := sendAdviceImage(ctx, adapter, matchedChannel.TenantID, payload.Sender.ID, matchedGroup.ZaloGroupID, adviceImage); err != nil {
+				log.Printf("[product-advisory] image %s failed for channel %s: %v", adviceImage.ID, matchedChannel.ID, err)
+			}
 		}
 
 		if groupAssistant {

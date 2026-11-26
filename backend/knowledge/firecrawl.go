@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,6 +28,14 @@ const (
 )
 
 var errInvalidSourceURL = errors.New("enter a public HTTP or HTTPS URL")
+
+var markdownImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)`)
+
+type ScrapedPage struct {
+	Text   string
+	Title  string
+	Images []string
+}
 
 // ParseSourceURL accepts links to public websites. CQA passes the URL as data
 // to Firecrawl and only connects to Firecrawl's fixed API host.
@@ -86,7 +96,23 @@ func (f *FirecrawlClient) Check(ctx context.Context) error {
 	return err
 }
 
-func (f *FirecrawlClient) scrape(ctx context.Context, sourceURL string) (text, title string, err error) {
+// ScrapePage returns normalized product copy and public image URLs from one
+// Firecrawl response. Image destinations are removed from Text so they do not
+// pollute the chatbot's product context.
+func (f *FirecrawlClient) ScrapePage(ctx context.Context, sourceURL string) (ScrapedPage, error) {
+	page, err := f.scrapePage(ctx, sourceURL)
+	if err != nil {
+		return ScrapedPage{}, err
+	}
+	page.Text = NormalizeText(markdownImagePattern.ReplaceAllString(page.Text, ""))
+	return page, nil
+}
+
+func (f *FirecrawlClient) scrapePage(ctx context.Context, sourceURL string) (ScrapedPage, error) {
+	source, err := ParseSourceURL(sourceURL)
+	if err != nil {
+		return ScrapedPage{}, err
+	}
 	payload, err := json.Marshal(struct {
 		URL             string   `json:"url"`
 		Formats         []string `json:"formats"`
@@ -95,11 +121,11 @@ func (f *FirecrawlClient) scrape(ctx context.Context, sourceURL string) (text, t
 		MaxAge          int      `json:"maxAge"`
 	}{sourceURL, []string{"markdown"}, true, firecrawlTimeout.Milliseconds(), 0})
 	if err != nil {
-		return "", "", err
+		return ScrapedPage{}, err
 	}
 	data, err := f.request(ctx, http.MethodPost, "/scrape", payload, 16<<20)
 	if err != nil {
-		return "", "", err
+		return ScrapedPage{}, err
 	}
 
 	var page struct {
@@ -107,22 +133,74 @@ func (f *FirecrawlClient) scrape(ctx context.Context, sourceURL string) (text, t
 		Metadata struct {
 			StatusCode int    `json:"statusCode"`
 			Title      string `json:"title"`
+			OGImage    string `json:"ogImage"`
+			Image      string `json:"image"`
 		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(data, &page); err != nil {
-		return "", "", errors.New("Firecrawl returned an invalid page response")
+		return ScrapedPage{}, errors.New("Firecrawl returned an invalid page response")
 	}
 	if code := page.Metadata.StatusCode; code != 0 && code != http.StatusNotModified && (code < 200 || code >= 300) {
-		return "", "", fmt.Errorf("Firecrawl: source page returned HTTP %d", code)
+		return ScrapedPage{}, fmt.Errorf("Firecrawl: source page returned HTTP %d", code)
 	}
-	text = NormalizeText(page.Markdown)
+	text := NormalizeText(page.Markdown)
 	if text == "" {
-		return "", "", errors.New("Firecrawl returned no readable text")
+		return ScrapedPage{}, errors.New("Firecrawl returned no readable text")
 	}
 	if utf8.RuneCountInString(text) > MaxTextChars {
-		return "", "", fmt.Errorf("Firecrawl: document is longer than %d characters", MaxTextChars)
+		return ScrapedPage{}, fmt.Errorf("Firecrawl: document is longer than %d characters", MaxTextChars)
 	}
-	return text, strings.TrimSpace(page.Metadata.Title), nil
+	images := extractPublicImageURLs(source, page.Markdown, page.Metadata.OGImage, page.Metadata.Image)
+	return ScrapedPage{Text: text, Title: strings.TrimSpace(page.Metadata.Title), Images: images}, nil
+}
+
+func (f *FirecrawlClient) scrape(ctx context.Context, sourceURL string) (text, title string, err error) {
+	page, err := f.scrapePage(ctx, sourceURL)
+	return page.Text, page.Title, err
+}
+
+func extractPublicImageURLs(source *url.URL, markdown string, candidates ...string) []string {
+	for _, match := range markdownImagePattern.FindAllStringSubmatch(markdown, -1) {
+		candidate := match[1]
+		if candidate == "" {
+			candidate = match[2]
+		}
+		candidates = append(candidates, candidate)
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	images := make([]string, 0, len(candidates))
+	for _, raw := range candidates {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		u, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		resolved := source.ResolveReference(u)
+		if resolved.Scheme != "https" || resolved.Fragment != "" || (resolved.Port() != "" && resolved.Port() != "443") {
+			continue
+		}
+		switch strings.ToLower(path.Ext(resolved.Path)) {
+		case ".svg", ".ico", ".avif", ".gif", ".pdf", ".html", ".htm":
+			continue
+		}
+		validated, err := ParseSourceURL(resolved.String())
+		if err != nil {
+			continue
+		}
+		value := validated.String()
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		images = append(images, value)
+		if len(images) == 20 {
+			break
+		}
+	}
+	return images
 }
 
 func (f *FirecrawlClient) request(ctx context.Context, method, path string, payload []byte, limit int64) (json.RawMessage, error) {

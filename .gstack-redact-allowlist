@@ -1,0 +1,2 @@
+# Known-benign test fixture URL in backend/channels/zalo_oa_product_images_test.go
+https://user:secret@images.example.com

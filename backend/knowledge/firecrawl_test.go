@@ -70,6 +70,26 @@ func TestFirecrawlScrapeContract(t *testing.T) {
 	}
 }
 
+func TestFirecrawlScrapePageExtractsOnlySendableImageURLs(t *testing.T) {
+	client := NewFirecrawlClient("fc-test")
+	client.client = &http.Client{Transport: firecrawlTransport(func(*http.Request) (*http.Response, error) {
+		return firecrawlStub(http.StatusOK, `{"success":true,"data":{"markdown":"Mô tả ![front](/images/front.webp) ![insecure](http://cdn.example.com/no.jpg) ![fragment](https://cdn.example.com/side.png#crop)","metadata":{"statusCode":200,"title":"Mũ","ogImage":"https://cdn.example.com/cover.jpg"}}}`), nil
+	})}
+	page, err := client.ScrapePage(context.Background(), "https://shop.example.com/products/helmet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantImages := []string{"https://cdn.example.com/cover.jpg", "https://shop.example.com/images/front.webp"}
+	if strings.Contains(page.Text, "front.webp") || len(page.Images) != len(wantImages) {
+		t.Fatalf("page = %+v", page)
+	}
+	for i := range wantImages {
+		if page.Images[i] != wantImages[i] {
+			t.Fatalf("images = %#v, want %#v", page.Images, wantImages)
+		}
+	}
+}
+
 func TestFirecrawlScrapeRejectsErrors(t *testing.T) {
 	for _, tt := range []struct {
 		name   string

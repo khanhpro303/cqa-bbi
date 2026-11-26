@@ -371,6 +371,16 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/knowledge/:docId/archive", middleware.RequirePermission("settings", "w"), handlers.ArchiveKnowledgeDocument)
 			tenant.POST("/knowledge/:docId/restore", middleware.RequirePermission("settings", "w"), handlers.RestoreKnowledgeDocument)
 			tenant.DELETE("/knowledge/:docId", middleware.RequireRole("owner", "admin"), handlers.PurgeKnowledgeDocument)
+
+			// Product advice attached to parent SKUs in the ERP cache.
+			tenant.GET("/product-advisory", middleware.RequirePermission("settings", "r"), handlers.ListProductAdvisories)
+			tenant.GET("/product-advisory/:parentCode", middleware.RequirePermission("settings", "r"), handlers.GetProductAdvisory)
+			tenant.PUT("/product-advisory/:parentCode", middleware.RequirePermission("settings", "w"), handlers.SaveProductAdvisory)
+			tenant.POST("/product-advisory/:parentCode/scrape", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), handlers.ScrapeProductAdvisory)
+			tenant.POST("/product-advisory/:parentCode/images", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), handlers.UploadProductAdvisoryImages)
+			tenant.PATCH("/product-advisory/:parentCode/images/:imageId", middleware.RequirePermission("settings", "w"), handlers.UpdateProductAdvisoryImage)
+			tenant.DELETE("/product-advisory/:parentCode/images/:imageId", middleware.RequirePermission("settings", "w"), handlers.DeleteProductAdvisoryImage)
+			tenant.GET("/product-advisory/:parentCode/images/:imageId/content", middleware.RequirePermission("settings", "r"), handlers.GetProductAdvisoryImageContent)
 			tenant.GET("/settings/ai-prompts", middleware.RequirePermission("settings", "r"), handlers.ListTaskPrompts)
 			tenant.PUT("/settings/ai-prompts/:key", middleware.RequirePermission("settings", "w"), handlers.SaveTaskPrompt)
 

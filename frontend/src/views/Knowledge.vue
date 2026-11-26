@@ -3,6 +3,14 @@
     <h1 class="text-h5 font-weight-bold mb-2">{{ $t('nav_knowledge') }}</h1>
     <div class="text-grey-darken-1 mb-4">{{ $t('kb_page_desc') }}</div>
 
+    <v-tabs v-model="section" color="primary" class="mb-5" data-testid="knowledge-sections">
+      <v-tab value="documents" prepend-icon="mdi-file-document-multiple-outline">{{ $t('kb_section_documents') }}</v-tab>
+      <v-tab value="products" prepend-icon="mdi-package-variant-closed">{{ $t('kb_section_products') }}</v-tab>
+    </v-tabs>
+
+    <ProductAdvisory v-if="section === 'products'" :tenant-id="tenantId" :can-edit="canEdit" />
+
+    <template v-else>
     <v-alert v-if="parser === 'local'" type="info" variant="tonal" density="compact" class="mb-4" data-testid="kb-local-parser">
       {{ $t('kb_parser_local') }} <router-link :to="`/${tenantId}/ai-engines`">{{ $t('nav_ai_engines') }}</router-link>.
     </v-alert>
@@ -220,6 +228,7 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+    </template>
 
     <v-snackbar v-model="snack" :color="snackColor" timeout="4000">{{ snackText }}</v-snackbar>
   </div>
@@ -231,6 +240,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import KnowledgePlayground from '../components/KnowledgePlayground.vue'
+import ProductAdvisory from '../components/ProductAdvisory.vue'
 import { useAuthStore } from '../stores/auth'
 
 export interface KnowledgeDoc {
@@ -259,6 +269,7 @@ const base = computed(() => `/tenants/${tenantId.value}/knowledge`)
 const canEdit = computed(() => authStore.canEdit('settings'))
 const isAdmin = computed(() => ['owner', 'admin'].includes(authStore.tenantPerms?.role || ''))
 
+const section = ref<'documents' | 'products'>('documents')
 const view = ref<'active' | 'archived'>('active')
 const documents = ref<KnowledgeDoc[]>([])
 const loading = ref(false)

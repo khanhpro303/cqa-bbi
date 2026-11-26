@@ -89,6 +89,8 @@ func AutoMigrate() error {
 		&models.AppSetting{},
 		&models.DataMigration{},
 		&models.CachedProduct{},
+		&models.ProductAdvisory{},
+		&models.ProductAdvisoryImage{},
 		&models.ERPRawProduct{},
 		&models.CachedCustomer{},
 		&models.ERPParentSKUExclusion{},
