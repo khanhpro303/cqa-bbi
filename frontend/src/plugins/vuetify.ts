@@ -31,6 +31,9 @@ export default createVuetify({
     },
   },
   defaults: {
+    VSnackbar: {
+      location: 'bottom right',
+    },
     VCard: {
       rounded: 'lg',
       elevation: 1,
