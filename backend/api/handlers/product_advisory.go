@@ -29,7 +29,7 @@ const (
 )
 
 const productParentCodeExpr = "COALESCE(NULLIF(TRIM(ma_cha), ''), TRIM(ma))"
-const productCatalogGroupSelect = productParentCodeExpr + " AS parent_code, COALESCE(MAX(NULLIF(TRIM(ten_dong_bo_web), '')), MAX(NULLIF(TRIM(ten), '')), " + productParentCodeExpr + ") AS web_name, COUNT(DISTINCT ma) AS variant_count, COALESCE(MAX(nhan_hieu_name), '') AS brand, COALESCE(MAX(NULLIF(TRIM(link_anh), '')), '') AS default_image_url"
+const productCatalogGroupSelect = productParentCodeExpr + " AS parent_code, COALESCE(MAX(NULLIF(TRIM(ten_dong_bo_web), '')), MAX(NULLIF(TRIM(ten), '')), MAX(" + productParentCodeExpr + ")) AS web_name, COUNT(DISTINCT ma) AS variant_count, COALESCE(MAX(nhan_hieu_name), '') AS brand, COALESCE(MAX(NULLIF(TRIM(link_anh), '')), '') AS default_image_url"
 
 type productCatalogGroup struct {
 	ParentCode      string `json:"parent_code" gorm:"column:parent_code"`
@@ -500,8 +500,9 @@ func ensureProductAdvisory(tx *gorm.DB, tenantID string, group productCatalogGro
 	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "tenant_id"}, {Name: "parent_code"}}, DoUpdates: clause.AssignmentColumns([]string{"web_name", "updated_at"})}).Create(&profile).Error; err != nil {
 		return profile, err
 	}
-	err := tx.Where("tenant_id = ? AND parent_code = ?", tenantID, group.ParentCode).Take(&profile).Error
-	return profile, err
+	var stored models.ProductAdvisory
+	err := tx.Where("tenant_id = ? AND parent_code = ?", tenantID, group.ParentCode).Take(&stored).Error
+	return stored, err
 }
 
 func findProductAdvisoryImage(ctx context.Context, tenantID, rawParentCode, imageID string) (models.ProductAdvisoryImage, int, error) {

@@ -181,7 +181,7 @@
                   <span class="text-caption">{{ image.source === 'scraped' ? $t('product_advisory_scraped') : $t('product_advisory_manual') }}</span>
                   <v-chip v-if="!image.enabled" size="x-small" color="warning" variant="tonal" class="ml-2">{{ $t('product_advisory_pending_review') }}</v-chip>
                   <v-spacer />
-                  <v-btn v-if="image.source === 'upload' && canEdit" icon="mdi-delete-outline" size="x-small" variant="text" color="error" :aria-label="$t('delete')" @click="removeImage(image)" />
+                  <v-btn v-if="canEdit" icon="mdi-delete-outline" size="x-small" variant="text" color="error" :aria-label="$t('delete')" @click="removeImage(image)" />
                 </div>
                 <v-text-field
                   v-model="image.caption"
