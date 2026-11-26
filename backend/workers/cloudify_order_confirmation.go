@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -75,11 +76,11 @@ func saveOrderApproval(ctx context.Context, database *gorm.DB, payload ZaloWebho
 
 	var notices []models.CloudifyOrderConfirmation
 	query := tx.Model(&models.CloudifyOrderConfirmation{}).
-		Select("id", "order_id", "order_code", "customer_code", "outbound_message_id", "confirmed_at").
+		Select("id", "order_id", "order_code", "customer_code", "outbound_message_id", "receipt_delivery", "confirmed_at").
 		Where("tenant_id = ? AND group_id = ? AND channel_id = ? AND zalo_group_id = ?", channel.TenantID, group.ID, channel.ID, group.ZaloGroupID).
 		Where("delivered_at <= ?", at.Add(2*time.Second))
 	if quote := payload.Message.QuoteMsgID; quote != "" {
-		query = query.Where("outbound_message_id = ?", quote).Limit(2)
+		query = query.Where("(outbound_message_id = ? OR JSON_CONTAINS(receipt_delivery, JSON_QUOTE(?), '$.message_ids'))", quote, quote).Limit(2)
 	} else {
 		query = query.Order("delivered_at DESC, id DESC").Limit(50)
 	}
@@ -143,7 +144,8 @@ func orderNoticeForReply(notices []models.CloudifyOrderConfirmation, text, quote
 	if quote != "" {
 		var match *models.CloudifyOrderConfirmation
 		for i := range notices {
-			if notices[i].OutboundMessageID == quote {
+			receipt := notices[i].ReceiptDelivery
+			if notices[i].OutboundMessageID == quote || receipt != nil && slices.Contains(receipt.MessageIDs, quote) {
 				if match != nil {
 					return nil, false
 				}

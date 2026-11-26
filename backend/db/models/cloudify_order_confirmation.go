@@ -19,6 +19,8 @@ type CloudifyOrderConfirmation struct {
 	OutboundMessageID string     `gorm:"type:varchar(255);not null"`
 	DeliveredAt       *time.Time `gorm:"index:idx_coc_tenant_delivery,priority:2;index:idx_coc_group_delivery,priority:3"`
 
+	ReceiptDelivery *CloudifyReceiptDelivery `gorm:"type:json;serializer:json" json:"-"`
+
 	ConfirmedAt         *time.Time
 	SenderID            string  `gorm:"type:varchar(255);not null;default:''"`
 	SenderName          string  `gorm:"type:varchar(255);not null;default:''"`
@@ -33,3 +35,9 @@ type CloudifyOrderConfirmation struct {
 }
 
 func (CloudifyOrderConfirmation) TableName() string { return "cloudify_order_confirmations" }
+
+// CloudifyReceiptDelivery checkpoints a receipt's layout and successful sends.
+type CloudifyReceiptDelivery struct {
+	LayoutKey  string   `json:"layout_key"`
+	MessageIDs []string `json:"message_ids"` // In page order, including missing IDs.
+}

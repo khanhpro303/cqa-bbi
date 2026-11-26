@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"gorm.io/gorm"
@@ -71,7 +74,7 @@ func receiptRelationLabel(value any) string {
 	return strings.TrimSpace(label)
 }
 
-func prepareReceipt(ctx context.Context, database *gorm.DB, tenantID string, event models.CloudifyOrderEvent, account PaymentAccount) ([]byte, error) {
+func prepareReceipt(ctx context.Context, database *gorm.DB, tenantID string, event models.CloudifyOrderEvent, account PaymentAccount) ([]receiptPage, error) {
 	var details receiptDetails
 	if err := json.Unmarshal([]byte(event.ReceiptData), &details); err != nil || details.Lines == nil {
 		return nil, errors.New("Cloudify order details are unavailable")
@@ -101,7 +104,28 @@ func prepareReceipt(ctx context.Context, database *gorm.DB, tenantID string, eve
 	for i := range details.Lines {
 		details.Lines[i].Image = images[details.Lines[i].SKU]
 	}
-	return renderReceiptPNG(order, details.Lines, details.Discount, payment)
+	pages, err := renderReceiptPages(order, details.Lines, details.Discount, payment)
+	if err != nil {
+		return nil, err
+	}
+	orderCode := receiptFilenameCode(order.Code)
+	if orderCode == "" {
+		orderCode = strconv.FormatInt(order.ID, 10)
+	}
+	customerCode := receiptFilenameCode(order.CustomerCode)
+	for i := range pages {
+		pages[i].filename = fmt.Sprintf("XNDH-%s-%s-%d.png", orderCode, customerCode, i+1)
+	}
+	return pages, nil
+}
+
+func receiptFilenameCode(code string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(code))
 }
 
 func receiptIsPayable(event models.CloudifyOrderEvent) bool {

@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"image/png"
+	"slices"
 	"testing"
 	"time"
 
@@ -52,12 +55,36 @@ func TestCloudifyLegacyConfirmationKeepsText(t *testing.T) {
 
 type confirmationImageSender struct {
 	fakeSender
-	images [][]byte
+	pages [][]receiptPage
 }
 
-func (s *confirmationImageSender) SendReceipt(_ context.Context, _ string, _ Recipient, img []byte) error {
-	s.images = append(s.images, img)
+func (s *confirmationImageSender) SendReceiptPages(_ context.Context, _ string, _ Recipient, pages []receiptPage) error {
+	s.pages = append(s.pages, pages)
 	return nil
+}
+
+type trackedConfirmationImageSender struct {
+	confirmationImageSender
+	sentPages map[string][]string
+}
+
+func (s *trackedConfirmationImageSender) openTrackedReceipt(_ context.Context, _ string, to Recipient) (string, sendReceiptImage, error) {
+	send := func(_ context.Context, image []byte, filename string) (string, error) {
+		if _, err := png.DecodeConfig(bytes.NewReader(image)); err != nil {
+			return "", err
+		}
+		history := s.sentPages[to.GroupID]
+		s.sentPages[to.GroupID] = append(history, filename)
+		if to.GroupID == "g2" && len(history) == 1 {
+			return "", errors.New("simulated page two failure")
+		}
+		return to.GroupID + "/" + filename, nil
+	}
+	return to.GroupID, send, nil
+}
+
+func (s *trackedConfirmationImageSender) sendTrackedText(context.Context, string, Recipient, string) (string, string, error) {
+	return "", "", errors.New("expected receipt images")
 }
 
 func TestCloudifyReceiptOutbox(t *testing.T) {
@@ -130,10 +157,82 @@ func TestCloudifyReceiptOutbox(t *testing.T) {
 	if done, err := DeliverPending(ctx, database, tenant, settings, sender, now); done != 1 || err != nil {
 		t.Fatalf("deliver: %d, %v", done, err)
 	}
-	if len(sender.sent) != 0 || len(sender.images) != 2 || !bytes.Equal(sender.images[0], sender.images[1]) {
-		t.Fatalf("expected the same image once per group, got %d images and %d texts", len(sender.images), len(sender.sent))
+	if len(sender.sent) != 0 || len(sender.pages) != 2 {
+		t.Fatalf("expected one receipt per group, got %d receipts and %d texts", len(sender.pages), len(sender.sent))
 	}
-	if _, err := png.DecodeConfig(bytes.NewReader(sender.images[0])); err != nil {
+	for _, pages := range sender.pages {
+		if len(pages) != 1 || pages[0].filename != "XNDH-ĐH16-KH125-1.png" || !bytes.Equal(pages[0].png, sender.pages[0][0].png) {
+			t.Fatal("expected the same named single image in each group")
+		}
+	}
+	if _, err := png.DecodeConfig(bytes.NewReader(sender.pages[0][0].png)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCloudifyReceiptOutboxResumesFailedPage(t *testing.T) {
+	database := testDatabase(t)
+	if err := database.AutoMigrate(&models.CachedProduct{}, &models.CloudifyOrderConfirmation{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	const tenant = "receipts"
+	now := time.Now().UTC()
+	for key, value := range map[string]string{
+		KeyWatchEnabled: "true", KeyNotifyEnabled: "true", KeyPaymentBankBIN: "970415",
+		KeyPaymentAccountNo: "0012345678", KeyPaymentAccountName: "Công ty mẫu",
+	} {
+		setSetting(t, database, tenant, key, value)
+	}
+	settings, err := LoadSettings(database, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := sampleRow(16, "ĐH000016", "1")
+	row["MA_KHACH_HANG"] = "S084"
+	lines := make([]any, 40)
+	for i := range lines {
+		lines[i] = map[string]any{"MA_HANG": fmt.Sprintf("SKU%d", i+1), "SO_LUONG": 1.0, "DON_GIA": 0.0}
+	}
+	row["DON_DAT_HANG_CHI_TIET"] = lines
+	if result, err := Ingest(ctx, database, tenant, []map[string]any{row}, SourcePoll, DiffOptions{}, now); err != nil || len(result.Events) != 1 {
+		t.Fatalf("ingest: %+v, %v", result, err)
+	}
+	sender := &trackedConfirmationImageSender{sentPages: make(map[string][]string)}
+	sender.recipients = map[string][]Recipient{"S084": {{GroupID: "g1"}, {GroupID: "g2"}}}
+	if done, err := DeliverPending(ctx, database, tenant, settings, sender, now); done != 0 || err != nil {
+		t.Fatalf("expected a retry after the partial delivery, finished %d: %v", done, err)
+	}
+	setSetting(t, database, tenant, KeyPaymentAccountNo, "0012345679")
+	changedSettings, err := LoadSettings(database, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := DeliverPending(ctx, database, tenant, changedSettings, sender, now.Add(time.Minute)); done != 0 || err != nil || len(sender.sentPages["g2"]) != 2 {
+		t.Fatalf("receipt continued after the payment account changed, finished %d: %v", done, err)
+	}
+	setSetting(t, database, tenant, KeyPaymentAccountNo, settings.PaymentAccount.AccountNo)
+	if done, err := DeliverPending(ctx, database, tenant, settings, sender, now.Add(2*time.Minute)); done != 1 || err != nil {
+		t.Fatalf("expected the remaining pages to be delivered, finished %d: %v", done, err)
+	}
+	successful := sender.sentPages["g1"]
+	if len(successful) < 2 {
+		t.Fatalf("expected multiple images, got %v", successful)
+	}
+	for i, filename := range successful {
+		if want := fmt.Sprintf("XNDH-ĐH000016-S084-%d.png", i+1); filename != want {
+			t.Fatalf("filename %q, want %q", filename, want)
+		}
+	}
+	wantAttempts := append([]string{successful[0], successful[1]}, successful[1:]...)
+	if attempts := sender.sentPages["g2"]; !slices.Equal(attempts, wantAttempts) {
+		t.Fatalf("retry sent %v, want %v", attempts, wantAttempts)
+	}
+	var tracking models.CloudifyOrderConfirmation
+	firstMessageID := "g2/" + successful[0]
+	err = database.Where("group_id = ? AND JSON_CONTAINS(receipt_delivery, JSON_QUOTE(?), '$.message_ids')", "g2", firstMessageID).Take(&tracking).Error
+	if err != nil || tracking.DeliveredAt == nil || tracking.ReceiptDelivery == nil || len(tracking.ReceiptDelivery.MessageIDs) != len(successful) ||
+		tracking.ReceiptDelivery.MessageIDs[0] != firstMessageID || tracking.OutboundMessageID != "g2/"+successful[len(successful)-1] {
+		t.Fatalf("unexpected delivery tracking %+v: %v", tracking, err)
 	}
 }

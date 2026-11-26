@@ -46,6 +46,11 @@ const (
 	receiptRight     = receiptWidth - receiptLeft
 	receiptTextWidth = receiptRight - receiptLeft
 	receiptQRSize    = 228
+
+	// receiptPageHeight is the target height for each page when a long order
+	// is split across multiple images. Header and footer are repeated on
+	// every page so each one is self-contained.
+	receiptPageHeight = 3200
 )
 
 var (
@@ -119,7 +124,40 @@ type receiptLineLayout struct {
 	amount        string
 }
 
-func renderReceiptPNG(order Order, lines []ReceiptLine, discount float64, payment ReceiptPayment) ([]byte, error) {
+// receiptHeaderInfo holds pre-computed header layout measurements.
+type receiptHeaderInfo struct {
+	orderCode     []string
+	headerBottom  int
+	customerLines []string
+	metaLines     []string
+	tableHeader   int
+	tableBodyY    int // y where items start (tableHeader + 52)
+}
+
+// receiptFooterInfo holds pre-computed footer layout measurements.
+type receiptFooterInfo struct {
+	subtotal     float64
+	discount     float64
+	total        float64
+	payment      ReceiptPayment
+	paymentLines []string
+}
+
+// footerHeight returns the total height consumed by summary + total + payment + margin.
+func (f receiptFooterInfo) footerHeight() int {
+	h := 0
+	if f.discount != 0 {
+		h += 78
+	}
+	h += 16 + 84 // totalTop offset + total bar
+	if f.payment.QR != nil {
+		h += 22 + max(receiptQRSize+36, 91+36*len(f.paymentLines))
+	}
+	h += receiptMargin + 24
+	return h
+}
+
+func renderReceiptPages(order Order, lines []ReceiptLine, discount float64, payment ReceiptPayment) ([]receiptPage, error) {
 	faces, err := newReceiptFaces()
 	if err != nil {
 		return nil, err
@@ -149,7 +187,13 @@ func renderReceiptPNG(order Order, lines []ReceiptLine, discount float64, paymen
 	}
 	metaLines := wrapReceiptText(faces.small, strings.Join(metadata, "  ·  "), receiptTextWidth)
 	tableHeader := headerBottom + 82 + 36*len(customerLines) + 30*len(metaLines)
-	y := tableHeader + 52
+	tableBodyY := tableHeader + 52
+
+	header := receiptHeaderInfo{
+		orderCode: orderCode, headerBottom: headerBottom,
+		customerLines: customerLines, metaLines: metaLines,
+		tableHeader: tableHeader, tableBodyY: tableBodyY,
+	}
 
 	// Smaller thumbnails leave space in the PNG upload budget for long orders.
 	photoSize := min(76, max(48, 7200/max(1, len(lines))))
@@ -177,35 +221,22 @@ func renderReceiptPNG(order Order, lines []ReceiptLine, discount float64, paymen
 		}
 		amount := receiptMoney(lineTotal)
 		amountWidth := max(244, font.MeasureString(faces.strong, amount).Ceil()+24)
-		available := receiptRight - amountWidth - x
+		// Keep wrapping stable if a product photo becomes available during a retry.
+		available := receiptRight - amountWidth - receiptLeft - photoSize - 18
 		item := receiptLineLayout{
-			line: line, y: y, x: x,
+			line: line, x: x,
 			name:    wrapReceiptText(faces.strong, name, available),
 			details: wrapReceiptText(faces.small, detail, available),
 			amount:  amount,
 		}
 		item.height = max(100, 35+35*len(item.name)+29*len(item.details))
-		y += item.height
-		if y > receiptMaxHeight {
-			return nil, errors.New("order items exceed the confirmation image height limit")
-		}
 		layout = append(layout, item)
 		subtotal += lineTotal
 	}
 	if !receiptValidAmount(subtotal) || !receiptValidAmount(discount) || !receiptValidAmount(order.Total) {
 		return nil, errors.New("order contains an invalid total or discount")
 	}
-	if len(layout) == 0 {
-		y += 68
-	}
-	summaryTop := y
-	if discount != 0 {
-		y += 78
-	}
-	totalTop := y + 16
-	y = totalTop + 84
 
-	paymentTop := y + 22
 	var paymentLines []string
 	if payment.QR != nil {
 		paymentLines = wrapReceiptText(faces.body, payment.AccountName, receiptTextWidth-receiptQRSize-40)
@@ -215,7 +246,63 @@ func renderReceiptPNG(order Order, lines []ReceiptLine, discount float64, paymen
 		if payment.TransferMemo != "" {
 			paymentLines = append(paymentLines, wrapReceiptText(faces.body, "Nội dung: "+payment.TransferMemo, receiptTextWidth-receiptQRSize-40)...)
 		}
-		y = paymentTop + max(receiptQRSize+36, 91+36*len(paymentLines))
+	}
+	footer := receiptFooterInfo{
+		subtotal: subtotal, discount: discount, total: order.Total,
+		payment: payment, paymentLines: paymentLines,
+	}
+
+	availableForItems := receiptPageHeight - tableBodyY - footer.footerHeight()
+	var spans [][2]int
+	for start := 0; start < len(layout); {
+		end := start + 1
+		height := layout[start].height
+		for end < len(layout) && height+layout[end].height <= availableForItems {
+			height += layout[end].height
+			end++
+		}
+		spans = append(spans, [2]int{start, end})
+		start = end
+	}
+	if len(spans) == 0 {
+		spans = append(spans, [2]int{})
+	}
+
+	totalPages := len(spans)
+	result := make([]receiptPage, 0, totalPages)
+	for pageIdx, span := range spans {
+		pageItems := layout[span[0]:span[1]]
+		page, err := renderReceiptSinglePage(faces, header, pageItems, footer, photoSize, pageIdx+1, totalPages)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, receiptPage{png: page, itemEnd: span[1]})
+	}
+	return result, nil
+}
+
+// renderReceiptSinglePage draws one page. When pageNum > 0 it shows "Trang pageNum/totalPages".
+func renderReceiptSinglePage(faces receiptFaces, header receiptHeaderInfo, items []receiptLineLayout, footer receiptFooterInfo, photoSize int, pageNum, totalPages int) ([]byte, error) {
+	// Position items starting from the table body.
+	y := header.tableBodyY
+	for i := range items {
+		items[i].y = y
+		y += items[i].height
+	}
+	if len(items) == 0 {
+		y += 68
+	}
+
+	summaryTop := y
+	if footer.discount != 0 {
+		y += 78
+	}
+	totalTop := y + 16
+	y = totalTop + 84
+
+	paymentTop := y + 22
+	if footer.payment.QR != nil {
+		y = paymentTop + max(receiptQRSize+36, 91+36*len(footer.paymentLines))
 	}
 	height := y + receiptMargin + 24
 	if height > receiptMaxHeight {
@@ -225,20 +312,32 @@ func renderReceiptPNG(order Order, lines []ReceiptLine, discount float64, paymen
 	canvas := image.NewRGBA(image.Rect(0, 0, receiptWidth, height))
 	receiptFill(canvas, 0, 0, receiptWidth, height, receiptBackground)
 	receiptFill(canvas, receiptMargin, receiptMargin, receiptWidth-receiptMargin, height-receiptMargin, color.White)
-	receiptFill(canvas, receiptMargin, receiptMargin, receiptWidth-receiptMargin, headerBottom, receiptNavy)
-	receiptText(canvas, faces.heading, receiptLeft, 89, color.White, "PHIẾU XÁC NHẬN ĐƠN HÀNG")
-	receiptTextLines(canvas, faces.total, receiptLeft, 141, 46, receiptLightBlue, orderCode)
-	receiptText(canvas, faces.strong, receiptLeft, headerBottom+52, receiptInk, "Khách hàng")
-	receiptTextLines(canvas, faces.body, receiptLeft, headerBottom+88, 36, receiptInk, customerLines)
-	receiptTextLines(canvas, faces.small, receiptLeft, headerBottom+88+36*len(customerLines), 30, receiptMuted, metaLines)
 
-	receiptFill(canvas, receiptLeft-12, tableHeader, receiptRight+12, tableHeader+44, receiptBackground)
-	receiptText(canvas, faces.strong, receiptLeft, tableHeader+30, receiptInk, "Sản phẩm")
-	receiptRightText(canvas, faces.strong, tableHeader+30, receiptInk, "Thành tiền")
-	if len(layout) == 0 {
-		receiptText(canvas, faces.body, receiptLeft, tableHeader+86, receiptMuted, "Chưa có chi tiết sản phẩm")
+	// Header
+	receiptFill(canvas, receiptMargin, receiptMargin, receiptWidth-receiptMargin, header.headerBottom, receiptNavy)
+	receiptText(canvas, faces.heading, receiptLeft, 89, color.White, "PHIẾU XÁC NHẬN ĐƠN HÀNG")
+	receiptTextLines(canvas, faces.total, receiptLeft, 141, 46, receiptLightBlue, header.orderCode)
+
+	// Page indicator (inside the navy header, right-aligned)
+	if totalPages > 1 {
+		pageLabel := "Trang " + strconv.Itoa(pageNum) + "/" + strconv.Itoa(totalPages)
+		receiptRightText(canvas, faces.small, 89, color.White, pageLabel)
 	}
-	for _, item := range layout {
+
+	receiptText(canvas, faces.strong, receiptLeft, header.headerBottom+52, receiptInk, "Khách hàng")
+	receiptTextLines(canvas, faces.body, receiptLeft, header.headerBottom+88, 36, receiptInk, header.customerLines)
+	receiptTextLines(canvas, faces.small, receiptLeft, header.headerBottom+88+36*len(header.customerLines), 30, receiptMuted, header.metaLines)
+
+	// Table header
+	receiptFill(canvas, receiptLeft-12, header.tableHeader, receiptRight+12, header.tableHeader+44, receiptBackground)
+	receiptText(canvas, faces.strong, receiptLeft, header.tableHeader+30, receiptInk, "Sản phẩm")
+	receiptRightText(canvas, faces.strong, header.tableHeader+30, receiptInk, "Thành tiền")
+	if len(items) == 0 {
+		receiptText(canvas, faces.body, receiptLeft, header.tableHeader+86, receiptMuted, "Chưa có chi tiết sản phẩm")
+	}
+
+	// Items
+	for _, item := range items {
 		if item.line.Image != nil {
 			photoTop := item.y + 12
 			bounds := image.Rect(receiptLeft, photoTop, receiptLeft+photoSize, photoTop+photoSize)
@@ -249,23 +348,27 @@ func renderReceiptPNG(order Order, lines []ReceiptLine, discount float64, paymen
 		receiptRightText(canvas, faces.strong, item.y+32, receiptInk, item.amount)
 		receiptFill(canvas, receiptLeft, item.y+item.height-1, receiptRight, item.y+item.height, receiptBorder)
 	}
-	if discount != 0 {
+
+	// Summary + total
+	if footer.discount != 0 {
 		receiptText(canvas, faces.body, receiptLeft, summaryTop+35, receiptMuted, "Tạm tính")
-		receiptRightText(canvas, faces.body, summaryTop+35, receiptMuted, receiptMoney(subtotal))
+		receiptRightText(canvas, faces.body, summaryTop+35, receiptMuted, receiptMoney(footer.subtotal))
 		receiptText(canvas, faces.body, receiptLeft, summaryTop+71, receiptMuted, "Giảm giá")
-		receiptRightText(canvas, faces.body, summaryTop+71, receiptMuted, receiptMoney(-discount))
+		receiptRightText(canvas, faces.body, summaryTop+71, receiptMuted, receiptMoney(-footer.discount))
 	}
 	receiptFill(canvas, receiptLeft-12, totalTop, receiptRight+12, totalTop+84, receiptMint)
 	receiptText(canvas, faces.strong, receiptLeft, totalTop+53, receiptTeal, "Tổng tiền đơn hàng")
-	receiptRightText(canvas, faces.total, totalTop+53, receiptTeal, receiptMoney(order.Total))
-	if payment.QR != nil {
+	receiptRightText(canvas, faces.total, totalTop+53, receiptTeal, receiptMoney(footer.total))
+
+	// Payment QR
+	if footer.payment.QR != nil {
 		left := receiptLeft + receiptQRSize + 35
 		receiptFill(canvas, receiptLeft-12, paymentTop, receiptRight+12, y, receiptBackground)
 		box := image.Rect(receiptLeft, paymentTop+18, receiptLeft+receiptQRSize, paymentTop+18+receiptQRSize)
 		draw.Draw(canvas, box, image.NewUniform(color.White), image.Point{}, draw.Src)
-		drawReceiptImage(canvas, payment.QR, box.Inset(18), imagedraw.NearestNeighbor)
+		drawReceiptImage(canvas, footer.payment.QR, box.Inset(18), imagedraw.NearestNeighbor)
 		receiptText(canvas, faces.strong, left, paymentTop+59, receiptInk, "Quét VietQR để chuyển khoản")
-		receiptTextLines(canvas, faces.body, left, paymentTop+101, 36, receiptMuted, paymentLines)
+		receiptTextLines(canvas, faces.body, left, paymentTop+101, 36, receiptMuted, footer.paymentLines)
 	}
 
 	var pngBuffer bytes.Buffer

@@ -10,13 +10,15 @@ import (
 func TestOrderNoticeForReply(t *testing.T) {
 	notices := []models.CloudifyOrderConfirmation{
 		{ID: "newer", OrderCode: "ĐH0000160", OutboundMessageID: "out-2"},
-		{ID: "older", OrderCode: "ĐH000016", OutboundMessageID: "out-1"},
+		{ID: "older", OrderCode: "ĐH000016", OutboundMessageID: "out-1", ReceiptDelivery: &models.CloudifyReceiptDelivery{MessageIDs: []string{"page-1", "out-1"}}},
 	}
 	for _, tc := range []struct {
 		text, quote, id string
 		history         bool
 	}{
 		{"ok", "out-1", "older", false},
+		{"ok", "page-1", "older", false},
+		{"ok", "page-", "", false},
 		{"ok ĐH000016", "someone-else", "", false},
 		{"duyệt đơn ĐH0000160", "", "newer", false},
 		{"duyệt đơn ĐH000016.", "", "older", false},
