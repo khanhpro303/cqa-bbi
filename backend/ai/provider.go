@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 // AIResponse contains the AI response text and usage metrics.
@@ -56,9 +57,7 @@ func CalculateCostUSD(provider, model string, inputTokens, outputTokens int) flo
 	if !ok {
 		return 0
 	}
-	if NormalizeProvider(provider) == "openai" && inputTokens > 272_000 &&
-		(modelMatchesRate(strings.ToLower(strings.TrimSpace(model)), "gpt-5.4") ||
-			modelMatchesRate(strings.ToLower(strings.TrimSpace(model)), "gpt-5.4-pro")) {
+	if NormalizeProvider(provider) == "openai" && inputTokens > 272_000 && openAIUsesLongContextPricing(model) {
 		rates.input *= 2
 		rates.output *= 1.5
 	}
@@ -95,6 +94,19 @@ var modelTokenRates = map[string][]struct {
 		{"gemini-2.0-flash-001", tokenRates{0.10, 0.40}},
 	},
 	"openai": {
+		{"gpt-6.2-astra", tokenRates{8.00, 40.00}},
+		{"gpt-6.2-sol", tokenRates{2.00, 10.00}},
+		{"gpt-6.1-terra", tokenRates{1.00, 5.00}},
+		{"gpt-6.1-sol", tokenRates{2.00, 10.00}},
+		{"gpt-6-astra", tokenRates{10.00, 50.00}},
+		{"gpt-6-sol", tokenRates{2.00, 10.00}},
+		{"gpt-6-luna", tokenRates{0.10, 0.50}},
+		{"gpt-5.6-sol", tokenRates{5.00, 30.00}},
+		{"gpt-5.6", tokenRates{5.00, 30.00}},
+		{"gpt-5.6-terra", tokenRates{2.00, 12.00}},
+		{"gpt-5.6-luna", tokenRates{0.20, 1.20}},
+		{"gpt-5.5-pro", tokenRates{30.00, 180.00}},
+		{"gpt-5.5", tokenRates{5.00, 30.00}},
 		{"gpt-5.4-nano", tokenRates{0.20, 1.25}},
 		{"gpt-5.4-mini", tokenRates{0.75, 4.50}},
 		{"gpt-5.4-pro", tokenRates{30.00, 180.00}},
@@ -112,13 +124,58 @@ var modelTokenRates = map[string][]struct {
 	},
 }
 
+var openAILongContextModels = []string{
+	"gpt-6.2-astra",
+	"gpt-6.2-sol",
+	"gpt-6.1-terra",
+	"gpt-6.1-sol",
+	"gpt-6-astra",
+	"gpt-6-sol",
+	"gpt-6-luna",
+	"gpt-5.6-sol",
+	"gpt-5.6",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
+	"gpt-5.5",
+	"gpt-5.4-pro",
+	"gpt-5.4",
+}
+
+func openAIUsesLongContextPricing(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	for _, pricedModel := range openAILongContextModels {
+		if modelMatchesRate(model, pricedModel) {
+			return true
+		}
+	}
+	return false
+}
+
 func lookupTokenRates(provider, model string) (tokenRates, bool) {
 	provider = NormalizeProvider(provider)
 	model = strings.ToLower(strings.TrimSpace(model))
+	if provider == "openai" {
+		if rates, ok := gpt56SolPromotionalRates(model, time.Now()); ok {
+			return rates, true
+		}
+	}
 	for _, pricedModel := range modelTokenRates[provider] {
 		if modelMatchesRate(model, pricedModel.model) {
 			return pricedModel.rates, true
 		}
+	}
+	return tokenRates{}, false
+}
+
+func gpt56SolPromotionalRates(model string, now time.Time) (tokenRates, bool) {
+	if !modelMatchesRate(model, "gpt-5.6-sol") && !modelMatchesRate(model, "gpt-5.6") {
+		return tokenRates{}, false
+	}
+	// OpenAI publishes the current promotion through November 30, 2026
+	// and the original Standard list rate of $5/$30 per million tokens.
+	promoEnd := time.Date(2026, time.December, 1, 8, 0, 0, 0, time.UTC)
+	if now.Before(promoEnd) {
+		return tokenRates{4.00, 20.00}, true
 	}
 	return tokenRates{}, false
 }
