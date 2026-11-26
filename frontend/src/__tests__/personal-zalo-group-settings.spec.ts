@@ -7,9 +7,11 @@ import {
 } from '../components/channels/personalZaloGroupSettings'
 
 describe('personal Zalo group settings', () => {
-  it('defaults group replies off and keeps configured names and handover group', () => {
+  it('defaults all personal group modes off and keeps configured modes, names and handover group', () => {
     expect(readPersonalZaloGroupSettings()).toEqual({
       personal_zalo_group_reply_enabled: false,
+      group_assistant_mode: false,
+      group_staff_call_only: false,
       group_bot_names: '',
       handover_alert_group_id: '',
       personal_zalo_handover_staff_id: '',
@@ -17,15 +19,31 @@ describe('personal Zalo group settings', () => {
 
     const settings = readPersonalZaloGroupSettings({
       personal_zalo_group_reply_enabled: true,
+      group_assistant_mode: true,
+      group_staff_call_only: true,
       group_bot_names: ' Bull;bot ',
       handover_alert_group_id: 'staff-group',
       personal_zalo_handover_staff_id: 'staff-person',
     })
     expect(personalZaloGroupSettingsPatch(settings)).toEqual({
       personal_zalo_group_reply_enabled: true,
+      group_assistant_mode: true,
+      group_staff_call_only: true,
       group_bot_names: 'Bull;bot',
       handover_alert_group_id: 'staff-group',
       personal_zalo_handover_staff_id: '',
+    })
+  })
+
+  it('preserves the staff-only preference while assistant mode is off', () => {
+    const settings = readPersonalZaloGroupSettings({
+      group_assistant_mode: false,
+      group_staff_call_only: true,
+    })
+
+    expect(personalZaloGroupSettingsPatch(settings)).toMatchObject({
+      group_assistant_mode: false,
+      group_staff_call_only: true,
     })
   })
 

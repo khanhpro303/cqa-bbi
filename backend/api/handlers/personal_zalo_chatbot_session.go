@@ -34,6 +34,8 @@ type personalZaloSessionConfig struct {
 	SessionTimeoutMinutes int    `json:"session_timeout_minutes"`
 	Managed               bool   `json:"-"`
 	GroupBotNames         string `json:"group_bot_names"`
+	GroupAssistantMode    bool   `json:"group_assistant_mode"`
+	GroupStaffCallOnly    bool   `json:"group_staff_call_only"`
 }
 
 type personalZaloTurn struct {
@@ -197,9 +199,9 @@ func personalZaloSessionFlowScope(req personalZaloChatbotRequest, sessionID stri
 	return "personal-zalo-" + hex.EncodeToString(digest[:])
 }
 
-func planPersonalZaloTurn(ctx context.Context, session personalZaloSessionConfig, req personalZaloChatbotRequest) (personalZaloTurn, error) {
+func planPersonalZaloTurn(ctx context.Context, session personalZaloSessionConfig, req personalZaloChatbotRequest, groupAssistantReply bool) (personalZaloTurn, error) {
 	group := req.ThreadType == personalZaloThreadGroup
-	if group && !personalZaloGroupMessageAddressed(req.Text, session) {
+	if group && !groupAssistantReply && !personalZaloGroupMessageAddressed(req.Text, session) {
 		return personalZaloTurn{}, nil
 	}
 	if !group && !session.Managed {

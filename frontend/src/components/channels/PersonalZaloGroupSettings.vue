@@ -13,6 +13,29 @@
       color="primary"
       data-testid="personal-zalo-group-reply-enabled"
     />
+
+    <div class="text-body-2 font-weight-medium mt-4 mb-1">{{ $t('personal_zalo_group_assistant_title') }}</div>
+    <v-switch
+      v-model="settings.group_assistant_mode"
+      :disabled="!settings.personal_zalo_group_reply_enabled"
+      :label="$t('personal_zalo_group_assistant_mode')"
+      :hint="$t('personal_zalo_group_assistant_mode_hint')"
+      persistent-hint
+      density="compact"
+      color="primary"
+      data-testid="personal-zalo-group-assistant-mode"
+    />
+    <v-switch
+      v-model="settings.group_staff_call_only"
+      :disabled="!settings.personal_zalo_group_reply_enabled || !settings.group_assistant_mode"
+      :label="$t('personal_zalo_group_staff_call_only')"
+      :hint="$t('personal_zalo_group_staff_call_only_hint')"
+      persistent-hint
+      density="compact"
+      color="primary"
+      class="mt-2"
+      data-testid="personal-zalo-group-staff-call-only"
+    />
     <v-text-field
       v-model="settings.group_bot_names"
       :label="$t('group_bot_names')"
@@ -20,7 +43,7 @@
       placeholder="bot"
       persistent-hint
       density="compact"
-      class="mt-3"
+      class="mt-2"
       data-testid="personal-zalo-group-bot-names"
     />
 

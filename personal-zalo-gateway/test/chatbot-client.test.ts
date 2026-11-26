@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
 import {
+  acknowledgePersonalZaloChatbotDelivery,
   buildChatbotRequest,
   chatbotEndpoint,
   isChatbotEligibleMessage,
@@ -121,6 +122,43 @@ test('a fresh group text carries separate group and sender identities', () => {
   assert.equal(payload.thread_type, 'group');
   assert.equal(payload.thread_id, '50005');
   assert.equal(payload.sender_id, '20002');
+});
+
+test('a group delivery receipt preserves the original identity and is independently signed', async (t) => {
+  t.after(() => {
+    delete process.env.PERSONAL_ZALO_CHATBOT_BASE_URL;
+    delete process.env.PERSONAL_ZALO_CHATBOT_SECRET;
+  });
+  process.env.PERSONAL_ZALO_CHATBOT_BASE_URL = deployment.baseUrl;
+  process.env.PERSONAL_ZALO_CHATBOT_SECRET = deployment.secret;
+  const now = Date.now();
+  const groupMessage = { ...message(now), threadType: 'group' as const, threadId: '50005' };
+  const deliveryReceipt = '123e4567-e89b-42d3-a456-426614174000';
+  const initial = buildChatbotRequest(account, groupMessage, deployment, now);
+  const receipt = buildChatbotRequest(account, groupMessage, deployment, now + 1, deliveryReceipt);
+  assert.ok(initial);
+  assert.ok(receipt);
+  const initialBody = JSON.parse(initial.body);
+  const receiptBody = JSON.parse(receipt.body);
+  assert.notEqual(receipt.requestId, initial.requestId);
+  assert.deepEqual(
+    { ...receiptBody, request_id: initialBody.request_id, delivery_receipt: undefined },
+    { ...initialBody, delivery_receipt: undefined },
+  );
+  assert.equal(receiptBody.delivery_receipt, deliveryReceipt);
+  assert.notEqual(receipt.signature, initial.signature);
+
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 204 }));
+  await acknowledgePersonalZaloChatbotDelivery(account, groupMessage, deliveryReceipt);
+  assert.equal(fetchMock.mock.callCount(), 1);
+  const request = fetchMock.mock.calls[0]?.arguments[1] as RequestInit;
+  const body = JSON.parse(String(request.body));
+  assert.equal(body.text, groupMessage.content);
+  assert.equal(body.sent_at, new Date(groupMessage.timestamp).toISOString());
+  assert.equal(body.delivery_receipt, deliveryReceipt);
+  const headers = request.headers as Record<string, string>;
+  assert.equal(headers['X-CQA-Signature']?.length, 64);
+  assert.equal(headers['X-CQA-Chatbot-Signature']?.length, 64);
 });
 
 test('CQA 204, failures and oversized replies do not produce a reply', async (t) => {
