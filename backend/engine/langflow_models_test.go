@@ -86,7 +86,7 @@ func TestSyncLangflowFlowModelRejectsUnsafeChoices(t *testing.T) {
 		{"Anthropic", "claude-haiku-4-5", "flow_provider_change_requires_langflow"},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
-			_, _, _, err := patchLangflowFlowModel([]byte(modelFlowFixture), tc.provider, tc.model)
+			_, _, _, err := patchLangflowFlowModel([]byte(modelFlowFixture), tc.provider, tc.model, nil)
 			got, ok := IsLangflowFlowModelError(err)
 			if !ok || got.Code != tc.code {
 				t.Fatalf("error = %v, want %s", err, tc.code)

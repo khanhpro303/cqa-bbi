@@ -35,6 +35,7 @@ type LangflowFlowModel struct {
 	Metadata     map[string]any        `json:"metadata,omitempty"`
 	Options      []LangflowModelOption `json:"options"`
 	AgentNodeIDs []string              `json:"agent_node_ids,omitempty"`
+	liveOpenAI   bool
 }
 
 type LangflowFlowModelError struct {
@@ -61,17 +62,19 @@ func ParseLangflowFlowModel(flowJSON []byte) (LangflowFlowModel, error) {
 		return LangflowFlowModel{}, err
 	}
 	result := LangflowFlowModel{
-		FlowID:   stringValue(document["id"]),
-		Name:     stringValue(document["name"]),
-		Model:    agents[0].selectedName,
-		Provider: agents[0].selectedFrom,
-		Metadata: mapValue(agents[0].selected["metadata"]),
+		FlowID:     stringValue(document["id"]),
+		Name:       stringValue(document["name"]),
+		Model:      agents[0].selectedName,
+		Provider:   agents[0].selectedFrom,
+		Metadata:   mapValue(agents[0].selected["metadata"]),
+		liveOpenAI: true,
 	}
 	for _, agent := range agents {
 		if agent.selectedName != result.Model || agent.selectedFrom != result.Provider {
 			return LangflowFlowModel{}, &LangflowFlowModelError{Code: "inconsistent_agent_models", Message: "Các agent node trong flow đang dùng model khác nhau; hãy đồng nhất trong Langflow trước."}
 		}
 		result.AgentNodeIDs = append(result.AgentNodeIDs, agent.nodeID)
+		result.liveOpenAI = result.liveOpenAI && agent.supportsLiveOpenAI()
 	}
 	result.Options = commonLangflowModelOptions(agents)
 	return result, nil
@@ -89,6 +92,9 @@ func ReadLangflowFlowModel(ctx context.Context, apiURL, apiKey, flowID string) (
 	if model.FlowID == "" {
 		model.FlowID = flowID
 	}
+	if model.liveOpenAI {
+		model.addOpenAICatalog(readLangflowOpenAICatalog(ctx, apiURL, apiKey, model.Provider))
+	}
 	return model, nil
 }
 
@@ -100,7 +106,14 @@ func SyncLangflowFlowModel(ctx context.Context, apiURL, apiKey, flowID, provider
 	if err != nil {
 		return LangflowFlowModel{}, err
 	}
-	payload, changed, selectedProvider, err := patchLangflowFlowModel(body, provider, modelName)
+	payload, changed, selectedProvider, err := patchLangflowFlowModel(body, provider, modelName, nil)
+	var catalog []LangflowModelOption
+	if modelErr, ok := IsLangflowFlowModelError(err); ok && modelErr.Code == "model_not_available" {
+		catalog = readLangflowOpenAICatalog(ctx, apiURL, apiKey, provider)
+		if len(catalog) > 0 {
+			payload, changed, selectedProvider, err = patchLangflowFlowModel(body, provider, modelName, catalog)
+		}
+	}
 	if err != nil {
 		return LangflowFlowModel{}, err
 	}
@@ -129,10 +142,13 @@ func SyncLangflowFlowModel(ctx context.Context, apiURL, apiKey, flowID, provider
 	if result.Model != modelName || !strings.EqualFold(result.Provider, selectedProvider) {
 		return LangflowFlowModel{}, &LangflowFlowModelError{Code: "model_sync_not_applied", Message: "Model đọc lại từ Langflow khác với lựa chọn đã gửi. Hãy tải lại flow."}
 	}
+	if result.liveOpenAI {
+		result.addOpenAICatalog(catalog)
+	}
 	return result, nil
 }
 
-func patchLangflowFlowModel(flowJSON []byte, provider, modelName string) ([]byte, bool, string, error) {
+func patchLangflowFlowModel(flowJSON []byte, provider, modelName string, catalog []LangflowModelOption) ([]byte, bool, string, error) {
 	document, agents, err := parseLangflowAgentModels(flowJSON)
 	if err != nil {
 		return nil, false, "", err
@@ -140,6 +156,12 @@ func patchLangflowFlowModel(flowJSON []byte, provider, modelName string) ([]byte
 	modelName, provider = strings.TrimSpace(modelName), strings.TrimSpace(provider)
 	if modelName == "" {
 		return nil, false, "", &LangflowFlowModelError{Code: "model_required", Message: "Model không được để trống."}
+	}
+	for _, agent := range agents {
+		if !agent.supportsLiveOpenAI() {
+			catalog = nil
+			break
+		}
 	}
 	selectedProvider := ""
 	changed := false
@@ -149,7 +171,19 @@ func patchLangflowFlowModel(flowJSON []byte, provider, modelName string) ([]byte
 		if provider == "" || !strings.EqualFold(agent.selectedFrom, provider) {
 			return nil, false, "", &LangflowFlowModelError{Code: "flow_provider_change_requires_langflow", Message: "Đổi nhà cung cấp cần cấu hình khóa API của agent trong Langflow."}
 		}
+		if agent.supportsLiveOpenAI() && modelName != agent.selectedName && langflowOpenAIRequiresDifferentToolMode(modelName) {
+			return nil, false, "", &LangflowFlowModelError{Code: "model_tool_mode_unsupported", Message: "Model này cần chế độ gọi công cụ khác với cấu hình Agent hiện tại."}
+		}
 		option, optionProvider, selectErr := selectLangflowModelOption(agent.options, provider, modelName)
+		if modelErr, ok := IsLangflowFlowModelError(selectErr); ok && modelErr.Code == "model_not_available" {
+			for _, candidate := range catalog {
+				if candidate.Name == modelName && strings.EqualFold(candidate.Provider, agent.selectedFrom) {
+					option = candidate.graphValue(agent.selectedFrom)
+					optionProvider, selectErr = agent.selectedFrom, nil
+					break
+				}
+			}
+		}
 		if selectErr != nil {
 			return nil, false, "", selectErr
 		}
