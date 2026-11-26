@@ -1,6 +1,6 @@
 import { logger } from '../logger.js';
 import type { GatewayStore } from '../store/file-store.js';
-import type { ThreadType } from '../types.js';
+import type { IncomingGatewayMessage, ThreadType } from '../types.js';
 import { detectContentType, messageContentToString } from './helpers.js';
 
 async function resolveZaloName(api: any, uid: string): Promise<{ zaloName: string; avatar: string }> {
@@ -37,7 +37,10 @@ export interface ListenerContext {
   accountId: string;
   api: any;
   store: GatewayStore;
-  onDisconnected: (accountId: string) => void;
+  onDisconnected: (accountId: string) => Promise<void>;
+  onConnected?: () => void;
+  onLiveMessage?: (message: IncomingGatewayMessage) => Promise<void>;
+  onSelfMessage?: (threadId: string, text: string) => void;
 }
 
 async function persistMessage(
@@ -45,7 +48,7 @@ async function persistMessage(
   accountId: string,
   api: any,
   message: any,
-): Promise<void> {
+): Promise<{ inserted: boolean; message: IncomingGatewayMessage }> {
   const isGroup = message.type === 1;
   const threadType: ThreadType = isGroup ? 'group' : 'user';
   const senderUid = String(message.data?.uidFrom || '');
@@ -65,30 +68,19 @@ async function persistMessage(
 
   const rawContent = message.data?.content;
   
-  let msgTimestamp = Date.now();
-  if (message.data?.ts) msgTimestamp = Number.parseInt(message.data.ts, 10);
-  else if (message.data?.time) msgTimestamp = Number(message.data.time);
-  else if (message.timestamp) msgTimestamp = Number(message.timestamp);
-  else if (message.time) msgTimestamp = Number(message.time);
-  else if (message.data?.cliMsgId) {
-    const tsParts = String(message.data.cliMsgId).split('_');
-    if (tsParts.length > 0 && !Number.isNaN(Number(tsParts[0]))) {
-      msgTimestamp = Number(tsParts[0]);
-    }
-  }
+  const explicitTimestamp = parseExplicitZaloTimestamp(message.data?.ts);
+  let fallbackTimestamp = Number(message.data?.time || message.timestamp || message.time ||
+    String(message.data?.cliMsgId || '').split('_')[0]);
+  if (fallbackTimestamp > 0 && fallbackTimestamp < 100_000_000_000) fallbackTimestamp *= 1000;
 
-  // Zalo sometimes returns time in seconds. If it's less than year 2001 in ms, it's definitely seconds.
-  if (msgTimestamp > 0 && msgTimestamp < 100000000000) {
-    msgTimestamp *= 1000;
-  }
-
-  await store.recordIncomingMessage(accountId, {
+  const incomingMessage: IncomingGatewayMessage = {
     senderUid,
     senderName,
     content: messageContentToString(rawContent),
     contentType: detectContentType(message.data?.msgType, rawContent),
     msgId: String(message.data?.msgId || ''),
-    timestamp: msgTimestamp,
+    timestamp: explicitTimestamp ?? (Number.isFinite(fallbackTimestamp) && fallbackTimestamp > 0 &&
+      fallbackTimestamp <= 8.64e15 ? fallbackTimestamp : Date.now()),
     isSelf: Boolean(message.isSelf),
     threadId: String(message.threadId || ''),
     threadType,
@@ -97,14 +89,28 @@ async function persistMessage(
     rawData: {
       message_type: message.data?.msgType || '',
     },
-  });
+    sourceContentIsString: typeof rawContent === 'string',
+    sourceTimestampIsValid: explicitTimestamp !== null,
+  };
+  const inserted = await store.recordIncomingMessage(accountId, incomingMessage);
+  return { inserted, message: incomingMessage };
+}
+
+function parseExplicitZaloTimestamp(value: unknown): number | null {
+  const raw = typeof value === 'number' ? String(value) : value;
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
+  const milliseconds = parsed < 100_000_000_000 ? parsed * 1000 : parsed;
+  return milliseconds <= 8.64e15 ? milliseconds : null;
 }
 
 export function attachZaloListener(ctx: ListenerContext): void {
-  const { accountId, api, store, onDisconnected } = ctx;
+  const { accountId, api, store, onConnected, onDisconnected, onLiveMessage, onSelfMessage } = ctx;
   const listener = api.listener;
 
   listener.on('connected', () => {
+    onConnected?.();
     logger.info(`[zalo:${accountId}] listener connected`);
     setTimeout(() => {
       try {
@@ -118,7 +124,15 @@ export function attachZaloListener(ctx: ListenerContext): void {
 
   listener.on('message', async (message: any) => {
     try {
-      await persistMessage(store, accountId, api, message);
+      if (onSelfMessage && message.isSelf && message.type === 0) {
+        onSelfMessage(String(message.threadId || ''), messageContentToString(message.data?.content));
+      }
+      const persisted = await persistMessage(store, accountId, api, message);
+      if (persisted.inserted && !persisted.message.isSelf && onLiveMessage) {
+        return onLiveMessage(persisted.message).catch((error) => {
+          logger.error(`[zalo:${accountId}] live chatbot dispatch failed`, error);
+        });
+      }
     } catch (error) {
       logger.error(`[zalo:${accountId}] message listener failed`, error);
     }
@@ -143,7 +157,9 @@ export function attachZaloListener(ctx: ListenerContext): void {
 
   listener.on('closed', (code: number, reason: string) => {
     logger.warn(`[zalo:${accountId}] listener closed code=${code} reason=${reason}`);
-    onDisconnected(accountId);
+    return onDisconnected(accountId).catch((error) => {
+      logger.error(`[zalo:${accountId}] failed to record listener closure`, error);
+    });
   });
 
   listener.on('error', (error: unknown) => {

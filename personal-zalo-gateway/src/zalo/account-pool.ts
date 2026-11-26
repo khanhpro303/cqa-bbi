@@ -1,7 +1,10 @@
 import { createRequire } from 'node:module';
+import { setTimeout as delay } from 'node:timers/promises';
+import { personalZaloChatbotConfig } from '../config.js';
 import { logger } from '../logger.js';
 import type { GatewayStore } from '../store/file-store.js';
-import type { SessionData } from '../types.js';
+import type { GatewayAccountRecord, IncomingGatewayMessage, SessionData } from '../types.js';
+import { isChatbotEligibleMessage, requestPersonalZaloChatbotReply } from '../chatbot/cqa-chatbot-client.js';
 import { attachZaloListener } from './listener.js';
 
 const require = createRequire(import.meta.url);
@@ -12,6 +15,20 @@ interface ZaloInstance {
   zalo: any;
   api: any;
   status: 'connected' | 'disconnected' | 'qr_pending' | 'connecting';
+  listenerClosed?: boolean;
+  chatbot?: ChatbotSession;
+}
+
+interface ActiveChatbotThread {
+  cancelled: boolean;
+  latest?: IncomingGatewayMessage;
+  expectedEcho?: { text: string; expiresAt: number };
+}
+
+interface ChatbotSession {
+  threads: Map<string, ActiveChatbotThread>;
+  sendChain: Promise<void>;
+  nextSendAt: number;
 }
 
 export class ZaloAccountPool {
@@ -149,7 +166,8 @@ export class ZaloAccountPool {
       logger.warn(`[zalo:${accountId}] getOwnProfile failed`, error);
     }
 
-    await this.store.setAccountRuntime(accountId, {
+    if (this.instances.get(accountId) !== instance) return;
+    const saved = await this.store.setAccountRuntime(accountId, {
       status: 'connected',
       zaloUid: ownId,
       accountExternalId: ownId,
@@ -159,14 +177,111 @@ export class ZaloAccountPool {
       lastError: '',
     });
 
+    if (!saved || this.instances.get(accountId) !== instance) return;
+
+    if (personalZaloChatbotConfig()) {
+      instance.chatbot = { threads: new Map(), sendChain: Promise.resolve(), nextSendAt: 0 };
+    }
     attachZaloListener({
       accountId,
       api,
       store: this.store,
+      onConnected: () => { instance.listenerClosed = false; },
       onDisconnected: (id) => {
-        void this.handleDisconnect(id);
+        instance.listenerClosed = true;
+        if (this.instances.get(id) !== instance) return Promise.resolve();
+        return this.handleDisconnect(id);
       },
+      onLiveMessage: instance.chatbot ? (message) => this.handleLiveMessage(accountId, ownId, instance, message) : undefined,
+      onSelfMessage: instance.chatbot ? (threadId, text) => {
+        const active = instance.chatbot?.threads.get(threadId);
+        if (!active) return;
+        if (active.expectedEcho?.text === text && active.expectedEcho.expiresAt >= Date.now()) {
+          active.expectedEcho = undefined;
+          return;
+        }
+        active.cancelled = true;
+        active.latest = undefined;
+      } : undefined,
     });
+  }
+
+  private async handleLiveMessage(
+    accountId: string,
+    ownId: string,
+    instance: ZaloInstance,
+    message: IncomingGatewayMessage,
+  ): Promise<void> {
+    const chatbot = instance.chatbot;
+    if (!chatbot || !this.canSendChatbotReply(accountId, instance) ||
+        message.threadId === ownId || !isChatbotEligibleMessage(message)) {
+      return;
+    }
+    const existing = chatbot.threads.get(message.threadId);
+    if (existing) {
+      if (!existing.latest || message.timestamp >= existing.latest.timestamp) existing.latest = message;
+      return;
+    }
+    if (chatbot.threads.size >= 3) return;
+
+    const active: ActiveChatbotThread = { cancelled: false };
+    chatbot.threads.set(message.threadId, active);
+    try {
+      let current: IncomingGatewayMessage | undefined = message;
+      while (current && this.canSendChatbotReply(accountId, instance)) {
+        active.latest = undefined;
+        active.cancelled = false;
+        const account = await this.store.getAccount(accountId);
+        if (account?.status === 'connected' && account.zaloUid === ownId && account.accountExternalId === ownId &&
+            !active.cancelled && this.canSendChatbotReply(accountId, instance)) {
+          const reply = await requestPersonalZaloChatbotReply(account, current);
+          if (reply && !active.cancelled) {
+            await this.sendChatbotReply(chatbot, active, instance, account, current.threadId, reply);
+          }
+        }
+        current = active.latest;
+      }
+    } finally {
+      chatbot.threads.delete(message.threadId);
+    }
+  }
+
+  private canSendChatbotReply(accountId: string, instance: ZaloInstance): boolean {
+    return this.instances.get(accountId) === instance && instance.status === 'connected' && !instance.listenerClosed;
+  }
+
+  private async sendChatbotReply(
+    chatbot: ChatbotSession,
+    active: ActiveChatbotThread,
+    instance: ZaloInstance,
+    expectedAccount: GatewayAccountRecord,
+    threadId: string,
+    reply: string,
+  ): Promise<void> {
+    const accountId = expectedAccount.id;
+    const send = chatbot.sendChain.then(async () => {
+      if (active.cancelled || !this.canSendChatbotReply(accountId, instance)) return;
+      const waitMs = chatbot.nextSendAt - Date.now();
+      if (waitMs > 0) await delay(waitMs);
+      const account = await this.store.getAccount(accountId);
+      if (active.cancelled || !this.canSendChatbotReply(accountId, instance) ||
+          account?.status !== 'connected' || account.zaloUid !== expectedAccount.zaloUid ||
+          account.tenantId !== expectedAccount.tenantId || account.channelId !== expectedAccount.channelId ||
+          account.accountExternalId !== expectedAccount.accountExternalId || account.importSecret !== expectedAccount.importSecret) {
+        return;
+      }
+      active.expectedEcho = { text: reply, expiresAt: Date.now() + 30_000 };
+      try {
+        await instance.api.sendMessage(reply, threadId, 0);
+      } finally {
+        chatbot.nextSendAt = Date.now() + 3_000;
+      }
+    }).catch((error) => {
+      active.expectedEcho = undefined;
+      logger.warn(`[zalo:${accountId}] chatbot send failed`, error);
+    });
+    chatbot.sendChain = send;
+    await send;
   }
 
   private async handleDisconnect(accountId: string): Promise<void> {

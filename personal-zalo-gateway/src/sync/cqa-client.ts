@@ -28,6 +28,23 @@ export class CQAImportError extends Error {
   }
 }
 
+export function signInternalRequestBody(
+  secret: string,
+  body: string,
+  requestId = randomUUID(),
+  now = Date.now(),
+): { requestId: string; timestamp: string; signature: string } {
+  const timestamp = `${Math.floor(now / 1000)}`;
+  const signature = createHmac('sha256', secret)
+    .update(timestamp)
+    .update('.')
+    .update(requestId)
+    .update('.')
+    .update(body)
+    .digest('hex');
+  return { requestId, timestamp, signature };
+}
+
 export function buildSignedImportRequest(accountBatch: AccountSyncBatch): {
   url: string;
   requestId: string;
@@ -36,7 +53,6 @@ export function buildSignedImportRequest(accountBatch: AccountSyncBatch): {
   body: string;
 } {
   const requestId = randomUUID();
-  const timestamp = `${Math.floor(Date.now() / 1000)}`;
   const payload = {
     schema_version: '2026-04-08',
     request_id: requestId,
@@ -50,19 +66,11 @@ export function buildSignedImportRequest(accountBatch: AccountSyncBatch): {
     })),
   };
   const body = JSON.stringify(payload);
-  const signature = createHmac('sha256', accountBatch.account.importSecret)
-    .update(timestamp)
-    .update('.')
-    .update(requestId)
-    .update('.')
-    .update(body)
-    .digest('hex');
+  const signed = signInternalRequestBody(accountBatch.account.importSecret, body, requestId);
 
   return {
     url: accountBatch.account.importEndpoint,
-    requestId,
-    timestamp,
-    signature,
+    ...signed,
     body,
   };
 }

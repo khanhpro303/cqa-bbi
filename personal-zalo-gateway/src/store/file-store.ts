@@ -107,8 +107,8 @@ export class GatewayStore {
     });
   }
 
-  async recordIncomingMessage(accountId: string, message: IncomingGatewayMessage): Promise<void> {
-    await this.updateState((state) => {
+  async recordIncomingMessage(accountId: string, message: IncomingGatewayMessage): Promise<boolean> {
+    return this.updateState((state) => {
       const account = state.accounts[accountId];
       if (!account) {
         throw new Error(`account_not_found:${accountId}`);
@@ -144,7 +144,8 @@ export class GatewayStore {
         thread_key: threadKey,
       };
 
-      if (!conversation.messages[messageID]) {
+      const inserted = !conversation.messages[messageID];
+      if (inserted) {
         conversation.messages[messageID] = {
           externalId: messageID,
           senderType: message.isSelf ? 'agent' : 'customer',
@@ -166,7 +167,7 @@ export class GatewayStore {
       account.threads[threadKey] = conversation;
       account.updatedAt = nowISO();
       account.lastError = '';
-      return undefined;
+      return inserted;
     });
   }
 

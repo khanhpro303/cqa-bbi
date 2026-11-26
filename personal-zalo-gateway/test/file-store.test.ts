@@ -17,7 +17,7 @@ test('GatewayStore deduplicates messages and builds pending sync batches', async
     importSecret: 'secret-1',
   });
 
-  await store.recordIncomingMessage(account.id, {
+  const inserted = await store.recordIncomingMessage(account.id, {
     senderUid: 'u-1',
     senderName: 'Alice',
     content: 'hello',
@@ -29,7 +29,7 @@ test('GatewayStore deduplicates messages and builds pending sync batches', async
     threadType: 'user',
   });
 
-  await store.recordIncomingMessage(account.id, {
+  const duplicate = await store.recordIncomingMessage(account.id, {
     senderUid: 'u-1',
     senderName: 'Alice',
     content: 'hello',
@@ -40,6 +40,9 @@ test('GatewayStore deduplicates messages and builds pending sync batches', async
     threadId: 'u-1',
     threadType: 'user',
   });
+
+  assert.equal(inserted, true);
+  assert.equal(duplicate, false);
 
   const batch = await store.nextSyncBatch(account.id, 10, 10);
   assert.ok(batch);
