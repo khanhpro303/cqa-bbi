@@ -29,16 +29,9 @@ func NewOpenAIProvider(apiKey, model, baseURL string) *OpenAIProvider {
 	if model == "" {
 		model = "gpt-5.4-mini"
 	}
-	mappedModel := model
-	switch model {
-	case "gpt-5.4-mini", "gpt-5-mini", "gpt-5-nano":
-		mappedModel = "gpt-4o-mini"
-	case "gpt-5", "gpt-5.3-codex", "gpt-5.3-chat-latest":
-		mappedModel = "gpt-4o"
-	}
 	return &OpenAIProvider{
 		apiKey:  apiKey,
-		model:   mappedModel,
+		model:   model,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		name:    "openai",
 	}
@@ -236,8 +229,9 @@ func parseChatCompletion(body []byte, fallbackModel string) (AIResponse, error) 
 			} `json:"message"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
+			PromptTokens     int      `json:"prompt_tokens"`
+			CompletionTokens int      `json:"completion_tokens"`
+			Cost             *float64 `json:"cost"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
@@ -253,11 +247,12 @@ func parseChatCompletion(body []byte, fallbackModel string) (AIResponse, error) 
 	}
 
 	return AIResponse{
-		Content:      parsed.Choices[0].Message.Content,
-		InputTokens:  parsed.Usage.PromptTokens,
-		OutputTokens: parsed.Usage.CompletionTokens,
-		Model:        model,
-		Provider:     "openai",
+		Content:         parsed.Choices[0].Message.Content,
+		InputTokens:     parsed.Usage.PromptTokens,
+		OutputTokens:    parsed.Usage.CompletionTokens,
+		ReportedCostUSD: parsed.Usage.Cost,
+		Model:           model,
+		Provider:        "openai",
 	}, nil
 }
 

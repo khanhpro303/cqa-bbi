@@ -243,7 +243,7 @@ func classifyOrderApproval(ctx context.Context, cfg *config.Config, tenantID, co
 	if isDirectOrderApproval(text, code) {
 		return true, nil
 	}
-	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg, engine.AITaskOrderApproval)
 	if err != nil || resolved.Client == nil {
 		return false, err
 	}

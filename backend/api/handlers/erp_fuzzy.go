@@ -19,12 +19,12 @@ import (
 // getAIClient creates an AI provider client based on tenant settings
 // (provider, model, API key, optional base URL). Used by every fuzzy
 // matching path that needs to ask an LLM for a single best-of-N pick.
-func getAIClient(ctx context.Context, tenantID string) (ai.AIProvider, error) {
+func getAIClient(ctx context.Context, tenantID, task string) (ai.AIProvider, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg, task)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string, scope
 		candidates = candidates[:fuzzyCandidateCap]
 	}
 
-	aiClient, err := getAIClient(ctx, tenantID)
+	aiClient, err := getAIClient(ctx, tenantID, engine.PromptProductCodeMatch)
 	if err != nil || aiClient == nil {
 		return "", fmt.Errorf("AI client not available: %w", err)
 	}
@@ -137,7 +137,7 @@ func fuzzyMatchAttributesWithLLM(
 		return "", "", "", nil
 	}
 
-	aiClient, clientErr := getAIClient(ctx, tenantID)
+	aiClient, clientErr := getAIClient(ctx, tenantID, engine.PromptAttributeMatch)
 	if clientErr != nil || aiClient == nil {
 		return "", "", "", fmt.Errorf("AI client not available: %w", clientErr)
 	}

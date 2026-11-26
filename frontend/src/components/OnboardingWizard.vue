@@ -29,9 +29,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
+import { readJsonStorage, writeJsonStorage } from '../utils/storage'
 
 const route = useRoute()
 const router = useRouter()
@@ -44,9 +45,17 @@ interface OnboardingStep {
   link: string
 }
 
+interface CachedOnboarding {
+  dismissed: boolean
+  steps: OnboardingStep[]
+}
+
+const onboardingCacheKey = (id: string) => `cqa_onboarding_status:${id}`
+
 const steps = ref<OnboardingStep[]>([])
 const dismissed = ref(false)
 const loaded = ref(false)
+let activeRequestId = 0
 
 const visible = computed(() => {
   if (!loaded.value || dismissed.value) return false
@@ -55,24 +64,58 @@ const visible = computed(() => {
 
 const completedCount = computed(() => steps.value.filter(s => s.done).length)
 
-async function loadOnboarding() {
-  if (!tenantId.value) return
-  loaded.value = false
-  try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/onboarding-status`)
-    steps.value = data.steps || []
-    dismissed.value = data.dismissed || false
+function hydrateFromCache(id: string) {
+  const cached = readJsonStorage<CachedOnboarding>(onboardingCacheKey(id))
+  if (cached && Array.isArray(cached.steps)) {
+    steps.value = cached.steps
+    dismissed.value = Boolean(cached.dismissed)
     loaded.value = true
+    return
+  }
+  steps.value = []
+  dismissed.value = false
+  loaded.value = false
+}
+
+async function loadOnboarding() {
+  const id = tenantId.value
+  if (!id) return
+  const requestId = ++activeRequestId
+  try {
+    const { data } = await api.get(`/tenants/${id}/onboarding-status`)
+    if (requestId !== activeRequestId || tenantId.value !== id) return
+    const nextSteps = Array.isArray(data.steps) ? data.steps : []
+    const nextDismissed = Boolean(data.dismissed)
+    steps.value = nextSteps
+    dismissed.value = nextDismissed
+    loaded.value = true
+    writeJsonStorage(onboardingCacheKey(id), {
+      dismissed: nextDismissed,
+      steps: nextSteps,
+    })
   } catch {
-    loaded.value = false
+    if (requestId === activeRequestId && !loaded.value) {
+      loaded.value = false
+    }
   }
 }
 
-onMounted(loadOnboarding)
-// Reload when tenant changes (switch company)
-watch(tenantId, loadOnboarding)
-// Reload when navigating between pages (steps may have been completed)
-watch(() => route.path, loadOnboarding)
+watch(
+  () => [tenantId.value, route.path] as const,
+  ([id], prev) => {
+    if (!id) {
+      steps.value = []
+      dismissed.value = false
+      loaded.value = false
+      return
+    }
+    if (!prev || prev[0] !== id) {
+      hydrateFromCache(id)
+    }
+    loadOnboarding()
+  },
+  { immediate: true },
+)
 
 function goToStep(step: OnboardingStep) {
   if (!step.done) {
@@ -81,9 +124,16 @@ function goToStep(step: OnboardingStep) {
 }
 
 async function dismiss() {
+  const id = tenantId.value
   dismissed.value = true
+  if (id) {
+    writeJsonStorage(onboardingCacheKey(id), {
+      dismissed: true,
+      steps: steps.value,
+    })
+  }
   try {
-    await api.put(`/tenants/${tenantId.value}/settings`, {
+    await api.put(`/tenants/${id}/settings`, {
       key: 'onboarding_dismissed',
       value: 'true',
     })

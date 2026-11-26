@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/vietbui/chat-quality-agent/config"
 )
@@ -332,7 +333,10 @@ func (f *flowDiscoveryRoundTripper) RoundTrip(r *http.Request) (*http.Response, 
 }
 
 const discoveryFlowBody = `{"data":{"nodes":[
-	{"id":"ToolCallingAgent-DISCOVER","data":{"node":{"template":{"system_prompt":{"value":"SYSTEM_PROMPT","load_from_db":true}}}}},
+	{"id":"ToolCallingAgent-DISCOVER","data":{"node":{"template":{
+		"system_prompt":{"value":"SYSTEM_PROMPT","load_from_db":true},
+		"model":{"value":[{"name":"gpt-5-mini","provider":"OpenAI"}],"options":[]}
+	}}}},
 	{"id":"ChatInput-irrelevant","data":{"node":{"template":{"input_value":{"value":""}}}}}
 ]}}`
 
@@ -396,6 +400,59 @@ func TestResolveAgentNodeIDsCachesPerFlow(t *testing.T) {
 	}
 	if transport.getCount != 1 {
 		t.Fatalf("expected flow definition fetched once (cached), got %d GETs", transport.getCount)
+	}
+}
+
+func TestFlowModelForUsageSharesDiscoveryAndIsolatesConnections(t *testing.T) {
+	transport := &flowDiscoveryRoundTripper{flowBody: discoveryFlowBody}
+	client := NewLangflowClient(&config.Config{})
+	client.client = &http.Client{Transport: transport}
+
+	provider, model := client.FlowModelForUsage(context.Background(), "https://langflow.example", "key-a", "flow-cache")
+	if provider != "openai" || model != "gpt-5-mini" {
+		t.Fatalf("FlowModelForUsage = (%q, %q), want (openai, gpt-5-mini)", provider, model)
+	}
+	if got := client.resolveAgentNodeIDs(context.Background(), "https://langflow.example", "key-a", "flow-cache"); len(got) != 1 || got[0] != "ToolCallingAgent-DISCOVER" {
+		t.Fatalf("resolveAgentNodeIDs = %#v, want cached discovered node", got)
+	}
+	if transport.getCount != 1 {
+		t.Fatalf("same connection should share discovery, got %d GETs", transport.getCount)
+	}
+
+	client.FlowModelForUsage(context.Background(), "https://other-langflow.example", "key-a", "flow-cache")
+	client.FlowModelForUsage(context.Background(), "https://other-langflow.example", "key-b", "flow-cache")
+	if transport.getCount != 3 {
+		t.Fatalf("URL and credential must isolate cache entries, got %d GETs", transport.getCount)
+	}
+}
+
+func TestFlowModelForUsageRefreshesExpiredMetadata(t *testing.T) {
+	transport := &flowDiscoveryRoundTripper{flowBody: discoveryFlowBody}
+	client := NewLangflowClient(&config.Config{})
+	client.client = &http.Client{Transport: transport}
+
+	client.FlowModelForUsage(context.Background(), "https://langflow.example", "key", "flow")
+	key := flowDiscoveryCacheKey("https://langflow.example", "key", "flow")
+	cached := client.nodeCache[key]
+	cached.modelExpiresAt = time.Now().Add(-time.Second)
+	client.nodeCache[key] = cached
+	client.FlowModelForUsage(context.Background(), "https://langflow.example", "key", "flow")
+	if transport.getCount != 2 {
+		t.Fatalf("expired model metadata should force a fresh GET, got %d", transport.getCount)
+	}
+}
+
+func TestParseLangflowResultKeepsSeparatedModelIdentity(t *testing.T) {
+	body := []byte(`{"provider":"Anthropic","outputs":[{"outputs":[{"results":{"message":{"text":"ok","properties":{"usage":{"input_tokens":11,"output_tokens":7,"model_name":"claude-haiku-4-5"}}}}}]}]}`)
+	result, err := parseLangflowResult(body)
+	if err != nil {
+		t.Fatalf("parseLangflowResult error: %v", err)
+	}
+	if !result.HasUsage || result.InputTokens != 11 || result.OutputTokens != 7 {
+		t.Fatalf("usage = %#v, want real 11/7 tokens", result)
+	}
+	if result.Provider != "claude" || result.Model != "claude-haiku-4-5" {
+		t.Fatalf("identity = (%q, %q), want (claude, claude-haiku-4-5)", result.Provider, result.Model)
 	}
 }
 

@@ -11,9 +11,13 @@ interface User {
   language: string
 }
 
-interface TenantPermissions {
+export interface TenantPermissions {
   role: string
   permissions: Record<string, string> // { channels: "rw", messages: "r", jobs: "", settings: "" }
+}
+
+export function hasTenantPermission(tenant: TenantPermissions, resource: string, action: 'r' | 'w'): boolean {
+  return tenant.role === 'owner' || tenant.role === 'admin' || (tenant.permissions[resource] || '').includes(action)
 }
 
 const skipFacebookAutoLoginKey = 'cqa_skip_facebook_auto_login'
@@ -25,29 +29,23 @@ export const useAuthStore = defineStore('auth', () => {
   const tenantPerms = ref<TenantPermissions>({ role: '', permissions: {} })
 
   function canView(resource: string): boolean {
-    const role = tenantPerms.value.role
-    if (role === 'owner' || role === 'admin') return true
-    const perm = tenantPerms.value.permissions[resource] || ''
-    return perm.includes('r')
+    return hasTenantPermission(tenantPerms.value, resource, 'r')
   }
 
   function canEdit(resource: string): boolean {
-    const role = tenantPerms.value.role
-    if (role === 'owner' || role === 'admin') return true
-    const perm = tenantPerms.value.permissions[resource] || ''
-    return perm.includes('w')
+    return hasTenantPermission(tenantPerms.value, resource, 'w')
   }
 
-  async function fetchTenantPermissions(tenantId: string) {
+  async function fetchTenantPermissions(tenantId: string): Promise<TenantPermissions> {
     try {
       const { data } = await api.get(`/tenants/${tenantId}/me`)
       let perms: Record<string, string> = {}
       if (data.permissions) {
         try { perms = JSON.parse(data.permissions) } catch { perms = {} }
       }
-      tenantPerms.value = { role: data.role || '', permissions: perms }
+      return { role: data.role || '', permissions: perms }
     } catch {
-      tenantPerms.value = { role: '', permissions: {} }
+      return { role: '', permissions: {} }
     }
   }
 

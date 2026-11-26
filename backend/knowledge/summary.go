@@ -64,7 +64,7 @@ func StartDocumentSummary(ctx context.Context, doc *models.KnowledgeDocument, cf
 	if doc.CharCount > summaryMaxRunes {
 		return current, ErrSummarySize
 	}
-	resolved, err := engine.ResolveTenantAIProvider(doc.TenantID, cfg)
+	resolved, err := engine.ResolveTenantAIProvider(doc.TenantID, cfg, engine.AITaskKnowledgeSummary)
 	if err != nil {
 		return current, err
 	}

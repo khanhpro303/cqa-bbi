@@ -259,7 +259,7 @@ func replyToCasualTurn(ctx context.Context, tenantID string, recent []chatmemory
 		return casualReply{}, errNoTimeForCasualReply
 	}
 	cfg, _ := config.Load()
-	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg, engine.PromptCasualReply)
 	if err != nil {
 		return casualReply{}, err
 	}
@@ -285,12 +285,13 @@ func replyToCasualTurn(ctx context.Context, tenantID string, recent []chatmemory
 		Outcome: outcome,
 		Prompt:  systemPrompt + "\n" + input,
 		Result: engine.LangflowResult{
-			Text:         text,
-			InputTokens:  resp.InputTokens,
-			OutputTokens: resp.OutputTokens,
-			Model:        resp.Model,
-			Provider:     resp.Provider,
-			HasUsage:     resp.InputTokens > 0 || resp.OutputTokens > 0,
+			Text:            text,
+			InputTokens:     resp.InputTokens,
+			OutputTokens:    resp.OutputTokens,
+			Model:           resp.Model,
+			Provider:        resp.Provider,
+			HasUsage:        resp.InputTokens > 0 || resp.OutputTokens > 0,
+			ReportedCostUSD: resp.ReportedCostUSD,
 		},
 	}, nil
 }

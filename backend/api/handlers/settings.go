@@ -20,6 +20,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -110,89 +111,128 @@ func getSettingValue(settings []models.AppSetting, key, defaultVal string) strin
 	return defaultVal
 }
 
-// SaveAISettings saves AI provider and API key
+// SaveAISettings saves provider credentials and, optionally, the tenant default.
 func SaveAISettings(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	var req struct {
-		Provider  string `json:"provider" binding:"required,oneof=claude gemini openai openrouter"`
-		APIKey    string `json:"api_key" binding:"required"`
-		Model     string `json:"model"`
-		BaseURL   string `json:"base_url"`
-		BatchMode string `json:"batch_mode"`
-		BatchSize string `json:"batch_size"`
+		Provider        string `json:"provider" binding:"required,oneof=claude gemini openai openrouter"`
+		APIKey          string `json:"api_key" binding:"required"`
+		Model           string `json:"model"`
+		BaseURL         string `json:"base_url"`
+		BatchMode       string `json:"batch_mode"`
+		BatchSize       string `json:"batch_size"`
+		CredentialsOnly bool   `json:"credentials_only"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
 		return
 	}
-
-	cfg, _ := config.Load()
-
-	// Audit: giá trị cũ để ghi cũ→mới.
-	oldProvider := getPlainSetting(tenantID, "ai_provider")
-	oldModel := getPlainSetting(tenantID, "ai_model")
-	apiKeyChanged := false
-
-	// Save model (plain)
-	if req.Model != "" {
-		upsertSetting(tenantID, "ai_model", req.Model, nil)
-	}
-
-	// Save base URL (plain, optional — empty string clears it)
-	if req.BaseURL != "" {
-		upsertSetting(tenantID, "ai_base_url", req.BaseURL, nil)
-	} else {
-		// Explicitly clear: delete the setting if empty
-		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_base_url").Delete(&models.AppSetting{})
-	}
-
-	// Save API key (encrypted, per provider). Keep existing key if masked value is sent.
-	currentProvider := req.Provider
-	var currentProviderSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_provider").First(&currentProviderSetting).Error; err == nil && currentProviderSetting.ValuePlain != "" {
-		currentProvider = currentProviderSetting.ValuePlain
+	cfg, err := config.Load()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ai_configuration_unavailable"})
+		return
 	}
 
 	providerKey := ai.ProviderAPIKeySettingKey(req.Provider)
-	if isMaskedSecret(req.APIKey) {
-		if _, err := getFirstSettingByKeys(tenantID, []string{providerKey}); err != nil {
-			// Backward compatibility: allow legacy key only when provider is unchanged.
-			if req.Provider != currentProvider {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key_configured"})
-				return
-			}
-			if _, legacyErr := getFirstSettingByKeys(tenantID, []string{"ai_api_key"}); legacyErr != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key_configured"})
-				return
-			}
-		}
-	} else {
-		encrypted, err := pkg.Encrypt([]byte(req.APIKey), cfg.EncryptionKey)
+	apiKeyChanged := !isMaskedSecret(req.APIKey)
+	var encrypted []byte
+	if apiKeyChanged {
+		encrypted, err = pkg.Encrypt([]byte(req.APIKey), cfg.EncryptionKey)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "encryption_failed"})
 			return
 		}
-		upsertSetting(tenantID, providerKey, "", encrypted)
-		apiKeyChanged = true
 	}
 
-	// Save provider (plain)
-	upsertSetting(tenantID, "ai_provider", req.Provider, nil)
-
-	// Save batch settings
-	if req.BatchMode != "" {
-		upsertSetting(tenantID, "ai_batch_mode", req.BatchMode, nil)
-	}
-	if req.BatchSize != "" {
-		upsertSetting(tenantID, "ai_batch_size", req.BatchSize, nil)
+	var oldProvider, oldModel string
+	missingKey := false
+	err = db.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		var existing []models.AppSetting
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("tenant_id = ? AND setting_key IN ?", tenantID,
+				[]string{"ai_provider", "ai_model", "ai_base_url", providerKey, "ai_api_key"}).
+			Find(&existing).Error; err != nil {
+			return err
+		}
+		oldProvider = getSettingValue(existing, "ai_provider", "claude")
+		oldModel = getSettingValue(existing, "ai_model", "")
+		hasAPIKey := apiKeyChanged
+		for _, row := range existing {
+			legacyForProvider := row.SettingKey == "ai_api_key" && oldProvider == req.Provider && req.Provider != "openrouter"
+			if (row.SettingKey == providerKey || legacyForProvider) && (len(row.ValueEncrypted) > 0 || row.ValuePlain != "") {
+				hasAPIKey = true
+				break
+			}
+		}
+		if !hasAPIKey {
+			missingKey = true
+			return gorm.ErrRecordNotFound
+		}
+		rows := []models.AppSetting{}
+		put := func(key, value string, secret []byte) {
+			rows = append(rows, models.AppSetting{ID: pkg.NewUUID(), TenantID: tenantID, SettingKey: key, ValuePlain: value, ValueEncrypted: secret})
+		}
+		if apiKeyChanged {
+			put(providerKey, "", encrypted)
+		}
+		baseURL := strings.TrimSpace(req.BaseURL)
+		put(ai.ProviderBaseURLSettingKey(req.Provider), baseURL, nil)
+		if !req.CredentialsOnly || oldProvider == req.Provider {
+			put("ai_base_url", baseURL, nil)
+		}
+		if !req.CredentialsOnly {
+			if oldProvider != req.Provider && ai.ValidProvider(oldProvider) {
+				// Preserve the old provider's endpoint for legacy tenants that
+				// configured it before per-provider URLs were available.
+				prior := models.AppSetting{ID: pkg.NewUUID(), TenantID: tenantID, SettingKey: ai.ProviderBaseURLSettingKey(oldProvider),
+					ValuePlain: getSettingValue(existing, "ai_base_url", "")}
+				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&prior).Error; err != nil {
+					return err
+				}
+				for _, row := range existing {
+					if oldProvider != "openrouter" && row.SettingKey == "ai_api_key" && (len(row.ValueEncrypted) > 0 || row.ValuePlain != "") {
+						priorKey := models.AppSetting{ID: pkg.NewUUID(), TenantID: tenantID, SettingKey: ai.ProviderAPIKeySettingKey(oldProvider),
+							ValuePlain: row.ValuePlain, ValueEncrypted: row.ValueEncrypted}
+						if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&priorKey).Error; err != nil {
+							return err
+						}
+						break
+					}
+				}
+			}
+			put("ai_provider", req.Provider, nil)
+			if req.Model != "" {
+				put("ai_model", req.Model, nil)
+			} else if oldProvider != req.Provider {
+				put("ai_model", ai.DefaultModel(req.Provider), nil)
+			}
+			if req.BatchMode != "" {
+				put("ai_batch_mode", req.BatchMode, nil)
+			}
+			if req.BatchSize != "" {
+				put("ai_batch_size", req.BatchSize, nil)
+			}
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "setting_key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"value_plain", "value_encrypted", "updated_at"}),
+		}).Create(&rows).Error
+	})
+	if err != nil {
+		if missingKey {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key_configured"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "save_ai_settings_failed"})
+		}
+		return
 	}
 
 	uid, uemail, ip := middleware.GetUserID(c), middleware.GetUserEmail(c), c.ClientIP()
-	if req.Provider != oldProvider {
+	if !req.CredentialsOnly && req.Provider != oldProvider {
 		db.LogActivity(tenantID, uid, uemail, "ai.provider_changed", "settings", "ai_provider",
 			fmt.Sprintf("AI provider: %s→%s", oldProvider, req.Provider), "", ip)
 	}
-	if req.Model != "" && req.Model != oldModel {
+	if !req.CredentialsOnly && req.Model != "" && req.Model != oldModel {
 		db.LogActivity(tenantID, uid, uemail, "ai.model_changed", "settings", "ai_model",
 			fmt.Sprintf("AI model: %s→%s", oldModel, req.Model), "", ip)
 	}
@@ -200,7 +240,6 @@ func SaveAISettings(c *gin.Context) {
 		db.LogActivity(tenantID, uid, uemail, "ai.api_key_rotated", "settings", "ai_api_key",
 			fmt.Sprintf("API key (provider %s) đã thay đổi", req.Provider), "", ip)
 	}
-
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})
 }
 
@@ -524,14 +563,18 @@ func langflowTestChannelWarnings(tenantID string) []string {
 // TestAIKey tests the AI API key by making a simple request
 func TestAIKey(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
-	cfg, _ := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ai_configuration_unavailable"})
+		return
+	}
 
 	// Optional request payload so UI can test unsaved key/provider directly.
 	var req struct {
-		Provider string `json:"provider"`
-		APIKey   string `json:"api_key"`
-		Model    string `json:"model"`
-		BaseURL  string `json:"base_url"`
+		Provider string  `json:"provider"`
+		APIKey   string  `json:"api_key"`
+		Model    string  `json:"model"`
+		BaseURL  *string `json:"base_url"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -540,10 +583,11 @@ func TestAIKey(c *gin.Context) {
 
 	// Get provider
 	var providerSetting models.AppSetting
-	provider := "claude"
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_provider").First(&providerSetting).Error; err == nil {
-		provider = providerSetting.ValuePlain
+	defaultProvider := "claude"
+	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_provider").First(&providerSetting).Error; err == nil && providerSetting.ValuePlain != "" {
+		defaultProvider = providerSetting.ValuePlain
 	}
+	provider := defaultProvider
 	if req.Provider != "" {
 		if !ai.ValidProvider(req.Provider) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_provider"})
@@ -557,7 +601,11 @@ func TestAIKey(c *gin.Context) {
 		apiKey = []byte(req.APIKey)
 	} else {
 		// Get API key by provider (fallback to legacy ai_api_key)
-		setting, err := getFirstSettingByKeys(tenantID, ai.ProviderAPIKeySettingKeys(provider))
+		keyNames := []string{ai.ProviderAPIKeySettingKey(provider)}
+		if provider == defaultProvider {
+			keyNames = ai.ProviderAPIKeySettingKeys(provider)
+		}
+		setting, err := getFirstSettingByKeys(tenantID, keyNames)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key_configured"})
 			return
@@ -573,25 +621,26 @@ func TestAIKey(c *gin.Context) {
 		}
 	}
 
-	_ = apiKey
-
 	// Get model + base URL for provider test (allow request override before save)
 	model := ""
 	if req.Model != "" {
 		model = req.Model
-	} else {
+	} else if provider == defaultProvider {
 		var modelSetting models.AppSetting
 		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_model").First(&modelSetting).Error; err == nil {
 			model = strings.TrimSpace(modelSetting.ValuePlain)
 		}
 	}
 	baseURL := ""
-	if req.BaseURL != "" {
-		baseURL = strings.TrimSpace(req.BaseURL)
+	if req.BaseURL != nil {
+		baseURL = strings.TrimSpace(*req.BaseURL)
 	} else {
 		var baseURLSetting models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_base_url").First(&baseURLSetting).Error; err == nil {
+		err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, ai.ProviderBaseURLSettingKey(provider)).Take(&baseURLSetting).Error
+		if err == nil {
 			baseURL = strings.TrimSpace(baseURLSetting.ValuePlain)
+		} else if provider == defaultProvider {
+			baseURL = strings.TrimSpace(getPlainSetting(tenantID, "ai_base_url"))
 		}
 	}
 

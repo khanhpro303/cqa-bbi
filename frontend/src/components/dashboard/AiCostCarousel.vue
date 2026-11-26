@@ -66,9 +66,8 @@
       </div>
     </div>
 
-    <div v-if="loading" class="dashboard-chart__state" role="status">
-      <v-progress-circular indeterminate size="24" width="2" />
-      <span>{{ $t('loading') }}</span>
+    <div v-if="loading" class="cost-slide">
+      <DashboardChartSkeleton :variant="view === 'day' ? 'line' : 'ranking'" :label="$t('loading')" />
     </div>
     <div v-else class="cost-slide" @touchstart.passive="playing = false">
       <Transition name="cost-slide" mode="out-in">
@@ -104,6 +103,8 @@ import { ref, computed, watch, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import DailyTrendChart from './DailyTrendChart.vue'
+import DashboardChartSkeleton from './DashboardChartSkeleton.vue'
+import './dashboard-skeleton.css'
 
 interface CostRow {
   label: string

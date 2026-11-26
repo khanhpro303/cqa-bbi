@@ -53,18 +53,21 @@ func (g *GeminiProvider) AnalyzeChat(ctx context.Context, systemPrompt string, c
 			return AIResponse{}, fmt.Errorf("gemini api returned empty content")
 		}
 
-		aiResp := AIResponse{
-			Content:  text,
-			Model:    g.model,
-			Provider: "gemini",
-		}
-		if result.UsageMetadata != nil {
-			aiResp.InputTokens = int(result.UsageMetadata.PromptTokenCount)
-			aiResp.OutputTokens = int(result.UsageMetadata.CandidatesTokenCount)
-		}
-
-		return aiResp, nil
+		return geminiResponse(text, g.model, result), nil
 	})
+}
+
+func geminiResponse(text, configuredModel string, result *genai.GenerateContentResponse) AIResponse {
+	model := result.ModelVersion
+	if model == "" {
+		model = configuredModel
+	}
+	resp := AIResponse{Content: text, Model: model, Provider: "gemini"}
+	if usage := result.UsageMetadata; usage != nil {
+		resp.InputTokens = int(usage.PromptTokenCount)
+		resp.OutputTokens = int(usage.CandidatesTokenCount) + int(usage.ThoughtsTokenCount)
+	}
+	return resp
 }
 
 func (g *GeminiProvider) AnalyzeChatBatch(ctx context.Context, systemPrompt string, items []BatchItem) (AIResponse, error) {

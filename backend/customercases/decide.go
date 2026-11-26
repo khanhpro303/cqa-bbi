@@ -158,7 +158,7 @@ func callTenantModel(ctx context.Context, tenantID, channelID, system, input str
 	if err != nil {
 		return "", err
 	}
-	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg, engine.PromptComplaintMatch)
 	if err != nil {
 		return "", err
 	}
@@ -192,10 +192,11 @@ func LogUsage(tenantID, channelID, provider, model string, resp ai.AIResponse) {
 	if resp.Model != "" {
 		model = resp.Model
 	}
+	resp.Provider, resp.Model = provider, model
 	row := models.AIUsageLog{
 		ID: pkg.NewUUID(), TenantID: tenantID, Provider: provider, Model: model,
 		Source: "chatbot", ChannelID: channelID, InputTokens: resp.InputTokens, OutputTokens: resp.OutputTokens,
-		CostUSD:   ai.CalculateCostUSD(provider, model, resp.InputTokens, resp.OutputTokens),
+		CostUSD:   resp.UsageCostUSD(),
 		CreatedAt: time.Now(),
 	}
 	if err := db.DB.Create(&row).Error; err != nil {

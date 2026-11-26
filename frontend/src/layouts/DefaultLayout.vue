@@ -469,7 +469,6 @@ watch(() => route.path, () => {
 watch(tenantId, async (id) => {
   if (id) {
     currentTenantId.value = id
-    authStore.fetchTenantPermissions(id)
     if (!tenants.value.length) {
       try {
         const { data } = await api.get('/tenants')
