@@ -120,7 +120,6 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *atomic.Int32) {
 		"SP457996":      `"SO_LUONG_TON":90,"SO_LUONG_TON_KHA_DUNG":"32"`,
 		"SP458003":      `"SO_LUONG_TON":9,"SO_LUONG_TON_KHA_DUNG":4`,
 		"SP457220_DK":   `"SO_LUONG_TON":3,"SO_LUONG_TON_KHA_DUNG":1`,
-		zeroStock.MA:    `"SO_LUONG_TON":15,"SO_LUONG_TON_KHA_DUNG":0`,
 		missingStock.MA: `"SO_LUONG_TON":15`,
 	}
 	previous := http.DefaultTransport
@@ -138,12 +137,18 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *atomic.Int32) {
 				return nil, fmt.Errorf("decode warehouse request: %w", err)
 			}
 			sku := input["MA_HANG"]
-			row, ok := warehouseRows[sku]
-			if !ok || len(input) != 1 {
+			if len(input) != 1 {
 				t.Errorf("unexpected warehouse payload: %v", input)
 				return nil, fmt.Errorf("unrecognized warehouse request for SKU %q", sku)
 			}
-			body = fmt.Sprintf(`[{"MA_HANG":%q,"SO_LUONG_TON_TONG":999,"TON_KHO_CHI_TIET":[{"TEN_KHO":"KHO-TONG",%s},{"TEN_KHO":"KHO-KHAC","SO_LUONG_TON_KHA_DUNG":500}]}]`, sku, row)
+			if sku == zeroStock.MA {
+				body = fmt.Sprintf(`{"code":200,"count":1,"data":[{"MA_HANG":%q,"SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]}]}`, sku)
+			} else if row, ok := warehouseRows[sku]; ok {
+				body = fmt.Sprintf(`[{"MA_HANG":%q,"SO_LUONG_TON_TONG":999,"TON_KHO_CHI_TIET":[{"TEN_KHO":"KHO-TONG",%s},{"TEN_KHO":"KHO-KHAC","SO_LUONG_TON_KHA_DUNG":500}]}]`, sku, row)
+			} else {
+				t.Errorf("unexpected warehouse payload: %v", input)
+				return nil, fmt.Errorf("unrecognized warehouse request for SKU %q", sku)
+			}
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})

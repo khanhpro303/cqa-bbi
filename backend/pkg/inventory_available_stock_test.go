@@ -65,6 +65,38 @@ func TestMainWarehouseAvailableStock_ExplicitZeroIsValid(t *testing.T) {
 	}
 }
 
+func TestMainWarehouseAvailableStock_EmptyWarehouseDetails(t *testing.T) {
+	tests := []struct {
+		name, data string
+		wantZero   bool
+	}{
+		{"both totals explicitly zero", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]}]`, true},
+		{"available total missing", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"TON_KHO_CHI_TIET":[]}]`, false},
+		{"physical total missing", `[{"MA_HANG":"SP457697","SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]}]`, false},
+		{"physical stock exists", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":1,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]}]`, false},
+		{"available total nonzero", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":1,"TON_KHO_CHI_TIET":[]}]`, false},
+		{"warehouse list null", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":null}]`, false},
+		{"warehouse details exist without main warehouse", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[{"TEN_KHO":"Kho CN","SO_LUONG_TON_KHA_DUNG":0}]}]`, false},
+		{"conflicting duplicate SKU", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]},{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":1,"SO_LUONG_TON_KHA_DUNG":1,"TON_KHO_CHI_TIET":[]}]`, false},
+		{"different SKU has zero", `[{"MA_HANG":"OTHER","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]}]`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var items []map[string]interface{}
+			if err := json.Unmarshal([]byte(tt.data), &items); err != nil {
+				t.Fatal(err)
+			}
+			got, err := mainWarehouseAvailableStockFromInventoryItems(items, "SP457697")
+			if tt.wantZero && (err != nil || got != 0) {
+				t.Fatalf("expected confirmed zero, got %v, %v", got, err)
+			}
+			if !tt.wantZero && err == nil {
+				t.Fatalf("expected unconfirmed stock, got %v", got)
+			}
+		})
+	}
+}
+
 func TestMainWarehouseAvailableStock_FailsClosed(t *testing.T) {
 	tests := []struct {
 		name  string
