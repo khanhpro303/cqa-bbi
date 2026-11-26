@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/channels"
@@ -758,6 +759,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Group assistant mode: the bot reads the whole customer group and
 		// answers only when needed (group_assistant.go).
 		groupAssistant := groupAssistantOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode)
+		groupName, groupRole := groupSpeaker(isWhitelisted, isCustomer, whitelistRec.Name, customerRec.Name)
+		// Staff in a customer group mostly talk to the customer; their
+		// messages reach the bot only when they call it (group_staff.go).
+		staffGated := staffCallOnlyOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode, groupRole)
 
 		// Concurrency control: sequential processing per lock key using a safe,
 		// owner-token Redis lock (engine.AcquireSessionLock / ReleaseSessionLock).
@@ -770,18 +775,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		var lockKey, lockToken string
 		if db.RedisClient != nil {
 			lockKey = workKey + ":lock"
-			acquired := false
-			// Try to acquire the lock every 250ms for up to 30 seconds.
-			for i := 0; i < 120; i++ {
-				if token, ok := engine.AcquireSessionLock(ctx, lockKey); ok {
-					lockToken = token
-					acquired = true
-					break
-				}
-				time.Sleep(250 * time.Millisecond)
-			}
-			if !acquired {
-				return fmt.Errorf("timeout waiting for session lock for key %s", sessionKey)
+			var err error
+			lockToken, err = waitForZaloSessionLock(ctx, lockKey)
+			if err != nil {
+				return err
 			}
 			defer engine.ReleaseSessionLock(ctx, lockKey, lockToken)
 		}
@@ -800,45 +797,38 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Check session
 		var activeSessionID string
 		if db.RedisClient != nil {
-			val, err := db.RedisClient.Get(ctx, sessionKey).Result()
-			if err == nil && val != "" {
-				activeSessionID = val
+			var err error
+			activeSessionID, err = db.RedisClient.Get(ctx, sessionKey).Result()
+			if err != nil && !errors.Is(err, redis.Nil) {
+				return fmt.Errorf("read current Zalo session: %w", err)
 			}
 		}
 
+		sessionTTL := time.Duration(meta.SessionTimeout)*time.Minute + time.Minute
 		if activeSessionID == "" {
-			// No active session. Check for trigger word.
-			var isTriggered bool
-			for _, kw := range strings.Split(meta.SessionKeyword, ";") {
-				kw = strings.TrimSpace(kw)
-				if kw != "" && strings.EqualFold(userText, kw) {
-					isTriggered = true
-					break
-				}
+			start := zaloSessionStartFor(meta, userText, staffGated, groupAssistant)
+			if start == zaloSessionStayClosed {
+				log.Printf("[zalo-drop] reason=no_session sender=%s key=%s", payload.Sender.ID, sessionKey)
+				return nil
 			}
-			if isTriggered {
-				// If the user triggers it, but is unverified, send them the verification DM!
-				if !isWhitelisted && !isCustomer {
-					verifyInstructions := "Tài khoản của bạn chưa được xác thực trên hệ thống CRM. Vui lòng nhắn tin theo cú pháp `verify <mã_xác_thực>` được cung cấp bởi nhân viên để đăng ký sử dụng Bot."
-					_ = adapter.SendMessage(ctx, payload.Sender.ID, verifyInstructions)
-					log.Printf("[worker] blocking unverified Zalo user %s for tenant %s (triggered bot)", payload.Sender.ID, matchedChannel.TenantID)
-					return nil
-				}
+			if start == zaloSessionManual && !isWhitelisted && !isCustomer {
+				verifyInstructions := "Tài khoản của bạn chưa được xác thực trên hệ thống CRM. Vui lòng nhắn tin theo cú pháp `verify <mã_xác_thực>` được cung cấp bởi nhân viên để đăng ký sử dụng Bot."
+				_ = adapter.SendMessage(ctx, payload.Sender.ID, verifyInstructions)
+				log.Printf("[worker] blocking unverified Zalo user %s for tenant %s (triggered bot)", payload.Sender.ID, matchedChannel.TenantID)
+				return nil
+			}
 
-				// Open session and generate unique session ID. Defensively wipe any
-				// sidecar flow-state left over from a prior conversation: the base
-				// session key is stable across open/close cycles, so an unclean
-				// teardown (crash, Redis hiccup) could otherwise resume a stale
-				// debt/order/menu state on this fresh session's first real turn.
-				teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
-				newSessionID := uuid.New().String()
-				if db.RedisClient != nil {
-					db.RedisClient.Set(ctx, sessionKey, newSessionID, time.Duration(meta.SessionTimeout)*time.Minute+1*time.Minute)
-				}
+			sessionID, opened, err := openZaloSession(ctx, sessionKey, workKey, matchedGroup.ZaloGroupID, sessionTTL)
+			if err != nil {
+				return err
+			}
+			activeSessionID = sessionID
+			switch {
+			case opened && start == zaloSessionManual:
 				if asynqClient != nil {
 					timeoutTask, err := NewSessionTimeoutTask(SessionTimeoutPayload{
 						SessionKey:     sessionKey,
-						SessionID:      newSessionID,
+						SessionID:      activeSessionID,
 						TenantID:       matchedChannel.TenantID,
 						ChannelID:      matchedChannel.ID,
 						ZaloUserID:     payload.Sender.ID,
@@ -852,46 +842,32 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				}
 				// Record the trigger message; the welcome sent with this ctx
 				// lands in the same chat-memory session.
-				ctx = startChatMemoryTurn(ctx, chatMemoryTurn(matchedChannel.TenantID, matchedChannel.ID, newSessionID,
+				ctx = startChatMemoryTurn(ctx, chatMemoryTurn(matchedChannel.TenantID, matchedChannel.ID, activeSessionID,
 					payload.Sender.ID, matchedGroup.ZaloGroupID, matchedGroup.Name, memSenderName, customerCode,
 					isWhitelisted && matchedGroup.ZaloGroupID == ""), payload, userText, memSenderName)
 				// Send welcome message
-				var err error
+				var sendErr error
 				if matchedGroup.ZaloGroupID != "" {
-					err = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionWelcomeMessage)
+					sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionWelcomeMessage)
 				} else {
-					err = adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionWelcomeMessage)
+					sendErr = adapter.SendMessage(ctx, payload.Sender.ID, meta.SessionWelcomeMessage)
 				}
-				if err != nil {
-					log.Printf("[worker] failed to send welcome message: %v", err)
+				if sendErr != nil {
+					log.Printf("[worker] failed to send welcome message: %v", sendErr)
 				}
-				if staffCallOnlyOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode, groupRoleFor(isWhitelisted, isCustomer)) {
+				if staffGated {
 					markStaffEngaged(ctx, sessionKey, payload.Sender.ID)
 				}
-				log.Printf("[worker] opened new session %s for key %s", newSessionID, sessionKey)
+				log.Printf("[worker] opened new session %s for key %s", activeSessionID, sessionKey)
 				return nil
+			case opened && start == zaloSessionStaffCall:
+				log.Printf("[group-staff] opened session %s for group %s", activeSessionID, matchedGroup.ZaloGroupID)
+			case opened && start == zaloSessionAssistant:
+				log.Printf("[group-assistant] opened session %s for group %s", activeSessionID, matchedGroup.ZaloGroupID)
 			}
-			if !groupAssistant {
-				// Ignore message
-				log.Printf("[zalo-drop] reason=no_session sender=%s key=%s (send the session keyword first)", payload.Sender.ID, sessionKey)
-				return nil
-			}
-			// Group assistant mode: any message opens the session silently and
-			// is handled in this same turn. The keep-alive below schedules the
-			// (quiet) idle timeout.
-			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
-			activeSessionID = uuid.New().String()
-			if db.RedisClient != nil {
-				db.RedisClient.Set(ctx, sessionKey, activeSessionID, time.Duration(meta.SessionTimeout)*time.Minute+time.Minute)
-			}
-			log.Printf("[group-assistant] opened session %s for group %s", activeSessionID, matchedGroup.ZaloGroupID)
+			// Automatic starts process this same turn. The normal keep-alive
+			// below schedules the idle timeout.
 		}
-
-		sessionTTL := time.Duration(meta.SessionTimeout)*time.Minute + time.Minute
-		groupName, groupRole := groupSpeaker(isWhitelisted, isCustomer, whitelistRec.Name, customerRec.Name)
-		// Staff in a customer group mostly talk to the customer; their
-		// messages reach the bot only when they call it (group_staff.go).
-		staffGated := staffCallOnlyOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode, groupRole)
 
 		// Verified-only interaction (design intent): the trigger-time gate above
 		// only blocks unverified senders at session OPEN. Because a group session
@@ -952,15 +928,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		ctx = startChatMemoryTurn(ctx, memTurn, payload, userText, memSenderName, imageAttachments(images)...)
 
 		// Has session. Check for end word.
-		var isEndTriggered bool
-		for _, kw := range strings.Split(meta.SessionEndKeyword, ";") {
-			kw = strings.TrimSpace(kw)
-			if kw != "" && strings.EqualFold(userText, kw) {
-				isEndTriggered = true
-				break
-			}
-		}
-		if isEndTriggered {
+		if matchesSessionKeyword(userText, meta.SessionEndKeyword) {
 			teardownSession(ctx, sessionKey, matchedGroup.ZaloGroupID)
 			if staffGated {
 				clearStaffEngaged(ctx, sessionKey, payload.Sender.ID)
@@ -2166,6 +2134,65 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		log.Printf("[worker] successfully replied to user %s via Langflow", payload.Sender.ID)
 		return nil
 	}
+}
+
+// waitForZaloSessionLock polls for up to 30 seconds so queued turns can reuse
+// the state created by the turn ahead of them.
+func waitForZaloSessionLock(ctx context.Context, key string) (string, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if token, ok := engine.AcquireSessionLock(waitCtx, key); ok {
+			return token, nil
+		}
+		select {
+		case <-ticker.C:
+		case <-waitCtx.Done():
+			return "", fmt.Errorf("waiting for Zalo session lock %s: %w", key, waitCtx.Err())
+		}
+	}
+}
+
+func openZaloSession(ctx context.Context, sessionKey, workKey, groupID string, ttl time.Duration) (string, bool, error) {
+	if db.RedisClient == nil {
+		return uuid.NewString(), true, nil
+	}
+	if workKey != sessionKey {
+		// Per-sender locks allow parallel turns, but the session ID is shared.
+		// Keep the activation lock outside the keys reset when opening a group.
+		key := "zalo_activation_lock:" + sessionKey
+		token, err := waitForZaloSessionLock(ctx, key)
+		if err != nil {
+			return "", false, err
+		}
+		defer engine.ReleaseSessionLock(context.WithoutCancel(ctx), key, token)
+		id, err := db.RedisClient.Get(ctx, sessionKey).Result()
+		if err == nil && id != "" {
+			return id, false, nil
+		}
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return "", false, fmt.Errorf("read current Zalo session: %w", err)
+		}
+	}
+
+	// The key is reused across conversations. Clear stale flow state before
+	// publishing the new session ID.
+	var err error
+	if groupID != "" && engine.PerSenderGroupSessions() {
+		err = engine.ResetGroupSessionForOpen(ctx, groupID)
+	} else {
+		err = engine.ClearSessionState(ctx, sessionKey)
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("reset state before opening Zalo session: %w", err)
+	}
+	id := uuid.NewString()
+	if err := db.RedisClient.Set(ctx, sessionKey, id, ttl).Err(); err != nil {
+		return "", false, fmt.Errorf("store new Zalo session: %w", err)
+	}
+	return id, true, nil
 }
 
 // teardownSession clears a finished session's Redis state. When per-sender group

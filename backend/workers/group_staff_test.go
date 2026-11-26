@@ -10,7 +10,113 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/vietbui/chat-quality-agent/db"
+	"github.com/vietbui/chat-quality-agent/engine"
 )
+
+func TestZaloSessionStartForStaffCall(t *testing.T) {
+	on, off := true, false
+	const question = "Bull ơi, Giày LS2 Zoe Man - Black H-V Yellow - 44 còn tồn khả dụng không?"
+	tests := []struct {
+		name, text, role, groupID, customerCode string
+		crm, assistant                          bool
+		switchValue                             *bool
+		want                                    zaloSessionStart
+	}{
+		{"staff question", question, groupRoleStaff, "s084", "S084", true, false, &on, zaloSessionStaffCall},
+		{"default on", question, groupRoleStaff, "s084", "S084", true, false, nil, zaloSessionStaffCall},
+		{"manual keyword with name", "Chào Bull", groupRoleStaff, "s084", "S084", true, false, &on, zaloSessionManual},
+		{"second manual keyword", "hi bull", groupRoleStaff, "s084", "S084", true, true, &on, zaloSessionManual},
+		{"closing keyword with name", "Tạm biệt Bull", groupRoleStaff, "s084", "S084", true, false, &on, zaloSessionStayClosed},
+		{"staff talking to customer", "anh ơi, mai em giao nhé", groupRoleStaff, "s084", "S084", true, false, &on, zaloSessionStayClosed},
+		{"switch off", question, groupRoleStaff, "s084", "S084", true, false, &off, zaloSessionStayClosed},
+		{"customer calling", question, groupRoleCustomer, "s084", "S084", true, false, &on, zaloSessionStayClosed},
+		{"unverified sender", question, groupRoleUnverified, "s084", "S084", true, false, &on, zaloSessionStayClosed},
+		{"staff direct message", question, groupRoleStaff, "", "", false, false, &on, zaloSessionStayClosed},
+		{"staff internal group", question, groupRoleStaff, "internal", "", true, false, &on, zaloSessionStayClosed},
+		{"unlinked group", question, groupRoleStaff, "unlinked", "S084", false, false, &on, zaloSessionStayClosed},
+		{"assistant mode", "anh ơi, mai em giao nhé", groupRoleStaff, "s084", "S084", true, true, &on, zaloSessionAssistant},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := ChannelMetadata{
+				GroupBotNames:      "Bull;Bell;bot",
+				GroupStaffCallOnly: tt.switchValue,
+				SessionKeyword:     "Chào Bull; Hi Bull",
+				SessionEndKeyword:  "Tạm biệt Bull",
+			}
+			staffGated := staffCallOnlyOn(meta, tt.groupID, tt.crm, tt.customerCode, tt.role)
+			if got := zaloSessionStartFor(meta, tt.text, staffGated, tt.assistant); got != tt.want {
+				t.Fatalf("session start = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOpenZaloSessionSharesGroupActivationAcrossSenders(t *testing.T) {
+	addr := os.Getenv("TEST_REDIS_ADDR")
+	if addr == "" {
+		t.Skip("TEST_REDIS_ADDR not set")
+	}
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	previousRedis, previousPerSender := db.RedisClient, engine.PerSenderGroupSessions()
+	db.RedisClient = client
+	engine.SetPerSenderGroupSessions(true)
+	t.Cleanup(func() {
+		db.RedisClient = previousRedis
+		engine.SetPerSenderGroupSessions(previousPerSender)
+		_ = client.Close()
+	})
+
+	ctx := context.Background()
+	groupID := "g-open-" + time.Now().Format("150405.000000")
+	sessionKey := engine.BuildSessionKey("test", "", groupID)
+	senders := []string{"staff1", "staff2"}
+	for _, sender := range senders {
+		workKey := engine.BuildSessionKey("test", sender, groupID)
+		if err := client.Set(ctx, workKey+engine.PendingOptionsSuffix, "stale", time.Minute).Err(); err != nil {
+			t.Fatal(err)
+		}
+		token, ok := engine.AcquireSessionLock(ctx, workKey+":lock")
+		if !ok {
+			t.Fatalf("could not acquire %s's processing lock", sender)
+		}
+		t.Cleanup(func() { engine.ReleaseSessionLock(ctx, workKey+":lock", token) })
+	}
+	t.Cleanup(func() { _, _ = engine.ClearGroupSessionState(ctx, groupID) })
+
+	type result struct {
+		id     string
+		opened bool
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan result, len(senders))
+	for _, sender := range senders {
+		go func() {
+			<-start
+			workKey := engine.BuildSessionKey("test", sender, groupID)
+			id, opened, err := openZaloSession(ctx, sessionKey, workKey, groupID, time.Minute)
+			results <- result{id, opened, err}
+		}()
+	}
+	close(start)
+	first, second := <-results, <-results
+	if first.err != nil || second.err != nil || first.id == "" || first.id != second.id || first.opened == second.opened {
+		t.Fatalf("expected exactly one opening and a shared session ID, got %+v and %+v", first, second)
+	}
+	if id, err := client.Get(ctx, sessionKey).Result(); err != nil || id != first.id {
+		t.Fatalf("stored session = %q, %v; want %q", id, err, first.id)
+	}
+	for _, sender := range senders {
+		workKey := engine.BuildSessionKey("test", sender, groupID)
+		if n, err := client.Exists(ctx, workKey+":lock").Result(); n != 1 || err != nil {
+			t.Fatalf("%s's processing lock was lost: %d, %v", sender, n, err)
+		}
+		if n, err := client.Exists(ctx, workKey+engine.PendingOptionsSuffix).Result(); n != 0 || err != nil {
+			t.Fatalf("%s's stale options remain: %d, %v", sender, n, err)
+		}
+	}
+}
 
 func TestStaffCallOnlyOn(t *testing.T) {
 	off := false

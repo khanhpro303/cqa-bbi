@@ -115,6 +115,17 @@ const groupSessionScanCount = 200
 // group ID that is a prefix of another can never over-match. Returns the number
 // of keys deleted. No-op (0, nil) when Redis is unavailable.
 func ClearGroupSessionState(ctx context.Context, zaloGroupID string) (int, error) {
+	return clearGroupSessionState(ctx, zaloGroupID, false)
+}
+
+// ResetGroupSessionForOpen clears stale flow state while preserving the
+// per-sender processing locks already held by the opening and queued turns.
+func ResetGroupSessionForOpen(ctx context.Context, zaloGroupID string) error {
+	_, err := clearGroupSessionState(ctx, zaloGroupID, true)
+	return err
+}
+
+func clearGroupSessionState(ctx context.Context, zaloGroupID string, keepLocks bool) (int, error) {
 	if db.RedisClient == nil {
 		return 0, nil
 	}
@@ -131,6 +142,9 @@ func ClearGroupSessionState(ctx context.Context, zaloGroupID string) (int, error
 		iter := db.RedisClient.Scan(ctx, 0, pattern, groupSessionScanCount).Iterator()
 		for iter.Next(ctx) {
 			key := iter.Val()
+			if keepLocks && strings.HasSuffix(key, ":lock") {
+				continue
+			}
 			if _, dup := seen[key]; dup {
 				continue
 			}
