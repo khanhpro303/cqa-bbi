@@ -249,13 +249,60 @@ test('preserves only the latest follow-up while the conversation is busy', { tim
   assert.equal(sendMessage.mock.callCount(), 1);
 });
 
-test('paces sends even when two direct conversations finish together', { timeout: 6500 }, async (t) => {
+test('paces sends across two channel records for the same Zalo account', { timeout: 6500 }, async (t) => {
   configureTestChatbot(t);
   const sendTimes: number[] = [];
   const sendMessage = async () => { sendTimes.push(Date.now()); };
-  const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
+  const { listener, login, pool, store, account } = await connectFixture(t, { ownId: '10001', sendMessage });
+  const secondListener = new TestListener();
+  login.mock.mockImplementation(async () => ({
+    listener: secondListener,
+    getOwnId: () => '10001',
+    getUserInfo: async () => ({}),
+    getGroupInfo: async () => ({}),
+    sendMessage,
+  }));
+  const secondAccount = await store.saveAccount({
+    tenantId: account.tenantId, channelId: 'second-channel',
+    importEndpoint: account.importEndpoint, importSecret: account.importSecret,
+  });
+  await pool.reconnect(secondAccount.id, session);
   t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: 'Chào bạn' }));
-  await Promise.all([listener.message(directMessage('70001')), listener.message(directMessage('70002', '20003'))]);
+  await Promise.all([listener.message(directMessage('70001')), secondListener.message(directMessage('70002', '20003'))]);
   assert.equal(sendTimes.length, 2);
   assert.ok(sendTimes[1]! - sendTimes[0]! >= 3000);
+});
+
+test('bot suppresses an inbound echo after the original turn has finished', { timeout: 2000 }, async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async () => ({}));
+  const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: 'Phản hồi của bot' }));
+  await listener.message(directMessage('80001'));
+  const echo = directMessage('80002');
+  await listener.message({ ...echo, data: { ...echo.data, content: ' Phản hồi của bot ' } });
+  assert.equal(fetchMock.mock.callCount(), 1);
+  assert.equal(sendMessage.mock.callCount(), 1);
+});
+
+test('a flood cancels a pending reply and the gateway still stores all inbound messages', { timeout: 4000 }, async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async () => ({}));
+  const { account, listener, store } = await connectFixture(t, { ownId: '10001', sendMessage });
+  let notifyStarted!: () => void;
+  let finishRequest!: (response: Response) => void;
+  const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+  const pending = new Promise<Response>((resolve) => { finishRequest = resolve; });
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => {
+    notifyStarted();
+    return pending;
+  });
+  const first = listener.message(directMessage('90001'));
+  await started;
+  for (let n = 2; n <= 7; n++) await listener.message(directMessage(String(90000 + n)));
+  finishRequest(Response.json({ reply: 'Phản hồi đang chờ' }));
+  await first;
+  assert.equal(fetchMock.mock.callCount(), 1);
+  assert.equal(sendMessage.mock.callCount(), 0);
+  assert.equal((await store.getAccount(account.id))?.threads['user:20002']?.messageOrder.length, 7);
 });
