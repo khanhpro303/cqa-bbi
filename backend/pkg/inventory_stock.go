@@ -127,8 +127,8 @@ func (c *CloudifyClient) InventoryStock(endpoint string, usePost bool, sku strin
 }
 
 // MainWarehouseAvailableStock returns SO_LUONG_TON_KHA_DUNG for one exact SKU
-// from the main warehouse rows in TON_KHO_CHI_TIET. It never falls back to the
-// product aggregate, physical stock, or another warehouse.
+// from the main warehouse rows in TON_KHO_CHI_TIET. Cloudify can also confirm
+// zero stock with an empty warehouse list and two explicit zero product totals.
 func (c *CloudifyClient) MainWarehouseAvailableStock(ctx context.Context, sku string) (float64, error) {
 	if strings.TrimSpace(sku) == "" {
 		return 0, fmt.Errorf("inventory available stock: SKU is required")
@@ -153,8 +153,9 @@ func mainWarehouseAvailableStockFromInventoryItems(items []map[string]interface{
 		return 0, fmt.Errorf("ERP returned no product rows")
 	}
 
-	foundSKU := false
+	matchingRows := 0
 	foundWarehouse := false
+	explicitZeroWithoutWarehouse := false
 	var total float64
 	for itemIndex, item := range items {
 		itemSKU, ok := item["MA_HANG"].(string)
@@ -164,11 +165,16 @@ func mainWarehouseAvailableStockFromInventoryItems(items []map[string]interface{
 		if itemSKU != sku {
 			continue
 		}
-		foundSKU = true
+		matchingRows++
 
 		details, ok := item["TON_KHO_CHI_TIET"].([]interface{})
 		if !ok {
 			return 0, fmt.Errorf("product row %d has missing or invalid TON_KHO_CHI_TIET", itemIndex)
+		}
+		if len(details) == 0 && matchingRows == 1 {
+			physical, hasPhysical := strictInventoryNumber(item["SO_LUONG_TON_TONG"])
+			available, hasAvailable := strictInventoryNumber(item["SO_LUONG_TON_KHA_DUNG"])
+			explicitZeroWithoutWarehouse = hasPhysical && hasAvailable && physical == 0 && available == 0
 		}
 		for detailIndex, detail := range details {
 			row, ok := detail.(map[string]interface{})
@@ -195,10 +201,10 @@ func mainWarehouseAvailableStockFromInventoryItems(items []map[string]interface{
 		}
 	}
 
-	if !foundSKU {
+	if matchingRows == 0 {
 		return 0, fmt.Errorf("ERP returned no exact SKU match")
 	}
-	if !foundWarehouse {
+	if !foundWarehouse && !(matchingRows == 1 && explicitZeroWithoutWarehouse) {
 		return 0, fmt.Errorf("ERP returned no main warehouse row")
 	}
 	return total, nil
