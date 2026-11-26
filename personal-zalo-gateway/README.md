@@ -54,7 +54,12 @@ Sidecar mỏng cho `chat-quality-agent` để ingest `Zalo cá nhân`.
 
 Luồng này dùng public flow của CQA. Bản hiện tại chưa truyền quyền ERP có phạm vi cho tài khoản Zalo cá nhân.
 
-Gateway xử lý tối đa ba hội thoại đồng thời trên mỗi phiên Zalo, giữ tin mới nhất đang chờ trong từng hội thoại và giãn cách các lần gửi tự động tối thiểu ba giây. Nếu tài khoản tự gửi tin trong cùng hội thoại khi bot đang xử lý, gateway hủy phản hồi đang chờ.
+Gateway xử lý tối đa ba hội thoại đồng thời trên mỗi phiên Zalo và giữ tin mới nhất đang chờ trong từng hội thoại. Nếu tài khoản tự gửi tin trong cùng hội thoại khi bot đang xử lý, gateway hủy phản hồi đang chờ.
+
+Ba lớp bảo vệ áp dụng trên từng tài khoản:
+- Giãn cách tối thiểu 3 giây và tối đa 20 lần gửi trong bất kỳ cửa sổ 60 giây nào.
+- Nhận diện tin bot lặp theo nội dung và hội thoại trong 30 giây.
+- Tạm ngưng chatbot 60 giây với người gửi quá 5 tin hợp lệ trong 3 giây. Tin nhắn vẫn được đồng bộ vào CQA.
 
 Tin đến ở hội thoại vượt giới hạn vẫn được đồng bộ. Khi AI hoặc thao tác gửi gặp lỗi, gateway vẫn lưu và đồng bộ tin nhắn theo lịch bình thường.
 

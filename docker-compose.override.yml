@@ -1,0 +1,8 @@
+# Keep the gateway on the Compose network, including on hosts with a local base file.
+services:
+  personal-zalo-gateway:
+    environment:
+      PERSONAL_ZALO_CHATBOT_BASE_URL: ${PERSONAL_ZALO_CHATBOT_BASE_URL:-http://app:8080}
+    ports: !reset []
+    expose:
+      - "3100"

@@ -19,6 +19,9 @@ use_checkout_compose() {
   if [[ -f docker-compose.browser-run.yml ]]; then
     compose+=(-f docker-compose.browser-run.yml)
   fi
+  if [[ -f docker-compose.override.yml ]]; then
+    compose+=(-f docker-compose.override.yml)
+  fi
 }
 services=(app nginx personal-zalo-gateway)
 declare -A old_tags old_images new_tags new_images rollback_tags
@@ -273,6 +276,9 @@ test "$table_count" = 12
 docker exec cqa-app sh -c 'test -n "$(find /app/static/assets -name "ServiceQuality-*.js" -print -quit)"'
 docker exec cqa-nginx nginx -t
 docker exec cqa-personal-zalo-gateway wget -q -T 5 -O /dev/null http://127.0.0.1:3100/health
+if [[ -f docker-compose.override.yml ]]; then
+  test "$(docker inspect -f '{{len .HostConfig.PortBindings}}' cqa-personal-zalo-gateway)" = 0
+fi
 if ! public_health; then
   reload_nginx
   for attempt in $(seq 1 5); do

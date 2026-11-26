@@ -1,10 +1,10 @@
 import { createRequire } from 'node:module';
-import { setTimeout as delay } from 'node:timers/promises';
 import { personalZaloChatbotConfig } from '../config.js';
 import { logger } from '../logger.js';
 import type { GatewayStore } from '../store/file-store.js';
 import type { GatewayAccountRecord, IncomingGatewayMessage, SessionData } from '../types.js';
 import { isChatbotEligibleMessage, requestPersonalZaloChatbotReply } from '../chatbot/cqa-chatbot-client.js';
+import { FloodDetector, RateLimiter, SelfEchoShield } from '../chatbot/zalo-message-guards.js';
 import { attachZaloListener } from './listener.js';
 
 const require = createRequire(import.meta.url);
@@ -22,18 +22,24 @@ interface ZaloInstance {
 interface ActiveChatbotThread {
   cancelled: boolean;
   latest?: IncomingGatewayMessage;
-  expectedEcho?: { text: string; expiresAt: number };
 }
 
 interface ChatbotSession {
   threads: Map<string, ActiveChatbotThread>;
-  sendChain: Promise<void>;
-  nextSendAt: number;
+  guards: AccountChatbotGuards;
+}
+
+interface AccountChatbotGuards {
+  ownId: string;
+  rateLimiter: RateLimiter;
+  echoShield: SelfEchoShield;
+  floodDetector: FloodDetector;
 }
 
 export class ZaloAccountPool {
   private readonly instances = new Map<string, ZaloInstance>();
   private readonly disconnectHistory = new Map<string, number[]>();
+  private readonly chatbotGuards = new Map<string, AccountChatbotGuards>();
 
   constructor(private readonly store: GatewayStore) {}
 
@@ -137,6 +143,7 @@ export class ZaloAccountPool {
       }
     }
     this.instances.delete(accountId);
+    this.chatbotGuards.delete(accountId);
   }
 
   private async completeLogin(accountId: string, api: any): Promise<void> {
@@ -180,7 +187,16 @@ export class ZaloAccountPool {
     if (!saved || this.instances.get(accountId) !== instance) return;
 
     if (personalZaloChatbotConfig()) {
-      instance.chatbot = { threads: new Map(), sendChain: Promise.resolve(), nextSendAt: 0 };
+      const previous = this.chatbotGuards.get(accountId);
+      const sameZaloAccount = [...this.chatbotGuards.values()].find((guards) => guards.ownId === ownId);
+      const guards = previous?.ownId === ownId ? previous : {
+        ownId,
+        rateLimiter: sameZaloAccount?.rateLimiter ?? new RateLimiter(),
+        echoShield: new SelfEchoShield(),
+        floodDetector: new FloodDetector(),
+      };
+      this.chatbotGuards.set(accountId, guards);
+      instance.chatbot = { threads: new Map(), guards };
     }
     attachZaloListener({
       accountId,
@@ -196,10 +212,7 @@ export class ZaloAccountPool {
       onSelfMessage: instance.chatbot ? (threadId, text) => {
         const active = instance.chatbot?.threads.get(threadId);
         if (!active) return;
-        if (active.expectedEcho?.text === text && active.expectedEcho.expiresAt >= Date.now()) {
-          active.expectedEcho = undefined;
-          return;
-        }
+        if (instance.chatbot?.guards.echoShield.isEcho(threadId, text)) return;
         active.cancelled = true;
         active.latest = undefined;
       } : undefined,
@@ -218,6 +231,14 @@ export class ZaloAccountPool {
       return;
     }
     const existing = chatbot.threads.get(message.threadId);
+    if (chatbot.guards.floodDetector.isFlooding(message.senderUid)) {
+      if (existing) {
+        existing.cancelled = true;
+        existing.latest = undefined;
+      }
+      return;
+    }
+    if (chatbot.guards.echoShield.isEcho(message.threadId, message.content)) return;
     if (existing) {
       if (!existing.latest || message.timestamp >= existing.latest.timestamp) existing.latest = message;
       return;
@@ -259,29 +280,24 @@ export class ZaloAccountPool {
     reply: string,
   ): Promise<void> {
     const accountId = expectedAccount.id;
-    const send = chatbot.sendChain.then(async () => {
-      if (active.cancelled || !this.canSendChatbotReply(accountId, instance)) return;
-      const waitMs = chatbot.nextSendAt - Date.now();
-      if (waitMs > 0) await delay(waitMs);
-      const account = await this.store.getAccount(accountId);
-      if (active.cancelled || !this.canSendChatbotReply(accountId, instance) ||
-          account?.status !== 'connected' || account.zaloUid !== expectedAccount.zaloUid ||
-          account.tenantId !== expectedAccount.tenantId || account.channelId !== expectedAccount.channelId ||
-          account.accountExternalId !== expectedAccount.accountExternalId || account.importSecret !== expectedAccount.importSecret) {
-        return;
-      }
-      active.expectedEcho = { text: reply, expiresAt: Date.now() + 30_000 };
-      try {
+    const { rateLimiter, echoShield, floodDetector } = chatbot.guards;
+    try {
+      await rateLimiter.schedule(async (recordAttempt) => {
+        if (active.cancelled || !this.canSendChatbotReply(accountId, instance)) return;
+        const account = await this.store.getAccount(accountId);
+        if (active.cancelled || !this.canSendChatbotReply(accountId, instance) || floodDetector.isMuted(threadId) ||
+            account?.status !== 'connected' || account.zaloUid !== expectedAccount.zaloUid ||
+            account.tenantId !== expectedAccount.tenantId || account.channelId !== expectedAccount.channelId ||
+            account.accountExternalId !== expectedAccount.accountExternalId || account.importSecret !== expectedAccount.importSecret) {
+          return;
+        }
+        echoShield.recordSent(threadId, reply);
+        recordAttempt();
         await instance.api.sendMessage(reply, threadId, 0);
-      } finally {
-        chatbot.nextSendAt = Date.now() + 3_000;
-      }
-    }).catch((error) => {
-      active.expectedEcho = undefined;
+      });
+    } catch (error) {
       logger.warn(`[zalo:${accountId}] chatbot send failed`, error);
-    });
-    chatbot.sendChain = send;
-    await send;
+    }
   }
 
   private async handleDisconnect(accountId: string): Promise<void> {
