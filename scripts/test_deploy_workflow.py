@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -90,6 +91,24 @@ class DeployWorkflowTest(unittest.TestCase):
             'git switch --detach "$previous_commit" || recovered=0\n    use_checkout_compose',
             self.rollout,
         )
+
+    def test_provisions_a_persistent_secret_without_printing_or_overwriting_it(self):
+        start = self.rollout.index("provision_personal_zalo_chatbot_secret() {")
+        end = self.rollout.index('exec 9>"$backup_root/.deploy.lock"', start)
+        provision = self.rollout[start:end] + "\nprovision_personal_zalo_chatbot_secret"
+        with tempfile.TemporaryDirectory() as directory:
+            env = Path(directory) / ".env"
+            env.write_text('DB_HOST=db\nPERSONAL_ZALO_CHATBOT_SECRET= "" # placeholder')
+            result = subprocess.run(
+                ["bash", "-ec", provision], cwd=directory, check=True, capture_output=True
+            )
+            first = env.read_text()
+            self.assertRegex(first, r"^DB_HOST=db\nPERSONAL_ZALO_CHATBOT_SECRET=[0-9a-f]{64}\n$")
+            self.assertEqual(result.stdout, b"")
+            self.assertEqual(result.stderr, b"")
+            self.assertEqual(env.stat().st_mode & 0o777, 0o600)
+            subprocess.run(["bash", "-ec", provision], cwd=directory, check=True)
+            self.assertEqual(env.read_text(), first)
 
     def test_retention_runs_after_every_success_gate(self):
         app_health = self.rollout.index('test "$healthy" = 1')

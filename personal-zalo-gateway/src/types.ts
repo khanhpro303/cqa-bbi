@@ -85,6 +85,8 @@ export interface IncomingGatewayMessage {
   groupName?: string;
   attachments?: GatewayAttachment[];
   rawData?: Record<string, unknown>;
+  sourceContentIsString?: boolean;
+  sourceTimestampIsValid?: boolean;
 }
 
 export interface SyncBatchMessage {

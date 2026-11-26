@@ -247,17 +247,21 @@ func UpdateChannel(c *gin.Context) {
 	if req.IsActive != nil {
 		updates["is_active"] = *req.IsActive
 	}
+	autoReplyColumn := "auto_reply_enabled"
+	if channel.ChannelType == "personal_zalo_import" {
+		autoReplyColumn = "personal_zalo_auto_reply_enabled"
+	}
 	if req.AutoReplyEnabled != nil {
 		if !channelSupportsAutoReply(channel.ChannelType) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "auto_reply_not_supported"})
 			return
 		}
-		updates["auto_reply_enabled"] = *req.AutoReplyEnabled
+		updates[autoReplyColumn] = *req.AutoReplyEnabled
 	}
 	// A deactivated channel must never auto-reply: deactivating forces auto-reply off.
 	// Reactivating does not auto-enable it (must be turned on explicitly).
 	if req.IsActive != nil && !*req.IsActive {
-		updates["auto_reply_enabled"] = false
+		updates[autoReplyColumn] = false
 	}
 	if req.Metadata != "" {
 		metadata := req.Metadata
@@ -313,16 +317,17 @@ func UpdateChannel(c *gin.Context) {
 			fmt.Sprintf("Channel '%s': is_active %v→%v", channel.Name, channel.IsActive, *req.IsActive), "", ip)
 	}
 	// auto_reply có thể đổi trực tiếp hoặc bị ép tắt khi vô hiệu hóa kênh (xem nhánh ở trên).
-	newAutoReply := channel.AutoReplyEnabled
+	oldAutoReply := channelAutoReplyEnabled(channel)
+	newAutoReply := oldAutoReply
 	if req.AutoReplyEnabled != nil {
 		newAutoReply = *req.AutoReplyEnabled
 	}
 	if req.IsActive != nil && !*req.IsActive {
 		newAutoReply = false
 	}
-	if newAutoReply != channel.AutoReplyEnabled {
+	if newAutoReply != oldAutoReply {
 		db.LogActivity(tenantID, uid, uemail, "channel.toggle_auto_reply", "channel", channelID,
-			fmt.Sprintf("Channel '%s': auto_reply %v→%v", channel.Name, channel.AutoReplyEnabled, newAutoReply), "", ip)
+			fmt.Sprintf("Channel '%s': auto_reply %v→%v", channel.Name, oldAutoReply, newAutoReply), "", ip)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "updated"})
@@ -1306,7 +1311,7 @@ func channelToResponse(ch models.Channel) ChannelResponse {
 		ExternalID:        ch.ExternalID,
 		IsActive:          ch.IsActive,
 		SupportsAutoReply: supportsAutoReply,
-		AutoReplyEnabled:  supportsAutoReply && ch.AutoReplyEnabled,
+		AutoReplyEnabled:  supportsAutoReply && channelAutoReplyEnabled(ch),
 		Metadata:          ch.Metadata,
 		LastSyncAt:        ch.LastSyncAt,
 		LastSyncStatus:    ch.LastSyncStatus,
@@ -1315,7 +1320,14 @@ func channelToResponse(ch models.Channel) ChannelResponse {
 }
 
 func channelSupportsAutoReply(channelType string) bool {
-	return channelType == "zalo_oa"
+	return channelType == "zalo_oa" || channelType == "personal_zalo_import"
+}
+
+func channelAutoReplyEnabled(ch models.Channel) bool {
+	if ch.ChannelType == "personal_zalo_import" {
+		return ch.PersonalZaloAutoReplyEnabled
+	}
+	return ch.AutoReplyEnabled
 }
 
 func normalizeCreateChannelCredentials(channelType string, raw json.RawMessage) (json.RawMessage, error) {

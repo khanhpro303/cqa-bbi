@@ -23,6 +23,10 @@ type Channel struct {
 	CreatedAt      time.Time `gorm:"not null" json:"created_at"`
 	UpdatedAt      time.Time `gorm:"not null" json:"updated_at"`
 
+	// Personal Zalo channels require a separate opt-in because legacy rows
+	// already have auto_reply_enabled=true from the Zalo OA default.
+	PersonalZaloAutoReplyEnabled bool `gorm:"not null;default:false" json:"-"`
+
 	Tenant Tenant `gorm:"foreignKey:TenantID" json:"tenant,omitempty"`
 }
 

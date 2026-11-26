@@ -133,6 +133,42 @@ for name, service in sorted(services.items()):
 '
 }
 
+# Provision an independent key for the app and personal Zalo gateway.
+# Both services already read the VPS .env. Keep an existing value as-is.
+provision_personal_zalo_chatbot_secret() {
+  python3 - <<'PYTHON'
+import os
+import re
+import secrets
+import tempfile
+from pathlib import Path
+
+path = Path(".env").resolve(strict=True)
+env = path.read_bytes()
+pattern = rb"(?m)^[ \t]*(?:export[ \t]+)?PERSONAL_ZALO_CHATBOT_SECRET[ \t]*=[ \t]*([^\r\n]*)"
+matches = list(re.finditer(pattern, env))
+if any(match.group(1).strip().split(b"#", 1)[0].strip() not in (b"", b"''", b'""') for match in matches):
+    raise SystemExit(0)
+
+# Remove empty assignments so Compose sees a single unambiguous value.
+env = re.sub(pattern + rb"(?:\r?\n|$)", b"", env)
+line = b"PERSONAL_ZALO_CHATBOT_SECRET=" + secrets.token_hex(32).encode("ascii") + b"\n"
+fd, tmp = tempfile.mkstemp(prefix=".env.chatbot.", dir=path.parent)
+try:
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(env)
+        if env and not env.endswith(b"\n"):
+            stream.write(b"\n")
+        stream.write(line)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise
+PYTHON
+}
+
 exec 9>"$backup_root/.deploy.lock"
 flock -n 9
 
@@ -171,6 +207,8 @@ for service in "${services[@]}"; do
   old_images[$service]=$(docker inspect -f '{{.Image}}' "$container")
   rollback_tags[$service]="$container:rollback-$run_id"
 done
+
+provision_personal_zalo_chatbot_secret
 
 git switch --detach "$revision"
 checkout_changed=1

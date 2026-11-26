@@ -45,6 +45,7 @@ func TestChannelToResponseExposesAutoReplyCapability(t *testing.T) {
 	tests := []struct {
 		name                 string
 		channelType          string
+		personalOptIn        bool
 		wantSupported        bool
 		wantAutoReplyEnabled bool
 	}{
@@ -61,18 +62,26 @@ func TestChannelToResponseExposesAutoReplyCapability(t *testing.T) {
 			wantAutoReplyEnabled: false,
 		},
 		{
-			name:                 "personal zalo import does not support auto reply",
+			name:                 "legacy personal zalo remains off until explicitly enabled",
 			channelType:          "personal_zalo_import",
-			wantSupported:        false,
+			wantSupported:        true,
 			wantAutoReplyEnabled: false,
+		},
+		{
+			name:                 "personal zalo can opt in",
+			channelType:          "personal_zalo_import",
+			personalOptIn:        true,
+			wantSupported:        true,
+			wantAutoReplyEnabled: true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			response := channelToResponse(models.Channel{
-				ChannelType:      tc.channelType,
-				AutoReplyEnabled: true,
+				ChannelType:                  tc.channelType,
+				AutoReplyEnabled:             true,
+				PersonalZaloAutoReplyEnabled: tc.personalOptIn,
 			})
 
 			if response.SupportsAutoReply != tc.wantSupported {

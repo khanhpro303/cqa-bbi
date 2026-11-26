@@ -151,6 +151,15 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		internal.POST("/imports/personal-zalo", handlers.NewPersonalZaloImportHandler(engine.NewIngestService()))
 	}
 
+	r.POST("/api/internal/chatbot/personal-zalo",
+		func(c *gin.Context) {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+			c.Next()
+		},
+		middleware.InternalHMACAuth(middleware.PersonalZaloChatbotSecretResolver(cfg.EncryptionKey, os.Getenv("PERSONAL_ZALO_CHATBOT_SECRET")), 5*time.Minute),
+		handlers.NewPersonalZaloChatbotHandler(cfg),
+	)
+
 	abzInternal := r.Group("/api/internal/abz")
 	abzInternal.Use(middleware.ABZExportHMACAuth(cfg.ABZExportSecret, cfg.ABZExportTenantID, 5*time.Minute))
 	{
