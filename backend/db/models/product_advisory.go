@@ -11,6 +11,7 @@ type ProductAdvisory struct {
 	SourceURL      string    `gorm:"type:varchar(2048)" json:"source_url"`
 	SourceTitle    string    `gorm:"type:varchar(500)" json:"source_title"`
 	ScrapedContent string    `gorm:"type:longtext" json:"scraped_content"`
+	SourceSummary  string    `gorm:"type:text" json:"source_summary"`
 	CreatedAt      time.Time `gorm:"not null" json:"created_at"`
 	UpdatedAt      time.Time `gorm:"not null;index" json:"updated_at"`
 }

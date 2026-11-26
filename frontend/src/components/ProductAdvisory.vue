@@ -136,6 +136,7 @@
                 :hint="$t('kb_link_public_hint')"
                 persistent-hint
                 type="url"
+                :disabled="scraping || saving"
                 maxlength="2048"
                 variant="outlined"
                 class="flex-grow-1"
@@ -147,7 +148,7 @@
                 prepend-icon="mdi-web-sync"
                 class="mt-sm-1"
                 :loading="scraping"
-                :disabled="!canEdit || !validSourceURL || scraping"
+                :disabled="!canEdit || !validSourceURL || saving || !!activeScrape"
                 data-testid="product-scrape"
                 @click="scrape"
               >
@@ -155,9 +156,14 @@
               </v-btn>
             </div>
             <v-alert v-if="sourceError" type="error" variant="tonal" density="compact" class="mt-2">{{ $t(sourceError) }}</v-alert>
-            <v-sheet v-if="detail.scraped_content" color="surface-variant" rounded class="pa-3 mt-3">
-              <div class="text-caption text-medium-emphasis mb-1">{{ detail.source_title || $t('product_advisory_scraped_preview') }}</div>
-              <div class="scraped-preview">{{ detail.scraped_content }}</div>
+            <v-sheet v-if="scraping || detail.source_summary || detail.scraped_content || detail.source_title || detail.summary_error" border rounded="lg" class="pa-4 mt-3">
+              <h4 class="text-subtitle-2 font-weight-bold">{{ $t('kb_summary_title') }}</h4>
+              <div v-if="detail.source_title && !scraping" class="text-caption text-medium-emphasis mt-1">{{ detail.source_title }}</div>
+              <div aria-live="polite">
+                <p v-if="scraping" class="text-body-2 text-medium-emphasis mt-2">{{ $t('product_advisory_summary_reading') }}</p>
+                <p v-else-if="detail.source_summary" class="text-body-2 source-summary mt-2">{{ detail.source_summary }}</p>
+                <p v-else class="text-body-2 text-medium-emphasis mt-2">{{ $t(summaryMessage) }}</p>
+              </div>
             </v-sheet>
 
             <div class="d-flex flex-wrap align-center justify-space-between ga-2 mt-6 mb-3">
@@ -183,7 +189,15 @@
             <div v-if="detail.images.length" class="product-images">
               <v-card v-for="image in detail.images" :key="image.id" variant="outlined" class="image-card">
                 <v-img :src="displayURL(image.url)" :alt="image.caption || selected.web_name" height="140" cover />
-                <div class="d-flex align-center px-2 py-1">
+                <div class="d-flex flex-wrap align-center ga-1 px-2 pt-2">
+                  <v-chip size="x-small" variant="tonal">
+                    {{ image.source === 'scraped' ? $t('product_advisory_scraped') : $t('product_advisory_manual') }}
+                  </v-chip>
+                  <v-chip v-if="!image.enabled" size="x-small" color="warning" variant="tonal">
+                    <span class="image-review-label">{{ $t('product_advisory_pending_review') }}</span>
+                  </v-chip>
+                </div>
+                <div class="d-flex align-center justify-space-between px-2">
                   <v-checkbox-btn
                     :model-value="image.enabled"
                     color="primary"
@@ -191,9 +205,6 @@
                     :disabled="!canEdit || updatingImage === image.id"
                     @update:model-value="(enabled) => setImageEnabled(image, !!enabled)"
                   />
-                  <span class="text-caption">{{ image.source === 'scraped' ? $t('product_advisory_scraped') : $t('product_advisory_manual') }}</span>
-                  <v-chip v-if="!image.enabled" size="x-small" color="warning" variant="tonal" class="ml-2">{{ $t('product_advisory_pending_review') }}</v-chip>
-                  <v-spacer />
                   <v-btn v-if="canEdit" icon="mdi-delete-outline" size="x-small" variant="text" color="error" :aria-label="$t('delete')" @click="removeImage(image)" />
                 </div>
                 <v-text-field
@@ -220,7 +231,7 @@
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="dialog = false">{{ $t('cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" :loading="saving" :disabled="!canEdit || !detail || !sourceURLAcceptable" data-testid="product-save" @click="save">
+          <v-btn color="primary" variant="flat" :loading="saving" :disabled="!canEdit || !detail || !sourceURLAcceptable || scraping || saving" data-testid="product-save" @click="save">
             {{ $t('save') }}
           </v-btn>
         </v-card-actions>
@@ -261,6 +272,8 @@ type ProductDetail = ProductGroup & {
   source_url: string
   source_title: string
   scraped_content: string
+  source_summary?: string
+  summary_error?: string
   images: ProductImage[]
 }
 
@@ -357,6 +370,14 @@ function debouncedLoad() {
 const dialog = ref(false)
 const selected = ref<ProductGroup | null>(null)
 const detail = ref<ProductDetail | null>(null)
+const summaryMessage = computed(() => {
+  switch (detail.value?.summary_error) {
+    case 'summary_no_ai': return 'kb_summary_no_ai'
+    case 'summary_no_text': return 'kb_summary_no_text'
+    case 'summary_failed': return 'kb_summary_failed'
+    default: return 'product_advisory_summary_missing'
+  }
+})
 const loadingDetail = ref(false)
 const detailError = ref(false)
 const form = ref({ notes: '', source_url: '' })
@@ -371,6 +392,7 @@ let detailRequest = 0
 async function openProduct(product: ProductGroup) {
   selected.value = product
   detail.value = null
+  sourceError.value = ''
   detailError.value = false
   dialog.value = true
   const request = ++detailRequest
@@ -407,7 +429,7 @@ function notify(message: string, color = 'success') {
 
 const saving = ref(false)
 async function save() {
-  if (!selected.value || !detail.value || !props.canEdit || !sourceURLAcceptable.value) return
+  if (!selected.value || !detail.value || !props.canEdit || !sourceURLAcceptable.value || saving.value || scraping.value) return
   const requestBase = base.value
   const parentCode = selected.value.parent_code
   saving.value = true
@@ -431,30 +453,38 @@ async function save() {
 
 const validSourceURL = computed(() => !!safeURL(form.value.source_url))
 const sourceURLAcceptable = computed(() => !form.value.source_url.trim() || validSourceURL.value)
-const scraping = ref(false)
+const activeScrape = ref<{ base: string; parentCode: string } | null>(null)
+const scraping = computed(() => activeScrape.value?.base === base.value && activeScrape.value?.parentCode === selected.value?.parent_code)
 const sourceError = ref('')
 async function scrape() {
-  if (!selected.value || !validSourceURL.value || !props.canEdit) return
+  if (!selected.value || !detail.value || !validSourceURL.value || !props.canEdit || saving.value || activeScrape.value) return
   const requestBase = base.value
   const parentCode = selected.value.parent_code
-  scraping.value = true
+  const request = detailRequest
+  activeScrape.value = { base: requestBase, parentCode }
   sourceError.value = ''
   try {
     const { data } = await api.post(`${requestBase}/${encodeURIComponent(parentCode)}/scrape`, {
       url: form.value.source_url.trim(),
     })
-    if (base.value !== requestBase || selected.value?.parent_code !== parentCode || !dialog.value) return
-    const updated = { ...detail.value!, ...data, images: data?.images || detail.value!.images } as ProductDetail
+    if (base.value !== requestBase || selected.value?.parent_code !== parentCode || !dialog.value || !detail.value) return
+    const updated: ProductDetail = {
+      ...detail.value,
+      ...data,
+      summary_error: data?.summary_error,
+      images: data?.images || detail.value.images,
+    }
     detail.value = updated
     form.value.source_url = updated.source_url || form.value.source_url
     prepareImages(updated.images.map((image) => image.url))
     notify(t('product_advisory_scraped_ok'))
-    await loadProducts(page.value)
+    void loadProducts(page.value)
   } catch (error: any) {
+    if (request !== detailRequest || !dialog.value) return
     const code = error?.response?.data?.error || error?.response?.data?.message
     sourceError.value = code === 'firecrawl_not_configured' ? 'product_advisory_firecrawl_missing' : 'product_advisory_scrape_failed'
   } finally {
-    scraping.value = false
+    activeScrape.value = null
   }
 }
 
@@ -568,7 +598,8 @@ defineExpose({ loadProducts, products, openProduct, detail, form, save, scrape }
 .editor-identity { min-width: 0; }
 .product-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .image-card { min-width: 0; overflow: hidden; }
-.scraped-preview { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 6; white-space: pre-wrap; }
+.image-review-label { color: rgb(var(--v-theme-on-surface)); }
+.source-summary { white-space: pre-line; overflow-wrap: anywhere; }
 code { overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .configured-filter { max-width: none; width: 100%; }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
+	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
@@ -72,6 +74,8 @@ type productAdvisoryDetail struct {
 	SourceURL      string                    `json:"source_url"`
 	SourceTitle    string                    `json:"source_title"`
 	ScrapedContent string                    `json:"scraped_content"`
+	SourceSummary  string                    `json:"source_summary"`
+	SummaryError   string                    `json:"summary_error,omitempty"`
 	Images         []productAdvisoryImageDTO `json:"images"`
 	UpdatedAt      *time.Time                `json:"updated_at,omitempty"`
 }
@@ -204,6 +208,7 @@ func SaveProductAdvisory(c *gin.Context) {
 		if sourceChanged {
 			updates["source_title"] = ""
 			updates["scraped_content"] = ""
+			updates["source_summary"] = ""
 			if err := tx.Where("tenant_id = ? AND product_advisory_id = ? AND source = ?", tenantID, profile.ID, "scraped").Delete(&models.ProductAdvisoryImage{}).Error; err != nil {
 				return err
 			}
@@ -216,7 +221,7 @@ func SaveProductAdvisory(c *gin.Context) {
 	GetProductAdvisory(c)
 }
 
-func ScrapeProductAdvisory(c *gin.Context) {
+func ScrapeProductAdvisory(c *gin.Context, cfg *config.Config) {
 	var req struct {
 		URL string `json:"url"`
 	}
@@ -245,21 +250,50 @@ func ScrapeProductAdvisory(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "scrape_failed", "message": err.Error()})
 		return
 	}
-	if err := saveProductAdvisoryScrape(c.Request.Context(), tenantID, group, source.String(), page); err != nil {
+	// Keep the Firecrawl and AI calls within the browser request budget.
+	summaryCtx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
+	summary, summaryErr := knowledge.SummarizeProductPage(summaryCtx, tenantID, cfg, group.WebName, page)
+	cancel()
+	if summaryErr != nil && !errors.Is(summaryErr, knowledge.ErrSummaryNoAI) && !errors.Is(summaryErr, knowledge.ErrSummaryNoText) {
+		log.Printf("[product-advisory] summarize page for tenant %s, product %s: %v", tenantID, group.ParentCode, summaryErr)
+	}
+	if err := saveProductAdvisoryScrape(c.Request.Context(), tenantID, group, source.String(), page, summary); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "save_failed"})
 		return
 	}
-	GetProductAdvisory(c)
+	detail, status, err := loadProductAdvisoryDetail(c.Request.Context(), tenantID, group.ParentCode)
+	if err != nil {
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	if detail.SourceSummary == "" {
+		switch {
+		case errors.Is(summaryErr, knowledge.ErrSummaryNoAI):
+			detail.SummaryError = "summary_no_ai"
+		case errors.Is(summaryErr, knowledge.ErrSummaryNoText):
+			detail.SummaryError = "summary_no_text"
+		case summaryErr != nil:
+			detail.SummaryError = "summary_failed"
+		}
+	}
+	c.JSON(http.StatusOK, detail)
 }
 
-func saveProductAdvisoryScrape(ctx context.Context, tenantID string, group productCatalogGroup, sourceURL string, page knowledge.ScrapedPage) error {
+func saveProductAdvisoryScrape(ctx context.Context, tenantID string, group productCatalogGroup, sourceURL string, page knowledge.ScrapedPage, summary string) error {
 	return db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		profile, err := ensureProductAdvisory(tx, tenantID, group)
 		if err != nil {
 			return err
 		}
 		sameSource := profile.SourceURL == sourceURL
-		if err := tx.Model(&profile).Updates(map[string]any{"web_name": group.WebName, "source_url": sourceURL, "source_title": page.Title, "scraped_content": page.Text, "updated_at": time.Now()}).Error; err != nil {
+		updates := map[string]any{
+			"web_name": group.WebName, "source_url": sourceURL, "source_title": page.Title,
+			"scraped_content": page.Text, "updated_at": time.Now(),
+		}
+		if summary != "" || !sameSource || profile.SourceTitle != page.Title || profile.ScrapedContent != page.Text {
+			updates["source_summary"] = summary
+		}
+		if err := tx.Model(&profile).Updates(updates).Error; err != nil {
 			return err
 		}
 		var previous []models.ProductAdvisoryImage
@@ -483,6 +517,7 @@ func loadProductAdvisoryDetail(ctx context.Context, tenantID, rawParentCode stri
 		return productAdvisoryDetail{}, http.StatusInternalServerError, errors.New("query_failed")
 	}
 	detail.Notes, detail.SourceURL, detail.SourceTitle, detail.ScrapedContent = profile.Notes, profile.SourceURL, profile.SourceTitle, profile.ScrapedContent
+	detail.SourceSummary = profile.SourceSummary
 	detail.UpdatedAt = &profile.UpdatedAt
 	var images []models.ProductAdvisoryImage
 	if err := db.DB.WithContext(ctx).Select("id, product_advisory_id, tenant_id, url, source, caption, media_type, enabled, sort_order, created_at, updated_at").

@@ -380,7 +380,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.GET("/product-advisory", middleware.RequirePermission("settings", "r"), handlers.ListProductAdvisories)
 			tenant.GET("/product-advisory/:parentCode", middleware.RequirePermission("settings", "r"), handlers.GetProductAdvisory)
 			tenant.PUT("/product-advisory/:parentCode", middleware.RequirePermission("settings", "w"), handlers.SaveProductAdvisory)
-			tenant.POST("/product-advisory/:parentCode/scrape", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), handlers.ScrapeProductAdvisory)
+			tenant.POST("/product-advisory/:parentCode/scrape", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), func(c *gin.Context) {
+				handlers.ScrapeProductAdvisory(c, cfg)
+			})
 			tenant.POST("/product-advisory/:parentCode/images", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), handlers.UploadProductAdvisoryImages)
 			tenant.PATCH("/product-advisory/:parentCode/images/:imageId", middleware.RequirePermission("settings", "w"), handlers.UpdateProductAdvisoryImage)
 			tenant.DELETE("/product-advisory/:parentCode/images/:imageId", middleware.RequirePermission("settings", "w"), handlers.DeleteProductAdvisoryImage)

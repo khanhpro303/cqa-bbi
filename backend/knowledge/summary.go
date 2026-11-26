@@ -137,22 +137,6 @@ func summarizePassages(ctx context.Context, call summaryCall, title string, pass
 		return "", ErrSummaryNoText
 	}
 
-	generate := func(ctx context.Context, instruction, section string, limit int) (string, error) {
-		input, err := json.Marshal(map[string]string{"title": title, "content": section})
-		if err != nil {
-			return "", err
-		}
-		result, err := call(ctx, summaryRules+instruction, string(input))
-		if err != nil {
-			return "", err
-		}
-		answer := strings.TrimSpace(result.Content)
-		if answer == "" {
-			return "", errors.New("empty AI summary")
-		}
-		return truncateRunes(answer, limit), nil
-	}
-
 	// Reduce all sections in order before the final pass. Each round shrinks
 	// the total size, including documents near the maximum extraction size.
 	for len(sections) > 1 {
@@ -164,7 +148,7 @@ func summarizePassages(ctx context.Context, call summaryCall, title string, pass
 				break
 			}
 			group.Go(func() error {
-				note, err := generate(groupCtx, "Ghi lại các chủ đề và chi tiết hữu ích trong phần này, tối đa 1.200 ký tự.", section, summaryNotesRunes)
+				note, err := generateSummaryText(groupCtx, call, "Ghi lại các chủ đề và chi tiết hữu ích trong phần này, tối đa 1.200 ký tự.", title, section, summaryNotesRunes)
 				notes[i] = note
 				return err
 			})
@@ -177,7 +161,42 @@ func summarizePassages(ctx context.Context, call summaryCall, title string, pass
 		}
 		sections = summarySections(notes)
 	}
-	return generate(ctx, "Viết một đoạn tổng quan ngắn, sau đó liệt kê tối đa tám ý quan trọng. Mỗi ý trên một dòng, bắt đầu bằng dấu gạch ngang. Giới hạn 3.500 ký tự.", sections[0], summaryFinalRunes)
+	return generateSummaryText(ctx, call, "Viết một đoạn tổng quan ngắn, sau đó liệt kê tối đa tám ý quan trọng. Mỗi ý trên một dòng, bắt đầu bằng dấu gạch ngang. Giới hạn 3.500 ký tự.", title, sections[0], summaryFinalRunes)
+}
+
+// SummarizeProductPage uses the workspace's knowledge-summary model for the product preview.
+func SummarizeProductPage(ctx context.Context, tenantID string, cfg *config.Config, productName string, page ScrapedPage) (string, error) {
+	text := strings.TrimSpace(page.Text)
+	if text == "" {
+		return "", ErrSummaryNoText
+	}
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg, engine.AITaskKnowledgeSummary)
+	if err != nil {
+		return "", err
+	}
+	if resolved.Client == nil {
+		return "", ErrSummaryNoAI
+	}
+	const instruction = "Tên trong dữ liệu là sản phẩm cần tóm tắt. Bỏ qua menu, liên kết điều hướng và sản phẩm liên quan. " +
+		"Viết một đoạn tổng quan ngắn rồi xuống dòng trống và liệt kê tối đa năm ý hữu ích khi tư vấn. " +
+		"Mỗi ý trên một dòng, bắt đầu bằng dấu •. Chỉ nêu đặc điểm, đối tượng sử dụng, thông số hoặc lưu ý khi trang có nêu. Giới hạn 1.500 ký tự."
+	return generateSummaryText(ctx, resolved.Client.AnalyzeChat, instruction, productName, truncateRunes(text, summaryInputRunes), 1500)
+}
+
+func generateSummaryText(ctx context.Context, call summaryCall, instruction, title, content string, limit int) (string, error) {
+	input, err := json.Marshal(map[string]string{"title": title, "content": content})
+	if err != nil {
+		return "", err
+	}
+	result, err := call(ctx, summaryRules+instruction, string(input))
+	if err != nil {
+		return "", err
+	}
+	answer := strings.TrimSpace(result.Content)
+	if answer == "" {
+		return "", errors.New("empty AI summary")
+	}
+	return truncateRunes(answer, limit), nil
 }
 
 func summarySections(passages []string) []string {

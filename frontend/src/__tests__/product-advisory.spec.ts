@@ -135,13 +135,20 @@ describe('ProductAdvisory', () => {
     wrapper.unmount()
   })
 
-  it('scrapes a public product page with the configured Firecrawl flow', async () => {
+  it('renders the AI summary and image badges after reading a product page', async () => {
     mocks.get
       .mockResolvedValueOnce({ data: { items: [product], total: 1 } })
       .mockResolvedValueOnce({ data: detail })
-    mocks.post.mockResolvedValueOnce({
-      data: { ...detail, source_url: 'https://example.com/storm', scraped_content: 'Mũ fullface đi phố.' },
-    })
+    const result = {
+      ...detail,
+      source_url: 'https://example.com/storm',
+      source_title: 'Storm II - Cửa hàng',
+      scraped_content: '[Skip to content](https://example.com/storm#main)',
+      source_summary: 'Mũ fullface phù hợp đi phố.\n\n• Kính chống UV.',
+      images: [{ id: 'storm', url: product.thumbnail_url, source: 'scraped', caption: '', enabled: false, sort_order: 0 }],
+    }
+    let finishScrape!: (response: { data: typeof result }) => void
+    mocks.post.mockReturnValueOnce(new Promise((resolve) => { finishScrape = resolve }))
     const wrapper = shallowMount(ProductAdvisory, {
       props: { tenantId: 'tenant-1', canEdit: true },
       global: { mocks: { $t: (key: string) => key }, renderStubDefaultSlot: true },
@@ -149,8 +156,22 @@ describe('ProductAdvisory', () => {
     await flushPromises()
     await (wrapper.vm as any).openProduct(product)
     ;(wrapper.vm as any).form.source_url = 'https://example.com/storm'
-    await (wrapper.vm as any).scrape()
+    const scrape = (wrapper.vm as any).scrape()
     await flushPromises()
+    expect(wrapper.text()).toContain('product_advisory_summary_reading')
+    await (wrapper.vm as any).save()
+    expect(mocks.put).not.toHaveBeenCalled()
+
+    finishScrape({ data: result })
+    await scrape
+    await flushPromises()
+    expect(wrapper.get('.source-summary').element.textContent).toBe(result.source_summary)
+    expect(wrapper.text()).toContain(result.source_title)
+    expect(wrapper.text()).not.toContain('Skip to content')
+    expect(wrapper.get('.image-card').findAll('v-chip').map((chip) => chip.text())).toEqual([
+      'product_advisory_scraped',
+      'product_advisory_pending_review',
+    ])
 
     expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/product-advisory/LS2-FF800/scrape', {
       url: 'https://example.com/storm',

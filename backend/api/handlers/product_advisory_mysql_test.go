@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/knowledge"
@@ -36,7 +37,7 @@ func TestProductAdvisoryMySQL(t *testing.T) {
 	tenant, otherTenant := pkg.NewUUID(), pkg.NewUUID()
 	t.Cleanup(func() {
 		db.DB = previous
-		for _, model := range []any{&models.ProductAdvisoryImage{}, &models.ProductAdvisory{}, &models.CachedProduct{}} {
+		for _, model := range []any{&models.ProductAdvisoryImage{}, &models.ProductAdvisory{}, &models.CachedProduct{}, &models.AppSetting{}} {
 			if err := database.Where("tenant_id IN ?", []string{tenant, otherTenant}).Delete(model).Error; err != nil {
 				t.Error(err)
 			}
@@ -45,7 +46,7 @@ func TestProductAdvisoryMySQL(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	})
-	if err := database.AutoMigrate(&models.CachedProduct{}, &models.ProductAdvisory{}, &models.ProductAdvisoryImage{}); err != nil {
+	if err := database.AutoMigrate(&models.CachedProduct{}, &models.ProductAdvisory{}, &models.ProductAdvisoryImage{}, &models.AppSetting{}); err != nil {
 		t.Fatal(err)
 	}
 	rows := []models.CachedProduct{
@@ -91,7 +92,46 @@ func TestProductAdvisoryMySQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	scraped := knowledge.ScrapedPage{Title: "Storm", Text: "Kính chống UV", Images: []string{"https://cdn.example.com/storm.jpg"}}
-	if err := saveProductAdvisoryScrape(context.Background(), tenant, group, source, scraped); err != nil {
+	const summaryText = "Storm II có kính chống UV."
+	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+			Input []struct {
+				Role    string `json:"role"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model != "test-preview-model" ||
+			len(body.Input) != 2 || body.Input[1].Role != "user" || len(body.Input[1].Content) != 1 {
+			t.Error("expected product page through the workspace's summary model")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var sourceData map[string]string
+		if err := json.Unmarshal([]byte(body.Input[1].Content[0].Text), &sourceData); err != nil ||
+			sourceData["title"] != group.WebName || sourceData["content"] != scraped.Text {
+			t.Error("expected product name and scraped page as summary data")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": summaryText})
+	}))
+	t.Cleanup(aiServer.Close)
+	for key, value := range map[string]string{
+		"ai_provider": "openai", "ai_api_key": "test-key", "ai_base_url": aiServer.URL,
+		"ai_task_model_knowledge_document_summary": `{"provider":"openai","model":"test-preview-model"}`,
+	} {
+		if err := database.Create(&models.AppSetting{ID: pkg.NewUUID(), TenantID: tenant, SettingKey: key, ValuePlain: value}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	summary, err := knowledge.SummarizeProductPage(context.Background(), tenant, &config.Config{}, group.WebName, scraped)
+	if err != nil || summary != summaryText {
+		t.Fatalf("unexpected AI summary %q: %v", summary, err)
+	}
+	if err := saveProductAdvisoryScrape(context.Background(), tenant, group, source, scraped, summary); err != nil {
 		t.Fatal(err)
 	}
 	get := func() productAdvisoryDetail {
@@ -104,7 +144,7 @@ func TestProductAdvisoryMySQL(t *testing.T) {
 		return detail
 	}
 	initial := get()
-	if initial.Notes != "Vỏ nhẹ" || initial.ScrapedContent != scraped.Text || len(initial.Images) != 1 || initial.Images[0].Enabled {
+	if initial.Notes != "Vỏ nhẹ" || initial.ScrapedContent != scraped.Text || initial.SourceSummary != summaryText || len(initial.Images) != 1 || initial.Images[0].Enabled {
 		t.Fatalf("unexpected initial details: %+v", initial)
 	}
 	imageID := initial.Images[0].ID
@@ -132,12 +172,12 @@ func TestProductAdvisoryMySQL(t *testing.T) {
 	}
 	manual := images.Images[0]
 	scraped.Images = append(scraped.Images, "https://cdn.example.com/new.jpg")
-	if err := saveProductAdvisoryScrape(context.Background(), tenant, group, source, scraped); err != nil {
+	if err := saveProductAdvisoryScrape(context.Background(), tenant, group, source, scraped, ""); err != nil {
 		t.Fatal(err)
 	}
 	updated := get()
-	if len(updated.Images) != 3 || updated.Images[0].ID != imageID || !updated.Images[0].Enabled || updated.Images[0].Caption != "Mặt trước" {
-		t.Fatalf("re-scrape lost reviewed images: %+v", updated.Images)
+	if updated.SourceSummary != summaryText || len(updated.Images) != 3 || updated.Images[0].ID != imageID || !updated.Images[0].Enabled || updated.Images[0].Caption != "Mặt trước" {
+		t.Fatalf("re-scrape lost summary or reviewed images: %+v", updated)
 	}
 	if rec := request(tenant, http.MethodGet, manual.URL, "", manual.ID, http.StatusOK, GetProductAdvisoryImageContent); !bytes.Equal(rec.Body.Bytes(), imageData.Bytes()) {
 		t.Fatal("uploaded image changed")
@@ -149,7 +189,7 @@ func TestProductAdvisoryMySQL(t *testing.T) {
 	}
 	request(tenant, http.MethodPut, "/P1", `{"notes":"Vỏ nhẹ","source_url":""}`, "", http.StatusOK, SaveProductAdvisory)
 	cleared := get()
-	if cleared.ScrapedContent != "" || len(cleared.Images) != 1 || cleared.Images[0].ID != manual.ID {
+	if cleared.ScrapedContent != "" || cleared.SourceSummary != "" || len(cleared.Images) != 1 || cleared.Images[0].ID != manual.ID {
 		t.Fatalf("clearing source affected wrong fields: %+v", cleared)
 	}
 }
