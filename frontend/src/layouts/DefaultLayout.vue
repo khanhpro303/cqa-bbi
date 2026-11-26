@@ -855,29 +855,30 @@ async function deleteGlobalCustomer(customerId: string) {
 
 <style scoped>
 .app-sidebar :deep(.v-navigation-drawer__content) {
-  --sidebar-scroll-thumb: rgba(var(--v-theme-on-surface), 0.46);
-  scrollbar-width: thin;
-  scrollbar-color: var(--sidebar-scroll-thumb) transparent;
+  --sidebar-scroll-thumb: var(--app-scrollbar-thumb, rgba(var(--v-theme-on-surface), 0.16));
+  overscroll-behavior: contain;
 }
 
 .app-sidebar :deep(.v-navigation-drawer__content:is(:hover, :focus-within)) {
-  --sidebar-scroll-thumb: rgba(var(--v-theme-on-surface), 0.64);
+  --sidebar-scroll-thumb: var(--app-scrollbar-thumb-emphasis, rgba(var(--v-theme-on-surface), 0.24));
 }
 
-@supports not (scrollbar-color: red transparent) {
-  .app-sidebar :deep(.v-navigation-drawer__content::-webkit-scrollbar) {
-    width: 8px;
-  }
+.app-sidebar :deep(.v-navigation-drawer__content::-webkit-scrollbar-thumb) {
+  background-color: var(--sidebar-scroll-thumb);
+}
 
-  .app-sidebar :deep(.v-navigation-drawer__content::-webkit-scrollbar-track) {
-    background: transparent;
-  }
+.app-sidebar :deep(.v-navigation-drawer__content::-webkit-scrollbar-thumb:hover) {
+  background-color: var(--app-scrollbar-thumb-hover, rgba(var(--v-theme-on-surface), 0.34));
+}
 
-  .app-sidebar :deep(.v-navigation-drawer__content::-webkit-scrollbar-thumb) {
-    background: var(--sidebar-scroll-thumb);
-    background-clip: padding-box;
-    border: 1px solid transparent;
-    border-radius: 8px;
+.app-sidebar :deep(.v-navigation-drawer__content::-webkit-scrollbar-thumb:active) {
+  background-color: var(--app-scrollbar-thumb-active, rgba(var(--v-theme-on-surface), 0.5));
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .app-sidebar :deep(.v-navigation-drawer__content) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--sidebar-scroll-thumb) transparent;
   }
 }
 

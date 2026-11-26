@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import vuetify from './plugins/vuetify'
+import './styles/scrollbar.css'
 import i18n from './i18n'
 import router from './router'
 import App from './App.vue'

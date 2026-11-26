@@ -398,22 +398,35 @@ button:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-o
 .scroll-region {
   overscroll-behavior: contain;
   padding-inline-end: 4px;
-  scrollbar-color: transparent transparent;
-  scrollbar-width: thin;
 }
-.scroll-region:hover,
-.scroll-region:focus-within { scrollbar-color: rgba(var(--v-theme-on-surface), .28) transparent; }
-.scroll-region::-webkit-scrollbar { width: 8px; }
-.scroll-region::-webkit-scrollbar-track { background: transparent; }
 .scroll-region::-webkit-scrollbar-thumb {
   background-color: transparent;
-  background-clip: content-box;
-  border: 2px solid transparent;
-  border-radius: 999px;
 }
 .scroll-region:hover::-webkit-scrollbar-thumb,
-.scroll-region:focus-within::-webkit-scrollbar-thumb { background-color: rgba(var(--v-theme-on-surface), .28); }
-.scroll-region::-webkit-scrollbar-thumb:hover { background-color: rgba(var(--v-theme-on-surface), .42); }
+.scroll-region:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--app-scrollbar-thumb-emphasis, rgba(var(--v-theme-on-surface), .24));
+}
+.scroll-region::-webkit-scrollbar-thumb:hover {
+  background-color: var(--app-scrollbar-thumb-hover, rgba(var(--v-theme-on-surface), .34));
+}
+.scroll-region::-webkit-scrollbar-thumb:active {
+  background-color: var(--app-scrollbar-thumb-active, rgba(var(--v-theme-on-surface), .5));
+}
+@media (hover: none) {
+  .scroll-region::-webkit-scrollbar-thumb {
+    background-color: var(--app-scrollbar-thumb, rgba(var(--v-theme-on-surface), .16));
+  }
+}
+@supports not selector(::-webkit-scrollbar) {
+  .scroll-region {
+    scrollbar-color: transparent transparent;
+    scrollbar-width: thin;
+  }
+  .scroll-region:hover,
+  .scroll-region:focus-within {
+    scrollbar-color: var(--app-scrollbar-thumb-emphasis, rgba(var(--v-theme-on-surface), .24)) transparent;
+  }
+}
 .keyword-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; width: 100%; text-align: left; cursor: pointer; border-bottom: 1px solid rgba(var(--v-theme-on-surface), .1); }
 .keyword-label { min-width: 0; overflow-wrap: anywhere; }
 .keyword-count { flex: 0 0 auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
