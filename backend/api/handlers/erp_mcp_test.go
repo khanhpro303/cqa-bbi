@@ -240,6 +240,105 @@ func TestERPMCPWarehouseAndPermission(t *testing.T) {
 	}
 }
 
+func TestERPMCPWarehousePublicHidesStockQuantity(t *testing.T) {
+	_, calls := setupWarehouseFixture(t)
+	router := gin.New()
+	router.POST("/mcp/erp/:tenantId", ERPMCP)
+	permission, err := engine.SignPermissionToken(engine.GroupPermissionContext{
+		TenantID: stockFixtureTenant, AgentType: "public", ZaloUserID: "fixture-zalo",
+		Groups: []engine.GroupPermission{{GroupID: "public-group", Resources: []engine.ResourcePermission{
+			{Resource: "inventory", IsEnabled: true, ScopeType: "own", ProductGroups: []string{"mũ"}, Brands: []string{"bulldog"}},
+		}}},
+	}, stockFixtureSigningKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/mcp/erp/"+stockFixtureTenant, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Agent-Token", "fixture-public-token")
+		req.Header.Set("X-Permission-Token", permission)
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+
+	discovery := request(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	if discovery.Code != http.StatusOK ||
+		!strings.Contains(discovery.Body.String(), "còn hàng hay hết hàng") ||
+		strings.Contains(discovery.Body.String(), "Cộng tồn khả dụng") {
+		t.Fatalf("unexpected public tool descriptions: %d %s", discovery.Code, discovery.Body.String())
+	}
+
+	for _, tc := range []struct {
+		name       string
+		input      string
+		wantStatus string
+		wantIn     string
+		forbid     []string
+		wantCalls  int32
+	}{
+		{
+			name:       "in-stock sku",
+			input:      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inventory_by_sku","arguments":{"sku":"SP457996"}}}`,
+			wantStatus: `"stock_status":"còn hàng"`,
+			wantIn:     `"in_stock":true`,
+			forbid:     []string{`"ton_kho"`, `"TON_KHO"`, `"sku_count"`, `:32`},
+			wantCalls:  1,
+		},
+		{
+			name:       "in-stock line",
+			input:      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inventory_by_line","arguments":{"line_name":"Bulldog DOGO"}}}`,
+			wantStatus: `"stock_status":"còn hàng"`,
+			wantIn:     `"in_stock":true`,
+			forbid:     []string{`"ton_kho"`, `"TON_KHO"`, `"sku_count"`, `:37`},
+			wantCalls:  3,
+		},
+		{
+			name:       "in-stock parent",
+			input:      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inventory_by_sku","arguments":{"search":"SP457204"}}}`,
+			wantStatus: `"stock_status":"còn hàng"`,
+			wantIn:     `"in_stock":true`,
+			forbid:     []string{`"ton_kho"`, `"TON_KHO"`, `"sku_count"`, `:36`},
+			wantCalls:  2,
+		},
+		{
+			name:       "zero-stock sku",
+			input:      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inventory_by_sku","arguments":{"sku":"ZERO-STOCK"}}}`,
+			wantStatus: `"stock_status":"hết hàng"`,
+			wantIn:     `"in_stock":false`,
+			forbid:     []string{`"ton_kho"`, `"TON_KHO"`, `"sku_count"`},
+			wantCalls:  1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := calls.Load()
+			res := request(tc.input)
+			var data struct {
+				Result struct {
+					IsError bool `json:"isError"`
+					Content []struct{ Text string }
+				}
+			}
+			if res.Code != http.StatusOK || json.Unmarshal(res.Body.Bytes(), &data) != nil || data.Result.IsError || len(data.Result.Content) != 1 {
+				t.Fatalf("unexpected response: %d %s", res.Code, res.Body.String())
+			}
+			body := data.Result.Content[0].Text
+			if !strings.Contains(body, tc.wantStatus) || !strings.Contains(body, tc.wantIn) || !strings.Contains(body, `"stock_visibility":"status_only"`) {
+				t.Errorf("missing status-only fields in %s", body)
+			}
+			for _, bad := range tc.forbid {
+				if strings.Contains(body, bad) {
+					t.Errorf("public response leaked %q: %s", bad, body)
+				}
+			}
+			if got := calls.Load() - before; got != tc.wantCalls {
+				t.Errorf("warehouse requests = %d, want %d", got, tc.wantCalls)
+			}
+		})
+	}
+}
+
 func TestERPMCPWarehouseScopedMiss(t *testing.T) {
 	_, calls := setupWarehouseFixture(t)
 	permission, err := engine.SignPermissionToken(engine.GroupPermissionContext{

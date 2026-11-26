@@ -154,6 +154,51 @@ func TestRenderCartAndView(t *testing.T) {
 	}
 }
 
+func TestRenderCartAndViewForPublicHidesStock(t *testing.T) {
+	shortLine := storm()
+	shortLine.Quantity = 6
+	zeroLine := visor()
+	zeroLine.Stock = stock(0)
+	zeroLine.Quantity = 1
+	s := CartState{Lines: []CartLine{shortLine, zeroLine}}
+	s.PutPending(CartPending{
+		Request: "FF901", Quantity: 1, Need: NeedLine,
+		Options: []CartOption{
+			{Option: 1, Line: "LS2 FF901", Stock: stock(5)},
+			{Option: 2, Line: "LS2 FF901 Carbon", Stock: stock(0)},
+		},
+	})
+	cart := &models.OrderCart{CustomerCode: "KH125", CustomerName: "Shop A", UpdatedAt: time.Date(2026, 11, 19, 1, 30, 0, 0, time.UTC)}
+
+	text := RenderCartForAgent(cart, s, "public")
+	if strings.Contains(text, "chỉ còn 5") || strings.Contains(text, "chỉ còn 0") {
+		t.Fatalf("public cart render leaked remaining stock:\n%s", text)
+	}
+	if !strings.Contains(text, "⚠ kho tổng không đủ số lượng đặt") || !strings.Contains(text, "⚠ kho tổng hiện hết hàng") {
+		t.Fatalf("public cart render missing expected warnings:\n%s", text)
+	}
+
+	view := ViewForAgent(cart, s, "public")
+	lines := view["lines"].([]map[string]any)
+	if _, hasStock := lines[0]["stock"]; hasStock || lines[0]["in_stock"] != true || lines[0]["warning"] != "Kho tổng không đủ số lượng đặt" {
+		t.Errorf("unexpected public line 0: %#v", lines[0])
+	}
+	if _, hasStock := lines[1]["stock"]; hasStock || lines[1]["in_stock"] != false || lines[1]["warning"] != "Kho tổng hiện hết hàng" {
+		t.Errorf("unexpected public line 1: %#v", lines[1])
+	}
+	pending := view["pending"].([]CartPending)
+	if pending[0].Options[0].Stock != nil || pending[0].Options[0].InStock == nil || !*pending[0].Options[0].InStock {
+		t.Errorf("pending option 0 should redact stock to in_stock=true: %+v", pending[0].Options[0])
+	}
+	if pending[0].Options[1].Stock != nil || pending[0].Options[1].InStock == nil || *pending[0].Options[1].InStock {
+		t.Errorf("pending option 1 should redact stock to in_stock=false: %+v", pending[0].Options[1])
+	}
+	// Original state keeps exact stock for internal checks.
+	if s.Pending[0].Options[0].Stock == nil || *s.Pending[0].Options[0].Stock != 5 {
+		t.Errorf("ViewForAgent mutated caller's pending state: %+v", s.Pending[0].Options[0])
+	}
+}
+
 func TestCartClosingText(t *testing.T) {
 	action := models.OrderAction{
 		Kind: KindCreate, CartID: "cart-1", CustomerCode: "KH125", CustomerName: "Shop A",

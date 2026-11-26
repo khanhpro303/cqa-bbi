@@ -1,6 +1,9 @@
 package workers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSelectSystemPrompt(t *testing.T) {
 	const (
@@ -73,6 +76,25 @@ func TestNormalizeLangflowReply(t *testing.T) {
 	} {
 		if got := normalizeLangflowReply(tc.input); got != tc.want {
 			t.Errorf("normalizeLangflowReply(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestPublicLineStockReply(t *testing.T) {
+	inStock := publicLineStockReply("Bulldog TORII", 25)
+	if !strings.Contains(inStock, "còn hàng") || strings.Contains(inStock, "25") {
+		t.Errorf("public in-stock reply leaked count or missed status: %q", inStock)
+	}
+	outOfStock := publicLineStockReply("Bulldog TORII", 0)
+	if !strings.Contains(outOfStock, "hết hàng") || strings.Contains(outOfStock, "0") {
+		t.Errorf("public out-of-stock reply leaked count or missed status: %q", outOfStock)
+	}
+}
+
+func TestPublicStockStatusInstructionRequiresStatusOnly(t *testing.T) {
+	for _, want := range []string{"còn hàng", "hết hàng", "TUYỆT ĐỐI KHÔNG nêu số lượng tồn kho cụ thể"} {
+		if !strings.Contains(publicStockStatusInstruction, want) {
+			t.Errorf("publicStockStatusInstruction missing %q", want)
 		}
 	}
 }

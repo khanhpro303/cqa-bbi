@@ -48,6 +48,33 @@ func isParentProductCode(ctx context.Context, tenantID, code string, withCopies 
 	return count > 1
 }
 
+func hideStockQuantity(permissions *engine.GroupPermissionContext) bool {
+	return permissions == nil || permissions.AgentType != "private"
+}
+
+func stockStatusLabel(available float64) string {
+	if available > 0 {
+		return "còn hàng"
+	}
+	return "hết hàng"
+}
+
+func applyStockVisibility(row map[string]interface{}, available float64, hideQuantity, includeStockAlias bool) {
+	if hideQuantity {
+		delete(row, "TON_KHO")
+		delete(row, "ton_kho")
+		delete(row, "stock")
+		row["in_stock"] = available > 0
+		row["stock_status"] = stockStatusLabel(available)
+		return
+	}
+	row["TON_KHO"] = available
+	row["ton_kho"] = available
+	if includeStockAlias {
+		row["stock"] = available
+	}
+}
+
 func respondWithWarehouseStock(c *gin.Context, client *pkg.CloudifyClient, permissions *engine.GroupPermissionContext, scope string, groups []string, term string, mode warehouseStockMode) {
 	ctx := c.Request.Context()
 	tenantID := permissions.TenantID
@@ -97,10 +124,19 @@ func respondWithWarehouseStock(c *gin.Context, client *pkg.CloudifyClient, permi
 		total += quantity
 	}
 
-	item := gin.H{"name": term, "ton_kho": total}
+	hideQty := hideStockQuantity(permissions)
+	item := gin.H{"name": term}
+	if hideQty {
+		item["in_stock"] = total > 0
+		item["stock_status"] = stockStatusLabel(total)
+	} else {
+		item["ton_kho"] = total
+	}
 	if byLine {
 		item["line_name"] = term
-		item["sku_count"] = len(totals)
+		if !hideQty {
+			item["sku_count"] = len(totals)
+		}
 		if mode == warehouseByParent {
 			item["parent_code"] = term
 			if web := getMapString(products[0], "TEN_DONG_BO_WEB", "ten_dong_bo_web"); web != "" {
@@ -112,7 +148,11 @@ func respondWithWarehouseStock(c *gin.Context, client *pkg.CloudifyClient, permi
 		item["ten"] = getMapString(products[0], "TEN", "ten")
 	}
 	writeAuditLog(tenantID, permissions, "inventory", scope, groups, term, http.StatusOK, 1, c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{"status": "success", "data": []gin.H{item}, "count": 1, "warehouse": engine.MainWarehouseCode, "stock_metric": "available"})
+	resp := gin.H{"status": "success", "data": []gin.H{item}, "count": 1, "warehouse": engine.MainWarehouseCode, "stock_metric": "available"}
+	if hideQty {
+		resp["stock_visibility"] = "status_only"
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func filterWarehouseProducts(products []map[string]any, groups, brands []string, allBrands bool) []map[string]any {

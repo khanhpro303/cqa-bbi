@@ -304,17 +304,35 @@ func TestBuildCartDraft(t *testing.T) {
 	}
 
 	// Refusals: open questions, empty cart, not enough stock.
-	refused := func(state orderactions.CartState, deps cartDeps, want string) {
+	refused := func(perms *engine.GroupPermissionContext, scope string, c *models.OrderCart, state orderactions.CartState, deps cartDeps, want string, forbid ...string) {
 		t.Helper()
-		_, err := buildCartDraft(context.Background(), permissions, "own", cart, state, deps)
+		_, err := buildCartDraft(context.Background(), perms, scope, c, state, deps)
 		var refusal *orderDraftError
 		if !errors.As(err, &refusal) || !strings.Contains(refusal.message, want) {
 			t.Errorf("want refusal %q, got %v", want, err)
 		}
+		for _, bad := range forbid {
+			if strings.Contains(refusal.message, bad) {
+				t.Errorf("refusal leaked %q: %s", bad, refusal.message)
+			}
+		}
 	}
-	refused(orderactions.CartState{Lines: state.Lines, Pending: []orderactions.CartPending{{ID: "p1", Request: "FF901"}}}, deps, "Còn sản phẩm chờ")
-	refused(orderactions.CartState{}, deps, "Giỏ hàng đang trống")
-	refused(state, cartDeps{freshStock: func(context.Context) (map[string]float64, bool) {
+	refused(permissions, "own", cart, orderactions.CartState{Lines: state.Lines, Pending: []orderactions.CartPending{{ID: "p1", Request: "FF901"}}}, deps, "Còn sản phẩm chờ")
+	refused(permissions, "own", cart, orderactions.CartState{}, deps, "Giỏ hàng đang trống")
+	// Public customer: hide remaining warehouse stock when short or zero.
+	refused(permissions, "own", cart, state, cartDeps{freshStock: func(context.Context) (map[string]float64, bool) {
+		return map[string]float64{"SP462694": 1, "KINH01": 5}, true
+	}}, "Kho tổng không đủ: LS2 FF818 Black XL (SKU SP462694) đặt 2 nhưng kho tổng không đủ số lượng", "kho tổng còn 1")
+	refused(permissions, "own", cart, state, cartDeps{freshStock: func(context.Context) (map[string]float64, bool) {
+		return map[string]float64{"SP462694": 0, "KINH01": 5}, true
+	}}, "Kho tổng không đủ: LS2 FF818 Black XL (SKU SP462694) hiện hết hàng ở kho tổng", "kho tổng còn 0")
+	// Private staff: keeps exact remaining stock count.
+	privatePermissions := draftPermissions("private",
+		engine.ResourcePermission{Resource: resourceOrderCreate, IsEnabled: true, ScopeType: "all"},
+	)
+	privateCart := *cart
+	privateCart.CustomerCode = "KH125"
+	refused(privatePermissions, "all", &privateCart, state, cartDeps{freshStock: func(context.Context) (map[string]float64, bool) {
 		return map[string]float64{"SP462694": 1, "KINH01": 5}, true
 	}}, "Kho tổng không đủ: LS2 FF818 Black XL (SKU SP462694) đặt 2, kho tổng còn 1")
 }

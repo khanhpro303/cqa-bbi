@@ -83,6 +83,7 @@ type CartOption struct {
 	Price      float64  `json:"price,omitempty"`
 	PriceRange string   `json:"price_range,omitempty"`
 	Stock      *float64 `json:"stock,omitempty"`
+	InStock    *bool    `json:"in_stock,omitempty"`
 }
 
 // CartPending is a product the customer asked for that still needs their
@@ -272,8 +273,16 @@ func (s CartState) Stage() string {
 	return "ready"
 }
 
-// View is the cart as the agent sees it in tool results.
+// View is the cart as the agent sees it in tool results (full internal stock).
 func View(cart *models.OrderCart, state CartState) map[string]any {
+	return ViewForAgent(cart, state, "private")
+}
+
+// ViewForAgent builds the cart payload for the active agent type. For public
+// customer chats it hides exact warehouse stock numbers and exposes only
+// availability / insufficient-stock warnings.
+func ViewForAgent(cart *models.OrderCart, state CartState, agentType string) map[string]any {
+	hideQty := agentType != "private"
 	lines := make([]map[string]any, 0, len(state.Lines))
 	for i, line := range state.Lines {
 		row := map[string]any{
@@ -281,18 +290,30 @@ func View(cart *models.OrderCart, state CartState) map[string]any {
 			"unit": line.Unit, "price": line.Price, "amount": float64(line.Quantity) * line.Price,
 		}
 		if line.Stock != nil {
-			row["stock"] = *line.Stock
+			if hideQty {
+				row["in_stock"] = *line.Stock > 0
+			} else {
+				row["stock"] = *line.Stock
+			}
 		}
 		if line.ShortStock() {
-			row["warning"] = fmt.Sprintf("Kho tổng chỉ còn %s", formatStock(*line.Stock))
+			if hideQty {
+				row["warning"] = publicShortStockWarning(*line.Stock)
+			} else {
+				row["warning"] = fmt.Sprintf("Kho tổng chỉ còn %s", formatStock(*line.Stock))
+			}
 		}
 		lines = append(lines, row)
 	}
 	pieces, amount := state.Totals()
+	pending := nonNilPending(state.Pending)
+	if hideQty {
+		pending = redactedPending(pending)
+	}
 	view := map[string]any{
 		"stage":          state.Stage(),
 		"lines":          lines,
-		"pending":        nonNilPending(state.Pending),
+		"pending":        pending,
 		"total_quantity": pieces,
 		"total_amount":   amount,
 		"total_text":     FormatVND(amount),
@@ -309,6 +330,33 @@ func View(cart *models.OrderCart, state CartState) map[string]any {
 	return view
 }
 
+func publicShortStockWarning(available float64) string {
+	if available <= 0 {
+		return "Kho tổng hiện hết hàng"
+	}
+	return "Kho tổng không đủ số lượng đặt"
+}
+
+func redactedPending(pending []CartPending) []CartPending {
+	out := make([]CartPending, len(pending))
+	for i, p := range pending {
+		cp := p
+		if len(p.Options) > 0 {
+			cp.Options = make([]CartOption, len(p.Options))
+			for j, opt := range p.Options {
+				if opt.Stock != nil {
+					inStock := *opt.Stock > 0
+					opt.InStock = &inStock
+					opt.Stock = nil
+				}
+				cp.Options[j] = opt
+			}
+		}
+		out[i] = cp
+	}
+	return out
+}
+
 func nonNilPending(p []CartPending) []CartPending {
 	if p == nil {
 		return []CartPending{}
@@ -320,9 +368,16 @@ var vietnam = time.FixedZone("ICT", 7*3600)
 
 // RenderCart writes the cart as plain text for the agent's system prompt.
 func RenderCart(cart *models.OrderCart, state CartState) string {
+	return RenderCartForAgent(cart, state, "private")
+}
+
+// RenderCartForAgent formats the cart block injected into the agent's system
+// prompt, omitting remaining warehouse stock counts for public customer chats.
+func RenderCartForAgent(cart *models.OrderCart, state CartState, agentType string) string {
 	if cart == nil {
 		return "(chưa có giỏ hàng)"
 	}
+	hideQty := agentType != "private"
 	var b strings.Builder
 	fmt.Fprintf(&b, "Cập nhật lần cuối: %s. Trạng thái: %s.\n", cart.UpdatedAt.In(vietnam).Format("15:04 02/01/2006"), state.Stage())
 	if cart.CustomerCode != "" {
@@ -334,7 +389,11 @@ func RenderCart(cart *models.OrderCart, state CartState) string {
 	for i, line := range state.Lines {
 		fmt.Fprintf(&b, "%d. %s (SKU %s): %d %s × %s", i+1, line.Label(), line.SKU, line.Quantity, unitText(line.Unit), FormatVND(line.Price))
 		if line.ShortStock() {
-			fmt.Fprintf(&b, " ⚠ kho tổng chỉ còn %s", formatStock(*line.Stock))
+			if hideQty {
+				fmt.Fprintf(&b, " ⚠ %s", strings.ToLower(publicShortStockWarning(*line.Stock)))
+			} else {
+				fmt.Fprintf(&b, " ⚠ kho tổng chỉ còn %s", formatStock(*line.Stock))
+			}
 		}
 		b.WriteString("\n")
 	}

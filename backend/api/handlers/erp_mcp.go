@@ -50,6 +50,24 @@ var erpMCPTools = []erpMCPTool{
 	newERPMCPTool("lookup_debt", "Tra công nợ theo kỳ và khách hàng trong phạm vi được phép.", "debt", nil, "search", "limit", "partner_id"),
 }
 
+func erpMCPToolsForAgent(agentType string) []erpMCPTool {
+	tools := append([]erpMCPTool{}, erpMCPTools...)
+	if agentType == "private" {
+		return tools
+	}
+	for i := range tools {
+		switch tools[i].Name {
+		case "search_product_variants":
+			tools[i].Description = "Tra màu, size hoặc giá biến thể của mã cha đã xác định. include_stock đính kèm trạng thái còn hàng/hết hàng (in_stock, stock_status) tại 1.KHO-TONG khi tra được (không trả số lượng tồn). Biến thể thiếu trạng thái tồn chưa có kết quả tồn." + erpLookupToolInstruction
+		case "inventory_by_sku":
+			tools[i].Description = "Kiểm tra tình trạng còn hàng hay hết hàng tại 1.KHO-TONG của MỘT biến thể (trả in_stock, stock_status; không nêu số lượng tồn). Khi chỉ có tên dòng và thuộc tính màu/size, dùng search cùng color/size/brand để phân giải SKU. Hỏi tồn của cả dòng thì dùng inventory_by_line; nếu lỡ truyền mã cha, hệ thống trả tình trạng cả dòng." + erpLookupToolInstruction
+		case "inventory_by_line":
+			tools[i].Description = "Kiểm tra tình trạng còn hàng hay hết hàng tại 1.KHO-TONG của các SKU được phép xem thuộc dòng đã xác nhận (line_name là web_name chính xác, ví dụ LS2 FF818; trả in_stock, stock_status; không nêu số lượng tồn). Nếu tên còn mơ hồ, dùng search_products trước." + erpLookupToolInstruction
+		}
+	}
+	return tools
+}
+
 const erpMCPToolContextKey = "erp_mcp_tool"
 
 func ERPMCP(c *gin.Context) {
@@ -123,7 +141,7 @@ func ERPMCP(c *gin.Context) {
 			reply(gin.H{"tools": []erpMCPTool{knowledgeMCPTool(tenantID)}})
 			return
 		}
-		tools := append(append([]erpMCPTool{}, erpMCPTools...), listedOrderTools()...)
+		tools := append(erpMCPToolsForAgent(agentType), listedOrderTools()...)
 		tools = append(tools, knowledgeMCPTool(tenantID), complaintMCPTool())
 		reply(gin.H{"tools": tools})
 	case "tools/call":

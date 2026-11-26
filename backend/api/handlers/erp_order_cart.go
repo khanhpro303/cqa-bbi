@@ -903,7 +903,7 @@ func runCartTool(ctx context.Context, permissions *engine.GroupPermissionContext
 			return gin.H{"status": "error", "message": refusal.message}, true
 		}
 		if errors.Is(err, orderactions.ErrNoCart) {
-			return gin.H{"status": "error", "message": "Chưa có giỏ hàng nào đang lên.", "cart": orderactions.View(nil, orderactions.CartState{})}, true
+			return gin.H{"status": "error", "message": "Chưa có giỏ hàng nào đang lên.", "cart": orderactions.ViewForAgent(nil, orderactions.CartState{}, permissions.AgentType)}, true
 		}
 		log.Printf("[order_cart] %s failed for %s: %v", tool.Name, permissions.ZaloUserID, err)
 		return gin.H{"error": "cart_unavailable", "message": "Chưa thể cập nhật giỏ hàng lúc này. Vui lòng thử lại sau."}, true
@@ -913,9 +913,9 @@ func runCartTool(ctx context.Context, permissions *engine.GroupPermissionContext
 	case "order_cart_view":
 		cart, state, ok := orderactions.OpenCart(ctx, permissions.TenantID, workKey)
 		if !ok {
-			return gin.H{"status": "success", "message": "Chưa có giỏ hàng nào đang lên.", "cart": orderactions.View(nil, orderactions.CartState{})}, false
+			return gin.H{"status": "success", "message": "Chưa có giỏ hàng nào đang lên.", "cart": orderactions.ViewForAgent(nil, orderactions.CartState{}, permissions.AgentType)}, false
 		}
-		return gin.H{"status": "success", "cart": orderactions.View(cart, state)}, false
+		return gin.H{"status": "success", "cart": orderactions.ViewForAgent(cart, state, permissions.AgentType)}, false
 
 	case "order_cart_clear":
 		cancelled, err := orderactions.CancelCart(ctx, permissions.TenantID, workKey)
@@ -974,7 +974,7 @@ func runCartTool(ctx context.Context, permissions *engine.GroupPermissionContext
 		if err != nil {
 			return fail(err)
 		}
-		body := gin.H{"status": "success", "cart": orderactions.View(cart, state)}
+		body := gin.H{"status": "success", "cart": orderactions.ViewForAgent(cart, state, permissions.AgentType)}
 		if len(changes) > 0 {
 			body["changes"] = changes
 		}
@@ -1015,7 +1015,7 @@ func runCartTool(ctx context.Context, permissions *engine.GroupPermissionContext
 		action, err := buildCartDraft(ctx, permissions, scope, cart, state, deps)
 		if err != nil {
 			if refusal := (*orderDraftError)(nil); errors.As(err, &refusal) {
-				return gin.H{"status": "error", "message": refusal.message, "cart": orderactions.View(cart, state)}, true
+				return gin.H{"status": "error", "message": refusal.message, "cart": orderactions.ViewForAgent(cart, state, permissions.AgentType)}, true
 			}
 			return fail(err)
 		}
@@ -1078,7 +1078,15 @@ func buildCartDraft(ctx context.Context, permissions *engine.GroupPermissionCont
 			var short []string
 			for _, line := range lines {
 				if available := stock[line.SKU]; line.Quantity > available {
-					short = append(short, fmt.Sprintf("%s (SKU %s) đặt %s, kho tổng còn %s", line.Name, line.SKU, formatQuantity(line.Quantity), formatQuantity(available)))
+					if permissions.AgentType != "private" {
+						if available <= 0 {
+							short = append(short, fmt.Sprintf("%s (SKU %s) hiện hết hàng ở kho tổng", line.Name, line.SKU))
+						} else {
+							short = append(short, fmt.Sprintf("%s (SKU %s) đặt %s nhưng kho tổng không đủ số lượng", line.Name, line.SKU, formatQuantity(line.Quantity)))
+						}
+					} else {
+						short = append(short, fmt.Sprintf("%s (SKU %s) đặt %s, kho tổng còn %s", line.Name, line.SKU, formatQuantity(line.Quantity), formatQuantity(available)))
+					}
 				}
 			}
 			if len(short) > 0 {

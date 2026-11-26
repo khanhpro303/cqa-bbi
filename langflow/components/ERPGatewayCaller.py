@@ -129,9 +129,9 @@ class ERPGatewayCaller(Component):
             name="include_stock",
             display_name="Include Stock",
             info=(
-                "Đặt 'true' khi cần TỒN của TỪNG size (vd 'còn size nào', 'tồn các "
+                "Đặt 'true' khi cần kiểm tra tồn/còn hàng của TỪNG size (vd 'còn size nào', 'tồn các "
                 "size màu X'). Dùng với resource=product_variants + color + size để "
-                "TRỐNG: backend trả MỌI size của màu đó, mỗi dòng kèm ton_kho trong 1 "
+                "TRỐNG: backend trả MỌI size của màu đó kèm thông tin tồn (hoặc trạng thái còn/hết hàng cho khách) trong 1 "
                 "call (không cần gọi inventory từng SKU). Bỏ trống cho câu hỏi giá/size "
                 "thường."
             ),
@@ -180,9 +180,12 @@ class ERPGatewayCaller(Component):
         items = data.get("data") or []
         if items:
             # When the agent asked include_stock=true, the backend already attached
-            # ton_kho to each row (colour-only "còn size nào / tồn các size" flow), so
-            # the answer is the size→tồn table here — no per-SKU inventory chaining.
+            # ton_kho (private) or in_stock/stock_status (public) to each row.
             has_stock = any(v.get("ton_kho") is not None for v in items)
+            has_stock_status = any(
+                v.get("stock_status") is not None or v.get("in_stock") is not None
+                for v in items
+            )
             lines = [f"Tìm thấy {len(items)} variant khớp parent={parent_code} color='{color}' size='{size}':"]
             for v in items:
                 ton = v.get("ton_kho")
@@ -190,6 +193,9 @@ class ERPGatewayCaller(Component):
                 if ton is not None:
                     ton_val = int(ton) if isinstance(ton, (int, float)) else ton
                     ton_txt = f" | tồn={ton_val}"
+                elif v.get("stock_status") is not None or v.get("in_stock") is not None:
+                    status = v.get("stock_status") or ("còn hàng" if v.get("in_stock") else "hết hàng")
+                    ton_txt = f" | tình_trạng={status}"
                 lines.append(
                     f"- ma={v.get('ma','')} | màu={v.get('color','')} | size={v.get('size','')} "
                     f"| giá={self._format_price(v.get('price'))}{ton_txt} | dvt={v.get('dvt','')} "
@@ -201,12 +207,18 @@ class ERPGatewayCaller(Component):
                     "TẤT CẢ size của màu này, KHÔNG hỏi lại 1 size và KHÔNG gọi inventory lại "
                     "(tồn đã có sẵn ở trên). Nếu khách hỏi 1 size cụ thể → chốt tồn của size đó."
                 )
+            elif has_stock_status:
+                lines.append(
+                    "Agent: response ĐÃ kèm tình trạng còn/hết cho từng size. CHỈ trả trạng thái "
+                    "'còn hàng' hoặc 'hết hàng' theo từng size, TUYỆT ĐỐI KHÔNG nêu số lượng tồn "
+                    "cụ thể và KHÔNG gọi inventory lại."
+                )
             else:
                 lines.append(
                     "Agent: ĐÂY LÀ BƯỚC GIỮA, chưa chắc là câu trả lời cuối. Đọc `ma` của data[0]. "
                     "Nếu intent là TỒN/CÒN HÀNG/SỐ LƯỢNG (kể cả khi khách đã bấm 'xem theo mã SKU "
                     "cụ thể' rồi mới nhập màu/size) → BẮT BUỘC gọi tiếp resource='inventory', "
-                    "search=<ma> để đọc ton_kho/TON_KHO; TUYỆT ĐỐI KHÔNG dừng ở giá vì response "
+                    "search=<ma> để kiểm tra tồn kho; TUYỆT ĐỐI KHÔNG dừng ở giá vì response "
                     "product_variants KHÔNG chứa tồn kho. Chỉ khi khách hỏi GIÁ rõ ràng mới chốt "
                     "`price` của variant khớp và dừng tại đây."
                 )

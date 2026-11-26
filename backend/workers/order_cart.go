@@ -26,9 +26,13 @@ func appendOrderCartContext(ctx context.Context, tenantID, workKey string, permi
 			return systemPrompt
 		}
 	}
-	rendered := orderactions.RenderCart(nil, state)
+	agentType := "public"
+	if permissions != nil && permissions.AgentType != "" {
+		agentType = permissions.AgentType
+	}
+	rendered := orderactions.RenderCartForAgent(nil, state, agentType)
 	if open {
-		rendered = orderactions.RenderCart(cart, state)
+		rendered = orderactions.RenderCartForAgent(cart, state, agentType)
 	}
 	block := engine.BuildTaskPrompt(tenantID, engine.PromptOrderCart, map[string]string{"cart": rendered})
 	if strings.TrimSpace(block) == "" {

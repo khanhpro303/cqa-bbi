@@ -243,6 +243,18 @@ const langflowUnansweredInstruction = `QUY TẮC TRẢ LỜI KHI THIẾU DỮ LI
 - Khi công cụ sản phẩm hoặc tồn kho của ERP trả lookup_outcome=no_visible_match, hoặc trả data rỗng với truy vấn có tên/mã và không có lựa chọn hay thông báo đã gửi qua Zalo, kết thúc tra cứu mục đó. Diễn đạt customer_message theo điều khách hỏi, hoặc nói ngắn gọn rằng em chưa xác nhận được từ dữ liệu hiện có và có thể hướng khách hỏi nhân viên phụ trách. Không kết luận sản phẩm không tồn tại, sai mã hay hết hàng. Không yêu cầu khách gửi lại mã, ảnh, màu hoặc size để giải quyết kết quả rỗng này. Không gọi search_knowledge, Astra, SQL hay nguồn khác để tìm lại thông tin ERP cho mục đó.
 - Khi tra sản phẩm, chỉ hỏi bổ sung nếu còn thiếu thông tin nhận diện hoặc ERP trả lựa chọn hợp lệ cần khách chọn. Tiếp tục xử lý các câu hỏi khác trong cùng tin nhắn theo đúng nguồn của từng câu hỏi. Chỉ nói về giới hạn quyền khi công cụ trả lỗi từ chối quyền rõ ràng. Nếu công cụ báo lỗi tạm thời, nói chưa tra được và mời thử lại sau.`
 
+const publicStockStatusInstruction = `QUY TẮC TRẢ LỜI TỒN KHO CHO KHÁCH HÀNG (BẮT BUỘC)
+Áp dụng quy tắc dưới đây thay cho mọi hướng dẫn khác về số lượng tồn kho khi trả lời khách hàng.
+- Khi trả lời về tồn kho, còn hàng/hết hàng, chọn màu/size hoặc giỏ hàng không đủ tồn: CHỈ báo trạng thái "còn hàng" (khi in_stock=true / còn khả dụng) hoặc "hết hàng" / "hiện không có hàng khả dụng" (khi in_stock=false / hết khả dụng).
+- TUYỆT ĐỐI KHÔNG nêu số lượng tồn kho cụ thể (kể cả tổng tồn dòng, tồn từng màu/size hay số lượng tồn còn lại), ngay cả khi khách hỏi "còn mấy cái / bao nhiêu con". Nếu khách hỏi "còn size nào", chỉ liệt kê tên các size còn hàng hoặc hết hàng.`
+
+func publicLineStockReply(label string, stock float64) string {
+	if stock > 0 {
+		return fmt.Sprintf("Dòng %s hiện còn hàng tại Kho Tổng. Anh/chị cần kiểm tra màu/size cụ thể nào thì nhắn em nhé.", label)
+	}
+	return fmt.Sprintf("Dòng %s hiện hết hàng tại Kho Tổng.", label)
+}
+
 // Some saved flow prompts still return this standalone fallback. Do not let
 // older prompt wording reach Zalo as an English error in a Vietnamese bot.
 func normalizeLangflowReply(reply string) string {
@@ -1331,6 +1343,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		if systemPromptToUse != "" {
 			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
+			if agentType != "private" {
+				systemPromptToUse += "\n\n" + publicStockStatusInstruction
+			}
 			if meta.UnansweredHandoverEnabled && agentType == "public" {
 				systemPromptToUse += "\n\n" + publicOrderLookupInstruction
 			}
@@ -1547,6 +1562,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					return sendStockFailure(err)
 				}
 				reply := fmt.Sprintf("Tồn khả dụng dòng %s tại Kho Tổng: %g\n\nChi tiết:\n%s", maCha, stock, strings.Join(details, "\n"))
+				if agentType != "private" {
+					reply = publicLineStockReply(maCha, stock)
+				}
 				if matchedGroup.ZaloGroupID != "" {
 					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
 				} else {
@@ -1567,6 +1585,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					return sendStockFailure(err)
 				}
 				reply := fmt.Sprintf("Tồn khả dụng của %s tại Kho Tổng: %g\n\nChi tiết:\n%s", webNames[0], stock, strings.Join(details, "\n"))
+				if agentType != "private" {
+					reply = publicLineStockReply(webNames[0], stock)
+				}
 				if matchedGroup.ZaloGroupID != "" {
 					_ = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
 				} else {
@@ -1657,9 +1678,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 			log.Printf("[stock-pick] inventory-by-web web=%q done: %d ma_cha ok, %d failed, total=%.1f, %d detail lines", webName, okCount, errCount, totalStock, len(details))
 			// Concise customer reply: chỉ tổng tồn cả dòng + gợi ý hỏi tiếp theo
-			// màu/size. Chi tiết từng biến thể (details) chỉ dùng cho log nội bộ —
-			// không đẩy lên Zalo để tránh tin nhắn dài bị từ chối.
+			// màu/size (khách public chỉ nhận trạng thái còn/hết hàng).
 			reply := fmt.Sprintf("Tồn khả dụng của dòng %s tại Kho Tổng là %g. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", webName, totalStock)
+			if agentType != "private" {
+				reply = publicLineStockReply(webName, totalStock)
+			}
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
@@ -1689,8 +1712,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return sendStockFailure(err)
 			}
 
-			// Concise reply: chỉ tổng tồn cả dòng, bỏ liệt kê biến thể (tránh tin dài).
+			// Concise reply: khách public chỉ nhận trạng thái còn/hết hàng.
 			reply := fmt.Sprintf("Tồn khả dụng của dòng %s tại Kho Tổng là %g. Anh/chị cần tồn theo màu/size cụ thể nào thì nhắn em nhé.", parsed.WebName, stock)
+			if agentType != "private" {
+				reply = publicLineStockReply(parsed.WebName, stock)
+			}
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)
@@ -1741,6 +1767,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 
 			reply := fmt.Sprintf("Tồn khả dụng của dòng %s (mã %s) tại Kho Tổng là %g.", displayName, clickPayload.MaCha, totalStock)
+			if agentType != "private" {
+				reply = publicLineStockReply(fmt.Sprintf("%s (mã %s)", displayName, clickPayload.MaCha), totalStock)
+			}
 			var sendErr error
 			if matchedGroup.ZaloGroupID != "" {
 				sendErr = adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, reply)

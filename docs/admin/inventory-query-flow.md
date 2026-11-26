@@ -518,15 +518,29 @@ totalStockFromInventoryItems (erp.go:2548).
 >   biến thành tồn 0. Worker không dùng `InventoryStockCache` (cache chỉ ở luồng handler).
 
 Response cuối (Backend → Langflow tool):
-  {
-    "status": "success",
-    "source": "cloudify_live" | "cloudify_live_filtered",
-    "resource": "inventory",
-    "data": [ {"MA": "FF901-RED-L", "ma_cha": "FF901",
-               "THUOC_TINH_1": "Gloss Black", "THUOC_TINH_2": "L",
-               "TON_KHO": 12, "ton_kho": 12}, … ],
-    "count": N
-  }
+  • Luồng private (nhân viên nội bộ):
+    {
+      "status": "success",
+      "source": "cloudify_live" | "cloudify_live_filtered",
+      "resource": "inventory",
+      "data": [ {"MA": "FF901-RED-L", "ma_cha": "FF901",
+                 "THUOC_TINH_1": "Gloss Black", "THUOC_TINH_2": "L",
+                 "TON_KHO": 12, "ton_kho": 12}, … ],
+      "count": N,
+      "stock_metric": "available"
+    }
+  • Luồng public (khách hàng / nhóm khách — ẩn số lượng tồn):
+    {
+      "status": "success",
+      "source": "cloudify_live" | "cloudify_live_filtered",
+      "resource": "inventory",
+      "data": [ {"MA": "FF901-RED-L", "ma_cha": "FF901",
+                 "THUOC_TINH_1": "Gloss Black", "THUOC_TINH_2": "L",
+                 "in_stock": true, "stock_status": "còn hàng"}, … ],
+      "count": N,
+      "stock_metric": "available",
+      "stock_visibility": "status_only"
+    }
 ```
 
 ---
@@ -662,10 +676,12 @@ Response cuối (Backend → Langflow tool):
 
 Tồn kho là dữ liệu **chung** (không gắn "khách sở hữu"), nên luồng resolve dòng
 sản phẩm (embedding → LLM), picker dòng-vs-SKU, cộng tồn theo `KHO-TONG` **giống
-hệt** public và private. Khác biệt private chỉ ở **phạm vi nhóm sản phẩm** được
-phép, lấy từ cấu hình group `private_bot` qua `IsResourceAllowed`
-(`permission_context.go:270-299`); `private_bot` chưa cấu hình → full access
-(mọi product group). **Boundary nhãn hiệu** (`Brands`/`AllBrands` qua
-`ResolveBrandFilter`) cũng đọc từ `private_bot` theo cùng cơ chế — chưa cấu hình
-hoặc `AllBrands` → mọi nhãn hiệu. Không có nhánh code riêng cho private trong nhánh
-`inventory`.
+hệt** public và private. Khác biệt private gồm:
+- **Phạm vi nhóm sản phẩm / nhãn hiệu** lấy từ cấu hình group `private_bot` qua
+  `IsResourceAllowed` (`permission_context.go:270-299`) và `ResolveBrandFilter`;
+  `private_bot` chưa cấu hình → full access.
+- **Hiển thị số lượng tồn:** chỉ `private` nhận và trả **số lượng tồn cụ thể**
+  (`ton_kho`, `"Tồn khả dụng ... là %g"`, `"kho tổng còn %s"` trong giỏ hàng).
+  Luồng `public` (khách hàng 1-1 và nhóm khách) chỉ nhận và trả trạng thái
+  `còn hàng` / `hết hàng` (`in_stock`, `stock_status`), ẩn toàn bộ số lượng tồn
+  ở cả API/MCP, reply trực tiếp từ worker, và cảnh báo thiếu hàng giỏ hàng.

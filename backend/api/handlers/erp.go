@@ -572,8 +572,12 @@ func ERPQuery(c *gin.Context) {
 					}
 					if erpURL, erpDB, erpLogin, erpPassword, credErr := loadCloudifyCredentials(tenantID, cfg); credErr == nil && erpURL != "" && erpLogin != "" && erpPassword != "" && len(eligible) > 0 {
 						stockClient := &pkg.CloudifyClient{BaseURL: erpURL, DB: erpDB, Login: erpLogin, Password: erpPassword}
-						enrichVariantsWithLiveStock(c.Request.Context(), stockClient, tenantID, eligible)
+						hideQty := hideStockQuantity(permCtx)
+						enrichVariantRowsWithStockVisibility(c.Request.Context(), stockClient, tenantID, eligible, hideQty)
 						response["stock_metric"] = "available"
+						if hideQty {
+							response["stock_visibility"] = "status_only"
+						}
 					} else if credErr != nil {
 						log.Printf("[erp_query] include_stock skipped, credential error: %v", credErr)
 					}
@@ -2118,7 +2122,7 @@ func resolveVariantStockDirect(
 			c.JSON(http.StatusBadGateway, gin.H{"error": "warehouse_stock_unavailable"})
 			return true
 		}
-		variantData = append(variantData, map[string]interface{}{
+		record := map[string]interface{}{
 			"MA":                 childSKU,
 			"ma":                 childSKU,
 			"code":               childSKU,
@@ -2127,8 +2131,6 @@ func resolveVariantStockDirect(
 			"TEN":                getMapString(child, "TEN", "ten", "ten_hang"),
 			"ten":                getMapString(child, "TEN", "ten", "ten_hang"),
 			"TEN_DONG_BO_WEB":    getMapString(child, "TEN_DONG_BO_WEB", "ten_dong_bo_web"),
-			"TON_KHO":            skuStock,
-			"ton_kho":            skuStock,
 			"MA_CHA":             getMapString(child, "MA_CHA", "ma_cha"),
 			"ma_cha":             getMapString(child, "MA_CHA", "ma_cha"),
 			"THUOC_TINH_1":       getMapString(child, "THUOC_TINH_1", "thuoc_tinh_1"),
@@ -2138,20 +2140,26 @@ func resolveVariantStockDirect(
 			"DVT":                getMapString(child, "DVT", "dvt"),
 			"LIST_TEN_NHOM_VTHH": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
 			"list_ten_nhom_vthh": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
-		})
+		}
+		applyStockVisibility(record, skuStock, hideStockQuantity(permCtx), false)
+		variantData = append(variantData, record)
 	}
 	if len(variantData) == 0 {
 		return false
 	}
 	writeAuditLog(tenantID, permCtx, "inventory", scopeType, productGroups, search, http.StatusOK, len(variantData), c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"status":       "success",
 		"data":         variantData,
 		"source":       "cloudify_live_exact_web_variant",
 		"resource":     "inventory",
 		"count":        len(variantData),
 		"stock_metric": "available",
-	})
+	}
+	if hideStockQuantity(permCtx) {
+		resp["stock_visibility"] = "status_only"
+	}
+	c.JSON(http.StatusOK, resp)
 	return true
 }
 
@@ -2203,8 +2211,6 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						"TEN":                getMapString(child, "TEN", "ten", "ten_hang"),
 						"ten":                getMapString(child, "TEN", "ten", "ten_hang"),
 						"TEN_DONG_BO_WEB":    getMapString(child, "TEN_DONG_BO_WEB", "ten_dong_bo_web"),
-						"TON_KHO":            skuStock,
-						"ton_kho":            skuStock,
 						"MA_CHA":             parentCode,
 						"ma_cha":             parentCode,
 						"THUOC_TINH_1":       getMapString(child, "THUOC_TINH_1", "thuoc_tinh_1"),
@@ -2215,16 +2221,21 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						"LIST_TEN_NHOM_VTHH": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
 						"list_ten_nhom_vthh": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
 					}
+					applyStockVisibility(record, skuStock, hideStockQuantity(permCtx), false)
 					variantData = append(variantData, record)
 				}
-				c.JSON(http.StatusOK, gin.H{
+				resp := gin.H{
 					"status":       "success",
 					"data":         variantData,
 					"source":       "cloudify_live_filtered",
 					"resource":     resource,
 					"count":        len(variantData),
 					"stock_metric": "available",
-				})
+				}
+				if hideStockQuantity(permCtx) {
+					resp["stock_visibility"] = "status_only"
+				}
+				c.JSON(http.StatusOK, resp)
 				return
 			}
 		}
@@ -2495,8 +2506,6 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						"TEN":                getMapString(child, "TEN", "ten", "ten_hang"),
 						"ten":                getMapString(child, "TEN", "ten", "ten_hang"),
 						"TEN_DONG_BO_WEB":    getMapString(child, "TEN_DONG_BO_WEB", "ten_dong_bo_web"),
-						"TON_KHO":            skuStock,
-						"ton_kho":            skuStock,
 						"MA_CHA":             maCha,
 						"ma_cha":             maCha,
 						"THUOC_TINH_1":       getMapString(child, "THUOC_TINH_1", "thuoc_tinh_1"),
@@ -2507,6 +2516,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						"LIST_TEN_NHOM_VTHH": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
 						"list_ten_nhom_vthh": getMapString(child, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh"),
 					}
+					applyStockVisibility(record, skuStock, hideStockQuantity(permCtx), false)
 					variantData = append(variantData, record)
 				}
 				data = variantData
@@ -2522,7 +2532,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						err = stockErr
 						break
 					}
-					product["TON_KHO"], product["ton_kho"], product["stock"] = total, total, total
+					applyStockVisibility(product, total, hideStockQuantity(permCtx), true)
 				}
 			}
 		}
@@ -3330,6 +3340,9 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 	}
 	if resource == "inventory" {
 		response["stock_metric"] = "available"
+		if hideStockQuantity(permCtx) {
+			response["stock_visibility"] = "status_only"
+		}
 	}
 	c.JSON(http.StatusOK, response)
 }
@@ -3359,10 +3372,14 @@ const maxVariantStockEnrichment = 12
 // per-SKU inventory round trips. A per-SKU lookup error is logged and that row is
 // left without ton_kho rather than failing the whole response.
 func enrichVariantsWithLiveStock(ctx context.Context, client *pkg.CloudifyClient, tenantID string, rows []map[string]interface{}) {
-	enrichVariantRowsWithStock(ctx, client, tenantID, rows)
+	enrichVariantRowsWithStockVisibility(ctx, client, tenantID, rows, false)
 }
 
 func enrichVariantRowsWithStock(ctx context.Context, client *pkg.CloudifyClient, tenantID string, rows []map[string]interface{}) {
+	enrichVariantRowsWithStockVisibility(ctx, client, tenantID, rows, false)
+}
+
+func enrichVariantRowsWithStockVisibility(ctx context.Context, client *pkg.CloudifyClient, tenantID string, rows []map[string]interface{}, hideQuantity bool) {
 	rows = rows[:min(len(rows), maxVariantStockEnrichment)]
 	skus := make([]string, len(rows))
 	for i, row := range rows {
@@ -3374,7 +3391,15 @@ func enrichVariantRowsWithStock(ctx context.Context, client *pkg.CloudifyClient,
 	}
 	for i, row := range rows {
 		if stock, ok := totals[skus[i]]; ok {
-			row["ton_kho"] = stock
+			if hideQuantity {
+				delete(row, "TON_KHO")
+				delete(row, "ton_kho")
+				delete(row, "stock")
+				row["in_stock"] = stock > 0
+				row["stock_status"] = stockStatusLabel(stock)
+			} else {
+				row["ton_kho"] = stock
+			}
 		}
 	}
 }
@@ -3448,12 +3473,26 @@ func respondWithMockDataV2(c *gin.Context, resource, search string, limit int, a
 			if !isGroupAllowed(item["group"].(string)) {
 				continue
 			}
-			filtered = append(filtered, item)
+			row := make(gin.H, len(item)+1)
+			for k, v := range item {
+				row[k] = v
+			}
+			if agentType != "private" {
+				qty, _ := row["stock"].(float64)
+				delete(row, "stock")
+				row["in_stock"] = qty > 0
+				row["stock_status"] = stockStatusLabel(qty)
+			}
+			filtered = append(filtered, row)
 			if len(filtered) >= limit {
 				break
 			}
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)})
+		resp := gin.H{"status": "success", "data": filtered, "source": "mock_erp", "count": len(filtered)}
+		if agentType != "private" {
+			resp["stock_visibility"] = "status_only"
+		}
+		c.JSON(http.StatusOK, resp)
 
 	case "orders":
 		if agentType == "public" && extractOrderCode(search) != "" {

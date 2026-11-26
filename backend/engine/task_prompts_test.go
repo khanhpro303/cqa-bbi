@@ -66,3 +66,20 @@ func TestCasualReplyPromptKeepsHandoffMarker(t *testing.T) {
 		t.Fatal("default instructions should say what to do on the last small-talk reply")
 	}
 }
+
+func TestStockPromptsDoNotMandatePublicStockCounts(t *testing.T) {
+	cartPrompt, ok := LookupTaskPrompt(PromptOrderCart)
+	if !ok {
+		t.Fatal("order cart prompt missing")
+	}
+	if strings.Contains(cartPrompt.Instructions, "báo số còn lại") {
+		t.Fatalf("order cart prompt should not require reporting remaining stock count: %s", cartPrompt.Instructions)
+	}
+	groupPrompt, ok := LookupTaskPrompt(PromptGroupAssistant)
+	if !ok {
+		t.Fatal("group assistant prompt missing")
+	}
+	if !strings.Contains(groupPrompt.Instructions, "không nêu số lượng tồn") {
+		t.Fatalf("group assistant prompt should forbid stock counts in customer groups: %s", groupPrompt.Instructions)
+	}
+}
