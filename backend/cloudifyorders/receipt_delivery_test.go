@@ -177,7 +177,7 @@ func TestCloudifyReceiptOutboxResumesFailedPage(t *testing.T) {
 	}
 	ctx := t.Context()
 	const tenant = "receipts"
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Second)
 	for key, value := range map[string]string{
 		KeyWatchEnabled: "true", KeyNotifyEnabled: "true", KeyPaymentBankBIN: "970415",
 		KeyPaymentAccountNo: "0012345678", KeyPaymentAccountName: "Công ty mẫu",
