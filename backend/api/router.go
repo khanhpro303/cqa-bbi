@@ -376,6 +376,13 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.PUT("/knowledge/firecrawl", middleware.RequirePermission("settings", "w"), handlers.SaveKnowledgeFirecrawl)
 			tenant.POST("/knowledge/firecrawl/test", middleware.RequirePermission("settings", "w"), handlers.TestKnowledgeFirecrawl)
 			tenant.GET("/knowledge/:docId", middleware.RequirePermission("settings", "r"), handlers.GetKnowledgeDocument)
+			tenant.POST("/knowledge/:docId/images", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), handlers.UploadKnowledgeDocumentImages)
+			tenant.PATCH("/knowledge/:docId/images/:imageId", middleware.RequirePermission("settings", "w"), handlers.UpdateKnowledgeDocumentImage)
+			tenant.DELETE("/knowledge/:docId/images/:imageId", middleware.RequirePermission("settings", "w"), handlers.DeleteKnowledgeDocumentImage)
+			tenant.GET("/knowledge/:docId/images/:imageId/content", middleware.RequirePermission("settings", "r"), handlers.GetKnowledgeDocumentImageContent)
+			tenant.POST("/knowledge/:docId/images/:imageId/describe", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), func(c *gin.Context) {
+				handlers.DescribeKnowledgeDocumentImage(c, cfg)
+			})
 			tenant.POST("/knowledge/:docId/summary", middleware.RequirePermission("settings", "w"), func(c *gin.Context) {
 				handlers.GenerateKnowledgeSummary(c, cfg)
 			})

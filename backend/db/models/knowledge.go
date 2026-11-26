@@ -56,3 +56,23 @@ type KnowledgeChunk struct {
 }
 
 func (KnowledgeChunk) TableName() string { return "knowledge_chunks" }
+
+// KnowledgeDocumentImage is a tenant-owned attachment stored with its document.
+type KnowledgeDocumentImage struct {
+	ID         string            `gorm:"type:char(36);primaryKey" json:"id"`
+	DocumentID string            `gorm:"type:char(36);not null;index:idx_kbimg_tenant_doc,priority:2" json:"document_id"`
+	TenantID   string            `gorm:"type:char(36);not null;index:idx_kbimg_tenant_doc,priority:1" json:"-"`
+	FileName   string            `gorm:"type:varchar(255)" json:"file_name"`
+	Caption    string            `gorm:"type:varchar(500)" json:"caption"`
+	MediaType  string            `gorm:"type:varchar(32);not null" json:"media_type"`
+	Width      int               `gorm:"not null;default:0" json:"width"`
+	Height     int               `gorm:"not null;default:0" json:"height"`
+	Data       []byte            `gorm:"type:mediumblob;not null" json:"-"`
+	Enabled    bool              `gorm:"not null;default:true" json:"enabled"`
+	SortOrder  int               `gorm:"not null;default:0" json:"sort_order"`
+	CreatedAt  time.Time         `gorm:"not null" json:"created_at"`
+	UpdatedAt  time.Time         `gorm:"not null" json:"updated_at"`
+	Document   KnowledgeDocument `gorm:"foreignKey:DocumentID;references:ID;constraint:OnDelete:CASCADE" json:"-"`
+}
+
+func (KnowledgeDocumentImage) TableName() string { return "knowledge_document_images" }

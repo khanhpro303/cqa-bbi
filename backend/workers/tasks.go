@@ -2003,6 +2003,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
+		if payload.SignatureVerified {
+			langflowInput, systemPromptToUse = engine.AddKnowledgeImageInstruction(langflowInput, systemPromptToUse)
+		}
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
 		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, langflowInput, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
 		// Self-heal: a per-channel Langflow override that Langflow rejects (bad
@@ -2032,7 +2035,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			log.Printf("[worker] langflow error (will retry) sender=%s flow=%s: %v", payload.Sender.ID, flowIDToUse, err)
 			return fmt.Errorf("langflow error: %w", err)
 		}
-		modelText, adviceImage := parseAdviceImage(lfRes.Text, adviceImages)
+		knowledgeText, knowledgeImageIDs := engine.ParseKnowledgeImageReply(lfRes.Text, engine.MaxKnowledgeReplyImages)
+		modelText, adviceImage := parseAdviceImage(knowledgeText, adviceImages)
 		replyText := normalizeLangflowReply(modelText)
 		if groupAssistant {
 			markGroupLinesSeen(ctx, sessionKey, unseenGroupRaw)
@@ -2095,10 +2099,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if !action && strings.Contains(replyText, unansweredHandoverAction) {
 			replyText = botEmptyAnswerMessage
 			adviceImage = models.ProductAdvisoryImage{}
+			knowledgeImageIDs = nil
 		}
 		if action {
 			replyText = botEmptyAnswerMessage
 			adviceImage = models.ProductAdvisoryImage{}
+			knowledgeImageIDs = nil
 			if engine.HasUnansweredLookup(ctx, &permCtx) {
 				recorded := false
 				if complaintCases {
@@ -2121,6 +2127,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				if strings.TrimSpace(replyText) == "" {
 					replyText = caseRecordedReply
 					adviceImage = models.ProductAdvisoryImage{}
+					knowledgeImageIDs = nil
 				}
 			}
 		}
@@ -2151,7 +2158,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if sendErr != nil {
 			return fmt.Errorf("failed to send reply to Zalo: %w", sendErr)
 		}
-		if adviceImage.ID != "" && replyText != botEmptyAnswerMessage {
+		knowledgeImageAttempted := false
+		if payload.SignatureVerified && replyText != botEmptyAnswerMessage && len(knowledgeImageIDs) > 0 {
+			var err error
+			knowledgeImageAttempted, err = sendKnowledgeImage(ctx, adapter, matchedChannel.TenantID, agentType, payload.Sender.ID, matchedGroup.ZaloGroupID, knowledgeImageIDs)
+			if err != nil {
+				log.Printf("[knowledge] image delivery failed for channel %s: %v", matchedChannel.ID, err)
+			}
+		}
+		if !knowledgeImageAttempted && adviceImage.ID != "" && replyText != botEmptyAnswerMessage {
 			if err := sendAdviceImage(ctx, adapter, matchedChannel.TenantID, payload.Sender.ID, matchedGroup.ZaloGroupID, adviceImage); err != nil {
 				log.Printf("[product-advisory] image %s failed for channel %s: %v", adviceImage.ID, matchedChannel.ID, err)
 			}

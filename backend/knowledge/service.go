@@ -45,6 +45,7 @@ const (
 // Hit is one passage returned to the bot.
 type Hit struct {
 	DocumentID string  `json:"document_id"`
+	ImageID    string  `json:"image_id,omitempty"`
 	Title      string  `json:"title"`
 	Content    string  `json:"content"`
 	Score      float64 `json:"score"`
@@ -491,14 +492,26 @@ func (s *Service) Search(ctx context.Context, tenantID, agentType, query string,
 		topK = 5
 	}
 	publicOnly := agentType != "private"
+	var hits []Hit
+	var err error
 	if s.index != nil && s.embed != nil {
-		hits, err := s.vectorSearch(ctx, tenantID, publicOnly, query, topK)
-		if err == nil {
-			return hits, nil
+		hits, err = s.vectorSearch(ctx, tenantID, publicOnly, query, topK)
+		if err != nil {
+			log.Printf("[knowledge] vector search failed, using keyword search: %v", err)
 		}
-		log.Printf("[knowledge] vector search failed, using keyword search: %v", err)
 	}
-	return keywordSearch(tenantID, publicOnly, query, topK)
+	if s.index == nil || s.embed == nil || err != nil {
+		hits, err = keywordSearch(tenantID, publicOnly, query, topK)
+		if err != nil {
+			return nil, err
+		}
+	}
+	captions, err := searchImageCaptions(ctx, tenantID, publicOnly, captionSearchWords(query), topK)
+	if err != nil {
+		log.Printf("[knowledge] image caption search failed: %v", err)
+		return hits, nil
+	}
+	return mergeCaptionHits(hits, captions, topK), nil
 }
 
 func (s *Service) vectorSearch(ctx context.Context, tenantID string, publicOnly bool, query string, topK int) ([]Hit, error) {

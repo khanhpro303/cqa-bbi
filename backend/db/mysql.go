@@ -65,6 +65,7 @@ func AutoMigrate() error {
 		&models.ChatCustomerProfile{},
 		&models.KnowledgeDocument{},
 		&models.KnowledgeChunk{},
+		&models.KnowledgeDocumentImage{},
 		&models.ServiceResolution{},
 		&models.MessengerLabelState{},
 		&models.MessengerLabelSnapshot{},

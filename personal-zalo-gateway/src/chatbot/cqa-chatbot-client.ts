@@ -6,14 +6,26 @@ import type { GatewayAccountRecord, IncomingGatewayMessage } from '../types.js';
 
 const chatbotTimeoutMs = 55_000;
 const deliveryReceiptTimeoutMs = 5_000;
+const maxImageBytes = 1 << 20;
+const maxEncodedImageLength = Math.ceil(maxImageBytes / 3) * 4;
+const maxResponseBytes = maxEncodedImageLength + (64 << 10);
+const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const friendSystemEvent = /^(bạn và .* đã trở thành bạn bè|các bạn đã trở thành bạn bè|hai bạn đã trở thành bạn bè|đã chấp nhận yêu cầu kết bạn|you are now connected with|đã trở thành bạn bè trên zalo)/i;
 const zaloUID = /^\d{1,64}$/;
 const zaloMessageID = /^\d{1,128}$/;
 const receiptUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export interface ChatbotReplyImage {
+  filename: `${string}.${string}`;
+  width: number;
+  height: number;
+  data: Buffer;
+}
+
 export interface PersonalZaloChatbotReply {
   reply: string;
   deliveryReceipt?: string;
+  images?: [ChatbotReplyImage];
 }
 
 export function chatbotEndpoint(baseUrl: string): string | null {
@@ -126,13 +138,16 @@ export async function requestPersonalZaloChatbotReply(
       logger.warn(`[chatbot] CQA rejected personal Zalo turn with HTTP ${response.status}`);
       return null;
     }
-    const payload = await response.json() as { reply?: unknown; delivery_receipt?: unknown };
-    if (typeof payload.reply !== 'string' || payload.reply.trim() === '' || payload.reply.length > 2_000) {
+    const payload = await readReplyPayload(response);
+    if (typeof payload?.reply !== 'string' || payload.reply.trim() === '' || payload.reply.length > 2_000) {
       return null;
     }
     const reply: PersonalZaloChatbotReply = { reply: payload.reply };
     if (message.threadType === 'group' && typeof payload.delivery_receipt === 'string' && receiptUUID.test(payload.delivery_receipt)) {
       reply.deliveryReceipt = payload.delivery_receipt;
+    } else if (message.threadType === 'user' && Array.isArray(payload.images)) {
+      const image = decodeReplyImage(payload.images[0]);
+      if (image) reply.images = [image];
     }
     return reply;
   } catch (error) {
@@ -141,6 +156,50 @@ export async function requestPersonalZaloChatbotReply(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function readReplyPayload(response: Response): Promise<{ reply?: unknown; images?: unknown; delivery_receipt?: unknown } | null> {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxResponseBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function decodeReplyImage(value: unknown): ChatbotReplyImage | null {
+  if (!value || typeof value !== 'object') return null;
+  const { filename, media_type, width, height, data_base64 } = value as Record<string, unknown>;
+  if (typeof filename !== 'string' || filename.trim() !== filename || !/^[a-z\d_-]{1,80}\.(?:jpe?g|png)$/i.test(filename) ||
+      typeof width !== 'number' || !Number.isSafeInteger(width) || width <= 0 ||
+      typeof height !== 'number' || !Number.isSafeInteger(height) || height <= 0 ||
+      width * height > 20_000_000 ||
+      typeof data_base64 !== 'string' || data_base64.length > maxEncodedImageLength ||
+      data_base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data_base64)) {
+    return null;
+  }
+
+  const data = Buffer.from(data_base64, 'base64');
+  if (data.length > maxImageBytes || data.toString('base64') !== data_base64) return null;
+  const isPNG = /\.png$/i.test(filename) && media_type === 'image/png' &&
+    data.subarray(0, pngSignature.length).equals(pngSignature);
+  const isJPEG = /\.jpe?g$/i.test(filename) && media_type === 'image/jpeg' &&
+    data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+  if (!isPNG && !isJPEG) return null;
+  return { filename: filename as ChatbotReplyImage['filename'], width, height, data };
 }
 
 export async function acknowledgePersonalZaloChatbotDelivery(

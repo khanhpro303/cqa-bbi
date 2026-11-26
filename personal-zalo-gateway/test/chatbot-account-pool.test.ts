@@ -426,3 +426,80 @@ test('a flood cancels a pending reply and the gateway still stores all inbound m
   assert.equal(sendMessage.mock.callCount(), 0);
   assert.equal((await store.getAccount(account.id))?.threads['user:20002']?.messageOrder.length, 7);
 });
+
+const knowledgeImageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jHioAAAAASUVORK5CYII=';
+const knowledgeImage = {
+  filename: 'kb-image.png', media_type: 'image/png', width: 1, height: 1, data_base64: knowledgeImageBase64,
+};
+
+function selfMessage(msgId: string, content: unknown, msgType = 'webchat') {
+  const incoming = directMessage(msgId);
+  return { ...incoming, isSelf: true, data: { ...incoming.data, uidFrom: '10001', content, msgType } };
+}
+
+test('sends text then one photo and ignores both early and delayed bot echoes', { timeout: 9000 }, async (t) => {
+  configureTestChatbot(t);
+  const messages: unknown[] = [];
+  let listener!: TestListener;
+  const sendMessage = async (message: unknown, threadId: string, type: number) => {
+    assert.equal(threadId, '20002');
+    assert.equal(type, 0);
+    messages.push(message);
+    if (messages.length === 1) {
+      await listener.message(selfMessage('80002', message));
+      return { message: { msgId: 80002 }, attachment: [] };
+    }
+    if (messages.length === 2) {
+      return { message: null, attachment: [{ msgId: 80003 }] };
+    }
+    return { message: { msgId: 80005 }, attachment: [] };
+  };
+  ({ listener } = await connectFixture(t, { ownId: '10001', sendMessage }));
+  let turns = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    if (++turns === 1) return Response.json({ reply: 'Hướng dẫn', images: [knowledgeImage] });
+    await listener.message(selfMessage('80003', { description: '', href: 'attachment' }, 'chat.photo'));
+    return Response.json({ reply: 'Tin tiếp theo' });
+  });
+
+  await listener.message(directMessage('80001'));
+  await listener.message(directMessage('80004'));
+  const data = Buffer.from(knowledgeImageBase64, 'base64');
+  assert.deepEqual(messages, [
+    'Hướng dẫn',
+    { msg: '', attachments: [{ filename: 'kb-image.png', data, metadata: { totalSize: data.length, width: 1, height: 1 } }] },
+    'Tin tiếp theo',
+  ]);
+});
+
+test('a manual photo during bot upload wins even when both images have empty captions', { timeout: 6000 }, async (t) => {
+  configureTestChatbot(t);
+  let listener!: TestListener;
+  const sendMessage = t.mock.fn(async (message: unknown) => {
+    if (typeof message === 'string') return { message: { msgId: 90002 }, attachment: [] };
+    await listener.message(directMessage('90003'));
+    await listener.message(selfMessage('90004', { description: '', href: 'manual' }, 'chat.photo'));
+    await listener.message(selfMessage('90005', { description: '', href: 'bot' }, 'chat.photo'));
+    return { message: null, attachment: [{ msgId: 90005 }] };
+  });
+  ({ listener } = await connectFixture(t, { ownId: '10001', sendMessage }));
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: 'Hướng dẫn', images: [knowledgeImage] }));
+
+  await listener.message(directMessage('90001'));
+  assert.equal(sendMessage.mock.callCount(), 2);
+  assert.equal(fetch.mock.callCount(), 1, 'manual photo cancels the queued follow-up');
+});
+
+test('a manual photo before attachment delivery suppresses the bot photo', { timeout: 5000 }, async (t) => {
+  configureTestChatbot(t);
+  let listener!: TestListener;
+  const sendMessage = t.mock.fn(async () => {
+    await listener.message(selfMessage('91002', { description: '', href: 'manual' }, 'chat.photo'));
+    return { message: { msgId: 91003 }, attachment: [] };
+  });
+  ({ listener } = await connectFixture(t, { ownId: '10001', sendMessage }));
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: 'Hướng dẫn', images: [knowledgeImage] }));
+
+  await listener.message(directMessage('91001'));
+  assert.equal(sendMessage.mock.callCount(), 1);
+});

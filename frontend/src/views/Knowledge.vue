@@ -55,6 +55,9 @@
             <td class="py-2">
               <button type="button" class="document-link" aria-haspopup="dialog" @click="openDoc(d, $event)">{{ d.title }}</button>
               <div class="text-caption text-medium-emphasis">{{ documentSource(d) }}</div>
+              <v-chip v-if="d.image_count" size="x-small" variant="tonal" prepend-icon="mdi-image-outline" class="mt-1">
+                {{ $t('kb_images_count', { count: d.image_count }) }}
+              </v-chip>
             </td>
             <td>
               <v-chip size="small" :color="d.audience === 'internal' ? 'deep-purple' : 'teal'" variant="tonal">
@@ -116,17 +119,18 @@
     </v-dialog>
 
     <!-- Text -->
-    <v-dialog v-model="textDialog" max-width="760px">
+    <v-dialog v-model="textDialog" :persistent="savingText" max-width="760px" scrollable>
       <v-card>
         <v-card-title>{{ $t('kb_add_text') }}</v-card-title>
         <v-card-text>
-          <v-text-field v-model="textTitle" :label="$t('kb_col_title')" density="compact" />
-          <v-textarea v-model="textContent" :label="$t('kb_text_content')" rows="12" auto-grow density="compact" />
-          <v-select v-model="textAudience" :items="audienceOptions" :label="$t('kb_col_audience')" density="compact" />
+          <v-text-field v-model="textTitle" :label="$t('kb_col_title')" :disabled="savingText" density="compact" />
+          <v-textarea v-model="textContent" :label="$t('kb_text_content')" :disabled="savingText" rows="12" auto-grow density="compact" />
+          <v-select v-model="textAudience" :items="audienceOptions" :label="$t('kb_col_audience')" :disabled="savingText" density="compact" />
+          <KnowledgeDocumentImages v-if="textDialog" v-model:drafts="textImageDrafts" :can-edit="canEdit" :disabled="savingText" />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn variant="text" @click="textDialog = false">{{ $t('cancel') }}</v-btn>
+          <v-btn variant="text" :disabled="savingText" @click="textDialog = false">{{ $t('cancel') }}</v-btn>
           <v-btn color="primary" variant="flat" :loading="savingText" :disabled="!textTitle.trim() || !textContent.trim()" @click="saveText">{{ $t('save') }}</v-btn>
         </v-card-actions>
       </v-card>
@@ -162,7 +166,7 @@
       </v-card>
     </v-dialog>
 
-    <v-dialog v-model="docDialog" :aria-label="selected?.title" max-width="760px" scrollable @after-leave="restoreDocumentFocus">
+    <v-dialog v-model="docDialog" :aria-label="selected?.title" :persistent="imageChangePending" max-width="760px" scrollable @after-leave="restoreDocumentFocus">
       <v-card v-if="selected">
         <div class="d-flex align-start justify-space-between ga-3 pa-4 pa-sm-6">
           <div class="document-heading">
@@ -175,7 +179,7 @@
               <v-chip size="small" variant="tonal">{{ $t(selected.audience === 'internal' ? 'kb_audience_internal' : 'kb_audience_public') }}</v-chip>
             </div>
           </div>
-          <v-btn icon="mdi-close" variant="text" size="small" :aria-label="$t('cm_close')" @click="docDialog = false" />
+          <v-btn icon="mdi-close" variant="text" size="small" :disabled="imageChangePending" :aria-label="$t('cm_close')" @click="docDialog = false" />
         </div>
         <v-divider />
         <v-card-text class="px-4 px-sm-6 py-5">
@@ -197,10 +201,18 @@
             <v-btn v-if="canGenerateSummary" data-testid="kb-generate-summary" class="mt-4" color="primary" variant="flat" prepend-icon="mdi-text-box-check-outline" @click="generateSummary">
               {{ $t(summary?.status === 'failed' || summaryError ? 'kb_retry' : 'kb_summary_generate') }}
             </v-btn>
-            <v-btn v-else-if="summaryError === 'kb_summary_load_failed'" class="mt-3" variant="text" @click="openDoc(selected)">
+            <v-btn v-else-if="summaryError === 'kb_summary_load_failed'" class="mt-3" variant="text" @click="retryDetail">
               {{ $t('kb_retry') }}
             </v-btn>
           </section>
+          <template v-if="docDialog && detailLoaded">
+            <v-divider class="my-5" />
+            <KnowledgeDocumentImages
+              :key="selected.id" v-model:drafts="detailImageDrafts" :images="detailImages" :base="base"
+              :document-id="selected.id" :can-edit="canEdit && selected.status !== 'archived'"
+              @update:images="updateDocumentImages" @busy="imageChangePending = $event"
+            />
+          </template>
           <section v-if="editingDoc" class="mt-6">
             <v-divider class="mb-4" />
             <v-text-field v-model="editTitle" :label="$t('kb_col_title')" density="compact" variant="outlined" maxlength="250" />
@@ -239,6 +251,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import { uploadKnowledgeImages, type KnowledgeImage, type KnowledgeImageDraft } from '../api/knowledgeImages'
+import KnowledgeDocumentImages from '../components/KnowledgeDocumentImages.vue'
 import KnowledgePlayground from '../components/KnowledgePlayground.vue'
 import ProductAdvisory from '../components/ProductAdvisory.vue'
 import { useAuthStore } from '../stores/auth'
@@ -256,6 +270,7 @@ export interface KnowledgeDoc {
   parser?: string
   char_count: number
   chunk_count: number
+  image_count?: number
   created_by: string
   created_at: string
 }
@@ -340,6 +355,7 @@ function schedulePoll() {
 onMounted(load)
 onBeforeUnmount(() => {
   ++listRequest
+  ++textRequest
   if (poll) clearTimeout(poll)
   closeDetail()
 })
@@ -386,20 +402,46 @@ const textTitle = ref('')
 const textContent = ref('')
 const textAudience = ref<'public' | 'internal'>('public')
 const savingText = ref(false)
+const textImageDrafts = ref<KnowledgeImageDraft[]>([])
+let textRequest = 0
+
 async function saveText() {
+  if (savingText.value || !textTitle.value.trim() || !textContent.value.trim()) return
+  const request = ++textRequest
+  const endpoint = base.value
   savingText.value = true
   try {
-    await api.post(`${base.value}/text`, { title: textTitle.value, content: textContent.value, audience: textAudience.value })
+    const { data: document } = await api.post<KnowledgeDoc>(`${endpoint}/text`, {
+      title: textTitle.value, content: textContent.value, audience: textAudience.value,
+    })
+    if (request !== textRequest) return
+    let imageUploadFailed = false
+    if (textImageDrafts.value.length) {
+      try {
+        await uploadKnowledgeImages(`${endpoint}/${document.id}`, textImageDrafts.value)
+      } catch {
+        if (request !== textRequest) return
+        attachmentDrafts.value[document.id] = textImageDrafts.value
+        imageUploadFailed = true
+      }
+      if (request !== textRequest) return
+    }
     textDialog.value = false
     textTitle.value = ''
     textContent.value = ''
-    notify(t('kb_uploaded', { n: 1 }))
+    textImageDrafts.value = []
     view.value = 'active'
+    if (imageUploadFailed) {
+      notify(t('kb_images_partial_upload'), 'warning')
+      void openDoc(document)
+    } else {
+      notify(t('kb_uploaded', { n: 1 }))
+    }
     await load()
   } catch (e) {
-    notify(errMsg(e), 'error')
+    if (request === textRequest) notify(errMsg(e), 'error')
   } finally {
-    savingText.value = false
+    if (request === textRequest) savingText.value = false
   }
 }
 
@@ -511,8 +553,21 @@ async function purge() {
 // Document dialog
 const docDialog = ref(false)
 const selected = ref<KnowledgeDoc | null>(null)
+const detailImages = ref<KnowledgeImage[]>([])
+const imageChangePending = ref(false)
+const attachmentDrafts = ref<Record<string, KnowledgeImageDraft[]>>({})
+const detailImageDrafts = computed({
+  get: () => attachmentDrafts.value[selected.value?.id ?? ''] ?? [],
+  set: (drafts) => {
+    const id = selected.value?.id
+    if (!id) return
+    if (drafts.length) attachmentDrafts.value[id] = drafts
+    else delete attachmentDrafts.value[id]
+  },
+})
 const selectedSourceURL = computed(() => httpURL(selected.value?.source_url || ''))
 const summary = ref<Summary | null>(null)
+const detailLoaded = ref(false)
 const loadingDetail = ref(false)
 const generatingSummary = ref(false)
 const summaryError = ref('')
@@ -527,6 +582,7 @@ const canGenerateSummary = computed(() => canEdit.value && !!selected.value?.chu
   !['kb_summary_load_failed', 'kb_summary_too_large'].includes(summaryError.value))
 let detailRequest = 0
 let documentRevision = 0
+let imageRevision = 0
 let detailPoll: ReturnType<typeof setTimeout> | undefined
 let docOpener: HTMLElement | null = null
 
@@ -538,6 +594,13 @@ watch(docDialog, (open) => { if (!open) closeDetail() })
 watch(base, () => {
   closeDetail()
   docDialog.value = false
+  ++textRequest
+  textDialog.value = false
+  savingText.value = false
+  textTitle.value = ''
+  textContent.value = ''
+  textImageDrafts.value = []
+  attachmentDrafts.value = {}
   linkRequest++
   linkDialog.value = false
   linkForm.value = { url: '', title: '', audience: 'public' }
@@ -554,7 +617,10 @@ function restoreDocumentFocus() {
 
 async function openDoc(d: KnowledgeDoc, event?: MouseEvent) {
   closeDetail()
+  if (selected.value?.id !== d.id) docOpener = null
   if (event?.currentTarget instanceof HTMLElement) docOpener = event.currentTarget
+  detailImages.value = []
+  detailLoaded.value = false
   selected.value = d
   summary.value = null
   summaryError.value = ''
@@ -566,13 +632,24 @@ async function openDoc(d: KnowledgeDoc, event?: MouseEvent) {
   await loadDetail(d.id, detailRequest)
 }
 
+function retryDetail() {
+  if (!selected.value || loadingDetail.value) return
+  clearTimeout(detailPoll)
+  loadingDetail.value = true
+  summaryError.value = ''
+  return loadDetail(selected.value.id, detailRequest)
+}
+
 async function loadDetail(id: string, request: number) {
   const revision = documentRevision
+  const imagesAtRequest = imageRevision
   try {
-    const { data } = await api.get<{ document: KnowledgeDoc; summary: Summary }>(`${base.value}/${id}`)
+    const { data } = await api.get<{ document: KnowledgeDoc; summary: Summary; images?: KnowledgeImage[] }>(`${base.value}/${id}`)
     if (!docDialog.value || request !== detailRequest) return
     if (revision === documentRevision) selected.value = data.document
+    if (imagesAtRequest === imageRevision) detailImages.value = data.images ?? []
     summary.value = data.summary
+    detailLoaded.value = true
     summaryError.value = ''
   } catch {
     if (docDialog.value && request === detailRequest) summaryError.value = 'kb_summary_load_failed'
@@ -582,6 +659,14 @@ async function loadDetail(id: string, request: number) {
       scheduleDetailPoll(id, request)
     }
   }
+}
+
+function updateDocumentImages(images: KnowledgeImage[]) {
+  if (!selected.value) return
+  ++imageRevision
+  detailImages.value = images
+  const document = documents.value.find(({ id }) => id === selected.value?.id)
+  if (document) document.image_count = images.length
 }
 
 function scheduleDetailPoll(id: string, request: number) {

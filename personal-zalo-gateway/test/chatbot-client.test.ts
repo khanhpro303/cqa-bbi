@@ -200,3 +200,65 @@ test('chatbot request stays disabled without a strong deployment secret and trus
   assert.equal(await requestPersonalZaloChatbotReply(account, message(Date.now())), null);
   assert.equal(fetchMock.mock.callCount(), 0);
 });
+
+test('decodes one bounded CQA image and preserves text when media is invalid', async (t) => {
+  t.after(() => {
+    delete process.env.PERSONAL_ZALO_CHATBOT_BASE_URL;
+    delete process.env.PERSONAL_ZALO_CHATBOT_SECRET;
+  });
+  process.env.PERSONAL_ZALO_CHATBOT_BASE_URL = deployment.baseUrl;
+  process.env.PERSONAL_ZALO_CHATBOT_SECRET = deployment.secret;
+  const incoming = message(Date.now());
+  const text = 'Xem hướng dẫn đính kèm';
+  const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jHioAAAAASUVORK5CYII=';
+  const image = { filename: 'kb-image.png', media_type: 'image/png', width: 1, height: 1, data_base64: base64 };
+  const mock = t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: text, images: [image, image] }));
+
+  assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), {
+    reply: text, images: [{ filename: image.filename, width: 1, height: 1, data: Buffer.from(base64, 'base64') }],
+  });
+
+  const receipt = '123e4567-e89b-42d3-a456-426614174000';
+  mock.mock.mockImplementation(async () => Response.json({ reply: text, delivery_receipt: receipt, images: [image] }));
+  const group = { ...incoming, threadId: '50005', threadType: 'group' } as const;
+  assert.deepEqual(await requestPersonalZaloChatbotReply(account, group), { reply: text, deliveryReceipt: receipt });
+
+  const oversized = Buffer.alloc((1 << 20) + 1);
+  Buffer.from(base64, 'base64').copy(oversized);
+  for (const badImage of [
+    { ...image, filename: '../kb-image.png' },
+    { ...image, filename: 'kb-image.png\n' },
+    { ...image, media_type: 'image/jpeg' },
+    { ...image, width: 1.5 },
+    { ...image, width: 20_000_001 },
+    { ...image, data_base64: base64.slice(0, -1) + '!' },
+    { ...image, data_base64: Buffer.from('hello world').toString('base64') },
+    { ...image, data_base64: oversized.toString('base64') },
+  ]) {
+    mock.mock.mockImplementation(async () => Response.json({ reply: text, images: [badImage] }));
+    assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), { reply: text });
+  }
+  mock.mock.mockImplementation(async () => Response.json({ reply: text }));
+  assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), { reply: text });
+});
+
+test('abandons a CQA response above the wire size limit', async (t) => {
+  t.after(() => {
+    delete process.env.PERSONAL_ZALO_CHATBOT_BASE_URL;
+    delete process.env.PERSONAL_ZALO_CHATBOT_SECRET;
+  });
+  process.env.PERSONAL_ZALO_CHATBOT_BASE_URL = deployment.baseUrl;
+  process.env.PERSONAL_ZALO_CHATBOT_SECRET = deployment.secret;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(stream) {
+      stream.enqueue(new Uint8Array(2 << 20));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  t.mock.method(globalThis, 'fetch', async () => new Response(body));
+  assert.equal(await requestPersonalZaloChatbotReply(account, message(Date.now())), null);
+  assert.equal(cancelled, true);
+});

@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/knowledge"
 )
@@ -38,6 +40,12 @@ type knowledgeMCPPassage struct {
 	Score   float64 `json:"score"`
 }
 
+type knowledgeMCPImage struct {
+	ID       string `json:"image_id"`
+	Document string `json:"document"`
+	Caption  string `json:"caption"`
+}
+
 // handleKnowledgeTool runs search_knowledge. The customer bot (public agent
 // token) only sees documents marked public; the staff bot sees all.
 func handleKnowledgeTool(ctx context.Context, tenantID, agentType string, args map[string]json.RawMessage) gin.H {
@@ -47,7 +55,8 @@ func handleKnowledgeTool(ctx context.Context, tenantID, agentType string, args m
 	}
 	for key := range args {
 		if key != "query" && key != "limit" {
-			return erpMCPResult([]byte(`{"error":"invalid_argument","field":"`+key+`"}`), true)
+			body, _ := json.Marshal(gin.H{"error": "invalid_argument", "field": key})
+			return erpMCPResult(body, true)
 		}
 	}
 	limit := 5
@@ -65,16 +74,79 @@ func handleKnowledgeTool(ctx context.Context, tenantID, agentType string, args m
 	out := struct {
 		Query    string                `json:"query"`
 		Passages []knowledgeMCPPassage `json:"passages"`
+		Images   []knowledgeMCPImage   `json:"images"`
 		Note     string                `json:"note,omitempty"`
-	}{Query: query, Passages: make([]knowledgeMCPPassage, 0, len(hits))}
+	}{Query: query, Passages: make([]knowledgeMCPPassage, 0, len(hits)), Images: []knowledgeMCPImage{}}
+	titles := make(map[string]string, len(hits))
 	for _, h := range hits {
-		out.Passages = append(out.Passages, knowledgeMCPPassage{Source: h.Title, Content: h.Content, Score: roundScore(h.Score)})
+		title := boundedKnowledgeField(h.Title, 255)
+		content := h.Content
+		if h.ImageID != "" {
+			content = boundedKnowledgeField(content, 500)
+		}
+		titles[h.DocumentID] = title
+		out.Passages = append(out.Passages, knowledgeMCPPassage{Source: title, Content: content, Score: roundScore(h.Score)})
+	}
+	for _, row := range knowledgeImagesForHits(ctx, tenantID, agentType, hits) {
+		out.Images = append(out.Images, knowledgeMCPImage{
+			ID: row.ID, Document: titles[row.DocumentID], Caption: boundedKnowledgeField(row.Caption, 500),
+		})
 	}
 	if len(hits) == 0 {
 		out.Note = "no_matching_documents"
 	}
 	body, _ := json.Marshal(out)
 	return erpMCPResult(body, false)
+}
+
+func boundedKnowledgeField(text string, limit int) string {
+	runes := []rune(engine.UntrustedText(text))
+	return string(runes[:min(len(runes), limit)])
+}
+
+func knowledgeImagesForHits(ctx context.Context, tenantID, agentType string, hits []knowledge.Hit) []models.KnowledgeDocumentImage {
+	const limit = 12
+	var docIDs []string
+	seenDoc := make(map[string]bool, len(hits))
+	for _, hit := range hits {
+		if !seenDoc[hit.DocumentID] {
+			seenDoc[hit.DocumentID] = true
+			docIDs = append(docIDs, hit.DocumentID)
+		}
+	}
+	rows, err := engine.ListDeliverableKnowledgeImageMetadata(ctx, tenantID, agentType, docIDs)
+	if err != nil {
+		log.Printf("[knowledge] failed to load image metadata tenant=%s: %v", tenantID, err)
+		return nil
+	}
+	byID := make(map[string]models.KnowledgeDocumentImage, len(rows))
+	byDoc := make(map[string][]models.KnowledgeDocumentImage, len(docIDs))
+	for _, row := range rows {
+		byID[row.ID] = row
+		byDoc[row.DocumentID] = append(byDoc[row.DocumentID], row)
+	}
+	out := make([]models.KnowledgeDocumentImage, 0, min(len(rows), limit))
+	appendImage := func(row models.KnowledgeDocumentImage) {
+		if _, exists := byID[row.ID]; exists && len(out) < limit {
+			out = append(out, row)
+			delete(byID, row.ID)
+		}
+	}
+	for _, hit := range hits {
+		if row, ok := byID[hit.ImageID]; ok {
+			appendImage(row)
+		}
+	}
+	// Give the highest-ranking documents one image each before filling the
+	// remaining slots, so one document cannot hide other relevant sources.
+	for i := 0; i < limit && len(out) < limit && len(byID) > 0; i++ {
+		for _, docID := range docIDs {
+			if images := byDoc[docID]; i < len(images) {
+				appendImage(images[i])
+			}
+		}
+	}
+	return out
 }
 
 func roundScore(f float64) float64 {
