@@ -91,9 +91,9 @@
 
     <v-dialog v-model="dialog" max-width="960px" scrollable aria-labelledby="product-advisory-dialog-title" @after-leave="resetEditor">
       <v-card v-if="selected">
-        <v-card-title class="d-flex align-center ga-3">
-          <v-avatar rounded="lg" size="44" color="surface-variant" aria-hidden="true">
-            <v-img v-if="editorThumbnail" :src="editorThumbnail" cover>
+        <v-card-title class="editor-header d-flex align-center ga-3">
+          <v-avatar class="editor-thumbnail" rounded="lg" color="surface-variant" aria-hidden="true">
+            <v-img v-if="editorThumbnail" :src="editorThumbnail" :cover="false">
               <template #placeholder>
                 <div class="d-flex h-100 align-center justify-center">
                   <v-icon icon="mdi-image-outline" />
@@ -103,10 +103,10 @@
             <v-icon v-else icon="mdi-image-outline" />
           </v-avatar>
           <div class="editor-identity flex-grow-1">
-            <h3 id="product-advisory-dialog-title" class="text-subtitle-1 font-weight-bold text-truncate">
+            <h3 id="product-advisory-dialog-title" class="editor-name">
               {{ selected.web_name || selected.parent_code }}
             </h3>
-            <div class="text-caption text-medium-emphasis text-truncate">
+            <div class="editor-meta text-medium-emphasis">
               <template v-if="selected.web_name && selected.web_name !== selected.parent_code">{{ selected.parent_code }} · </template>{{ $t('product_advisory_variant_count', { count: selected.variant_count }) }}
             </div>
           </div>
@@ -595,7 +595,29 @@ defineExpose({ loadProducts, products, openProduct, detail, form, save, scrape }
 .product-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .product-table table { min-width: 720px; }
 .configured-filter { max-width: 260px; }
-.editor-identity { min-width: 0; }
+.editor-header {
+  padding: 1rem 1.5rem;
+  white-space: normal;
+}
+.editor-thumbnail {
+  flex: none;
+  width: 6rem;
+  height: 6rem;
+}
+.editor-identity {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.editor-name {
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.editor-meta {
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
 .product-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .image-card { min-width: 0; overflow: hidden; }
 .image-review-label { color: rgb(var(--v-theme-on-surface)); }
@@ -603,5 +625,7 @@ defineExpose({ loadProducts, products, openProduct, detail, form, save, scrape }
 code { overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .configured-filter { max-width: none; width: 100%; }
+  .editor-header { padding-inline: 1rem; }
+  .editor-thumbnail { width: 4.5rem; height: 4.5rem; }
 }
 </style>
