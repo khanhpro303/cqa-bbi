@@ -749,12 +749,12 @@ func DeleteZaloCustomer(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
-func getAIClientForTenant(ctx context.Context, tenantID string) (ai.AIProvider, error) {
+func getAIClientForTenant(ctx context.Context, tenantID, task string) (ai.AIProvider, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg, task)
 	if err != nil {
 		return nil, err
 	}
@@ -919,7 +919,7 @@ func AnalyzeZaloCustomerChat(c *gin.Context) {
 	transcript := sb.String()
 
 	// 6. Get active AI client
-	aiClient, err := getAIClientForTenant(c.Request.Context(), tenantID)
+	aiClient, err := getAIClientForTenant(c.Request.Context(), tenantID, engine.AITaskCRMAnalysis)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "failed_to_initialize_ai_client", "details": err.Error()})
 		return

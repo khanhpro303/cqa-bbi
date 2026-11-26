@@ -149,7 +149,7 @@ var describeImage = func(ctx context.Context, tenantID, channelID string, img ai
 	if err != nil {
 		return "", err
 	}
-	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg, engine.PromptImageReader)
 	if err != nil {
 		return "", err
 	}

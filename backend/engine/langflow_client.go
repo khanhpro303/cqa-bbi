@@ -3,14 +3,18 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/config"
 )
 
@@ -59,11 +63,19 @@ const (
 	// discovery so a transient Langflow hiccup doesn't trigger a GET on every
 	// single message, while still self-healing within seconds.
 	agentNodeCacheNegativeTTL = 30 * time.Second
+	// Flow-model lookup runs after the reply has already been produced. Keep a
+	// cold-cache miss bounded so usage logging never leaves a long-lived goroutine
+	// behind when Langflow's management endpoint is unavailable.
+	flowModelLookupTimeout = 3 * time.Second
+	flowModelCacheTTL      = 30 * time.Second
 )
 
 type agentNodeCacheEntry struct {
-	nodeIDs   []string
-	expiresAt time.Time
+	nodeIDs        []string
+	provider       string
+	model          string
+	expiresAt      time.Time
+	modelExpiresAt time.Time
 }
 
 // LangflowClient handles communication with the Langflow API.
@@ -72,7 +84,14 @@ type LangflowClient struct {
 	client *http.Client
 
 	nodeCacheMu sync.RWMutex
-	nodeCache   map[string]agentNodeCacheEntry // keyed by flow ID
+	nodeCache   map[string]agentNodeCacheEntry
+}
+
+// flowDiscoveryCacheKey isolates cached flow metadata by Langflow connection,
+// flow, and credential without retaining the API key in memory as map data.
+func flowDiscoveryCacheKey(apiURL, apiKey, flowID string) string {
+	keyHash := sha256.Sum256([]byte(apiKey))
+	return fmt.Sprintf("%s\x00%s\x00%x", strings.TrimRight(apiURL, "/"), flowID, keyHash)
 }
 
 func NewLangflowClient(cfg *config.Config) *LangflowClient {
@@ -106,62 +125,59 @@ func (l *LangflowClient) applySystemPromptTweak(ctx context.Context, tweaks map[
 // cached per flow ID. On any error it falls back to fallbackAgentNodeIDs so a
 // system prompt still ships even when discovery is unavailable.
 func (l *LangflowClient) resolveAgentNodeIDs(ctx context.Context, apiURL, apiKey, flowID string) []string {
+	return l.resolveFlowDiscovery(ctx, apiURL, apiKey, flowID, false).nodeIDs
+}
+
+// FlowModelForUsage reports the model selected in the live Langflow graph.
+// It returns empty values when discovery is unavailable so the caller can use
+// response metadata or another explicit fallback without mislabelling spend.
+func (l *LangflowClient) FlowModelForUsage(ctx context.Context, apiURL, apiKey, flowID string) (provider, model string) {
+	lookupCtx, cancel := context.WithTimeout(ctx, flowModelLookupTimeout)
+	defer cancel()
+	entry := l.resolveFlowDiscovery(lookupCtx, apiURL, apiKey, flowID, true)
+	return entry.provider, entry.model
+}
+
+func (l *LangflowClient) resolveFlowDiscovery(ctx context.Context, apiURL, apiKey, flowID string, needModel bool) agentNodeCacheEntry {
+	key := flowDiscoveryCacheKey(apiURL, apiKey, flowID)
 	l.nodeCacheMu.RLock()
-	entry, ok := l.nodeCache[flowID]
+	entry, ok := l.nodeCache[key]
 	l.nodeCacheMu.RUnlock()
-	if ok && time.Now().Before(entry.expiresAt) {
-		return entry.nodeIDs
+	now := time.Now()
+	if ok && now.Before(entry.expiresAt) && (!needModel || now.Before(entry.modelExpiresAt)) {
+		return entry
 	}
 
-	nodeIDs, err := l.fetchAgentNodeIDs(ctx, apiURL, apiKey, flowID)
+	body, err := readLangflowFlow(ctx, l.client, apiURL, apiKey, flowID)
 	ttl := agentNodeCacheTTL
+	nodeIDs := []string(nil)
+	if err == nil {
+		nodeIDs, err = extractAgentNodeIDs(body)
+	}
 	if err != nil || len(nodeIDs) == 0 {
 		log.Printf("[langflow] agent node discovery for flow %s failed (err=%v, found=%d); using fallback node IDs", flowID, err, len(nodeIDs))
 		nodeIDs = fallbackAgentNodeIDs
 		ttl = agentNodeCacheNegativeTTL
 	}
 
+	entry = agentNodeCacheEntry{nodeIDs: nodeIDs, expiresAt: now.Add(ttl), modelExpiresAt: now.Add(flowModelCacheTTL)}
+	if flowModel, parseErr := ParseLangflowFlowModel(body); parseErr == nil {
+		entry.provider = ai.NormalizeProvider(flowModel.Provider)
+		entry.model = strings.TrimSpace(flowModel.Model)
+	}
+
 	l.nodeCacheMu.Lock()
-	l.nodeCache[flowID] = agentNodeCacheEntry{nodeIDs: nodeIDs, expiresAt: time.Now().Add(ttl)}
+	l.nodeCache[key] = entry
 	l.nodeCacheMu.Unlock()
-	return nodeIDs
+	return entry
 }
 
 // fetchAgentNodeIDs GETs the flow definition and extracts agent node IDs.
 func (l *LangflowClient) fetchAgentNodeIDs(ctx context.Context, apiURL, apiKey, flowID string) ([]string, error) {
-	if apiURL == "" || flowID == "" {
-		return nil, fmt.Errorf("langflow integration is not configured")
-	}
-
-	url := fmt.Sprintf("%s/api/v1/flows/%s", apiURL, flowID)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	body, err := readLangflowFlow(ctx, l.client, apiURL, apiKey, flowID)
 	if err != nil {
-		return nil, fmt.Errorf("create flow request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Accept", "application/json")
-	// Authenticate with x-api-key ONLY. The /api/v1/flows/{id} endpoint runs the
-	// Bearer/JWT auth dependency first and rejects a Langflow API key ("sk-...")
-	// sent as "Authorization: Bearer" with 401 "Invalid token" — even when a valid
-	// x-api-key is also present. (The /run endpoint uses api-key auth, which is why
-	// it tolerated both headers.) Sending only x-api-key lets discovery succeed.
-	if apiKey != "" {
-		req.Header.Set("x-api-key", apiKey)
-	}
-
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("flow request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read flow response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, &LangflowAPIError{prefix: "flow api error", StatusCode: resp.StatusCode, body: string(body)}
-	}
-
 	return extractAgentNodeIDs(body)
 }
 
@@ -204,19 +220,19 @@ func extractAgentNodeIDs(flowJSON []byte) ([]string, error) {
 // HistoryRetriever. Scope:
 //
 //   - metadata.zalo_user_id == <uid>
-//       Strict per-user isolation, no cross-user leak.
+//     Strict per-user isolation, no cross-user leak.
 //
 //   - metadata.is_disambiguation != true
-//       Excludes ephemeral option-list pushes (see engine.ChatMessage
-//       IsDisambiguation). Two reasons:
-//         1. Cross-context within a session: if user asks Q1 then Q2 and
-//            both end with "1./2./3." option lists, embedding "1" matches
-//            both equally — leaving them in the recall pool would poison
-//            the prompt with stale options. They're still retrievable via
-//            Memory-zEYL8 (sequential, time-ordered) for the immediate
-//            follow-up, which is the only place they're useful.
-//         2. Long-term recall stays meaningful: only real Q&A turns
-//            survive into semantic memory.
+//     Excludes ephemeral option-list pushes (see engine.ChatMessage
+//     IsDisambiguation). Two reasons:
+//     1. Cross-context within a session: if user asks Q1 then Q2 and
+//     both end with "1./2./3." option lists, embedding "1" matches
+//     both equally — leaving them in the recall pool would poison
+//     the prompt with stale options. They're still retrievable via
+//     Memory-zEYL8 (sequential, time-ordered) for the immediate
+//     follow-up, which is the only place they're useful.
+//     2. Long-term recall stays meaningful: only real Q&A turns
+//     survive into semantic memory.
 //
 // Note: no `session_id` filter — that would kill cross-session memory
 // ("the customer from last week asked about FF901..."). Sequential
@@ -386,12 +402,13 @@ func (l *LangflowClient) RunFlowWithOverrides(ctx context.Context, sessionID, za
 // parsed from the Langflow response. HasUsage is true only when real usage
 // figures were found; callers should fall back to estimation otherwise.
 type LangflowResult struct {
-	Text         string
-	InputTokens  int
-	OutputTokens int
-	Model        string
-	Provider     string
-	HasUsage     bool
+	Text            string
+	InputTokens     int
+	OutputTokens    int
+	Model           string
+	Provider        string
+	HasUsage        bool
+	ReportedCostUSD *float64
 }
 
 // RunFlowWithCustomer keeps the original string-only contract for callers that
@@ -536,11 +553,18 @@ func parseLangflowResult(respBody []byte) (LangflowResult, error) {
 		return LangflowResult{}, fmt.Errorf("unmarshal langflow response: %w", err)
 	}
 
-	res := LangflowResult{}
 	// Best-effort: scan the whole response for token usage metadata, which
 	// different Langflow component versions place in different spots.
-	if in, out, model, found := findTokenUsage(result); found {
-		res.InputTokens, res.OutputTokens, res.Model, res.HasUsage = in, out, model, true
+	res := findTokenUsage(result, "", "")
+	// Some Langflow/provider versions place model identity beside the usage map
+	// or on the message metadata instead of inside the token counters.
+	provider, responseModel := findModelIdentity(result)
+	if res.Provider == "" && (res.Model == "" || res.Model == responseModel) {
+		res.Provider = provider
+	}
+	res.Provider = ai.NormalizeProvider(res.Provider)
+	if res.Model == "" {
+		res.Model = responseModel
 	}
 
 	outputs, ok := result["outputs"].([]interface{})
@@ -606,31 +630,107 @@ func parseLangflowResult(respBody []byte) (LangflowResult, error) {
 // carries LLM token usage. It accepts the common key spellings used by OpenAI,
 // Anthropic and Langflow components, returning found=true on the first match
 // that yields a non-zero input or output token count.
-func findTokenUsage(v interface{}) (inTok, outTok int, model string, found bool) {
+func findTokenUsage(v interface{}, provider, model string) LangflowResult {
 	switch node := v.(type) {
 	case map[string]interface{}:
+		if p := firstStringKey(node, "provider", "model_provider"); p != "" {
+			provider = p
+		}
+		if m := firstStringKey(node, "model", "model_name"); m != "" {
+			model = m
+		}
 		in := firstIntKey(node, "input_tokens", "prompt_tokens")
 		out := firstIntKey(node, "output_tokens", "completion_tokens")
-		if in > 0 || out > 0 {
-			m, _ := node["model"].(string)
-			if m == "" {
-				m, _ = node["model_name"].(string)
-			}
-			return in, out, m, true
+		var reportedCost *float64
+		if cost, ok := node["cost"].(float64); ok && cost >= 0 && ai.NormalizeProvider(provider) == "openrouter" {
+			reportedCost = &cost
 		}
-		for _, child := range node {
-			if i, o, m, ok := findTokenUsage(child); ok {
-				return i, o, m, ok
+		if in > 0 || out > 0 {
+			return LangflowResult{InputTokens: in, OutputTokens: out, Provider: provider, Model: model, HasUsage: true, ReportedCostUSD: reportedCost}
+		}
+		for _, key := range langflowMetadataKeys(node) {
+			if res := findTokenUsage(node[key], provider, model); res.HasUsage {
+				return res
 			}
 		}
 	case []interface{}:
 		for _, child := range node {
-			if i, o, m, ok := findTokenUsage(child); ok {
-				return i, o, m, ok
+			if res := findTokenUsage(child, provider, model); res.HasUsage {
+				return res
 			}
 		}
 	}
-	return 0, 0, "", false
+	return LangflowResult{}
+}
+
+// findModelIdentity locates explicit provider/model labels without guessing a
+// provider from the model name. A model and provider in the same metadata map
+// take precedence, then a model-only and provider-only label are combined.
+func findModelIdentity(v interface{}) (provider, model string) {
+	var fallbackProvider, fallbackModel string
+	var walk func(interface{}) (string, string, bool)
+	walk = func(value interface{}) (string, string, bool) {
+		switch node := value.(type) {
+		case map[string]interface{}:
+			p := firstStringKey(node, "provider", "model_provider")
+			m := firstStringKey(node, "model", "model_name")
+			if p != "" && m != "" {
+				return p, m, true
+			}
+			if fallbackProvider == "" && p != "" {
+				fallbackProvider = p
+			}
+			if fallbackModel == "" && m != "" {
+				fallbackModel = m
+			}
+			for _, key := range langflowMetadataKeys(node) {
+				if p, m, ok := walk(node[key]); ok {
+					return p, m, true
+				}
+			}
+		case []interface{}:
+			for _, child := range node {
+				if p, m, ok := walk(child); ok {
+					return p, m, true
+				}
+			}
+		}
+		return "", "", false
+	}
+	if p, m, ok := walk(v); ok {
+		return p, m
+	}
+	return fallbackProvider, fallbackModel
+}
+
+func langflowMetadataKeys(node map[string]interface{}) []string {
+	priority := []string{"usage", "usage_metadata", "token_usage", "response_metadata", "outputs", "results", "message", "properties"}
+	keys := make([]string, 0, len(node))
+	for _, key := range priority {
+		if _, ok := node[key]; ok {
+			keys = append(keys, key)
+		}
+	}
+	remaining := len(keys)
+	for key, value := range node {
+		switch value.(type) {
+		case map[string]interface{}, []interface{}:
+			if !slices.Contains(priority, key) {
+				keys = append(keys, key)
+			}
+		}
+	}
+	slices.Sort(keys[remaining:])
+	return keys
+}
+
+func firstStringKey(m map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := m[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // firstIntKey returns the first integer value found among the given keys.

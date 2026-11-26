@@ -129,11 +129,6 @@ func (g *GeminiProvider) AnalyzeImages(ctx context.Context, systemPrompt, text s
 		if out == "" {
 			return AIResponse{}, fmt.Errorf("gemini api returned empty content")
 		}
-		resp := AIResponse{Content: out, Model: g.model, Provider: "gemini"}
-		if result.UsageMetadata != nil {
-			resp.InputTokens = int(result.UsageMetadata.PromptTokenCount)
-			resp.OutputTokens = int(result.UsageMetadata.CandidatesTokenCount)
-		}
-		return resp, nil
+		return geminiResponse(out, g.model, result), nil
 	})
 }

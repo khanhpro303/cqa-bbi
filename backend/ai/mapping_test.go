@@ -2,19 +2,19 @@ package ai
 
 import "testing"
 
-func TestModelMappingOpenAI(t *testing.T) {
+func TestOpenAIModelPassThrough(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected string
 	}{
-		{"gpt-5.4-mini", "gpt-4o-mini"},
-		{"gpt-5-mini", "gpt-4o-mini"},
-		{"gpt-5-nano", "gpt-4o-mini"},
-		{"gpt-5", "gpt-4o"},
-		{"gpt-5.3-codex", "gpt-4o"},
-		{"gpt-5.3-chat-latest", "gpt-4o"},
-		{"gpt-4o-mini", "gpt-4o-mini"}, // normal/unmapped stays the same
-		{"", "gpt-4o-mini"}, // default case
+		{"gpt-5.4-mini", "gpt-5.4-mini"},
+		{"gpt-5-mini", "gpt-5-mini"},
+		{"gpt-5-nano", "gpt-5-nano"},
+		{"gpt-5", "gpt-5"},
+		{"gpt-5.3-codex", "gpt-5.3-codex"},
+		{"gpt-5.3-chat-latest", "gpt-5.3-chat-latest"},
+		{"gpt-4o-mini", "gpt-4o-mini"},
+		{"", "gpt-5.4-mini"},
 	}
 
 	for _, tt := range tests {
@@ -25,20 +25,20 @@ func TestModelMappingOpenAI(t *testing.T) {
 	}
 }
 
-func TestModelMappingClaude(t *testing.T) {
+func TestClaudeModelPassThrough(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected string
 	}{
-		{"claude-sonnet-4-6", "claude-3-5-sonnet-latest"},
-		{"claude-sonnet-4-5-20250929", "claude-3-5-sonnet-latest"},
-		{"claude-sonnet-4-5", "claude-3-5-sonnet-latest"},
-		{"claude-haiku-4-5-20251001", "claude-3-5-haiku-latest"},
-		{"claude-haiku-4-5", "claude-3-5-haiku-latest"},
-		{"claude-opus-4", "claude-3-opus-latest"},
-		{"claude-opus-4-6", "claude-3-opus-latest"},
-		{"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest"}, // normal/unmapped stays the same
-		{"", "claude-3-5-sonnet-latest"}, // default case
+		{"claude-sonnet-4-6", "claude-sonnet-4-6"},
+		{"claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929"},
+		{"claude-sonnet-4-5", "claude-sonnet-4-5"},
+		{"claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"},
+		{"claude-haiku-4-5", "claude-haiku-4-5"},
+		{"claude-opus-4", "claude-opus-4"},
+		{"claude-opus-4-6", "claude-opus-4-6"},
+		{"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest"},
+		{"", "claude-sonnet-4-6"},
 	}
 
 	for _, tt := range tests {

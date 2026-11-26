@@ -1,5 +1,5 @@
-import { createRouter, createWebHistory } from 'vue-router'
-import { useAuthStore } from '../stores/auth'
+import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vue-router'
+import { hasTenantPermission, useAuthStore, type TenantPermissions } from '../stores/auth'
 import api from '../api'
 
 // Permission denied message (set by guard, consumed by layout)
@@ -8,6 +8,8 @@ export function clearPermissionDeniedMsg() { permissionDeniedMsg = '' }
 
 // Cache validated tenant IDs to avoid repeated API calls
 const validTenantIds = new Set<string>()
+let loadedPermsTenantId = ''
+const pendingTenantPerms = new WeakMap<RouteLocationNormalized, TenantPermissions>()
 
 const router = createRouter({
   history: createWebHistory(),
@@ -195,33 +197,44 @@ router.beforeEach(async (to) => {
     return { path: '/' }
   }
 
-  // Validate tenant exists
+  // Validate tenant exists and ensure tenant permissions are loaded before
+  // rendering tenant views so admin-only layout blocks (e.g. above the banner)
+  // and navigation items do not pop in after mount.
   if (to.meta.validateTenant && to.params.tenantId) {
     const tid = to.params.tenantId as string
-    if (!validTenantIds.has(tid)) {
-      try {
-        await api.get(`/tenants/${tid}`)
-        validTenantIds.add(tid)
-      } catch {
-        return { name: 'not-found' }
-      }
+    const authStore = useAuthStore()
+    const needsPerms = loadedPermsTenantId !== tid || !authStore.tenantPerms.role
+    let permissions: TenantPermissions
+    try {
+      const [requestedPermissions] = await Promise.all([
+        needsPerms ? authStore.fetchTenantPermissions(tid) : authStore.tenantPerms,
+        validTenantIds.has(tid) ? undefined : api.get(`/tenants/${tid}`),
+      ])
+      permissions = requestedPermissions
+      validTenantIds.add(tid)
+    } catch {
+      return { name: 'not-found' }
     }
 
     // Check permission for tenant routes
     const perm = to.meta.perm as string | undefined
     if (perm) {
-      const authStore = useAuthStore()
-      // Ensure permissions are loaded
-      if (!authStore.tenantPerms.role) {
-        await authStore.fetchTenantPermissions(tid)
-      }
-      const action = (to.meta.permAction as string) || 'r'
-      const allowed = action === 'w' ? authStore.canEdit(perm) : authStore.canView(perm)
-      if (!allowed) {
+      const action = to.meta.permAction === 'w' ? 'w' : 'r'
+      if (!hasTenantPermission(permissions, perm, action)) {
         permissionDeniedMsg = 'Bạn không có quyền truy cập trang này'
         return { path: `/${tid}` }
       }
     }
+    if (needsPerms) pendingTenantPerms.set(to, permissions)
+  }
+})
+
+router.afterEach((to, _from, failure) => {
+  if (failure) return
+  const permissions = pendingTenantPerms.get(to)
+  if (permissions) {
+    useAuthStore().tenantPerms = permissions
+    loadedPermsTenantId = permissions.role ? String(to.params.tenantId) : ''
   }
 })
 
@@ -235,6 +248,7 @@ router.onError((error) => {
 // Clear cache on logout
 export function clearTenantCache() {
   validTenantIds.clear()
+  loadedPermsTenantId = ''
 }
 
 export default router

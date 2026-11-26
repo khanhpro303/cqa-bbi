@@ -1,10 +1,14 @@
 <template>
-  <v-card class="banner-carousel mb-4 rounded-lg overflow-hidden" elevation="2">
+  <v-card
+    class="banner-carousel mb-4 rounded-lg overflow-hidden"
+    elevation="2"
+    :style="{ height: `${bannerHeight}px` }"
+  >
     <div @mouseenter="paused = true" @mouseleave="paused = false">
       <v-carousel
         v-model="slide"
         :height="bannerHeight"
-        :cycle="!paused && editingIndex === null"
+        :cycle="!paused && !offsetsLoading && editingIndex === null"
         :interval="5000"
         :touch="editingIndex === null"
         progress="primary"
@@ -14,6 +18,7 @@
         <v-carousel-item
           v-for="(banner, index) in banners"
           :key="banner.src"
+          eager
         >
           <div
             class="banner-frame"
@@ -26,9 +31,14 @@
           >
             <img
               class="banner-img"
+              :class="{
+                'is-pending': offsetsLoading,
+                'is-revealing': hasBeenPending && !offsetsLoading,
+              }"
               :src="banner.src"
               :alt="banner.alt"
               :style="{ objectPosition: `50% ${offsets[index]}%` }"
+              :fetchpriority="index === 0 ? 'high' : 'auto'"
               draggable="false"
             />
 
@@ -54,6 +64,7 @@
 import { ref, computed, reactive, watch } from 'vue'
 import { useDisplay } from 'vuetify'
 import api from '../../api'
+import { writeCachedBannerOffsets } from './dashboardCache'
 import doiNguG20 from '../../assets/banners/doi-ngu-g20.jpg'
 import doiNguBbi from '../../assets/banners/doi-ngu-bbi.jpg'
 import khoArthur from '../../assets/banners/kho-arthur.jpg'
@@ -62,13 +73,21 @@ import khoArthur from '../../assets/banners/kho-arthur.jpg'
 // focal point (objectPosition Y, 0-100%) is adjustable. Admins double-click + drag
 // to reposition, and the offsets persist to the tenant settings store so every
 // dashboard viewer sees the same crop.
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   // JSON array string of percentages, e.g. "[50,30,70]". Comes from GET /dashboard.
   offsets?: string | null
+  // True only on first uncached load while GET /dashboard is resolving banner_offsets.
+  offsetsLoading?: boolean
   // Only admins (settings:w) may reposition and save.
   canEdit?: boolean
   // Required to PUT the shared setting.
   tenantId: string
+}>(), {
+  offsetsLoading: false,
+})
+
+const emit = defineEmits<{
+  'update:offsets': [value: string]
 }>()
 
 const banners = [
@@ -84,6 +103,14 @@ const slide = ref(0)
 const paused = ref(false)
 const saving = ref(false)
 const editingIndex = ref<number | null>(null)
+const hasBeenPending = ref(props.offsetsLoading)
+
+watch(
+  () => props.offsetsLoading,
+  (pending) => {
+    if (pending) hasBeenPending.value = true
+  },
+)
 
 // Per-banner vertical focal point (%). Index-aligned with `banners`.
 const offsets = reactive<number[]>(parseOffsets(props.offsets))
@@ -100,7 +127,12 @@ function parseOffsets(raw?: string | null): number[] {
     try {
       const parsed = JSON.parse(raw)
       if (Array.isArray(parsed)) {
-        return banners.map((_, i) => clamp(Number(parsed[i]) || DEFAULT_OFFSET))
+        return banners.map((_, i) => {
+          const val = parsed[i]
+          if (val === null || val === undefined || val === '') return DEFAULT_OFFSET
+          const num = Number(val)
+          return Number.isFinite(num) ? clamp(num) : DEFAULT_OFFSET
+        })
       }
     } catch {
       // ignore malformed value, fall back to defaults
@@ -122,11 +154,14 @@ watch(
 async function persistOffsets() {
   if (!props.canEdit) return
   saving.value = true
+  const serialized = JSON.stringify(offsets)
   try {
     await api.put(`/tenants/${props.tenantId}/settings`, {
       key: 'banner_offsets',
-      value: JSON.stringify(offsets),
+      value: serialized,
     })
+    writeCachedBannerOffsets(props.tenantId, serialized)
+    emit('update:offsets', serialized)
   } catch (e: any) {
     alert('Không lưu được vị trí banner: ' + (e?.response?.data?.error || e?.message || 'lỗi'))
   } finally {
@@ -186,6 +221,7 @@ function onPointerUp() {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  background: rgba(var(--v-theme-on-surface), 0.04);
 }
 
 .banner-frame.can-edit {
@@ -212,6 +248,20 @@ function onPointerUp() {
   object-fit: cover; /* fixed crop mask */
   user-select: none;
   -webkit-user-drag: none;
+}
+
+.banner-img.is-pending {
+  opacity: 0;
+}
+
+.banner-img.is-revealing {
+  transition: opacity 150ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .banner-img.is-revealing {
+    transition: none;
+  }
 }
 
 .banner-edit-hint {

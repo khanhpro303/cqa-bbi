@@ -776,7 +776,7 @@ func PromptContext(ctx context.Context, tenantID, channelID, subjectType, subjec
 }
 
 func (s *Service) callTenantLLM(ctx context.Context, tenantID, system, input string) (ai.AIResponse, string, string, error) {
-	resolved, err := engine.ResolveTenantAIProvider(tenantID, s.cfg)
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, s.cfg, engine.PromptChatMemorySummary)
 	if err != nil {
 		return ai.AIResponse{}, "", "", err
 	}
@@ -840,9 +840,10 @@ func EmbedText(ctx context.Context, cfg *config.Config, tenantID, text string) (
 }
 
 func logUsage(sess models.ChatSession, provider, model string, resp ai.AIResponse) {
-	if resp.InputTokens == 0 && resp.OutputTokens == 0 {
+	if resp.InputTokens == 0 && resp.OutputTokens == 0 && resp.ReportedCostUSD == nil {
 		return
 	}
+	resp.Provider, resp.Model = provider, model
 	db.DB.Create(&models.AIUsageLog{
 		ID:               pkg.NewUUID(),
 		TenantID:         sess.TenantID,
@@ -854,7 +855,7 @@ func logUsage(sess models.ChatSession, provider, model string, resp ai.AIRespons
 		Model:            model,
 		InputTokens:      resp.InputTokens,
 		OutputTokens:     resp.OutputTokens,
-		CostUSD:          ai.CalculateCostUSD(provider, model, resp.InputTokens, resp.OutputTokens),
+		CostUSD:          resp.UsageCostUSD(),
 		CreatedAt:        time.Now(),
 	})
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"github.com/vietbui/chat-quality-agent/servicequality"
 	"golang.org/x/text/unicode/norm"
@@ -1005,12 +1006,14 @@ func defaultProductGroupingDependencies(database *gorm.DB, jobs ...models.Job) p
 			}
 			return pruneProductGroupingCache(ctx, database, tenantID)
 		},
-		aiClient: getAIClientForTenant,
+		aiClient: func(ctx context.Context, tenantID string) (ai.AIProvider, error) {
+			return getAIClientForTenant(ctx, tenantID, engine.AITaskProductGrouping)
+		},
 		logUsage: func(ctx context.Context, tenantID string, response ai.AIResponse) {
 			_ = database.WithContext(ctx).Create(&models.AIUsageLog{
 				ID: pkg.NewUUID(), TenantID: tenantID, Source: "job", Provider: response.Provider, Model: response.Model,
 				InputTokens: response.InputTokens, OutputTokens: response.OutputTokens,
-				CostUSD: ai.CalculateCostUSD(response.Provider, response.Model, response.InputTokens, response.OutputTokens), CreatedAt: time.Now(),
+				CostUSD: response.UsageCostUSD(), CreatedAt: time.Now(),
 			}).Error
 		},
 	}
@@ -1028,7 +1031,7 @@ func defaultProductGroupingDependencies(database *gorm.DB, jobs ...models.Job) p
 	}
 	deps.logUsage = func(ctx context.Context, tenantID string, response ai.AIResponse) {
 		err := withProductGroupingJob(ctx, database, job, func(tx *gorm.DB) error {
-			return tx.Create(&models.AIUsageLog{ID: pkg.NewUUID(), TenantID: tenantID, JobID: job.ID, JobRunID: run.ID, Source: "job", Provider: response.Provider, Model: response.Model, InputTokens: response.InputTokens, OutputTokens: response.OutputTokens, CostUSD: ai.CalculateCostUSD(response.Provider, response.Model, response.InputTokens, response.OutputTokens), CreatedAt: time.Now()}).Error
+			return tx.Create(&models.AIUsageLog{ID: pkg.NewUUID(), TenantID: tenantID, JobID: job.ID, JobRunID: run.ID, Source: "job", Provider: response.Provider, Model: response.Model, InputTokens: response.InputTokens, OutputTokens: response.OutputTokens, CostUSD: response.UsageCostUSD(), CreatedAt: time.Now()}).Error
 		})
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			log.Printf("[service-quality] grouping usage write failed: %v", err)

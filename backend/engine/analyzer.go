@@ -677,7 +677,7 @@ func (a *Analyzer) runJobInternalExt(ctx context.Context, job models.Job, maxCon
 				snapshotMetadata.AIModel = aiResp.Model
 
 				// Log AI usage + cost
-				cost := ai.CalculateCostUSD(aiResp.Provider, aiResp.Model, aiResp.InputTokens, aiResp.OutputTokens)
+				cost := aiResp.UsageCostUSD()
 				usageLog := models.AIUsageLog{
 					ID:           pkg.NewUUID(),
 					TenantID:     job.TenantID,
@@ -800,52 +800,15 @@ complete:
 }
 
 func (a *Analyzer) getProvider(job models.Job) (ai.AIProvider, error) {
-	// Get AI provider from tenant settings (fallback to job's ai_provider)
-	provider := job.AIProvider
-	var providerSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, "ai_provider").First(&providerSetting).Error; err == nil {
-		provider = providerSetting.ValuePlain
+	resolved, err := resolveTenantAIProvider(job.TenantID, a.cfg, job.JobType,
+		AITaskModel{Provider: job.AIProvider, Model: job.AIModel}, false)
+	if err != nil {
+		return nil, err
 	}
-
-	// Get API key from tenant settings (per provider, with legacy fallback).
-	apiKey := ""
-	var setting models.AppSetting
-	keyFound := false
-	for _, key := range ai.ProviderAPIKeySettingKeys(provider) {
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, key).First(&setting).Error; err == nil {
-			keyFound = true
-			break
-		}
-	}
-	if !keyFound {
+	if resolved.Client == nil {
 		return nil, fmt.Errorf("API key not configured - go to Settings > AI Config")
 	}
-
-	if setting.ValueEncrypted != nil && len(setting.ValueEncrypted) > 0 {
-		decrypted, err := pkg.Decrypt(setting.ValueEncrypted, a.cfg.EncryptionKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt API key: %w", err)
-		}
-		apiKey = string(decrypted)
-	} else {
-		apiKey = setting.ValuePlain
-	}
-
-	// Get model from tenant settings (fallback to job's ai_model)
-	model := job.AIModel
-	var modelSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, "ai_model").First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
-		model = modelSetting.ValuePlain
-	}
-
-	// Get base URL from tenant settings (optional)
-	var baseURL string
-	var baseURLSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = ?", job.TenantID, "ai_base_url").First(&baseURLSetting).Error; err == nil {
-		baseURL = baseURLSetting.ValuePlain
-	}
-
-	return ai.NewProvider(provider, apiKey, model, baseURL, a.cfg.AIMaxTokens)
+	return resolved.Client, nil
 }
 
 func buildConversationInsightDetail(classResult ai.ClassificationResponse, sourceLastMessageAt *time.Time, orderOutcomes ...[]persistedOrderOutcome) ([]byte, error) {
@@ -1528,7 +1491,7 @@ func (a *Analyzer) runBatchMode(ctx context.Context, provider ai.AIProvider, job
 		}
 
 		// Log AI usage
-		cost := ai.CalculateCostUSD(aiResp.Provider, aiResp.Model, aiResp.InputTokens, aiResp.OutputTokens)
+		cost := aiResp.UsageCostUSD()
 		usageLog := models.AIUsageLog{
 			ID:           pkg.NewUUID(),
 			TenantID:     job.TenantID,

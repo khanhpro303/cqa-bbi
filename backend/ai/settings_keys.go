@@ -1,5 +1,9 @@
 package ai
 
+func ProviderBaseURLSettingKey(provider string) string {
+	return "ai_base_url_" + provider
+}
+
 // ProviderAPIKeySettingKey returns the tenant setting key used to store API key per provider.
 func ProviderAPIKeySettingKey(provider string) string {
 	switch provider {

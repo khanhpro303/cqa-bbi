@@ -1224,7 +1224,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				}
 				reply, err := replyToCasualTurn(ctx, matchedChannel.TenantID, history(), userText, isWhitelisted,
 					casualModeFor(route, streak, budget), casualCallDeadline(turnStart, time.Now()))
-				if err == nil && reply.Result.HasUsage {
+				if err == nil && (reply.Result.HasUsage || reply.Result.ReportedCostUSD != nil) {
 					casualAgentType := "public"
 					if isWhitelisted {
 						casualAgentType = "private"
@@ -2044,7 +2044,14 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Record AI spend for this chatbot turn (non-blocking). Tokens come from
 		// the Langflow response when present, else are estimated from text length.
 		// matchedGroup.ID is "" for 1:1 chats; whitelistRec.Name is "" for customers.
-		go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, agentType, matchedGroup.ID, lfRes, systemPromptToUse+langflowInput, lfRes.Text)
+		go func(res engine.LangflowResult) {
+			var flowProvider, flowModel string
+			if res.Provider == "" || res.Model == "" {
+				flowProvider, flowModel = langflowClient.FlowModelForUsage(context.Background(), lfCfg.APIURL, lfCfg.APIKey, flowIDToUse)
+			}
+			res.Provider, res.Model = resolveChatbotPricing(res, flowProvider, flowModel)
+			logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, agentType, matchedGroup.ID, res, systemPromptToUse+langflowInput, res.Text)
+		}(lfRes)
 
 		if strings.TrimSpace(replyText) == "" {
 			log.Printf("[zalo-drop] reason=langflow_empty sender=%s flow=%s", payload.Sender.ID, flowIDToUse)
@@ -2616,7 +2623,7 @@ func classifyMessageIntent(ctx context.Context, tenantID, message string, histor
 func classifyWithTaskPrompt(ctx context.Context, tenantID, promptKey, input string, businessRouting bool) (string, error) {
 	// Resolve the tenant's AI provider (settings → key → model → base URL).
 	cfg, _ := config.Load()
-	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg, promptKey)
 	if err != nil {
 		return "", err
 	}
@@ -2753,12 +2760,12 @@ func parseAttachmentText(atts []ZaloWebhookAttachment) string {
 }
 
 // getAIClient creates an AI provider client based on tenant settings.
-func getAIClient(ctx context.Context, tenantID string) (ai.AIProvider, error) {
+func getAIClient(ctx context.Context, tenantID, task string) (ai.AIProvider, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg)
+	resolved, err := engine.ResolveTenantAIProvider(tenantID, cfg, task)
 	if err != nil {
 		return nil, err
 	}
@@ -2768,37 +2775,18 @@ func getAIClient(ctx context.Context, tenantID string) (ai.AIProvider, error) {
 	return resolved.Client, nil
 }
 
-// resolveChatbotPricing returns the provider/model used to price chatbot LLM
-// spend when the Langflow response carried no real usage numbers. It prefers
-// dedicated chatbot_* settings, then the tenant's general ai_* settings, then a
-// sane default.
-func resolveChatbotPricing(tenantID string) (provider, model string) {
-	get := func(key string) string {
-		var s models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&s).Error; err == nil {
-			return s.ValuePlain
-		}
-		return ""
-	}
-	provider = get("chatbot_provider")
-	if provider == "" {
-		provider = get("ai_provider")
+// resolveChatbotPricing fills incomplete metadata from the flow that ran.
+// Response model snapshots take precedence over the configured model.
+func resolveChatbotPricing(res engine.LangflowResult, flowProvider, flowModel string) (provider, model string) {
+	provider, model = ai.NormalizeProvider(res.Provider), strings.TrimSpace(res.Model)
+	flowProvider = ai.NormalizeProvider(flowProvider)
+	if model == "" && (provider == "" || provider == flowProvider) {
+		model = flowModel
 	}
 	if provider == "" {
-		provider = "openai"
-	}
-	model = get("chatbot_model")
-	if model == "" {
-		model = get("ai_model")
-	}
-	if model == "" {
-		switch provider {
-		case "claude":
-			model = "claude-haiku-4-5"
-		case "gemini":
-			model = "gemini-2.0-flash"
-		default:
-			model = "gpt-5.4-mini"
+		provider = ai.ProviderForModel(model)
+		if model != "" && (model == flowModel || strings.HasPrefix(model, flowModel+"-20")) && flowProvider != "" {
+			provider = flowProvider
 		}
 	}
 	return provider, model
@@ -2814,12 +2802,8 @@ func logChatbotAIUsage(tenantID, channelID, senderID, senderName, agentType, gro
 	inTok, outTok := res.InputTokens, res.OutputTokens
 
 	if !res.HasUsage {
-		provider, model = resolveChatbotPricing(tenantID)
 		inTok = ai.EstimateTokens(promptText)
 		outTok = ai.EstimateTokens(replyText)
-	} else if provider == "" {
-		// Real token counts but no provider/model label — price with tenant config.
-		provider, model = resolveChatbotPricing(tenantID)
 	}
 
 	// GMF (public) customers aren't in the whitelist, so senderName arrives empty.
@@ -2843,7 +2827,7 @@ func logChatbotAIUsage(tenantID, channelID, senderID, senderName, agentType, gro
 		Model:            model,
 		InputTokens:      inTok,
 		OutputTokens:     outTok,
-		CostUSD:          ai.CalculateCostUSD(provider, model, inTok, outTok),
+		CostUSD:          (ai.AIResponse{Provider: provider, Model: model, InputTokens: inTok, OutputTokens: outTok, ReportedCostUSD: res.ReportedCostUSD}).UsageCostUSD(),
 		CreatedAt:        time.Now(),
 	}
 	if err := db.DB.Create(&usage).Error; err != nil {
@@ -2901,7 +2885,7 @@ func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (stri
 		candidates = candidates[:fuzzyCandidateCap]
 	}
 
-	aiClient, err := getAIClient(ctx, tenantID)
+	aiClient, err := getAIClient(ctx, tenantID, engine.PromptProductCodeMatch)
 	if err != nil || aiClient == nil {
 		return "", fmt.Errorf("AI client not available: %w", err)
 	}
@@ -2954,7 +2938,7 @@ func fuzzyMatchMaChaWithLLM(ctx context.Context, tenantID, keyword string) (stri
 
 // extractInventoryQueryKeyword uses LLM to identify if the message is asking for stock, and extracts the keyword.
 func extractInventoryQueryKeyword(ctx context.Context, tenantID, message string) (bool, string, error) {
-	aiClient, err := getAIClient(ctx, tenantID)
+	aiClient, err := getAIClient(ctx, tenantID, engine.PromptInventoryKeyword)
 	if err != nil {
 		log.Printf("[worker] Failed to get AI client for extractInventoryQueryKeyword: %v", err)
 		return false, "", nil

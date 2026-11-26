@@ -18,28 +18,44 @@ type TenantAIProvider struct {
 	Model    string
 }
 
-// ResolveTenantAIProvider builds the tenant's AI client from the AI settings
-// (ai_provider, ai_api_key_*, ai_model, ai_base_url). It returns a nil Client
-// with no error when no API key is configured, so callers can skip the call.
-func ResolveTenantAIProvider(tenantID string, cfg *config.Config) (TenantAIProvider, error) {
-	provider := "claude"
-	var providerSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_provider'", tenantID).First(&providerSetting).Error; err == nil && providerSetting.ValuePlain != "" {
-		provider = providerSetting.ValuePlain
-	}
-	out := TenantAIProvider{Provider: provider}
+// ResolveTenantAIProvider uses a task override when present. It returns a nil
+// Client when the inherited settings have no key, so callers can skip the call.
+func ResolveTenantAIProvider(tenantID string, cfg *config.Config, task string) (TenantAIProvider, error) {
+	return resolveTenantAIProvider(tenantID, cfg, task, AITaskModel{Provider: "claude"}, true)
+}
 
-	var setting models.AppSetting
-	keyFound := false
-	for _, key := range ai.ProviderAPIKeySettingKeys(provider) {
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, key).First(&setting).Error; err == nil {
-			keyFound = true
-			break
-		}
+func resolveTenantAIProvider(tenantID string, cfg *config.Config, task string, fallback AITaskModel, useLegacyOpenAIKey bool) (TenantAIProvider, error) {
+	taskKey := AITaskModelSettingPrefix + task
+	var settings []models.AppSetting
+	keys := []string{"ai_provider", "ai_model", "ai_base_url", "ai_api_key", taskKey}
+	for _, provider := range ai.Providers {
+		keys = append(keys, ai.ProviderAPIKeySettingKey(provider), ai.ProviderBaseURLSettingKey(provider))
+	}
+	if err := db.DB.Where("tenant_id = ? AND setting_key IN ?", tenantID, keys).Find(&settings).Error; err != nil {
+		return TenantAIProvider{}, fmt.Errorf("load tenant AI settings: %w", err)
+	}
+	byKey := make(map[string]models.AppSetting, len(settings))
+	for _, setting := range settings {
+		byKey[setting.SettingKey] = setting
+	}
+	override, err := ParseAITaskModel(byKey[taskKey].ValuePlain)
+	if err != nil {
+		return TenantAIProvider{}, fmt.Errorf("AI task %s: %w", task, err)
 	}
 
+	selection, baseURL, keyNames := selectTaskAIModel(override, fallback,
+		AITaskModel{Provider: byKey["ai_provider"].ValuePlain, Model: byKey["ai_model"].ValuePlain},
+		byKey["ai_base_url"].ValuePlain)
+	if scopedURL, ok := byKey[ai.ProviderBaseURLSettingKey(selection.Provider)]; ok {
+		baseURL = scopedURL.ValuePlain
+	}
+	out := TenantAIProvider{Provider: selection.Provider, Model: selection.Model}
 	apiKey := ""
-	if keyFound {
+	for _, key := range keyNames {
+		setting, ok := byKey[key]
+		if !ok {
+			continue
+		}
 		if len(setting.ValueEncrypted) > 0 {
 			decrypted, err := pkg.Decrypt(setting.ValueEncrypted, cfg.EncryptionKey)
 			if err != nil {
@@ -49,31 +65,48 @@ func ResolveTenantAIProvider(tenantID string, cfg *config.Config) (TenantAIProvi
 		} else {
 			apiKey = setting.ValuePlain
 		}
+		if apiKey != "" {
+			break
+		}
 	}
-	if apiKey == "" && provider == "openai" {
+	if apiKey == "" && selection.Provider == "openai" && override == (AITaskModel{}) && useLegacyOpenAIKey {
 		apiKey = cfg.LangflowAPIKey
 	}
 	if apiKey == "" {
+		if override != (AITaskModel{}) {
+			return out, fmt.Errorf("API key not configured for AI task %s (%s)", task, selection.Provider)
+		}
 		return out, nil
 	}
 
-	model := ai.DefaultModel(provider)
-	var modelSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_model'", tenantID).First(&modelSetting).Error; err == nil && modelSetting.ValuePlain != "" {
-		model = modelSetting.ValuePlain
-	}
-	out.Model = model
-
-	var baseURL string
-	var baseURLSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'ai_base_url'", tenantID).First(&baseURLSetting).Error; err == nil {
-		baseURL = baseURLSetting.ValuePlain
-	}
-
-	client, err := ai.NewProvider(provider, apiKey, model, baseURL, cfg.AIMaxTokens)
+	client, err := ai.NewProvider(selection.Provider, apiKey, selection.Model, baseURL, cfg.AIMaxTokens)
 	if err != nil {
 		return out, err
 	}
 	out.Client = client
 	return out, nil
+}
+
+func selectTaskAIModel(override, fallback, tenantDefault AITaskModel, baseURL string) (AITaskModel, string, []string) {
+	if tenantDefault.Provider == "" {
+		tenantDefault.Provider = fallback.Provider
+	}
+	if tenantDefault.Provider == "" {
+		tenantDefault.Provider = "claude"
+	}
+	if tenantDefault.Model == "" && tenantDefault.Provider == fallback.Provider {
+		tenantDefault.Model = fallback.Model
+	}
+	if tenantDefault.Model == "" {
+		tenantDefault.Model = ai.DefaultModel(tenantDefault.Provider)
+	}
+	if override.Provider == "" {
+		return tenantDefault, baseURL, ai.ProviderAPIKeySettingKeys(tenantDefault.Provider)
+	}
+	if override.Provider == tenantDefault.Provider {
+		return override, baseURL, ai.ProviderAPIKeySettingKeys(override.Provider)
+	}
+	// A legacy key or a custom gateway for the default provider may be valid
+	// only with that provider. A different vendor uses its own key and URL.
+	return override, "", []string{ai.ProviderAPIKeySettingKey(override.Provider)}
 }

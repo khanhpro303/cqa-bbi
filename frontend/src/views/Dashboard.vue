@@ -40,7 +40,7 @@
           <div class="text-caption text-grey-darken-1">{{ $t('chatbot_master_desc') }}</div>
         </div>
         <v-spacer />
-        <div class="d-flex align-center">
+        <div class="d-flex align-center" style="min-height: 36px;">
           <template v-if="chatbotStatusLoaded">
             <span class="text-body-2 font-weight-medium mr-2" :class="chatbotActive ? 'text-success' : 'text-grey'">
               {{ chatbotActive ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
@@ -57,16 +57,25 @@
             <v-btn v-if="chatbotStatusError" icon="mdi-refresh" size="small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click="fetchChatbotStatus" />
           </template>
           <v-btn v-else-if="chatbotStatusError" icon="mdi-refresh" size="small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click="fetchChatbotStatus" />
-          <template v-else>
-            <span class="text-body-2 text-grey mr-2">{{ $t('loading') }}</span>
-            <v-progress-circular indeterminate size="20" width="2" color="grey" />
-          </template>
+          <span
+            v-else
+            class="dash-skel dash-skel--pill"
+            style="width: 96px; height: 22px;"
+            role="status"
+            :aria-label="$t('loading')"
+          />
         </div>
       </div>
     </v-card>
 
     <!-- Banner image carousel -->
-    <BannerCarousel :offsets="bannerOffsets" :can-edit="isAdmin" :tenant-id="tenantId" />
+    <BannerCarousel
+      :offsets="bannerOffsets"
+      :offsets-loading="!bannerOffsetsReady"
+      :can-edit="isAdmin"
+      :tenant-id="tenantId"
+      @update:offsets="onBannerOffsetsUpdated"
+    />
 
     <h1 class="text-h6 font-weight-bold d-md-none mb-3">{{ $t('dashboard') }}</h1>
     <div class="d-flex flex-wrap align-center mb-4 ga-2">
@@ -91,6 +100,10 @@
       </v-col>
     </v-row>
 
+    <div class="dashboard-refresh-slot" aria-hidden="true">
+      <v-progress-linear v-if="isRefreshing" indeterminate color="primary" height="2" rounded />
+    </div>
+
     <!-- Stat cards -->
     <v-row class="mb-6">
       <v-col v-for="stat in stats" :key="stat.label" cols="6" sm="4" md="3">
@@ -98,7 +111,10 @@
           <div class="d-flex justify-space-between align-center">
             <div>
               <div class="text-body-2 text-grey">{{ $t(stat.label) }}</div>
-              <div class="text-h5 font-weight-bold mt-1">{{ stat.value }}</div>
+              <div v-if="showInitialSkeleton" class="text-h5 font-weight-bold mt-1 dash-skel-line" aria-hidden="true">
+                <span class="dash-skel" style="width: 56px; height: 0.85em;" />
+              </div>
+              <div v-else class="text-h5 font-weight-bold mt-1">{{ stat.value }}</div>
             </div>
             <v-icon :color="stat.color" size="32" class="opacity-50">{{ stat.icon }}</v-icon>
           </div>
@@ -108,25 +124,47 @@
 
     <!-- Channel counts + extra stats -->
     <v-row class="mb-4">
-      <v-col v-for="ch in channelCounts" :key="ch.channel_type" cols="6" sm="3">
-        <v-card class="pa-4">
-          <div class="d-flex justify-space-between align-center">
-            <div>
-              <div class="text-body-2 text-grey">{{ ch.channel_type === 'facebook' ? 'Facebook' : 'Zalo OA' }}</div>
-              <div class="text-h5 font-weight-bold mt-1">{{ ch.count }}</div>
+      <template v-if="showInitialSkeleton">
+        <v-col v-for="n in 2" :key="`ch-skel-${n}`" cols="6" sm="3">
+          <v-card class="pa-4">
+            <div class="d-flex justify-space-between align-center">
+              <div>
+                <div class="text-body-2 text-grey dash-skel-line" aria-hidden="true">
+                  <span class="dash-skel dash-skel--pill" style="width: 72px; height: 0.9em;" />
+                </div>
+                <div class="text-h5 font-weight-bold mt-1 dash-skel-line" aria-hidden="true">
+                  <span class="dash-skel" style="width: 48px; height: 0.85em;" />
+                </div>
+              </div>
+              <span class="dash-skel dash-skel--circle" style="width: 32px; height: 32px;" aria-hidden="true" />
             </div>
-            <v-icon :color="ch.channel_type === 'facebook' ? 'blue' : 'green'" size="32" class="opacity-50">
-              {{ ch.channel_type === 'facebook' ? 'mdi-facebook-messenger' : 'mdi-chat' }}
-            </v-icon>
-          </div>
-        </v-card>
-      </v-col>
+          </v-card>
+        </v-col>
+      </template>
+      <template v-else>
+        <v-col v-for="ch in channelCounts" :key="ch.channel_type" cols="6" sm="3">
+          <v-card class="pa-4">
+            <div class="d-flex justify-space-between align-center">
+              <div>
+                <div class="text-body-2 text-grey">{{ ch.channel_type === 'facebook' ? 'Facebook' : 'Zalo OA' }}</div>
+                <div class="text-h5 font-weight-bold mt-1">{{ ch.count }}</div>
+              </div>
+              <v-icon :color="ch.channel_type === 'facebook' ? 'blue' : 'green'" size="32" class="opacity-50">
+                {{ ch.channel_type === 'facebook' ? 'mdi-facebook-messenger' : 'mdi-chat' }}
+              </v-icon>
+            </div>
+          </v-card>
+        </v-col>
+      </template>
       <v-col cols="6" sm="3">
         <v-card class="pa-4">
           <div class="d-flex justify-space-between align-center">
             <div>
               <div class="text-body-2 text-grey">{{ $t('total_messages') }}</div>
-              <div class="text-h5 font-weight-bold mt-1">{{ totalMessages.toLocaleString() }}</div>
+              <div v-if="showInitialSkeleton" class="text-h5 font-weight-bold mt-1 dash-skel-line" aria-hidden="true">
+                <span class="dash-skel" style="width: 68px; height: 0.85em;" />
+              </div>
+              <div v-else class="text-h5 font-weight-bold mt-1">{{ totalMessages.toLocaleString() }}</div>
             </div>
             <v-icon color="primary" size="32" class="opacity-50">mdi-email-multiple</v-icon>
           </div>
@@ -137,7 +175,10 @@
           <div class="d-flex justify-space-between align-center">
             <div>
               <div class="text-body-2 text-grey">{{ $t('ai_cost') }}</div>
-              <div class="text-h5 font-weight-bold mt-1">{{ Math.round(costToday * exchangeRate).toLocaleString('vi-VN') }}đ</div>
+              <div v-if="showInitialSkeleton" class="text-h5 font-weight-bold mt-1 dash-skel-line" aria-hidden="true">
+                <span class="dash-skel" style="width: 88px; height: 0.85em;" />
+              </div>
+              <div v-else class="text-h5 font-weight-bold mt-1">{{ Math.round(costToday * exchangeRate).toLocaleString('vi-VN') }}đ</div>
             </div>
             <v-icon color="warning" size="32" class="opacity-50">mdi-currency-usd</v-icon>
           </div>
@@ -153,7 +194,19 @@
             <v-icon start size="small" color="primary">mdi-bell-ring</v-icon>
             {{ $t('recent_activity') }}
           </div>
-          <div v-if="recentActivity.length" class="flex-grow-1">
+          <div v-if="showInitialSkeleton" class="flex-grow-1" role="status" :aria-label="$t('loading')">
+            <div
+              v-for="(widthPct, idx) in activitySkeletonWidths"
+              :key="idx"
+              class="d-flex align-center pa-2 mb-1 rounded dashboard-activity-skel"
+            >
+              <span class="dash-skel dash-skel--pill mr-2 flex-shrink-0" style="width: 78px; height: 20px;" />
+              <span class="dash-skel dash-skel--pill" :style="{ width: `${widthPct}%`, height: '14px' }" />
+              <v-spacer />
+              <span class="dash-skel dash-skel--pill ml-2 flex-shrink-0" style="width: 50px; height: 12px;" />
+            </div>
+          </div>
+          <div v-else-if="recentActivity.length" class="flex-grow-1">
             <div
               v-for="item in recentActivity"
               :key="item.id"
@@ -197,16 +250,34 @@
           <div class="d-flex ga-4 mb-3">
             <div>
               <div class="text-caption text-grey">{{ $t('cost_today') }}</div>
-              <div class="text-h6 font-weight-bold">{{ Math.round(costToday * exchangeRate).toLocaleString('vi-VN') }}đ</div>
+              <div v-if="showInitialSkeleton" class="text-h6 font-weight-bold dash-skel-line" aria-hidden="true">
+                <span class="dash-skel" style="width: 78px; height: 0.85em;" />
+              </div>
+              <div v-else class="text-h6 font-weight-bold">{{ Math.round(costToday * exchangeRate).toLocaleString('vi-VN') }}đ</div>
             </div>
             <div>
               <div class="text-caption text-grey">{{ $t('cost_this_month') }}</div>
-              <div class="text-h6 font-weight-bold">{{ Math.round(costMonth * exchangeRate).toLocaleString('vi-VN') }}đ</div>
+              <div v-if="showInitialSkeleton" class="text-h6 font-weight-bold dash-skel-line" aria-hidden="true">
+                <span class="dash-skel" style="width: 88px; height: 0.85em;" />
+              </div>
+              <div v-else class="text-h6 font-weight-bold">{{ Math.round(costMonth * exchangeRate).toLocaleString('vi-VN') }}đ</div>
             </div>
           </div>
 
           <!-- Cost by day table -->
-          <v-table v-if="costByDay.length" density="compact" class="text-body-2">
+          <div v-if="showInitialSkeleton" class="dashboard-cost-table-skel" role="status" :aria-label="$t('loading')">
+            <div class="dashboard-cost-table-skel__row dashboard-cost-table-skel__head">
+              <span class="dash-skel dash-skel--pill" style="width: 40px; height: 11px;" />
+              <span class="dash-skel dash-skel--pill" style="width: 48px; height: 11px;" />
+              <span class="dash-skel dash-skel--pill" style="width: 64px; height: 11px;" />
+            </div>
+            <div v-for="n in 5" :key="n" class="dashboard-cost-table-skel__row">
+              <span class="dash-skel dash-skel--pill" style="width: 58px; height: 13px;" />
+              <span class="dash-skel dash-skel--pill" style="width: 46px; height: 13px;" />
+              <span class="dash-skel dash-skel--pill" style="width: 70px; height: 13px;" />
+            </div>
+          </div>
+          <v-table v-else-if="costByDay.length" density="compact" class="text-body-2">
             <thead>
               <tr>
                 <th>{{ $t('date') }}</th>
@@ -255,8 +326,14 @@
             </span>
             <h2>{{ $t('messages_by_day') }}</h2>
           </div>
+          <DashboardChartSkeleton
+            v-if="showInitialSkeleton"
+            variant="line"
+            :legend-count="3"
+            :label="$t('loading')"
+          />
           <DailyTrendChart
-            v-if="messagesByDay.length"
+            v-else-if="messagesByDay.length"
             :label="$t('messages_by_day')"
             :dates="messageDates"
             :series="messageSeries"
@@ -284,8 +361,16 @@ import { useChatbotStore } from '../stores/chatbot'
 import AiCostCarousel from '../components/dashboard/AiCostCarousel.vue'
 import BannerCarousel from '../components/dashboard/BannerCarousel.vue'
 import DailyTrendChart from '../components/dashboard/DailyTrendChart.vue'
+import DashboardChartSkeleton from '../components/dashboard/DashboardChartSkeleton.vue'
+import {
+  readCachedBannerOffsets,
+  readCachedDemoStatus,
+  writeCachedBannerOffsets,
+  writeCachedDemoStatus,
+} from '../components/dashboard/dashboardCache'
 import { formatDashboardDate } from '../components/dashboard/chartDate'
 import '../components/dashboard/dashboard-charts.css'
+import '../components/dashboard/dashboard-skeleton.css'
 
 const route = useRoute()
 const router = useRouter()
@@ -347,7 +432,14 @@ const costToday = ref(0)
 const costMonth = ref(0)
 const costByDay = ref<any[]>([])
 const exchangeRate = ref(26000)
-const bannerOffsets = ref<string | null>(null)
+const initialCachedOffsets = readCachedBannerOffsets(tenantId.value)
+const bannerOffsets = ref<string | null>(initialCachedOffsets ?? null)
+const bannerOffsetsReady = ref(initialCachedOffsets !== undefined)
+const dashboardLoaded = ref(false)
+const dashboardLoading = ref(true)
+const showInitialSkeleton = computed(() => !dashboardLoaded.value && dashboardLoading.value)
+const isRefreshing = computed(() => dashboardLoaded.value && dashboardLoading.value)
+const activitySkeletonWidths = [62, 74, 54, 68, 58]
 const services = ref([
   { name: 'API Server', ok: true },
   { name: 'Database', ok: true },
@@ -356,6 +448,11 @@ const services = ref([
 const messagesByDay = ref<any[]>([])
 const channelCounts = ref<any[]>([])
 const totalMessages = computed(() => messagesByDay.value.reduce((sum, d) => sum + (d.count || 0), 0))
+
+function onBannerOffsetsUpdated(value: string) {
+  bannerOffsets.value = value
+  bannerOffsetsReady.value = true
+}
 
 // Date filter + presets
 const now = new Date()
@@ -419,13 +516,21 @@ const messageSeries = computed(() => [
   { label: t('dashboard_staff_replies'), values: messagesByDay.value.map(day => day.reply_count || 0) },
 ])
 
+let dashboardRequestId = 0
+
 async function loadDashboard() {
+  const id = tenantId.value
+  if (!id) return
+  const requestId = ++dashboardRequestId
+  dashboardLoading.value = true
   try {
     const params: Record<string, string> = {}
     if (dateFrom.value) params.from = dateFrom.value
     if (dateTo.value) params.to = dateTo.value
 
-    const { data } = await api.get(`/tenants/${tenantId.value}/dashboard`, { params })
+    const { data } = await api.get(`/tenants/${id}/dashboard`, { params })
+    if (requestId !== dashboardRequestId || tenantId.value !== id) return
+
     stats.value[0].value = data.total_conversations
     stats.value[1].value = data.issues_today
     stats.value[2].value = data.active_jobs
@@ -435,26 +540,41 @@ async function loadDashboard() {
     costMonth.value = data.cost_this_month || 0
     costByDay.value = data.cost_by_day || []
     exchangeRate.value = data.exchange_rate || 26000
-    bannerOffsets.value = data.banner_offsets ?? null
+    const nextOffsets = data.banner_offsets ?? null
+    bannerOffsets.value = nextOffsets
+    bannerOffsetsReady.value = true
+    writeCachedBannerOffsets(id, nextOffsets)
 
     qcAlerts.value = data.qc_alerts || []
     classRecent.value = data.classification_recent || []
     messagesByDay.value = data.messages_by_day || []
     channelCounts.value = data.conversations_by_channel || []
+    dashboardLoaded.value = true
   } catch {
     // Dashboard data not available yet
+  } finally {
+    if (requestId === dashboardRequestId) {
+      bannerOffsetsReady.value = true
+      dashboardLoading.value = false
+    }
   }
 }
 
 // Demo data state
-const demoStatus = ref<{ has_data: boolean; is_demo: boolean } | null>(null)
+const demoStatus = ref<{ has_data: boolean; is_demo: boolean } | null>(readCachedDemoStatus(tenantId.value))
 const resettingDemo = ref(false)
 const resetDialog = ref(false)
 
 async function loadDemoStatus() {
+  const id = tenantId.value
+  if (!id) return
   try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/demo/status`)
+    const { data } = await api.get(`/tenants/${id}/demo/status`)
+    if (tenantId.value !== id) return
     demoStatus.value = data
+    if (data && typeof data.is_demo === 'boolean') {
+      writeCachedDemoStatus(id, data)
+    }
   } catch { /* ignore */ }
 }
 
@@ -471,6 +591,26 @@ async function resetDemo() {
     resettingDemo.value = false
   }
 }
+
+watch(tenantId, (id) => {
+  if (!id) return
+  const cachedOffsets = readCachedBannerOffsets(id)
+  bannerOffsets.value = cachedOffsets ?? null
+  bannerOffsetsReady.value = cachedOffsets !== undefined
+  demoStatus.value = readCachedDemoStatus(id)
+  dashboardLoaded.value = false
+  for (const stat of stats.value) stat.value = 0
+  costToday.value = 0
+  costMonth.value = 0
+  costByDay.value = []
+  exchangeRate.value = 26000
+  qcAlerts.value = []
+  classRecent.value = []
+  messagesByDay.value = []
+  channelCounts.value = []
+  loadDemoStatus()
+  loadDashboard()
+})
 
 onMounted(() => {
   loadDemoStatus()
@@ -494,3 +634,30 @@ function goToConversation(convId: string, tab?: string) {
   }
 }
 </script>
+
+<style scoped>
+.dashboard-refresh-slot {
+  height: 2px;
+  margin-top: -10px;
+  margin-bottom: 8px;
+}
+
+.dashboard-activity-skel {
+  min-height: 36px;
+  background: rgba(var(--v-theme-on-surface), 0.03);
+}
+
+.dashboard-cost-table-skel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 32px;
+  padding: 0 8px;
+}
+
+.dashboard-cost-table-skel__head {
+  height: 28px;
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+}
+</style>
