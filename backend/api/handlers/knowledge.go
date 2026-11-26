@@ -19,13 +19,15 @@ import (
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/knowledge"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"gorm.io/gorm"
 )
 
 // ListKnowledgeDocuments lists the tenant's chatbot documents. ?view=archived
 // lists the archive.
 func ListKnowledgeDocuments(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
-	q := db.DB.Where("tenant_id = ?", tenantID)
+	ctx := c.Request.Context()
+	q := db.DB.WithContext(ctx).Where("tenant_id = ?", tenantID)
 	if c.Query("view") == "archived" {
 		q = q.Where("status = ?", knowledge.StatusArchived)
 	} else {
@@ -36,19 +38,24 @@ func ListKnowledgeDocuments(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
 		return
 	}
+	documents, err := knowledgeDocumentListWithImageCounts(ctx, tenantID, docs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
+		return
+	}
 	svc := knowledge.Default()
 	parser := tenantParser(tenantID)
 	parserName := knowledge.ParserLocal
 	if parser.Enabled() {
 		parserName = knowledge.ParserUnstructured
 	}
-	firecrawlKey, _, err := loadFirecrawlKey(c.Request.Context(), tenantID)
+	firecrawlKey, _, err := loadFirecrawlKey(ctx, tenantID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"documents":            docs,
+		"documents":            documents,
 		"vector_store":         svc.IndexName(),
 		"parser":               parserName,
 		"supported_extensions": knowledge.AcceptedExtensions(parser),
@@ -162,13 +169,21 @@ func lockKnowledgeDoc(c *gin.Context) (*models.KnowledgeDocument, func()) {
 	return doc, release
 }
 
-// GetKnowledgeDocument returns a document with its saved reading summary.
+// GetKnowledgeDocument returns a document with its saved summary and image metadata.
 func GetKnowledgeDocument(c *gin.Context) {
 	doc, ok := loadKnowledgeDoc(c)
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"document": doc, "summary": knowledge.ReadDocumentSummary(doc)})
+	var images []models.KnowledgeDocumentImage
+	if err := knowledgeImageQuery(db.DB.WithContext(c.Request.Context()), doc.TenantID, doc.ID).
+		Omit("Data").Order("sort_order, created_at, id").Find(&images).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"document": doc, "summary": knowledge.ReadDocumentSummary(doc), "images": knowledgeDocumentImageDTOs(doc.TenantID, images),
+	})
 }
 
 func GenerateKnowledgeSummary(c *gin.Context, cfg *config.Config) {
@@ -345,10 +360,27 @@ func PurgeKnowledgeDocument(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "vector_delete_failed", "message": err.Error()})
 		return
 	}
-	tx := db.DB.Begin()
-	tx.Where("document_id = ?", doc.ID).Delete(&models.KnowledgeChunk{})
-	tx.Delete(doc)
-	if err := tx.Commit().Error; err != nil {
+	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockKnowledgeDocumentRow(tx, doc.TenantID, doc.ID)
+		if err != nil {
+			return err
+		}
+		if locked.Status != knowledge.StatusArchived {
+			return errKnowledgeDocArchiveRequired
+		}
+		if err := tx.Where("tenant_id = ? AND document_id = ?", doc.TenantID, doc.ID).Delete(&models.KnowledgeChunk{}).Error; err != nil {
+			return err
+		}
+		if err := knowledgeImageQuery(tx, doc.TenantID, doc.ID).Delete(&models.KnowledgeDocumentImage{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("tenant_id = ?", doc.TenantID).Delete(doc).Error
+	})
+	if errors.Is(err, errKnowledgeDocArchiveRequired) {
+		c.JSON(http.StatusConflict, gin.H{"error": "archive_first"})
+		return
+	}
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete_failed"})
 		return
 	}
@@ -374,12 +406,14 @@ func SearchKnowledgeTest(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
-	hits, err := knowledge.Default().Search(ctx, middleware.GetTenantID(c), agent, req.Query, req.Limit)
+	tenantID := middleware.GetTenantID(c)
+	hits, err := knowledge.Default().Search(ctx, tenantID, agent, req.Query, req.Limit)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "search_failed", "message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"hits": hits, "vector_store": knowledge.Default().IndexName()})
+	images := knowledgeDocumentImageDTOs(tenantID, knowledgeImagesForHits(ctx, tenantID, agent, hits))
+	c.JSON(http.StatusOK, gin.H{"hits": hits, "images": images, "vector_store": knowledge.Default().IndexName()})
 }
 
 // ImportKnowledgeFromAstra copies the passages of an old Langflow/Astra

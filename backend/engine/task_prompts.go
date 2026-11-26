@@ -238,7 +238,7 @@ CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`,
 		Group:        "chatbot",
 		Title:        "Tra tài liệu nghiệp vụ (search_knowledge)",
 		Description:  "Mô tả công cụ search_knowledge mà bot thấy. Bot đọc đoạn này để quyết định khi nào tra trang Tài liệu chatbot (chính sách, bảo hành, giao hàng, hướng dẫn...). Sau khi sửa, bấm làm mới danh sách tool trên node MCP Tools của Langflow để bot nhận mô tả mới.",
-		Instructions: `Tra tài liệu nghiệp vụ của công ty (chính sách bán hàng, bảo hành, đổi trả, giao hàng, thanh toán, hướng dẫn sử dụng, giới thiệu sản phẩm, quy trình nội bộ...). Gọi khi câu hỏi cần kiến thức không có trong dữ liệu ERP (giá, tồn, đơn, công nợ dùng tool ERP). query là câu hỏi viết lại ngắn gọn, đủ ý, bằng tiếng Việt. Chỉ trả lời theo các đoạn tài liệu trả về; nếu không đoạn nào khớp thì nói chưa có thông tin, không tự bịa.`,
+		Instructions: `Tra tài liệu nghiệp vụ của công ty (chính sách bán hàng, bảo hành, đổi trả, giao hàng, thanh toán, hướng dẫn sử dụng, giới thiệu sản phẩm, quy trình nội bộ...). Gọi khi câu hỏi cần kiến thức không có trong dữ liệu ERP (giá, tồn, đơn, công nợ dùng tool ERP). query là câu hỏi viết lại ngắn gọn, đủ ý, bằng tiếng Việt. Kết quả có passages và images; mỗi ảnh có image_id và mô tả (caption) nếu đã nhập. Chỉ trả lời theo dữ liệu tài liệu trả về; nếu không đoạn nào khớp thì nói chưa có thông tin, không tự bịa.`,
 	},
 	{
 		Key:         PromptOrderCart,

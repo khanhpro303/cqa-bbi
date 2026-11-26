@@ -90,19 +90,28 @@ func NewKnowledgeChatPreview(cfg *config.Config) gin.HandlerFunc {
 		}
 		// The preview identity also scopes the flow's vector history to this
 		// conversation. The MCP credential grants only search_knowledge.
-		reply, err := client.RunFlowWithCustomerUsage(ctx, session.flowSessionID, session.flowSessionID, question,
-			lf.APIURL, lf.APIKey, flowID, "", "", token, settings[promptKey].ValuePlain)
+		input, prompt := engine.AddKnowledgeImageInstruction(question, settings[promptKey].ValuePlain)
+		reply, err := client.RunFlowWithCustomerUsage(ctx, session.flowSessionID, session.flowSessionID, input,
+			lf.APIURL, lf.APIKey, flowID, "", "", token, prompt)
 		if err != nil {
 			log.Printf("[knowledge-preview] tenant=%s agent=%s Langflow request failed (%T)", tenantID, req.AgentType, err)
 			c.JSON(http.StatusBadGateway, gin.H{"error": "preview_unavailable"})
 			return
 		}
-		answer := strings.TrimSpace(reply.Text)
+		answer, imageIDs := engine.ParseKnowledgeImageReply(reply.Text, engine.MaxKnowledgeReplyImages)
+		answer = strings.TrimSpace(answer)
 		if answer == "" || strings.Contains(answer, "[RICH_MESSAGE_SENT]") {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "preview_empty_reply"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"answer": answer, "session_id": session.id})
+		var images []models.KnowledgeDocumentImage
+		if len(imageIDs) > 0 {
+			images, err = engine.LoadDeliverableKnowledgeReplyImageMetadata(ctx, tenantID, req.AgentType, imageIDs[0])
+			if err != nil {
+				log.Printf("[knowledge-preview] tenant=%s failed to load reply image: %v", tenantID, err)
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"answer": answer, "session_id": session.id, "images": knowledgeDocumentImageDTOs(tenantID, images)})
 	}
 }
 

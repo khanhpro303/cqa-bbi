@@ -24,6 +24,12 @@ func ResolveTenantAIProvider(tenantID string, cfg *config.Config, task string) (
 	return resolveTenantAIProvider(tenantID, cfg, task, AITaskModel{Provider: "claude"}, true)
 }
 
+// ResolveTenantAIProviderWithTenantKey resolves task settings using credentials
+// configured by the tenant, including for tenant-configured provider URLs.
+func ResolveTenantAIProviderWithTenantKey(tenantID string, cfg *config.Config, task string) (TenantAIProvider, error) {
+	return resolveTenantAIProvider(tenantID, cfg, task, AITaskModel{Provider: "claude"}, false)
+}
+
 func resolveTenantAIProvider(tenantID string, cfg *config.Config, task string, fallback AITaskModel, useLegacyOpenAIKey bool) (TenantAIProvider, error) {
 	taskKey := AITaskModelSettingPrefix + task
 	var settings []models.AppSetting

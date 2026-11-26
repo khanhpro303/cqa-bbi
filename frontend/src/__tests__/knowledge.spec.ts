@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import Knowledge from '../views/Knowledge.vue'
+import KnowledgeDocumentImages from '../components/KnowledgeDocumentImages.vue'
+import KnowledgeImagePreview from '../components/KnowledgeImagePreview.vue'
 import KnowledgePlayground from '../components/KnowledgePlayground.vue'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() }))
@@ -13,6 +15,11 @@ vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ canEdit: () => true, t
 
 const doc = { id: 'd1', title: 'Bảo hành', file_name: 'bh.pdf', source: 'upload', audience: 'public', enabled: true, status: 'ready', char_count: 100, chunk_count: 2, created_by: 'a@b', created_at: '2026-11-22T10:00:00Z' }
 const linkDoc = { ...doc, file_name: '', source: 'url', source_url: 'https://example.com/warranty', parser: 'firecrawl' }
+const base = '/tenants/tenant-1/knowledge'
+const image = {
+  id: 'img1', document_id: doc.id, url: `/api/v1${base}/${doc.id}/images/img1/content`,
+  file_name: 'warranty.png', caption: 'Bảng bảo hành', enabled: true, width: 64, height: 32,
+}
 
 const LinkField = defineComponent({
   props: ['modelValue'],
@@ -92,6 +99,61 @@ describe('Knowledge page', () => {
     const uploads = mocks.post.mock.calls.filter((c: any[]) => c[0] === '/tenants/tenant-1/knowledge/upload')
     expect(uploads).toHaveLength(2)
     expect((uploads[0][1] as FormData).get('audience')).toBe('public')
+  })
+
+  it('creates a text document and sends its images and captions in the same order', async () => {
+    const textDoc = { ...doc, source: 'text' }
+    mocks.post
+      .mockResolvedValueOnce({ data: textDoc })
+      .mockResolvedValueOnce({ data: { images: [image] } })
+    const wrapper = shallowMount(Knowledge, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    try {
+      const vm = wrapper.vm as any
+      vm.textDialog = true
+      vm.textTitle = doc.title
+      vm.textContent = 'Điều kiện bảo hành'
+      vm.textImageDrafts = [
+        { key: 1, file: new File(['first'], image.file_name, { type: 'image/png' }), caption: image.caption },
+        { key: 2, file: new File(['second'], 'terms.jpg', { type: 'image/jpeg' }), caption: '' },
+      ]
+      await vm.saveText()
+      expect(mocks.post.mock.calls[0]).toEqual([`${base}/text`, {
+        title: doc.title, content: 'Điều kiện bảo hành', audience: 'public',
+      }])
+      const [url, form] = mocks.post.mock.calls[1]!
+      expect(url).toBe(`${base}/${doc.id}/images`)
+      expect((form as FormData).getAll('images').map((file) => (file as File).name)).toEqual([image.file_name, 'terms.jpg'])
+      expect((form as FormData).get('captions')).toBe(JSON.stringify([image.caption, '']))
+      expect(vm.textImageDrafts).toEqual([])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('opens the saved document with the original attachment draft when upload fails', async () => {
+    const textDoc = { ...doc, source: 'text' }
+    mocks.get.mockImplementation(async (path: string) => ({
+      data: path === `${base}/${doc.id}` ? { document: textDoc, images: [], summary: { status: 'missing' } } : { documents: [textDoc] },
+    }))
+    mocks.post.mockResolvedValueOnce({ data: textDoc }).mockRejectedValueOnce(new Error('upload failed'))
+    const wrapper = shallowMount(Knowledge, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    try {
+      const vm = wrapper.vm as any
+      const draft = { key: 1, file: new File(['png'], image.file_name, { type: 'image/png' }), caption: image.caption }
+      vm.textDialog = true
+      vm.textTitle = doc.title
+      vm.textContent = 'Điều kiện bảo hành'
+      vm.textImageDrafts = [draft]
+      await vm.saveText()
+      await flushPromises()
+      expect(vm.textDialog).toBe(false)
+      expect(vm.docDialog).toBe(true)
+      expect(wrapper.getComponent(KnowledgeDocumentImages).props('drafts')).toEqual([draft])
+      expect(wrapper.text()).toContain('kb_images_partial_upload')
+      expect(mocks.post).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('toggles a document off through PATCH', async () => {
@@ -213,6 +275,117 @@ describe('Knowledge page', () => {
     } finally {
       wrapper.unmount()
       vi.useRealTimers()
+    }
+  })
+
+  it('keeps the attachment editor mounted through a failed summary poll and retry', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    mocks.get
+      .mockResolvedValueOnce({ data: { documents: [doc] } })
+      .mockResolvedValueOnce({ data: { document: doc, images: [image], summary: { status: 'processing' } } })
+      .mockRejectedValueOnce(new Error('temporary connection problem'))
+      .mockResolvedValueOnce({ data: { document: doc, images: [image], summary: { status: 'ready', text: 'Tóm tắt bảo hành' } } })
+    const wrapper = shallowMount(Knowledge, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    try {
+      await flushPromises()
+      await wrapper.get('.document-link').trigger('click')
+      await flushPromises()
+      const editor = wrapper.getComponent(KnowledgeDocumentImages).vm
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(wrapper.text()).toContain('kb_summary_load_failed')
+      expect(wrapper.getComponent(KnowledgeDocumentImages).vm).toBe(editor)
+      await (wrapper.vm as any).retryDetail()
+      expect(wrapper.getComponent(KnowledgeDocumentImages).vm).toBe(editor)
+      expect(wrapper.get('.document-summary').text()).toBe('Tóm tắt bảo hành')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('Knowledge document images', () => {
+  it('keeps the AI caption as a draft, saves it explicitly, and can disable and delete the image', async () => {
+    const caption = 'Bảng thời gian bảo hành'
+    mocks.post.mockReset().mockResolvedValueOnce({ data: { caption } })
+    mocks.patch.mockReset()
+      .mockResolvedValueOnce({ data: { ...image, caption } })
+      .mockResolvedValueOnce({ data: { ...image, caption, enabled: false } })
+    mocks.delete.mockReset().mockResolvedValueOnce({ status: 204 })
+    const wrapper = shallowMount(KnowledgeDocumentImages, {
+      props: { base, documentId: doc.id, images: [image], drafts: [], canEdit: true },
+      global: { stubs: { VTextField: LinkField }, renderStubDefaultSlot: true },
+    })
+    try {
+      const vm = wrapper.vm as any
+      await vm.describe(image)
+      expect(mocks.post).toHaveBeenCalledWith(`${base}/${doc.id}/images/${image.id}/describe`, undefined, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+      expect(mocks.patch).not.toHaveBeenCalled()
+      expect(wrapper.get('input[type="text"], input:not([type])').element).toHaveProperty('value', caption)
+      await vm.patch(image, { caption })
+      expect(wrapper.emitted('update:images')?.[0]).toEqual([[{ ...image, caption }]])
+      await vm.patch({ ...image, caption }, { enabled: false })
+      expect(mocks.patch).toHaveBeenLastCalledWith(`${base}/${doc.id}/images/${image.id}`, { enabled: false })
+      await vm.removeImage(image)
+      expect(mocks.delete).toHaveBeenCalledWith(`${base}/${doc.id}/images/${image.id}`)
+      expect(wrapper.emitted('update:images')?.at(-1)).toEqual([[]])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('uses protected same-tenant URLs for preview and releases the blob when invalidated', async () => {
+    mocks.get.mockReset().mockResolvedValueOnce({ data: new Blob(['png'], { type: 'image/png' }) })
+    const createURL = vi.spyOn(URL, 'createObjectURL')
+    const revokeURL = vi.spyOn(URL, 'revokeObjectURL')
+    const wrapper = shallowMount(KnowledgeImagePreview, { props: { base, image, alt: image.caption } })
+    try {
+      await flushPromises()
+      expect(mocks.get).toHaveBeenCalledWith(image.url.slice('/api/v1'.length), expect.objectContaining({ responseType: 'blob' }))
+      const blobURL = createURL.mock.results[0]?.value
+      expect(wrapper.get('img').attributes('src')).toBe(blobURL)
+      await wrapper.setProps({ image: { ...image, url: image.url.replace('tenant-1', 'tenant-2') } })
+      expect(wrapper.text()).toBe('kb_images_preview_failed')
+      expect(mocks.get).toHaveBeenCalledTimes(1)
+      expect(revokeURL).toHaveBeenCalledWith(blobURL)
+    } finally {
+      wrapper.unmount()
+      createURL.mockRestore()
+      revokeURL.mockRestore()
+    }
+  })
+})
+
+describe('Knowledge playground images', () => {
+  it('shows the image in the bot response and counts matched images by document in search', async () => {
+    mocks.post.mockReset()
+      .mockResolvedValueOnce({ data: { answer: 'Xem bảng bên dưới.', session_id: 'preview-1', images: [image] } })
+      .mockResolvedValueOnce({ data: {
+        hits: [{ document_id: doc.id, title: doc.title, content: 'Một đoạn', score: 1 },
+          { document_id: 'd2', title: 'Tài liệu khác', content: 'Đoạn khác', score: 0.6 }],
+        images: [image],
+      } })
+    const wrapper = shallowMount(KnowledgePlayground, {
+      props: { base, isAdmin: true },
+      global: { renderStubDefaultSlot: true },
+    })
+    try {
+      const vm = wrapper.vm as any
+      vm.question = 'Thời gian bảo hành?'
+      vm.chatInput = { focus: vi.fn() }
+      await vm.sendQuestion()
+      await flushPromises()
+      expect(wrapper.getComponent(KnowledgeImagePreview).props('image')).toEqual(image)
+      expect(wrapper.get('figcaption').text()).toBe(image.caption)
+      vm.mode = 'search'
+      vm.searchQuery = 'bảo hành'
+      await vm.runSearch()
+      await flushPromises()
+      const results = wrapper.findAll('.search-hit')
+      expect(results[0]?.find('.hit-image-count').exists()).toBe(true)
+      expect(results[1]?.find('.hit-image-count').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
     }
   })
 })

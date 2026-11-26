@@ -117,6 +117,7 @@ func TestKnowledgePreviewMCPRejectsTokenForAnotherTenant(t *testing.T) {
 
 func TestKnowledgeChatPreviewRunsConfiguredPublicFlowWithPreviewCredential(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	const imageID = "cea6c2f1-40bc-4c42-a256-e2f676d24e9d"
 	database, err := gorm.Open(mysql.New(mysql.Config{
 		DSN:                       "fixture@tcp(127.0.0.1:3306)/fixture",
 		SkipInitializeWithVersion: true,
@@ -125,11 +126,19 @@ func TestKnowledgeChatPreviewRunsConfiguredPublicFlowWithPreviewCredential(t *te
 		t.Fatal(err)
 	}
 	if err := database.Callback().Query().After("gorm:query").Register("fixture:preview", func(q *gorm.DB) {
-		if q.Statement.Vars[0] == "tenant-a" {
-			*q.Statement.Dest.(*[]models.AppSetting) = []models.AppSetting{
-				{SettingKey: "ai_engine_langflow_token", ValuePlain: "tenant-key"},
-				{SettingKey: "ai_engine_langflow_public_flow_id", ValuePlain: "flow-public"},
+		switch rows := q.Statement.Dest.(type) {
+		case *[]models.AppSetting:
+			if q.Statement.Vars[0] == "tenant-a" {
+				*rows = []models.AppSetting{
+					{SettingKey: "ai_engine_langflow_token", ValuePlain: "tenant-key"},
+					{SettingKey: "ai_engine_langflow_public_flow_id", ValuePlain: "flow-public"},
+				}
 			}
+		case *[]models.KnowledgeDocumentImage:
+			if !strings.Contains(q.Statement.SQL.String(), "d.audience = ?") {
+				t.Error("customer preview image lookup lacks audience guard")
+			}
+			*rows = []models.KnowledgeDocumentImage{{ID: imageID, DocumentID: "doc-a", Caption: "Bảng hướng dẫn", Enabled: true}}
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -159,7 +168,7 @@ func TestKnowledgeChatPreviewRunsConfiguredPublicFlowWithPreviewCredential(t *te
 		}
 		var payload map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&payload)
-		if payload["input_value"] == "redirect" {
+		if input, _ := payload["input_value"].(string); strings.HasPrefix(input, "redirect\n") {
 			http.Redirect(w, r, "/redirect-target", http.StatusTemporaryRedirect)
 			return
 		}
@@ -171,7 +180,7 @@ func TestKnowledgeChatPreviewRunsConfiguredPublicFlowWithPreviewCredential(t *te
 			Payload:         payload,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"outputs":[{"outputs":[{"results":{"message":{"text":"EGO là thương hiệu mũ bảo hiểm."}}}]}]}`))
+		_, _ = w.Write([]byte(`{"outputs":[{"outputs":[{"results":{"message":{"text":"EGO là thương hiệu mũ bảo hiểm.\n[KB_IMAGE:` + imageID + `]"}}}]}]}`))
 	}))
 	t.Cleanup(server.Close)
 
@@ -197,7 +206,8 @@ func TestKnowledgeChatPreviewRunsConfiguredPublicFlowWithPreviewCredential(t *te
 	}
 	recorder := call("tenant-a", "EGO là brand gì?")
 
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "EGO là thương hiệu") {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "EGO là thương hiệu") ||
+		strings.Contains(recorder.Body.String(), "[KB_IMAGE:") || !strings.Contains(recorder.Body.String(), "/knowledge/doc-a/images/"+imageID+"/content") {
 		t.Fatalf("preview response status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	request := <-received
@@ -213,7 +223,7 @@ func TestKnowledgeChatPreviewRunsConfiguredPublicFlowWithPreviewCredential(t *te
 	if got := resolveKnowledgePreviewAgent(knowledgePreviewTestKey, "tenant-a", request.AgentToken); got != "public" {
 		t.Fatalf("Langflow preview agent token resolved as %q", got)
 	}
-	if request.Payload["input_value"] != "EGO là brand gì?" {
+	if input, _ := request.Payload["input_value"].(string); !strings.HasPrefix(input, "EGO là brand gì?\n\n") || !strings.Contains(input, "search_knowledge") {
 		t.Fatalf("Langflow input = %v", request.Payload["input_value"])
 	}
 	sessionID, _ := request.Payload["session_id"].(string)

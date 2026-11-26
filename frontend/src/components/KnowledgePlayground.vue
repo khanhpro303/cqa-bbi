@@ -24,7 +24,7 @@
         </div>
       </div>
 
-      <div ref="transcript" class="transcript" :tabindex="messages.length ? 0 : undefined" :aria-label="t('kb_chat_transcript')">
+      <div ref="transcript" class="transcript" :tabindex="messages.length ? 0 : undefined" :aria-label="t('kb_chat_transcript')" @scroll="trackChatScroll">
         <div v-if="!messages.length" class="chat-empty">
           <v-icon icon="mdi-message-processing-outline" size="22" aria-hidden="true" />
           <p>{{ t('kb_chat_starter') }}</p>
@@ -41,6 +41,10 @@
           <div v-for="(message, index) in messages" :key="index" class="message" :class="{ 'message-user': message.role === 'user' }">
             <span class="message-label">{{ t(message.role === 'user' ? 'kb_chat_you' : 'kb_chat_bot') }}</span>
             <div class="message-text">{{ message.text }}</div>
+            <figure v-for="image in message.images" :key="image.id" class="message-image">
+              <KnowledgeImagePreview :base="base" :image="image" :alt="image.caption ? '' : t('kb_images_chat_alt')" @load="followChatImage" />
+              <figcaption v-if="image.caption" class="text-caption text-medium-emphasis">{{ image.caption }}</figcaption>
+            </figure>
           </div>
           <div v-if="chatRequest" class="message">
             <span class="message-label">{{ t('kb_chat_bot') }}</span>
@@ -90,6 +94,10 @@
             <summary>
               <div class="hit-heading">
                 <strong>{{ hit.title }}</strong>
+                <span v-if="imageCounts[hit.document_id]" class="hit-image-count">
+                  <v-icon icon="mdi-image-outline" size="14" aria-hidden="true" />
+                  {{ t('kb_images_count', { count: imageCounts[hit.document_id] }) }}
+                </span>
                 <span>{{ t('kb_score') }} {{ hit.score.toFixed(3) }}</span>
                 <v-icon icon="mdi-chevron-down" size="18" class="hit-chevron" aria-hidden="true" />
               </div>
@@ -108,10 +116,12 @@ import { isAxiosError } from 'axios'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import type { KnowledgeImage } from '../api/knowledgeImages'
+import KnowledgeImagePreview from './KnowledgeImagePreview.vue'
 
 type Agent = 'public' | 'private'
-type Hit = { title: string; content: string; score: number }
-type Message = { role: 'user' | 'bot'; text: string }
+type Hit = { document_id: string; title: string; content: string; score: number }
+type Message = { role: 'user' | 'bot'; text: string; images?: KnowledgeImage[] }
 
 const props = defineProps<{ base: string; isAdmin: boolean }>()
 const { t } = useI18n()
@@ -130,6 +140,7 @@ const chatError = ref('')
 const chatRequest = shallowRef<AbortController>()
 const transcript = ref<HTMLElement>()
 const chatInput = ref<{ focus: () => void }>()
+let followTranscript = true
 
 function useExample(key: string) {
   question.value = t(key)
@@ -152,8 +163,18 @@ function startNewChat() {
 
 watch(chatAgent, resetChat, { flush: 'sync' })
 watch([() => messages.value.length, chatRequest, mode], () => {
-  if (mode.value === 'chat' && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight
+  followTranscript = true
+  followChatImage()
 }, { flush: 'post' })
+
+function trackChatScroll() {
+  const log = transcript.value
+  if (log) followTranscript = log.scrollHeight - log.clientHeight - log.scrollTop <= 16
+}
+
+function followChatImage() {
+  if (followTranscript && mode.value === 'chat' && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight
+}
 
 async function sendQuestion() {
   const text = question.value.trim()
@@ -165,14 +186,14 @@ async function sendQuestion() {
   question.value = ''
   messages.value.push({ role: 'user', text })
   try {
-    const { data } = await api.post<{ answer: string; session_id: string }>(`${props.base}/chat-preview`, {
+    const { data } = await api.post<{ answer: string; session_id: string; images?: KnowledgeImage[] }>(`${props.base}/chat-preview`, {
       question: text,
       agent_type: chatAgent.value,
       ...(sessionID.value && { session_id: sessionID.value }),
     }, { signal: request.signal })
     if (chatRequest.value !== request) return
     sessionID.value = data.session_id
-    messages.value.push({ role: 'bot', text: data.answer })
+    messages.value.push({ role: 'bot', text: data.answer, images: data.images })
   } catch (error) {
     if (chatRequest.value !== request) return
     messages.value.pop()
@@ -189,6 +210,7 @@ async function sendQuestion() {
 const searchAgent = ref<Agent>('public')
 const searchQuery = ref('')
 const hits = ref<Hit[] | null>(null)
+const imageCounts = ref<Record<string, number>>({})
 const searchRequest = shallowRef<AbortController>()
 const searchError = ref(false)
 
@@ -196,6 +218,7 @@ function clearSearch() {
   searchRequest.value?.abort()
   searchRequest.value = undefined
   hits.value = null
+  imageCounts.value = {}
   searchError.value = false
 }
 
@@ -224,11 +247,15 @@ async function runSearch() {
   searchError.value = false
   hits.value = null
   try {
-    const { data } = await api.post<{ hits: Hit[] }>(`${props.base}/search`, {
+    const { data } = await api.post<{ hits: Hit[]; images?: KnowledgeImage[] }>(`${props.base}/search`, {
       query,
       agent_type: searchAgent.value,
     }, { signal: request.signal })
-    if (searchRequest.value === request) hits.value = data.hits || []
+    if (searchRequest.value !== request) return
+    hits.value = data.hits || []
+    const counts: Record<string, number> = {}
+    for (const image of data.images ?? []) counts[image.document_id] = (counts[image.document_id] ?? 0) + 1
+    imageCounts.value = counts
   } catch {
     if (searchRequest.value === request) searchError.value = true
   } finally {
@@ -315,6 +342,8 @@ async function runSearch() {
   line-height: 1.6;
 }
 .message-user .message-text { background: rgba(var(--v-theme-primary), 0.09); }
+.message-image { margin: 0.5rem 0 0; overflow-wrap: anywhere; }
+.message-image figcaption { margin-top: 0.25rem; }
 .playground-form {
   display: flex;
   align-items: center;
@@ -347,6 +376,7 @@ async function runSearch() {
 }
 .hit-heading strong { flex: 1; overflow-wrap: anywhere; }
 .hit-heading span { color: rgba(var(--v-theme-on-surface), 0.75); white-space: nowrap; font-size: 0.75rem; }
+.hit-image-count { display: inline-flex; align-items: center; gap: 0.2rem; }
 .search-hit[open] .hit-chevron { transform: rotate(180deg); }
 .hit-excerpt { margin-top: 0.25rem; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.875rem; line-height: 1.55; }
 .hit-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }

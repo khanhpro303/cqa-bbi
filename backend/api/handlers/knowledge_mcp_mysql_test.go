@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -51,6 +52,19 @@ func TestSearchKnowledgeMCPMySQL(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	publicImageID, internalImageID, disabledImageID := pkg.NewUUID(), pkg.NewUUID(), pkg.NewUUID()
+	for _, row := range []models.KnowledgeDocumentImage{
+		{ID: publicImageID, TenantID: tenant, DocumentID: pub.ID, Caption: "Bảng <đổi trả>\ntrong bảy ngày", FileName: "private-storage-name.png", MediaType: "image/png", Data: []byte("private binary"), Enabled: true},
+		{ID: internalImageID, TenantID: tenant, DocumentID: internal.ID, Caption: "Bảng giá vốn", MediaType: "image/png", Data: []byte("internal fixture"), Enabled: true},
+		{ID: disabledImageID, TenantID: tenant, DocumentID: pub.ID, Caption: "Bảng chính sách cũ", MediaType: "image/png", Data: []byte("disabled fixture"), Enabled: true},
+	} {
+		if err := db.DB.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.DB.Model(&models.KnowledgeDocumentImage{}).Where("id = ?", disabledImageID).Update("enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	gin.SetMode(gin.TestMode)
 	call := func(token, body string) map[string]any {
@@ -85,8 +99,12 @@ func TestSearchKnowledgeMCPMySQL(t *testing.T) {
 	if !strings.Contains(got, "còn tem") || strings.Contains(got, "Giá vốn") {
 		t.Fatalf("customer bot result: %s", got)
 	}
+	if !strings.Contains(got, publicImageID) || !strings.Contains(got, "Bảng đổi trả trong bảy ngày") ||
+		strings.Contains(got, internalImageID) || strings.Contains(got, disabledImageID) || strings.Contains(got, "private-storage-name") {
+		t.Fatalf("customer bot image metadata: %s", got)
+	}
 	got = text(call("priv-token", q))
-	if !strings.Contains(got, "Giá vốn") {
+	if !strings.Contains(got, "Giá vốn") || !strings.Contains(got, internalImageID) || strings.Contains(got, disabledImageID) {
 		t.Fatalf("staff bot must see internal doc: %s", got)
 	}
 	bad := call("pub-token", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_knowledge","arguments":{"query":"x","tenant_id":"other"}}}`)
@@ -95,5 +113,28 @@ func TestSearchKnowledgeMCPMySQL(t *testing.T) {
 	}
 	if out := call("wrong", q); out["error"] == nil {
 		t.Fatalf("bad agent token accepted: %v", out)
+	}
+
+	assertDelivery := func(tenant, agent, imageID string, deliverable bool) {
+		t.Helper()
+		rows, err := engine.LoadDeliverableKnowledgeImages(context.Background(), tenant, agent, []string{imageID})
+		if err != nil || (len(rows) == 1) != deliverable {
+			t.Fatalf("delivery tenant=%s agent=%s id=%s got=%d want=%t err=%v", tenant, agent, imageID, len(rows), deliverable, err)
+		}
+	}
+	assertDelivery(tenant, "public", publicImageID, true)
+	assertDelivery(tenant, "public", internalImageID, false)
+	assertDelivery(tenant, "private", internalImageID, true)
+	assertDelivery(tenant, "private", disabledImageID, false)
+	assertDelivery(pkg.NewUUID(), "private", publicImageID, false)
+	for _, fields := range []map[string]any{
+		{"enabled": false, "status": knowledge.StatusReady},
+		{"enabled": true, "status": knowledge.StatusArchived},
+		{"enabled": true, "status": knowledge.StatusProcessing},
+	} {
+		if err := db.DB.Model(&models.KnowledgeDocument{}).Where("id = ?", pub.ID).Updates(fields).Error; err != nil {
+			t.Fatal(err)
+		}
+		assertDelivery(tenant, "public", publicImageID, false)
 	}
 }

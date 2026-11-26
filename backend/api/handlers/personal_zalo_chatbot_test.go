@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -30,6 +32,11 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	const key = "0123456789abcdef0123456789abcdef"
 	const secret = "test-personal-zalo-channel-secret"
 	const gatewaySecret = "test-deployment-gateway-signing-secret"
+	const imageID = "cea6c2f1-40bc-4c42-a256-e2f676d24e9d"
+	var pngData bytes.Buffer
+	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 3, 4))); err != nil {
+		t.Fatal(err)
+	}
 	credentials, err := pkg.Encrypt([]byte(`{"import_secret":"`+secret+`"}`), key)
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +63,10 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	masterEnabled := true
 	publicFlow := "public-flow"
 	var pauseDuringFlow atomic.Bool
+	var tenantCredentials atomic.Bool
+	var requestHandover atomic.Bool
+	imagePrivate := false
+	imageReads := 0
 	if err := database.Callback().Query().After("gorm:query").Register("test:personal_zalo_chatbot", func(q *gorm.DB) {
 		switch row := q.Statement.Dest.(type) {
 		case *models.Channel:
@@ -76,6 +87,25 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 				{SettingKey: "chatbot_active", ValuePlain: strconv.FormatBool(masterEnabled)},
 				{SettingKey: "ai_engine_langflow_public_flow_id", ValuePlain: publicFlow},
 			}
+			if tenantCredentials.Load() {
+				*row = append(*row, models.AppSetting{SettingKey: "ai_engine_langflow_token", ValuePlain: "fixture-langflow-key"})
+			}
+			if requestHandover.Load() {
+				*row = append(*row, models.AppSetting{SettingKey: "ai_engine_system_prompt", ValuePlain: "Hỗ trợ khách hàng."})
+			}
+		case *models.CRMGroup:
+			q.AddError(gorm.ErrRecordNotFound)
+		case *[]models.KnowledgeDocumentImage:
+			imageReads++
+			if !strings.Contains(q.Statement.SQL.String(), "d.audience = ?") ||
+				!slices.Contains(q.Statement.Vars, any("public")) ||
+				!slices.Contains(q.Statement.Vars, any(imageID)) ||
+				!slices.Contains(q.Statement.Vars, any(channel.TenantID)) {
+				t.Error("image lookup did not enforce selected ID, tenant, and customer visibility")
+			}
+			if !imagePrivate {
+				*row = []models.KnowledgeDocumentImage{{ID: imageID, Data: pngData.Bytes()}}
+			}
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -84,6 +114,10 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	var flowCalls atomic.Int32
 	var pauseOnNextTurn atomic.Bool
 	flow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
 		flowCalls.Add(1)
 		if pauseOnNextTurn.Swap(false) {
 			pauseDuringFlow.Store(true)
@@ -94,7 +128,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			Tweaks    map[string]any `json:"tweaks"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil ||
-			r.URL.Path != "/api/v1/run/public-flow" || input.Text != "Xin chào" ||
+			r.URL.Path != "/api/v1/run/public-flow" ||
 			!strings.HasPrefix(input.SessionID, "personal-zalo-") ||
 			input.Tweaks["permission_token"] != nil || input.Tweaks["customer_code"] != nil ||
 			r.Header.Get("X-LANGFLOW-GLOBAL-VAR-ERP_AGENT_TOKEN") != "" ||
@@ -104,7 +138,21 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 		if r.Header.Get("X-API-Key") != "fixture-langflow-key" {
 			t.Error("Langflow credentials were not passed")
 		}
-		_, _ = fmt.Fprint(w, `{"outputs":[{"outputs":[{"results":{"message":{"text":"Chào bạn!"}}}]}]}`)
+		reply := "Chào bạn!"
+		if token := r.Header.Get("X-LANGFLOW-GLOBAL-VAR-CQA_ERP_AGENT_TOKEN"); tenantCredentials.Load() {
+			if resolveKnowledgePreviewAgent(key, channel.TenantID, token) != "public" {
+				t.Error("Langflow did not receive a public knowledge-only token")
+			}
+			if requestHandover.Load() {
+				reply = personalZaloAIHandoverMarker
+			} else if !strings.HasPrefix(input.Text, "Xin chào\n\n") || !strings.Contains(input.Text, "search_knowledge") {
+				t.Error("Langflow did not receive the knowledge-image instructions")
+			}
+			reply += "\n[KB_IMAGE:" + imageID + "]"
+		} else if token != "" || input.Text != "Xin chào" {
+			t.Error("legacy Langflow turn unexpectedly changed")
+		}
+		_, _ = fmt.Fprintf(w, `{"outputs":[{"outputs":[{"results":{"message":{"text":%q}}}]}]}`, reply)
 	}))
 	defer flow.Close()
 
@@ -216,6 +264,42 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	fresh.RequestID, fresh.MessageID = "paused-turn", "msg-2"
 	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusNoContent || flowCalls.Load() != 2 {
 		t.Fatalf("paused status=%d, Langflow calls=%d", response.Code, flowCalls.Load())
+	}
+
+	pauseDuringFlow.Store(false)
+	tenantCredentials.Store(true)
+	fresh.RequestID, fresh.MessageID = "public-image", "msg-3"
+	response := submit(fresh, secret, gatewaySecret)
+	var output struct {
+		Reply  string                       `json:"reply"`
+		Images []personalZaloKnowledgeImage `json:"images"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &output); err != nil || response.Code != http.StatusOK ||
+		output.Reply != "Chào bạn!" || len(output.Images) != 1 {
+		t.Fatalf("public image response status=%d body=%s err=%v", response.Code, response.Body.String(), err)
+	}
+	attachment := output.Images[0]
+	if attachment.ID != imageID || attachment.Width != 3 || attachment.Height != 4 ||
+		attachment.MediaType != "image/png" || attachment.FileName != "image.png" ||
+		!bytes.Equal(attachment.Data, pngData.Bytes()) || imageReads != 2 {
+		t.Fatalf("unexpected image metadata or visibility checks: %+v (reads: %d)", attachment, imageReads)
+	}
+
+	imagePrivate = true
+	fresh.RequestID, fresh.MessageID = "private-image", "msg-4"
+	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK || response.Body.String() != `{"reply":"Chào bạn!"}` {
+		t.Fatalf("private image response status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	imagePrivate = false
+	requestHandover.Store(true)
+	channel.Metadata = `{"handover_alert_group_id":"unavailable-group"}`
+	fresh.RequestID, fresh.MessageID = "handover-with-image", "msg-5"
+	readsBeforeHandover := imageReads
+	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), personalZaloHandoverUnavailable) || strings.Contains(response.Body.String(), imageID) ||
+		imageReads != readsBeforeHandover {
+		t.Fatalf("handover must suppress image. status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

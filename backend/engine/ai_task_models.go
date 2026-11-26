@@ -8,13 +8,14 @@ import (
 )
 
 const (
-	AITaskQC                 = "qc_analysis"
-	AITaskClassification     = "classification"
-	AITaskProductGrouping    = "product_grouping"
-	AITaskCRMAnalysis        = "crm_analysis"
-	AITaskOrderApproval      = "cloudify_order_approval"
-	AITaskKnowledgeSummary   = "knowledge_document_summary"
-	AITaskModelSettingPrefix = "ai_task_model_"
+	AITaskQC                    = "qc_analysis"
+	AITaskClassification        = "classification"
+	AITaskProductGrouping       = "product_grouping"
+	AITaskCRMAnalysis           = "crm_analysis"
+	AITaskOrderApproval         = "cloudify_order_approval"
+	AITaskKnowledgeSummary      = "knowledge_document_summary"
+	AITaskKnowledgeImageCaption = "knowledge_image_caption"
+	AITaskModelSettingPrefix    = "ai_task_model_"
 )
 
 type AITaskModel struct {
@@ -51,6 +52,7 @@ func AITaskModelOptions() []AITaskModelOption {
 		{AITaskModelSetting{Key: PromptProductCodeMatch}, "Đối chiếu mã sản phẩm", "ERP", "text"},
 		{AITaskModelSetting{Key: PromptAttributeMatch}, "Đối chiếu thuộc tính sản phẩm", "ERP", "text"},
 		{AITaskModelSetting{Key: AITaskKnowledgeSummary}, "Tóm tắt tài liệu kho tri thức", "Kho tri thức", "text"},
+		{AITaskModelSetting{Key: AITaskKnowledgeImageCaption}, "Mô tả ảnh tài liệu kho tri thức", "Kho tri thức", "vision"},
 	}
 }
 
