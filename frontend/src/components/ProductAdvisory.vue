@@ -89,12 +89,26 @@
       </v-card-actions>
     </v-card>
 
-    <v-dialog v-model="dialog" max-width="960px" scrollable @after-leave="resetEditor">
+    <v-dialog v-model="dialog" max-width="960px" scrollable aria-labelledby="product-advisory-dialog-title" @after-leave="resetEditor">
       <v-card v-if="selected">
-        <v-card-title class="d-flex align-start ga-3">
-          <div class="flex-grow-1">
-            <div>{{ selected.web_name || selected.parent_code }}</div>
-            <div class="text-caption text-medium-emphasis">{{ selected.parent_code }} · {{ $t('product_advisory_variant_count', { count: selected.variant_count }) }}</div>
+        <v-card-title class="d-flex align-center ga-3">
+          <v-avatar rounded="lg" size="44" color="surface-variant" aria-hidden="true">
+            <v-img v-if="editorThumbnail" :src="editorThumbnail" cover>
+              <template #placeholder>
+                <div class="d-flex h-100 align-center justify-center">
+                  <v-icon icon="mdi-image-outline" />
+                </div>
+              </template>
+            </v-img>
+            <v-icon v-else icon="mdi-image-outline" />
+          </v-avatar>
+          <div class="editor-identity flex-grow-1">
+            <h3 id="product-advisory-dialog-title" class="text-subtitle-1 font-weight-bold text-truncate">
+              {{ selected.web_name || selected.parent_code }}
+            </h3>
+            <div class="text-caption text-medium-emphasis text-truncate">
+              <template v-if="selected.web_name && selected.web_name !== selected.parent_code">{{ selected.parent_code }} · </template>{{ $t('product_advisory_variant_count', { count: selected.variant_count }) }}
+            </div>
           </div>
           <v-btn icon="mdi-close" variant="text" size="small" :aria-label="$t('cancel')" @click="dialog = false" />
         </v-card-title>
@@ -151,20 +165,19 @@
                 <div class="text-subtitle-2 font-weight-bold">{{ $t('product_advisory_images') }}</div>
                 <div class="text-caption text-medium-emphasis">{{ $t('product_advisory_images_hint') }}</div>
               </div>
-              <v-file-input
-                v-if="canEdit"
-                v-model="imageFiles"
-                accept="image/jpeg,image/png,image/webp,image/gif"
-                multiple
-                hide-details
-                density="compact"
-                prepend-icon=""
-                prepend-inner-icon="mdi-image-plus-outline"
-                :label="$t('product_advisory_add_images')"
-                class="image-input"
-                :disabled="uploadingImages"
-                @update:model-value="uploadImages"
-              />
+              <template v-if="canEdit">
+                <input ref="imageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden @change="uploadImages" />
+                <v-btn
+                  color="primary"
+                  variant="outlined"
+                  prepend-icon="mdi-image-plus-outline"
+                  :loading="uploadingImages"
+                  :disabled="uploadingImages"
+                  @click="imageInput?.click()"
+                >
+                  {{ $t('product_advisory_add_images') }}
+                </v-btn>
+              </template>
             </div>
 
             <div v-if="detail.images.length" class="product-images">
@@ -347,6 +360,12 @@ const detail = ref<ProductDetail | null>(null)
 const loadingDetail = ref(false)
 const detailError = ref(false)
 const form = ref({ notes: '', source_url: '' })
+const editorThumbnail = computed(() => {
+  const thumbnail = detail.value
+    ? detail.value.images.find((image) => image.enabled)?.url
+    : selected.value?.thumbnail_url
+  return displayURL(thumbnail) || displayURL(detail.value?.default_image_url || selected.value?.default_image_url)
+})
 let detailRequest = 0
 
 async function openProduct(product: ProductGroup) {
@@ -374,7 +393,6 @@ function resetEditor() {
   ++detailRequest
   selected.value = null
   detail.value = null
-  imageFiles.value = []
   sourceError.value = ''
 }
 
@@ -440,14 +458,14 @@ async function scrape() {
   }
 }
 
-const imageFiles = ref<File[] | File | null>([])
+const imageInput = ref<HTMLInputElement | null>(null)
 const uploadingImages = ref(false)
-async function uploadImages() {
-  if (!selected.value || !props.canEdit) return
-  const files = Array.isArray(imageFiles.value) ? imageFiles.value : imageFiles.value ? [imageFiles.value] : []
-  if (!files.length) return
+async function uploadImages(event: Event) {
+  const input = event.currentTarget as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  if (!files.length || !selected.value || !props.canEdit || uploadingImages.value) return
   if (files.length > 8 || files.some((file) => file.size > 5 * 1024 ** 2) || files.reduce((sum, file) => sum + file.size, 0) > 11 * 1024 ** 2) {
-    imageFiles.value = []
     notify(t('product_advisory_image_size'), 'error')
     return
   }
@@ -464,7 +482,6 @@ async function uploadImages() {
     const added = data?.images || []
     detail.value!.images.push(...added)
     prepareImages(added.map((image: ProductImage) => image.url))
-    imageFiles.value = []
     notify(t('product_advisory_images_added'))
     await loadProducts(page.value)
   } catch {
@@ -548,12 +565,12 @@ defineExpose({ loadProducts, products, openProduct, detail, form, save, scrape }
 .product-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .product-table table { min-width: 720px; }
 .configured-filter { max-width: 260px; }
-.image-input { max-width: 330px; }
+.editor-identity { min-width: 0; }
 .product-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .image-card { min-width: 0; overflow: hidden; }
 .scraped-preview { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 6; white-space: pre-wrap; }
 code { overflow-wrap: anywhere; }
 @media (max-width: 600px) {
-  .configured-filter, .image-input { max-width: none; width: 100%; }
+  .configured-filter { max-width: none; width: 100%; }
 }
 </style>

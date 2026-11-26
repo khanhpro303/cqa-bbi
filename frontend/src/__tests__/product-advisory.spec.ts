@@ -77,6 +77,64 @@ describe('ProductAdvisory', () => {
     wrapper.unmount()
   })
 
+  it.each([product.thumbnail_url, ''])('renders the editor thumbnail or placeholder for %j', async (imageURL) => {
+    mocks.get.mockResolvedValueOnce({ data: { items: [product], total: 1 } }).mockResolvedValueOnce({
+      data: { ...detail, default_image_url: imageURL },
+    })
+    const wrapper = shallowMount(ProductAdvisory, {
+      props: { tenantId: 'tenant-1', canEdit: true },
+      global: { mocks: { $t: (key: string) => key }, renderStubDefaultSlot: true },
+    })
+    await flushPromises()
+    await (wrapper.vm as any).openProduct(product)
+    await flushPromises()
+
+    const header = wrapper.get('v-card-title')
+    expect(header.get('h3').text()).toBe(product.web_name)
+    if (imageURL) {
+      expect(header.get('v-img').attributes('src')).toBe(imageURL)
+    } else {
+      expect(header.find('v-img').exists()).toBe(false)
+      expect(header.get('v-icon').attributes('icon')).toBe('mdi-image-outline')
+    }
+    wrapper.unmount()
+  })
+
+  it('opens the file picker from the upload button and posts the chosen images', async () => {
+    mocks.get
+      .mockResolvedValueOnce({ data: { items: [product], total: 1 } })
+      .mockResolvedValueOnce({ data: detail })
+    const wrapper = shallowMount(ProductAdvisory, {
+      props: { tenantId: 'tenant-1', canEdit: true },
+      global: {
+        mocks: { $t: (key: string) => key },
+        stubs: { VBtn: { template: '<button type="button"><slot /></button>' } },
+        renderStubDefaultSlot: true,
+      },
+    })
+    await flushPromises()
+    await (wrapper.vm as any).openProduct(product)
+    await flushPromises()
+
+    const input = wrapper.get<HTMLInputElement>('input[type="file"]')
+    const openPicker = vi.spyOn(input.element, 'click').mockImplementation(() => {})
+    const button = wrapper.findAll('button').find((item) => item.text() === 'product_advisory_add_images')
+    expect(button).toBeDefined()
+    await button!.trigger('click')
+    expect(openPicker).toHaveBeenCalledOnce()
+
+    const file = new File(['image'], 'storm.png', { type: 'image/png' })
+    Object.defineProperty(input.element, 'files', { value: [file] })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(mocks.post).toHaveBeenCalledOnce()
+    const [url, body] = mocks.post.mock.calls[0]!
+    expect(url).toBe('/tenants/tenant-1/product-advisory/LS2-FF800/images')
+    expect(body.getAll('images')).toEqual([file])
+    wrapper.unmount()
+  })
+
   it('scrapes a public product page with the configured Firecrawl flow', async () => {
     mocks.get
       .mockResolvedValueOnce({ data: { items: [product], total: 1 } })
