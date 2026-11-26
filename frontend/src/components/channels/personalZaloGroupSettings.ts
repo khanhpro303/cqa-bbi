@@ -1,5 +1,7 @@
 export interface PersonalZaloGroupSettings {
   personal_zalo_group_reply_enabled: boolean
+  group_assistant_mode: boolean
+  group_staff_call_only: boolean
   group_bot_names: string
   handover_alert_group_id: string
   personal_zalo_handover_staff_id: string
@@ -34,6 +36,8 @@ export interface PersonalZaloHandoverGroup {
 export function readPersonalZaloGroupSettings(metadata: Record<string, unknown> = {}): PersonalZaloGroupSettings {
   return {
     personal_zalo_group_reply_enabled: metadata.personal_zalo_group_reply_enabled === true,
+    group_assistant_mode: metadata.group_assistant_mode === true,
+    group_staff_call_only: metadata.group_staff_call_only === true,
     group_bot_names: typeof metadata.group_bot_names === 'string' ? metadata.group_bot_names : '',
     handover_alert_group_id: typeof metadata.handover_alert_group_id === 'string' ? metadata.handover_alert_group_id : '',
     personal_zalo_handover_staff_id: typeof metadata.personal_zalo_handover_staff_id === 'string'
@@ -45,6 +49,8 @@ export function readPersonalZaloGroupSettings(metadata: Record<string, unknown> 
 export function personalZaloGroupSettingsPatch(settings: PersonalZaloGroupSettings): Record<string, unknown> {
   return {
     personal_zalo_group_reply_enabled: settings.personal_zalo_group_reply_enabled,
+    group_assistant_mode: settings.group_assistant_mode,
+    group_staff_call_only: settings.group_staff_call_only,
     group_bot_names: settings.group_bot_names.trim(),
     handover_alert_group_id: settings.handover_alert_group_id || '',
     personal_zalo_handover_staff_id: settings.handover_alert_group_id

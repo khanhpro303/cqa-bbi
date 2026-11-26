@@ -193,21 +193,48 @@ function groupMessage(msgId: string, senderId = '20002', threadId = '50005') {
 
 test('a new group text is signed with sender identity and replies to the originating group', async (t) => {
   configureTestChatbot(t);
+  const deliveryReceipt = '123e4567-e89b-42d3-a456-426614174000';
   let sent!: { text: string; threadId: string; type: number };
   const sendMessage = async (text: string, threadId: string, type: number) => {
     sent = { text, threadId, type };
   };
-  const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: 'Chào cả nhóm' }));
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) => {
+    const payload = JSON.parse(String(request.body));
+    return payload.delivery_receipt
+      ? new Response(null, { status: 204 })
+      : Response.json({ reply: 'Chào cả nhóm', delivery_receipt: deliveryReceipt });
+  });
   const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
 
   await listener.message(groupMessage('41001'));
 
   assert.deepEqual(sent, { text: 'Chào cả nhóm', threadId: '50005', type: 1 });
+  assert.equal(fetchMock.mock.callCount(), 2);
   const request = fetchMock.mock.calls[0]?.arguments[1] as RequestInit;
+  const receiptRequest = fetchMock.mock.calls[1]?.arguments[1] as RequestInit;
   const payload = JSON.parse(String(request.body));
+  const receiptPayload = JSON.parse(String(receiptRequest.body));
   assert.equal(payload.thread_type, 'group');
   assert.equal(payload.thread_id, '50005');
   assert.equal(payload.sender_id, '20002');
+  assert.equal(receiptPayload.delivery_receipt, deliveryReceipt);
+  assert.equal(receiptPayload.text, payload.text);
+  assert.equal(receiptPayload.sent_at, payload.sent_at);
+  assert.notEqual(receiptPayload.request_id, payload.request_id);
+});
+
+test('a failed Zalo group send never acknowledges delivery', async (t) => {
+  configureTestChatbot(t);
+  const deliveryReceipt = '123e4567-e89b-42d3-a456-426614174000';
+  const sendMessage = t.mock.fn(async () => { throw new Error('SDK send failed'); });
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({ reply: 'Không gửi được', delivery_receipt: deliveryReceipt }));
+  const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
+
+  await listener.message(groupMessage('41002'));
+
+  assert.equal(sendMessage.mock.callCount(), 1);
+  assert.equal(fetchMock.mock.callCount(), 1);
 });
 
 test('a manual group reply cancels pending bot replies for every sender in that group', { timeout: 2000 }, async (t) => {
@@ -233,10 +260,14 @@ test('a manual group reply cancels pending bot replies for every sender in that 
     isSelf: true,
     data: { ...groupMessage('42003', '10001').data, content: 'Nhân viên đang hỗ trợ' },
   });
-  finishRequests(Response.json({ reply: 'Tin bot đang chờ' }));
+  finishRequests(Response.json({
+    reply: 'Tin bot đang chờ',
+    delivery_receipt: '123e4567-e89b-42d3-a456-426614174000',
+  }));
   await Promise.all([first, second]);
 
   assert.equal(sendMessage.mock.callCount(), 0);
+  assert.equal(startedCount, 2, 'cancelled replies must not create delivery receipts');
 });
 
 test('busy group senders keep separate latest-follow-up slots', { timeout: 2000 }, async (t) => {

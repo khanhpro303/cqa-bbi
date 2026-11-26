@@ -65,13 +65,13 @@ func TestPlanPersonalZaloLegacyDirectAndSilentGroup(t *testing.T) {
 	t.Cleanup(func() { db.RedisClient = previousRedis })
 	session := personalZaloSessionConfig{SessionTimeoutMinutes: 30, GroupBotNames: "bot"}
 	direct := personalZaloChatbotRequest{TenantID: "tenant", ChannelID: "channel", AccountExternalID: "123", ThreadID: "456", ThreadType: "user", SenderID: "456", Text: "xin chào"}
-	turn, err := planPersonalZaloTurn(t.Context(), session, direct)
+	turn, err := planPersonalZaloTurn(t.Context(), session, direct, false)
 	if err != nil || !turn.RunFlow || !strings.HasPrefix(turn.FlowScope, "personal-zalo-") {
 		t.Fatalf("legacy direct turn = %+v, err=%v", turn, err)
 	}
 	group := direct
 	group.ThreadType, group.ThreadID, group.Text = "group", "999", "mọi người kiểm tra giúp"
-	turn, err = planPersonalZaloTurn(t.Context(), session, group)
+	turn, err = planPersonalZaloTurn(t.Context(), session, group, false)
 	if err != nil || turn.RunFlow || turn.Reply != "" {
 		t.Fatalf("unaddressed group turn = %+v, err=%v", turn, err)
 	}
@@ -110,17 +110,17 @@ func TestPersonalZaloConfiguredSessions(t *testing.T) {
 	t.Cleanup(func() { _ = client.Del(context.Background(), keys...).Err() })
 
 	base.Text = "tư vấn giúp tôi"
-	beforeOpen, err := planPersonalZaloTurn(t.Context(), session, base)
+	beforeOpen, err := planPersonalZaloTurn(t.Context(), session, base, false)
 	if err != nil || beforeOpen.RunFlow || beforeOpen.Reply != "" {
 		t.Fatalf("turn before open = %+v, err=%v", beforeOpen, err)
 	}
 	base.Text = "chào bot"
-	opened, err := planPersonalZaloTurn(t.Context(), session, base)
+	opened, err := planPersonalZaloTurn(t.Context(), session, base, false)
 	if err != nil || opened.RunFlow || opened.Reply != "xin chào" || opened.FlowScope == "" {
 		t.Fatalf("open turn = %+v, err=%v", opened, err)
 	}
 	base.Text = "tư vấn giúp tôi"
-	active, err := planPersonalZaloTurn(t.Context(), session, base)
+	active, err := planPersonalZaloTurn(t.Context(), session, base, false)
 	if err != nil || !active.RunFlow || active.FlowScope != opened.FlowScope {
 		t.Fatalf("active turn = %+v, err=%v; opened=%+v", active, err, opened)
 	}
@@ -129,17 +129,17 @@ func TestPersonalZaloConfiguredSessions(t *testing.T) {
 		t.Fatalf("session TTL=%s, err=%v", ttl, err)
 	}
 	base.Text = "chào bot"
-	reopened, err := planPersonalZaloTurn(t.Context(), session, base)
+	reopened, err := planPersonalZaloTurn(t.Context(), session, base, false)
 	if err != nil || reopened.FlowScope == opened.FlowScope {
 		t.Fatalf("reopen did not isolate history: opened=%+v reopened=%+v err=%v", opened, reopened, err)
 	}
 	base.Text = "tạm biệt"
-	closed, err := planPersonalZaloTurn(t.Context(), session, base)
+	closed, err := planPersonalZaloTurn(t.Context(), session, base, false)
 	if err != nil || closed.Reply != "hẹn gặp lại" {
 		t.Fatalf("close turn = %+v, err=%v", closed, err)
 	}
 	base.Text = "tư vấn tiếp"
-	afterClose, err := planPersonalZaloTurn(t.Context(), session, base)
+	afterClose, err := planPersonalZaloTurn(t.Context(), session, base, false)
 	if err != nil || afterClose.RunFlow || afterClose.Reply != "" {
 		t.Fatalf("turn after close = %+v, err=%v", afterClose, err)
 	}
@@ -149,23 +149,23 @@ func TestPersonalZaloConfiguredSessions(t *testing.T) {
 	groupTwo := groupOne
 	groupTwo.SenderID = "789"
 	keys = append(keys, personalZaloSessionKey(groupOne), personalZaloSessionKey(groupTwo))
-	first, err := planPersonalZaloTurn(t.Context(), session, groupOne)
+	first, err := planPersonalZaloTurn(t.Context(), session, groupOne, false)
 	if err != nil || !first.RunFlow {
 		t.Fatalf("first group turn = %+v, err=%v", first, err)
 	}
-	second, err := planPersonalZaloTurn(t.Context(), session, groupTwo)
+	second, err := planPersonalZaloTurn(t.Context(), session, groupTwo, false)
 	if err != nil || !second.RunFlow || second.FlowScope == first.FlowScope {
 		t.Fatalf("per-sender group isolation failed: first=%+v second=%+v err=%v", first, second, err)
 	}
 	if err := client.Expire(t.Context(), personalZaloSessionKey(groupOne), -time.Second).Err(); err != nil {
 		t.Fatal(err)
 	}
-	afterTimeout, err := planPersonalZaloTurn(t.Context(), session, groupOne)
+	afterTimeout, err := planPersonalZaloTurn(t.Context(), session, groupOne, false)
 	if err != nil || !afterTimeout.RunFlow || afterTimeout.FlowScope == first.FlowScope {
 		t.Fatalf("group turn after timeout = %+v, err=%v", afterTimeout, err)
 	}
 	groupOne.Text = "mọi người cứ trao đổi"
-	silent, err := planPersonalZaloTurn(t.Context(), session, groupOne)
+	silent, err := planPersonalZaloTurn(t.Context(), session, groupOne, false)
 	if err != nil || silent.RunFlow || silent.Reply != "" {
 		t.Fatalf("unaddressed active group turn = %+v, err=%v", silent, err)
 	}

@@ -154,9 +154,11 @@ func validatePersonalZaloChatbotMetadata(ctx context.Context, tenantID string, m
 			return errors.New("session_timeout_minutes must be a whole number from 0 to 1440")
 		}
 	}
-	if value, exists := metadata["personal_zalo_group_reply_enabled"]; exists {
-		if _, ok := value.(bool); !ok {
-			return errors.New("personal_zalo_group_reply_enabled must be true or false")
+	for _, key := range []string{"personal_zalo_group_reply_enabled", "group_assistant_mode", "group_staff_call_only"} {
+		if value, exists := metadata[key]; exists {
+			if _, ok := value.(bool); !ok {
+				return fmt.Errorf("%s must be true or false", key)
+			}
 		}
 	}
 	open, _ := metadata["session_keyword"].(string)

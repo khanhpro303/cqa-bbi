@@ -3,7 +3,11 @@ import { personalZaloChatbotConfig } from '../config.js';
 import { logger } from '../logger.js';
 import type { GatewayStore } from '../store/file-store.js';
 import type { GatewayAccountRecord, IncomingGatewayMessage, SessionData } from '../types.js';
-import { isChatbotEligibleMessage, requestPersonalZaloChatbotReply } from '../chatbot/cqa-chatbot-client.js';
+import {
+  acknowledgePersonalZaloChatbotDelivery,
+  isChatbotEligibleMessage,
+  requestPersonalZaloChatbotReply,
+} from '../chatbot/cqa-chatbot-client.js';
 import { FloodDetector, RateLimiter, SelfEchoShield } from '../chatbot/zalo-message-guards.js';
 import { attachZaloListener } from './listener.js';
 
@@ -266,9 +270,12 @@ export class ZaloAccountPool {
         const account = await this.store.getAccount(accountId);
         if (account?.status === 'connected' && account.zaloUid === ownId && account.accountExternalId === ownId &&
             !active.cancelled && this.canSendChatbotReply(accountId, instance)) {
-          const reply = await requestPersonalZaloChatbotReply(account, current);
-          if (reply && !active.cancelled) {
-            await this.sendChatbotReply(chatbot, active, instance, account, current, reply);
+          const response = await requestPersonalZaloChatbotReply(account, current);
+          if (response && !active.cancelled) {
+            const sent = await this.sendChatbotReply(chatbot, active, instance, account, current, response.reply);
+            if (sent && response.deliveryReceipt) {
+              await acknowledgePersonalZaloChatbotDelivery(account, current, response.deliveryReceipt);
+            }
           }
         }
         current = active.latest;
@@ -289,9 +296,10 @@ export class ZaloAccountPool {
     expectedAccount: GatewayAccountRecord,
     message: IncomingGatewayMessage,
     reply: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const accountId = expectedAccount.id;
     const { rateLimiter, echoShield, floodDetector } = chatbot.guards;
+    let sent = false;
     try {
       await rateLimiter.schedule(async (recordAttempt) => {
         if (active.cancelled || !this.canSendChatbotReply(accountId, instance)) return;
@@ -305,9 +313,12 @@ export class ZaloAccountPool {
         echoShield.recordSent(chatbotThreadKey(message.threadType, message.threadId), reply);
         recordAttempt();
         await instance.api.sendMessage(reply, message.threadId, message.threadType === 'group' ? 1 : 0);
+        sent = true;
       });
+      return sent;
     } catch (error) {
       logger.warn(`[zalo:${accountId}] chatbot send failed`, error);
+      return false;
     }
   }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"github.com/vietbui/chat-quality-agent/workers"
 	"gorm.io/gorm"
 )
 
@@ -33,6 +34,7 @@ type personalZaloChatbotRequest struct {
 	MessageID         string    `json:"message_id" binding:"required,max=128"`
 	SentAt            time.Time `json:"sent_at" binding:"required"`
 	Text              string    `json:"text" binding:"required"`
+	DeliveryReceipt   string    `json:"delivery_receipt" binding:"omitempty,uuid4"`
 }
 
 // NewPersonalZaloChatbotHandler receives live text turns from the
@@ -55,7 +57,8 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		age := time.Since(req.SentAt)
 		if req.Text == "" || personalZaloTextBoundary(req.Text, personalZaloTextLimit) != len(req.Text) ||
 			!personalZaloUIDPattern.MatchString(req.AccountExternalID) || !normalizePersonalZaloChatbotRequest(&req) ||
-			age > 2*time.Minute || age < -30*time.Second {
+			(req.DeliveryReceipt == "" && (age > 2*time.Minute || age < -30*time.Second)) ||
+			(req.DeliveryReceipt != "" && req.ThreadType != personalZaloThreadGroup) {
 			c.Status(http.StatusNoContent)
 			return
 		}
@@ -86,11 +89,17 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_session_unavailable"})
 			return
 		}
-		handover := personalZaloHandoverRequested(req.Text) &&
-			(req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req.Text, sessionConfig))
+		if req.DeliveryReceipt != "" {
+			confirmPersonalZaloGroupReply(ctx, sessionConfig, req)
+			c.Status(http.StatusNoContent)
+			return
+		}
+		addressed := req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req.Text, sessionConfig)
+		groupTurn := preparePersonalZaloGroupTurn(ctx, channel, sessionConfig, req, addressed, workers.PersonalZaloGroupNeedsReply)
+		handover := personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
 		var turn personalZaloTurn
 		if !handover {
-			turn, err = planPersonalZaloTurn(ctx, sessionConfig, req)
+			turn, err = planPersonalZaloTurn(ctx, sessionConfig, req, groupTurn.Inferred)
 			if err != nil {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_session_unavailable"})
 				return
@@ -117,7 +126,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 				c.JSON(http.StatusBadGateway, gin.H{"error": "chatbot_reply_failed"})
 				return
 			}
-			handover = instruction != "" && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
+			handover = instruction != "" && (addressed || !groupTurn.Staff) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
 			reply = personalZaloStripHandoverMarker(reply)
 		}
 		reply = strings.TrimSpace(reply)
@@ -145,15 +154,31 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			c.Status(http.StatusNoContent)
 			return
 		}
+		if groupTurn.Speaker != "" {
+			latestSession, err := parsePersonalZaloSessionConfig(latestChannel, cfg)
+			if err != nil || (groupTurn.Inferred && !latestSession.GroupAssistantMode) ||
+				(groupTurn.Inferred && groupTurn.Staff && latestSession.GroupStaffCallOnly && !sessionConfig.GroupStaffCallOnly) {
+				c.Status(http.StatusNoContent)
+				return
+			}
+			sessionConfig = latestSession
+		}
 		if handover {
 			closePersonalZaloSession(ctx, req)
+			clearPersonalZaloStaffFollowup(ctx, req)
 			reply = sendPersonalZaloHandover(ctx, cfg, latestChannel, req)
 		}
 
 		if personalZaloTextBoundary(reply, personalZaloTextLimit) < len(reply) {
 			reply = strings.TrimSpace(reply[:personalZaloTextBoundary(reply, personalZaloTextLimit-1)]) + "…"
 		}
-		c.JSON(http.StatusOK, gin.H{"reply": reply})
+		response := gin.H{"reply": reply}
+		if !handover && groupTurn.Speaker != "" && sessionConfig.GroupAssistantMode {
+			if receipt := awaitPersonalZaloGroupDelivery(ctx, req, groupTurn, reply); receipt != "" {
+				response["delivery_receipt"] = receipt
+			}
+		}
+		c.JSON(http.StatusOK, response)
 	}
 }
 
