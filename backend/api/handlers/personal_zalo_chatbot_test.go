@@ -163,6 +163,20 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			channel.Metadata = `{"sync_scope":"group"}`
 			return func() { channel.Metadata = "" }
 		}},
+		{name: "group replies default off", signingSecret: secret, want: http.StatusNoContent, setup: func(req *personalZaloChatbotRequest) func() {
+			req.SchemaVersion, req.ThreadType, req.SenderID, req.Text = "personal-zalo-chatbot-v2", "group", "789", "Bot ơi"
+			return nil
+		}},
+		{name: "group with direct sync scope", signingSecret: secret, want: http.StatusNoContent, setup: func(req *personalZaloChatbotRequest) func() {
+			req.SchemaVersion, req.ThreadType, req.SenderID, req.Text = "personal-zalo-chatbot-v2", "group", "789", "Bot ơi"
+			channel.Metadata = `{"personal_zalo_group_reply_enabled":true,"sync_scope":"direct"}`
+			return func() { channel.Metadata = "" }
+		}},
+		{name: "ambient group talk", signingSecret: secret, want: http.StatusNoContent, setup: func(req *personalZaloChatbotRequest) func() {
+			req.SchemaVersion, req.ThreadType, req.SenderID, req.Text = "personal-zalo-chatbot-v2", "group", "789", "Cho tôi gặp nhân viên"
+			channel.Metadata = `{"personal_zalo_group_reply_enabled":true}`
+			return func() { channel.Metadata = "" }
+		}},
 		{name: "master disabled", signingSecret: secret, want: http.StatusNoContent, setup: func(_ *personalZaloChatbotRequest) func() {
 			masterEnabled = false
 			return func() { masterEnabled = true }

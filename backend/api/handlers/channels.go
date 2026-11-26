@@ -267,12 +267,17 @@ func UpdateChannel(c *gin.Context) {
 		metadata := req.Metadata
 		switch channel.ChannelType {
 		case "personal_zalo_import":
-			mergedMetadata, err := mergePersonalZaloMetadataPreservingAccountOwners(channel.Metadata, req.Metadata)
+			merged, err := mergeChannelMetadata(channel.Metadata, req.Metadata)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata", "details": err.Error()})
 				return
 			}
-			metadata = mergedMetadata
+			if err := validatePersonalZaloChatbotMetadata(c.Request.Context(), tenantID, merged); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_personal_zalo_chatbot_settings", "details": err.Error()})
+				return
+			}
+			out, _ := json.Marshal(merged)
+			metadata = string(out)
 		case "zalo_oa":
 			// Merge incoming keys over existing so the campaign-alert config
 			// (campaign_alerts_enabled / campaign_alert_group_id) never clobbers

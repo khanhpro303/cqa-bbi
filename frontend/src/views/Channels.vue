@@ -266,8 +266,8 @@
         <v-card-text class="px-6 py-2">
           <v-tabs v-model="editTab" :aria-label="$t('edit_channel')" color="primary" class="mb-4" show-arrows>
             <v-tab id="channel-edit-general-tab" value="general" aria-controls="channel-edit-general">{{ $t('general_settings') }}</v-tab>
-            <v-tab v-if="editChannelType === 'zalo_oa'" id="channel-edit-chatbot-tab" value="chatbot" aria-controls="channel-edit-chatbot">{{ $t('chatbot_session') }}</v-tab>
-            <v-tab v-if="editChannelType === 'zalo_oa'" id="channel-edit-groups-tab" value="groups" aria-controls="channel-edit-groups">{{ $t('zalo_group_settings_tab') }}</v-tab>
+            <v-tab v-if="isZaloChatbotChannel" id="channel-edit-chatbot-tab" value="chatbot" aria-controls="channel-edit-chatbot">{{ $t('chatbot_session') }}</v-tab>
+            <v-tab v-if="isZaloChatbotChannel" id="channel-edit-groups-tab" value="groups" aria-controls="channel-edit-groups">{{ $t('zalo_group_settings_tab') }}</v-tab>
           </v-tabs>
 
           <div style="max-height: 60vh; overflow-y: auto;" class="px-1">
@@ -275,6 +275,19 @@
               <v-window-item id="channel-edit-general" value="general" role="tabpanel" aria-labelledby="channel-edit-general-tab" class="pt-3">
                 <v-text-field v-model="editForm.name" :label="$t('channel_name')" class="mb-3" />
                 <v-switch v-model="editForm.is_active" :label="$t('active')" color="primary" density="compact" class="mb-3" />
+                <v-select
+                  v-if="editChannelType === 'personal_zalo_import'"
+                  v-model="editForm.sync_scope"
+                  :items="[
+                    { title: $t('sync_scope_all'), value: 'all' },
+                    { title: $t('sync_scope_direct'), value: 'direct' },
+                    { title: $t('sync_scope_group'), value: 'group' },
+                  ]"
+                  :label="$t('sync_scope')"
+                  :hint="$t('sync_scope_hint')"
+                  density="compact"
+                  persistent-hint
+                />
                 <template v-if="editChannelType !== 'personal_zalo_import'">
                   <v-select
                     v-model="editForm.sync_interval"
@@ -292,24 +305,29 @@
                 </template>
               </v-window-item>
               
-              <v-window-item v-if="editChannelType === 'zalo_oa'" id="channel-edit-chatbot" value="chatbot" role="tabpanel" aria-labelledby="channel-edit-chatbot-tab" class="pt-3">
+              <v-window-item v-if="isZaloChatbotChannel" id="channel-edit-chatbot" value="chatbot" role="tabpanel" aria-labelledby="channel-edit-chatbot-tab" class="pt-3">
                 <div class="text-subtitle-2 mb-2">{{ $t('session_config') }}</div>
+                <v-alert v-if="editChannelType === 'personal_zalo_import'" type="info" variant="tonal" density="compact" class="mb-3">
+                  {{ $t('personal_zalo_session_hint') }}
+                </v-alert>
                 <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
                 <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
                 <v-text-field v-model="editForm.session_welcome_message" :label="$t('session_welcome')" :hint="$t('session_welcome_hint')" persistent-hint density="compact" class="mb-3" />
                 <v-text-field v-model="editForm.session_goodbye_message" :label="$t('session_goodbye')" :hint="$t('session_goodbye_hint')" persistent-hint density="compact" class="mb-3" />
-                <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" type="number" density="compact" class="mb-3" />
-                <v-divider class="my-4" />
-                <div class="text-subtitle-2 mb-1">{{ $t('casual_budget_title') }}</div>
-                <div class="text-caption text-medium-emphasis mb-3">{{ $t('casual_budget_desc') }}</div>
-                <v-row dense>
+                <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" :min="editChannelType === 'personal_zalo_import' ? 0 : undefined" :max="editChannelType === 'personal_zalo_import' ? 1440 : undefined" type="number" density="compact" class="mb-3" />
+                <template v-if="editChannelType === 'zalo_oa'">
+                  <v-divider class="my-4" />
+                  <div class="text-subtitle-2 mb-1">{{ $t('casual_budget_title') }}</div>
+                  <div class="text-caption text-medium-emphasis mb-3">{{ $t('casual_budget_desc') }}</div>
+                  <v-row dense>
                   <v-col cols="12" sm="6">
                     <v-text-field v-model.number="editForm.casual_full_agent_turns" :label="$t('casual_full_agent_turns')" :hint="$t('casual_full_agent_turns_hint')" persistent-hint type="number" min="0" max="1000" step="1" :rules="[casualWholeRule]" density="compact" class="mb-3" data-testid="casual-full-agent-turns" />
                   </v-col>
                   <v-col cols="12" sm="6">
                     <v-text-field v-model.number="editForm.casual_quiet_after" :label="$t('casual_quiet_after')" :hint="$t('casual_quiet_after_hint')" persistent-hint type="number" min="0" max="1000" step="1" :rules="[casualWholeRule, casualQuietRule]" density="compact" class="mb-3" data-testid="casual-quiet-after" />
                   </v-col>
-                </v-row>
+                  </v-row>
+                </template>
                 <v-divider class="my-4" />
                 <div class="text-subtitle-2 mb-2">{{ $t('langflow_integration') }}</div>
                 <v-alert type="info" variant="tonal" density="compact" class="mb-3">
@@ -319,13 +337,20 @@
                   {{ $t('langflow_legacy_override_notice') }}
                 </v-alert>
               </v-window-item>
-              <v-window-item v-if="editChannelType === 'zalo_oa'" id="channel-edit-groups" value="groups" role="tabpanel" aria-labelledby="channel-edit-groups-tab" class="pt-3">
+              <v-window-item v-if="isZaloChatbotChannel" id="channel-edit-groups" value="groups" role="tabpanel" aria-labelledby="channel-edit-groups-tab" class="pt-3">
                 <ZaloGroupSettings
-                  v-if="editDialog"
+                  v-if="editDialog && editChannelType === 'zalo_oa'"
                   :key="editChannelId"
                   v-model="editGroupSettings"
                   :tenant-id="tenantId"
                   :channel-id="editChannelId"
+                />
+                <PersonalZaloGroupSettings
+                  v-else-if="editDialog"
+                  :key="editChannelId"
+                  v-model="editPersonalGroupSettings"
+                  :tenant-id="tenantId"
+                  :active-channel-ids="activeZaloOAChannelIDs"
                 />
               </v-window-item>
             </v-window>
@@ -354,7 +379,9 @@ import { useChatbotStore } from '../stores/chatbot'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
 import FacebookPageConnect from '../components/channels/FacebookPageConnect.vue'
+import PersonalZaloGroupSettings from '../components/channels/PersonalZaloGroupSettings.vue'
 import ZaloGroupSettings from '../components/channels/ZaloGroupSettings.vue'
+import { personalZaloGroupSettingsPatch, readPersonalZaloGroupSettings } from '../components/channels/personalZaloGroupSettings'
 import { readZaloGroupSettings, zaloGroupSettingsPatch } from '../components/channels/zaloGroupSettings'
 
 const route = useRoute()
@@ -653,12 +680,17 @@ const savingEdit = ref(false)
 const editTab = ref('general')
 const editChannelId = ref('')
 const editChannelType = ref('')
+const isZaloChatbotChannel = computed(() => ['zalo_oa', 'personal_zalo_import'].includes(editChannelType.value))
+const activeZaloOAChannelIDs = computed(() => channelStore.channels
+  .filter((channel) => channel.channel_type === 'zalo_oa' && channel.is_active)
+  .map((channel) => channel.id))
 const editForm = reactive({
-  name: '', is_active: true, sync_files: false, sync_interval: 15,
+  name: '', is_active: true, sync_files: false, sync_interval: 15, sync_scope: 'all',
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
   casual_full_agent_turns: CASUAL_FULL_AGENT_TURNS_DEFAULT as number | string, casual_quiet_after: CASUAL_QUIET_AFTER_DEFAULT as number | string,
 })
 const editGroupSettings = ref(readZaloGroupSettings())
+const editPersonalGroupSettings = ref(readPersonalZaloGroupSettings())
 const editOriginalMeta = ref<Record<string, unknown>>({})
 const LEGACY_LANGFLOW_META_KEYS = ['langflow_api_url', 'langflow_api_key', 'langflow_flow_id', 'langflow_public_flow_id']
 const hasLegacyLangflowOverride = computed(() =>
@@ -686,6 +718,7 @@ function openEdit(ch: any) {
     editOriginalMeta.value = meta
     editForm.sync_files = meta.sync_files || false
     editForm.sync_interval = meta.sync_interval || 15
+    editForm.sync_scope = ['direct', 'group'].includes(meta.sync_scope) ? meta.sync_scope : 'all'
     editForm.session_keyword = meta.session_keyword || ''
     editForm.session_end_keyword = meta.session_end_keyword || ''
     editForm.session_welcome_message = meta.session_welcome_message || ''
@@ -697,6 +730,7 @@ function openEdit(ch: any) {
     editOriginalMeta.value = {}
     editForm.sync_files = false
     editForm.sync_interval = 15
+    editForm.sync_scope = 'all'
     editForm.session_keyword = ''
     editForm.session_end_keyword = ''
     editForm.session_welcome_message = ''
@@ -706,6 +740,7 @@ function openEdit(ch: any) {
     editForm.casual_quiet_after = CASUAL_QUIET_AFTER_DEFAULT
   }
   editGroupSettings.value = readZaloGroupSettings(editOriginalMeta.value)
+  editPersonalGroupSettings.value = readPersonalZaloGroupSettings(editOriginalMeta.value)
   editDialog.value = true
 }
 
@@ -725,7 +760,17 @@ async function saveEdit() {
       name: editForm.name,
       is_active: editForm.is_active,
     }
-    if (editChannelType.value !== 'personal_zalo_import') {
+    if (editChannelType.value === 'personal_zalo_import') {
+      payload.metadata = JSON.stringify({
+        sync_scope: editForm.sync_scope,
+        session_keyword: editForm.session_keyword,
+        session_end_keyword: editForm.session_end_keyword,
+        session_welcome_message: editForm.session_welcome_message,
+        session_goodbye_message: editForm.session_goodbye_message,
+        session_timeout_minutes: Number(editForm.session_timeout_minutes),
+        ...personalZaloGroupSettingsPatch(editPersonalGroupSettings.value),
+      })
+    } else {
       // The API merges Zalo OA metadata. Other channels need the full object.
       const isZaloOA = editChannelType.value === 'zalo_oa'
       const metaToSave: Record<string, unknown> = {

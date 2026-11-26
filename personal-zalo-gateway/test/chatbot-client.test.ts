@@ -59,6 +59,8 @@ test('buildChatbotRequest derives endpoint, scopes identity and signs the exact 
   assert.equal(payload.schema_version, 'personal-zalo-chatbot-v1');
   assert.equal(payload.account_external_id, '10001');
   assert.equal(payload.thread_id, '20002');
+  assert.equal(payload.thread_type, 'user');
+  assert.equal(payload.sender_id, '20002');
   assert.equal(payload.message_id, '30003');
   assert.equal(payload.text, 'Xin chào');
   const expected = createHmac('sha256', account.importSecret)
@@ -87,7 +89,7 @@ test('chatbot eligibility rejects replay-prone and non-customer events', () => {
 
   const invalid = [
     { ...eligible, isSelf: true },
-    { ...eligible, threadType: 'group' as const },
+    { ...eligible, threadType: 'group' as const, threadId: eligible.senderUid },
     { ...eligible, threadId: '99999' },
     { ...eligible, msgId: '' },
     { ...eligible, timestamp: now - 120_001 },
@@ -100,6 +102,25 @@ test('chatbot eligibility rejects replay-prone and non-customer events', () => {
   for (const candidate of invalid) {
     assert.equal(isChatbotEligibleMessage(candidate, now), false);
   }
+});
+
+test('a fresh group text carries separate group and sender identities', () => {
+  const now = Date.now();
+  const groupMessage: IncomingGatewayMessage = {
+    ...message(now),
+    threadType: 'group',
+    threadId: '50005',
+    senderUid: '20002',
+  };
+  assert.equal(isChatbotEligibleMessage(groupMessage, now), true);
+
+  const request = buildChatbotRequest(account, groupMessage, deployment, now);
+  assert.ok(request);
+  const payload = JSON.parse(request.body);
+  assert.equal(payload.schema_version, 'personal-zalo-chatbot-v2');
+  assert.equal(payload.thread_type, 'group');
+  assert.equal(payload.thread_id, '50005');
+  assert.equal(payload.sender_id, '20002');
 });
 
 test('CQA 204, failures and oversized replies do not produce a reply', async (t) => {

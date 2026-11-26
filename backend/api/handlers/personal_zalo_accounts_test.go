@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/vietbui/chat-quality-agent/api/contracts"
@@ -53,15 +54,21 @@ func TestEncodeAndDecodePersonalZaloAccountOwnersPreservesExistingMetadata(t *te
 }
 
 func TestMergePersonalZaloMetadataPreservingAccountOwners(t *testing.T) {
-	existing := `{"sync_interval":15,"account_owners":[{"account_external_id":"zalo-1","user_id":"user-1"}]}`
-	incoming := `{"sync_interval":30,"sync_files":true}`
+	existing := `{"sync_interval":15,"sync_scope":"direct","account_owners":[{"account_external_id":"zalo-1","user_id":"user-1"}]}`
+	incoming := `{"sync_interval":30,"sync_files":true,"session_keyword":"Chào bot"}`
 
-	merged, err := mergePersonalZaloMetadataPreservingAccountOwners(existing, incoming)
+	merged, err := mergeChannelMetadata(existing, incoming)
 	if err != nil {
-		t.Fatalf("mergePersonalZaloMetadataPreservingAccountOwners returned error: %v", err)
+		t.Fatal(err)
 	}
-
-	owners, err := decodePersonalZaloAccountOwners(merged)
+	if merged["sync_scope"] != "direct" || merged["session_keyword"] != "Chào bot" {
+		t.Fatal("sync scope and chatbot settings must survive the same metadata update")
+	}
+	raw, err := json.Marshal(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners, err := decodePersonalZaloAccountOwners(string(raw))
 	if err != nil {
 		t.Fatalf("decodePersonalZaloAccountOwners returned error: %v", err)
 	}
