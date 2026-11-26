@@ -67,10 +67,38 @@ func staffCallOnlyOn(meta ChannelMetadata, zaloGroupID string, isCRMGroup bool, 
 	return role == groupRoleStaff && zaloGroupID != "" && isCRMGroup && strings.TrimSpace(groupCustomerCode) != ""
 }
 
-// groupRoleFor is the group role of a sender, as groupSpeaker labels it.
-func groupRoleFor(isWhitelisted, isCustomer bool) string {
-	_, role := groupSpeaker(isWhitelisted, isCustomer, "", "")
-	return role
+type zaloSessionStart int
+
+const (
+	zaloSessionStayClosed zaloSessionStart = iota
+	zaloSessionManual
+	zaloSessionStaffCall
+	zaloSessionAssistant
+)
+
+// zaloSessionStartFor decides how a turn without an active session should
+// start. An exact opening keyword keeps its welcome-only behavior even if it
+// also contains a configured bot name.
+func zaloSessionStartFor(meta ChannelMetadata, text string, staffGated, groupAssistant bool) zaloSessionStart {
+	switch {
+	case matchesSessionKeyword(text, meta.SessionKeyword):
+		return zaloSessionManual
+	case groupAssistant:
+		return zaloSessionAssistant
+	case staffGated && !matchesSessionKeyword(text, meta.SessionEndKeyword) && callsGroupBot(text, groupBotNames(meta), ""):
+		return zaloSessionStaffCall
+	default:
+		return zaloSessionStayClosed
+	}
+}
+
+func matchesSessionKeyword(text, keywords string) bool {
+	for _, kw := range strings.Split(keywords, ";") {
+		if kw = strings.TrimSpace(kw); kw != "" && strings.EqualFold(text, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // groupBotNames returns the names staff use to call the bot in a group.
@@ -95,10 +123,8 @@ func callsGroupBot(text string, names []string, sessionKeywords string) bool {
 	if t == "" {
 		return false
 	}
-	for _, kw := range strings.Split(sessionKeywords, ";") {
-		if kw = strings.TrimSpace(kw); kw != "" && strings.EqualFold(t, kw) {
-			return true
-		}
+	if matchesSessionKeyword(t, sessionKeywords) {
+		return true
 	}
 	lower := strings.ToLower(t)
 	for _, name := range names {
