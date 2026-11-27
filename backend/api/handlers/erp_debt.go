@@ -78,9 +78,8 @@ func mapDebtItemForLLM(item map[string]interface{}) map[string]interface{} {
 }
 
 // resolveCustomerCodeFromPartnerID looks a partner up by its ERP ID and
-// returns the customer code (MA) used by debt / order queries. Tries an
-// exact ID match first; falls back to the first row when ERP returns
-// fuzzy results so a near-match still resolves a code.
+// returns the customer code (MA) used by the debt report. A fuzzy match is
+// not evidence that the requested partner owns that ledger.
 func resolveCustomerCodeFromPartnerID(client *pkg.CloudifyClient, partnerID string) (string, error) {
 	if partnerID == "" {
 		return "", fmt.Errorf("partner ID is empty")
@@ -96,12 +95,6 @@ func resolveCustomerCodeFromPartnerID(client *pkg.CloudifyClient, partnerID stri
 			if maVal != "" {
 				return maVal, nil
 			}
-		}
-	}
-	if len(partners) > 0 {
-		maVal := getMapString(partners[0], "MA", "code", "ma")
-		if maVal != "" {
-			return maVal, nil
 		}
 	}
 	return "", fmt.Errorf("partner %s not found on ERP", partnerID)

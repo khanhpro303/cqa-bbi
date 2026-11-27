@@ -95,17 +95,25 @@ function registerAuthorizedAccountRoutes(app: FastifyInstance, deps: AccountRout
       displayName?: string;
     };
 
-    const account = await deps.store.saveAccount(
-      {
-        tenantId: body.tenantId || current.tenantId,
-        channelId: body.channelId || current.channelId,
-        importEndpoint: body.importEndpoint || current.importEndpoint,
-        importSecret: body.importSecret || current.importSecret,
-        accountExternalId: body.accountExternalId || current.accountExternalId,
-        displayName: body.displayName || current.displayName,
-      },
-      accountId,
-    );
+    let account;
+    try {
+      account = await deps.store.saveAccount(
+        {
+          tenantId: body.tenantId || current.tenantId,
+          channelId: body.channelId || current.channelId,
+          importEndpoint: body.importEndpoint || current.importEndpoint,
+          importSecret: body.importSecret || current.importSecret,
+          accountExternalId: body.accountExternalId || current.accountExternalId,
+          displayName: body.displayName || current.displayName,
+        },
+        accountId,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === 'account_binding_immutable') {
+        return reply.status(409).send({ error: 'account_binding_immutable' });
+      }
+      throw error;
+    }
 
     return sanitizeAccount(account);
   });

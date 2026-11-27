@@ -55,6 +55,10 @@ export class GatewayStore {
       const id = accountId || randomUUID();
       const existing = state.accounts[id];
       const now = nowISO();
+      if (existing && (input.tenantId !== existing.tenantId || input.channelId !== existing.channelId ||
+          (input.accountExternalId && existing.accountExternalId && input.accountExternalId !== existing.accountExternalId))) {
+        throw new Error('account_binding_immutable');
+      }
 
       const next: GatewayAccountRecord = {
         id,
@@ -101,6 +105,14 @@ export class GatewayStore {
     return this.updateState((state) => {
       const account = state.accounts[accountId];
       if (!account) return null;
+      if ((changes.tenantId !== undefined && changes.tenantId !== account.tenantId) ||
+          (changes.channelId !== undefined && changes.channelId !== account.channelId) ||
+          (changes.accountExternalId !== undefined && account.accountExternalId && changes.accountExternalId !== account.accountExternalId) ||
+          (changes.zaloUid !== undefined && account.zaloUid && changes.zaloUid !== account.zaloUid) ||
+          (changes.accountExternalId !== undefined && account.zaloUid && changes.accountExternalId !== account.zaloUid) ||
+          (changes.zaloUid !== undefined && account.accountExternalId && changes.zaloUid !== account.accountExternalId)) {
+        throw new Error('account_binding_immutable');
+      }
       const next: GatewayAccountRecord = {
         ...account,
         ...changes,
@@ -115,6 +127,7 @@ export class GatewayStore {
     accountId: string,
     message: IncomingGatewayMessage,
     queueChatbotTurn = false,
+    historyOnly = false,
   ): Promise<boolean> {
     return this.updateState((state) => {
       const account = state.accounts[accountId];
@@ -156,6 +169,7 @@ export class GatewayStore {
       if (inserted) {
         conversation.messages[messageID] = {
           externalId: messageID,
+          historyOnly: historyOnly || undefined,
           senderType: message.isSelf ? 'agent' : 'customer',
           senderName: message.senderName || '',
           content: message.content || '',
@@ -169,7 +183,15 @@ export class GatewayStore {
           },
         };
         conversation.messageOrder.push(messageID);
-        if (queueChatbotTurn && !message.isSelf) {
+        conversation.pending = true;
+      }
+      const record = conversation.messages[messageID]!;
+      // History can arrive first on reconnect. Only the first live copy may
+      // start a turn. An absent marker on older records keeps them deduplicated.
+      const firstLive = !historyOnly && (inserted || record.historyOnly === true);
+      if (firstLive) {
+        delete record.historyOnly;
+        if (queueChatbotTurn && !message.isSelf && !record.deletedAt) {
           account.chatbotTurns ??= {};
           account.chatbotTurns[chatbotTurnKey(message)] = {
             message,
@@ -181,13 +203,12 @@ export class GatewayStore {
             updatedAt: nowISO(),
           };
         }
-        conversation.pending = true;
       }
 
       account.threads[threadKey] = conversation;
       account.updatedAt = nowISO();
       account.lastError = '';
-      return inserted;
+      return historyOnly ? inserted : firstLive;
     });
   }
 
@@ -334,6 +355,9 @@ export class GatewayStore {
   ): Promise<AccountSyncBatch | null> {
     const account = await this.getAccount(accountId);
     if (!account) return null;
+    if (account.zaloUid && account.accountExternalId && account.zaloUid !== account.accountExternalId) {
+      throw new Error('account_identity_mismatch');
+    }
 
     const conversationEntries = Object.entries(account.threads)
       .filter(([, conv]) => conv.pending)

@@ -9,7 +9,8 @@ import { SyncService } from '../src/sync/sync-service.js';
 
 async function storeWithPendingMessage() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pzgw-sync-'));
-  const store = new GatewayStore(path.join(dir, 'state.json'));
+  const stateFile = path.join(dir, 'state.json');
+  const store = new GatewayStore(stateFile);
   await store.init();
   const account = await store.saveAccount({
     tenantId: 'tenant-1',
@@ -29,16 +30,32 @@ async function storeWithPendingMessage() {
     threadId: 'u-1',
     threadType: 'user',
   });
-  return { store, account };
+  return { store, account, stateFile };
+}
+
+function successfulAcknowledgement(init?: RequestInit, overrides: Record<string, unknown> = {}) {
+  const request = JSON.parse(String(init?.body));
+  const messages = request.conversations.reduce(
+    (total: number, conversation: { messages: unknown[] }) => total + conversation.messages.length,
+    0,
+  );
+  return Response.json({
+    request_id: request.request_id,
+    conversations: request.conversations.length,
+    messages_processed: messages,
+    messages_inserted: messages,
+    messages_deduplicated: 0,
+    ...overrides,
+  }, { status: 202 });
 }
 
 test('an account whose CQA channel is gone is paused instead of retried every interval', async (t) => {
   const { store, account } = await storeWithPendingMessage();
   let calls = 0;
-  let answer = () => new Response('{"error":"invalid_internal_target"}', { status: 401 });
-  t.mock.method(globalThis, 'fetch', async () => {
+  let answer = (_init?: RequestInit) => new Response('{"error":"invalid_internal_target"}', { status: 401 });
+  t.mock.method(globalThis, 'fetch', async (_request: RequestInfo | URL, init?: RequestInit) => {
     calls++;
-    return answer();
+    return answer(init);
   });
   const service = new SyncService(store, 60_000, 10, 10, 5_000);
 
@@ -50,9 +67,9 @@ test('an account whose CQA channel is gone is paused instead of retried every in
   await service.syncAll();
   assert.equal(calls, 1, 'a paused account must not be sent again on schedule');
 
-  // CQA re-points the account at a valid channel: syncing resumes.
-  await store.saveAccount({ ...account, channelId: 'new-channel' }, account.id);
-  answer = () => Response.json({ request_id: 'r', conversations: 1, messages_processed: 1, messages_inserted: 1, messages_deduplicated: 0 });
+  // CQA revalidates the immutable binding: syncing resumes.
+  await store.saveAccount({ ...account }, account.id);
+  answer = (init) => successfulAcknowledgement(init);
   await service.syncAll();
   assert.equal(calls, 2);
   stored = await store.getAccount(account.id);
@@ -75,6 +92,25 @@ test('other import failures are still retried on the next interval', async (t) =
   assert.equal((await store.getAccount(account.id))?.syncBlockedReason, undefined);
 });
 
+test('a mismatched acknowledgement keeps the batch pending until CQA confirms the same request', async (t) => {
+  const { store, account } = await storeWithPendingMessage();
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_request: RequestInfo | URL, init?: RequestInit) => {
+    calls++;
+    return successfulAcknowledgement(init, calls === 1 ? { request_id: 'another-request' } : {});
+  });
+  const service = new SyncService(store, 60_000, 10, 10, 5_000);
+
+  await service.syncAll();
+  assert.ok(await store.nextSyncBatch(account.id, 10, 10), 'unacknowledged messages must remain durable');
+  assert.equal(service.healthSnapshot().failures, 1);
+
+  await service.syncAll();
+  assert.equal(calls, 2);
+  assert.equal(await store.nextSyncBatch(account.id, 10, 10), null);
+  assert.equal(service.healthSnapshot().failingAccounts, 0);
+});
+
 test('deleteAccount removes the account', async () => {
   const { store, account } = await storeWithPendingMessage();
   assert.equal(await store.deleteAccount(account.id), true);
@@ -82,10 +118,24 @@ test('deleteAccount removes the account', async () => {
   assert.equal(await store.deleteAccount(account.id), false);
 });
 
+test('an inconsistent physical and configured Zalo identity is never synchronized', async (t) => {
+  const { store, account, stateFile } = await storeWithPendingMessage();
+  const state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+  state.accounts[account.id].zaloUid = 'physical-zalo';
+  state.accounts[account.id].accountExternalId = 'configured-zalo';
+  await fs.writeFile(stateFile, JSON.stringify(state));
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({}));
+  const service = new SyncService(store, 60_000, 10, 10, 5_000);
+
+  await service.syncAll();
+
+  assert.equal(fetchMock.mock.callCount(), 0);
+  await assert.rejects(store.nextSyncBatch(account.id, 10, 10), /account_identity_mismatch/);
+});
+
 test('health snapshot reports sync outcomes without account identifiers', async (t) => {
   const { store, account } = await storeWithPendingMessage();
-  t.mock.method(globalThis, 'fetch', async () =>
-    Response.json({ request_id: 'r', conversations: 1, messages_processed: 1, messages_inserted: 1, messages_deduplicated: 0 }));
+  t.mock.method(globalThis, 'fetch', async (_request: RequestInfo | URL, init?: RequestInit) => successfulAcknowledgement(init));
   const service = new SyncService(store, 60_000, 10, 10, 5_000);
   t.after(() => service.stop());
 
@@ -117,10 +167,10 @@ test('shutdown stops new sync work and reports a bounded drain timeout', async (
   let releaseFetch!: () => void;
   const pendingFetch = new Promise<void>((resolve) => { releaseFetch = resolve; });
   let calls = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
+  t.mock.method(globalThis, 'fetch', async (_request: RequestInfo | URL, init?: RequestInit) => {
     calls++;
     await pendingFetch;
-    return Response.json({ request_id: 'r', conversations: 1, messages_processed: 1, messages_inserted: 1, messages_deduplicated: 0 });
+    return successfulAcknowledgement(init);
   });
   const service = new SyncService(store, 60_000, 10, 1, 5_000);
   const sync = service.syncAccount(account.id);

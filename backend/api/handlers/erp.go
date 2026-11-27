@@ -1012,27 +1012,27 @@ func resolveAgentType(tenantID, token string) string {
 // ---------------------------------------------------------------------------
 
 func isERPActive(tenantID, agentType string) bool {
-	if agentType == "private" {
-		activeKey := "erp_private_active"
-		var s models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, activeKey).First(&s).Error; err == nil {
-			return s.ValuePlain == "true"
+	settings, err := loadPersonalZaloChatbotSettings(context.Background(), tenantID, erpActivationKeys...)
+	return err == nil && erpActiveForRole(settings, agentType)
+}
+
+var erpActivationKeys = []string{"erp_private_active", "erp_integration_active", "erp_api_url"}
+
+func erpActiveForRole(settings map[string]models.AppSetting, agentType string) bool {
+	switch agentType {
+	case "private":
+		if flag, ok := settings["erp_private_active"]; ok {
+			return flag.ValuePlain == "true"
 		}
+	case "public":
+		// Public resource permissions belong to CRM groups.
+	default:
+		return false
 	}
-
-	// Fallback to global flag
-	var global models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_integration_active'", tenantID).First(&global).Error; err == nil {
-		return global.ValuePlain == "true"
+	if flag, ok := settings["erp_integration_active"]; ok {
+		return flag.ValuePlain == "true"
 	}
-
-	// Check if API URL is configured
-	var urlSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_api_url'", tenantID).First(&urlSetting).Error; err == nil {
-		return urlSetting.ValuePlain != ""
-	}
-
-	return false
+	return strings.TrimSpace(settings["erp_api_url"].ValuePlain) != ""
 }
 
 // ---------------------------------------------------------------------------
@@ -2983,6 +2983,16 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			}
 
 			promptText := debtPeriodPromptText
+			if permCtx.PersonalZalo && permCtx.AgentType == "private" && partnerID != "" {
+				code, resolveErr := resolveCustomerCodeFromPartnerID(client, partnerID)
+				if resolveErr != nil {
+					err = resolveErr
+					break
+				}
+				storeDebtCustomerState(c.Request.Context(), tenantID, permCtx, engine.DebtCustomerState{
+					Stage: engine.DebtCustomerStagePeriod, Codes: []string{code},
+				})
+			}
 
 			// Deliver the period question to the customer ourselves, exactly like
 			// the inventory dòng-vs-SKU picker above. The Langflow agent only ever
@@ -3090,6 +3100,22 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				state.Codes = scopeApprovedDebtCodes(state.Codes, scopeType, ownCodes, allowedDebtCodes)
 				hasState = len(state.Codes) != 0
 			}
+			_, _, hasPeriod := parseDebtPeriodFromSearch(search)
+			customerSearch := strings.TrimSpace(debtPeriodPhrase.ReplaceAllString(search, " "))
+			customerTokens := tokenizeCustomerQuery(customerSearch)
+			namedCustomer := len(customerTokens) > 0 && !(hasPeriod && allCustomersReplyWords[foldDebtSearch(strings.Join(customerTokens, " "))])
+			if permCtx.PersonalZalo && !hasState && hasPeriod && strings.Trim(customerSearch, " .,;:?!") == "" {
+				// A bare period is a continuation. If its customer selection expired
+				// or could not be stored, ask again before reading any ledger.
+				pushDebtPrompt(debtCustomerPromptText)
+				debtPromptResponse()
+				return
+			}
+			if hasPeriod && namedCustomer {
+				// A newly named customer takes precedence over a previous pick.
+				// A missing or ambiguous match must not widen to the whole ledger.
+				hasState = false
+			}
 			if hasState {
 				switch state.Stage {
 				case engine.DebtCustomerStagePick:
@@ -3152,35 +3178,29 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						return
 					}
 				}
-			} else if _, _, isPeriod := parseDebtPeriodFromSearch(search); !isPeriod {
-				// Fresh turn naming a concrete customer (not a period word — a bare
-				// period with no in-flight state is a scope-wide continuation left
-				// to the legacy resolution below). Generic "công nợ của khách hàng"
-				// was already answered by the customer prompt above.
-				if len(tokenizeCustomerQuery(search)) > 0 {
-					approved := scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID, search), scopeType, ownCodes, allowedDebtCodes)
-					switch {
-					case len(approved) == 0:
-						// Nothing in scope — ask again for a code/name (the legacy
-						// safety net's behaviour, kept here for the resolved path).
-						pushDebtPrompt(debtCustomerPromptText)
-						debtPromptResponse()
-						return
-					case len(approved) > 1:
-						storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePick, Codes: approved})
-						pushDebtPickPrompt(approved)
-						debtPromptResponse()
-						return
-					}
-					// Exactly one customer resolved and (per the outer guard) no
-					// period named yet → ask which period before querying. A
-					// customer named together with a period in one message is rare
-					// and falls through to the legacy scope-wide path, as before.
+			} else if namedCustomer {
+				approved := scopeApprovedDebtCodes(resolveCachedCustomerCodesFromTokens(tenantID, customerTokens), scopeType, ownCodes, allowedDebtCodes)
+				switch {
+				case len(approved) == 0:
+					// Nothing in scope — ask again for a code/name (the legacy
+					// safety net's behaviour, kept here for the resolved path).
+					pushDebtPrompt(debtCustomerPromptText)
+					debtPromptResponse()
+					return
+				case len(approved) > 1:
+					storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePick, Codes: approved})
+					pushDebtPickPrompt(approved)
+					debtPromptResponse()
+					return
+				}
+				if !hasPeriod {
 					storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePeriod, Codes: approved})
 					pushDebtPrompt(debtPeriodPromptText)
 					debtPromptResponse()
 					return
 				}
+				targetCustomerCodes = approved
+				privateDebtResolved = true
 			}
 		}
 
@@ -3194,9 +3214,11 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			} else {
 				if partnerID != "" {
 					code, errCode := resolveCustomerCodeFromPartnerID(client, partnerID)
-					if errCode == nil && code != "" {
-						targetCustomerCodes = []string{code}
+					if errCode != nil {
+						err = errCode
+						break
 					}
+					targetCustomerCodes = []string{code}
 				} else if search != "" {
 					_, _, isPeriod := parseDebtPeriodFromSearch(search)
 					if !isPeriod {
@@ -3284,12 +3306,16 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			"BAO_GOM_SO_LIEU_CHI_NHANH_PHU_THUOC": "true",
 			"DS_KHACH_HANG":                       strings.Join(targetCustomerCodes, ","),
 		}
-		data, err = client.SearchCustomEndpoint(debtEndpoint, params)
+		data, err = client.SearchCustomEndpointContext(c.Request.Context(), debtEndpoint, params)
 
 		if err == nil && data != nil {
 			mappedData := make([]map[string]interface{}, 0, len(data))
 			for _, item := range data {
-				mappedData = append(mappedData, mapDebtItemForLLM(item))
+				row := mapDebtItemForLLM(item)
+				if len(targetCustomerCodes) > 0 && !codesContain(targetCustomerCodes, getMapString(row, "MA_KHACH_HANG")) {
+					continue
+				}
+				mappedData = append(mappedData, row)
 			}
 			data = mappedData
 		}

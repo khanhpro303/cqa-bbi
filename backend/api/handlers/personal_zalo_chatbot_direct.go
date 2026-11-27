@@ -53,7 +53,7 @@ func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req
 		agentToken = strings.TrimSpace(settings["ai_agent_erp_token"].ValuePlain)
 	}
 	var permissions engine.GroupPermissionContext
-	if agentToken != "" {
+	if agentToken != "" && erpActiveForRole(settings, identity.AgentType) {
 		var err error
 		permissions, err = engine.ResolvePersonalZaloERPPermissions(ctx, req.TenantID, req.ChannelID, req.SenderID, identity.AgentType, identity.Customer)
 		if err != nil {
@@ -96,9 +96,12 @@ func personalZaloPermissionsHash(permissions engine.GroupPermissionContext) stri
 	return hex.EncodeToString(digest[:])
 }
 
-func (g personalZaloDirectGrant) stillAuthorized(ctx context.Context, req personalZaloChatbotRequest, identity personalZaloERPIdentity) bool {
+func (g personalZaloDirectGrant) stillAuthorized(ctx context.Context, req personalZaloChatbotRequest, identity personalZaloERPIdentity, settings map[string]models.AppSetting) bool {
 	if g.grantHash == "" {
 		return true
+	}
+	if !erpActiveForRole(settings, identity.AgentType) {
+		return false
 	}
 	current, err := engine.ResolvePersonalZaloERPPermissions(ctx, req.TenantID, req.ChannelID, req.SenderID, identity.AgentType, identity.Customer)
 	return err == nil && g.grantHash == personalZaloPermissionsHash(current)

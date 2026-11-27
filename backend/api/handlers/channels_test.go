@@ -97,6 +97,37 @@ func TestChannelToResponseExposesAutoReplyCapability(t *testing.T) {
 	}
 }
 
+func TestCanManageChannelCredentialsRequiresWritePermission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name        string
+		role        string
+		permissions string
+		want        bool
+	}{
+		{name: "owner", role: "owner", want: true},
+		{name: "admin", role: "admin", want: true},
+		{name: "channel writer", role: "member", permissions: `{"channels":"rw"}`, want: true},
+		{name: "channel reader", role: "member", permissions: `{"channels":"r"}`},
+		{name: "malformed permissions", role: "member", permissions: `{`},
+		{name: "missing context"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			if tc.role != "" {
+				ctx.Set("tenant_role", tc.role)
+			}
+			if tc.permissions != "" {
+				ctx.Set("tenant_permissions", tc.permissions)
+			}
+			if got := canManageChannelCredentials(ctx); got != tc.want {
+				t.Fatalf("canManageChannelCredentials() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEnrichPersonalZaloAvatarsPopulatesLatestMatch(t *testing.T) {
 	setPersonalZaloGatewayAdminSecret(t)
 	calls := 0

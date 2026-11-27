@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -12,6 +14,8 @@ import (
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func NewPersonalZaloImportHandler(ingestor engine.ConversationIngester) gin.HandlerFunc {
@@ -26,9 +30,21 @@ func NewPersonalZaloImportHandler(ingestor engine.ConversationIngester) gin.Hand
 			return
 		}
 
-		var channel models.Channel
-		if err := db.DB.Where("id = ? AND tenant_id = ?", req.ChannelID, req.TenantID).First(&channel).Error; err != nil {
+		if !personalZaloUIDPattern.MatchString(req.AccountExternalID) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_account_external_id"})
+			return
+		}
+		channel, err := bindPersonalZaloAccount(c.Request.Context(), req.TenantID, req.ChannelID, req.AccountExternalID, false)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "channel_not_found"})
+			return
+		}
+		if isMySQLDuplicateEntry(err) || errors.Is(err, gorm.ErrDuplicatedKey) {
+			c.JSON(http.StatusConflict, gin.H{"error": "channel_account_mismatch"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "channel_binding_failed"})
 			return
 		}
 		if !channel.IsActive {
@@ -43,7 +59,7 @@ func NewPersonalZaloImportHandler(ingestor engine.ConversationIngester) gin.Hand
 			return
 		}
 
-		if req.AccountExternalID != "" && channel.ExternalID != "" && channel.ExternalID != req.AccountExternalID {
+		if channel.ExternalID != req.AccountExternalID {
 			c.JSON(http.StatusConflict, gin.H{"error": "channel_account_mismatch"})
 			return
 		}
@@ -54,11 +70,14 @@ func NewPersonalZaloImportHandler(ingestor engine.ConversationIngester) gin.Hand
 			return
 		}
 		if updatedMetadata != "" && updatedMetadata != channel.Metadata {
-			if err := db.DB.Model(&models.Channel{}).
-				Where("id = ? AND tenant_id = ?", channel.ID, channel.TenantID).
-				Update("metadata", updatedMetadata).Error; err == nil {
-				channel.Metadata = updatedMetadata
+			result := db.DB.WithContext(c.Request.Context()).Model(&models.Channel{}).
+				Where("id = ? AND tenant_id = ? AND metadata = CAST(? AS JSON)", channel.ID, channel.TenantID, channel.Metadata).
+				Update("metadata", updatedMetadata)
+			if result.Error != nil || result.RowsAffected == 0 {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "account_owner_update_failed"})
+				return
 			}
+			channel.Metadata = updatedMetadata
 		}
 
 		var metadata struct {
@@ -129,10 +148,12 @@ func NewPersonalZaloImportHandler(ingestor engine.ConversationIngester) gin.Hand
 			"last_sync_error":  "",
 			"updated_at":       time.Now(),
 		}
-		if req.AccountExternalID != "" && channel.ExternalID == "" {
-			updates["external_id"] = req.AccountExternalID
+		if err := db.DB.WithContext(c.Request.Context()).Model(&models.Channel{}).
+			Where("id = ? AND tenant_id = ? AND external_id = ?", channel.ID, channel.TenantID, channel.ExternalID).
+			Updates(updates).Error; err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "import_status_update_failed"})
+			return
 		}
-		db.DB.Model(&models.Channel{}).Where("id = ?", req.ChannelID).Updates(updates)
 
 		c.JSON(http.StatusAccepted, gin.H{
 			"message":               "imported",
@@ -143,6 +164,27 @@ func NewPersonalZaloImportHandler(ingestor engine.ConversationIngester) gin.Hand
 			"messages_deduplicated": totalDeduplicated,
 		})
 	}
+}
+
+// Bind the first account before accepting any of its conversation history.
+// The row lock only covers the account claim, not conversation ingestion.
+func bindPersonalZaloAccount(ctx context.Context, tenantID, channelID, accountID string, directChat bool) (models.Channel, error) {
+	var channel models.Channel
+	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", channelID, tenantID)
+		if directChat {
+			query = query.Where("channel_type = ? AND is_active = ? AND personal_zalo_auto_reply_enabled = ? AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sync_scope')), '') <> 'group'",
+				"personal_zalo_import", true, true)
+		}
+		if err := query.Take(&channel).Error; err != nil {
+			return err
+		}
+		if !channel.IsActive || channel.ChannelType != "personal_zalo_import" || channel.ExternalID != "" {
+			return nil
+		}
+		return tx.Model(&channel).Update("external_id", accountID).Error
+	})
+	return channel, err
 }
 
 func toSyncedConversation(conv contracts.ImportConversation, accountExternalID string, owner *contracts.PersonalZaloAccountOwner) channels.SyncedConversation {

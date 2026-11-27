@@ -163,18 +163,28 @@ async function refresh() {
   if (!props.accountBound || loading.value) return
   loading.value = true
   error.value = ''
+  const [linksResult, optionsResult] = await Promise.allSettled([
+    api.get<IdentityLink[]>(endpoint.value),
+    api.get<IdentityOptions>(`${endpoint.value}/options`),
+  ])
   try {
-    const [{ data: nextLinks }, { data: nextOptions }] = await Promise.all([
-      api.get<IdentityLink[]>(endpoint.value),
-      api.get<IdentityOptions>(`${endpoint.value}/options`),
-    ])
-    links.value = nextLinks || []
-    options.value = { ...nextOptions, staff: nextOptions.staff || [], customers: nextOptions.customers || [] }
+    if (linksResult.status === 'fulfilled') {
+      links.value = linksResult.value.data || []
+    }
+    if (optionsResult.status === 'fulfilled') {
+      const nextOptions = optionsResult.value.data
+      options.value = { ...nextOptions, staff: nextOptions.staff || [], customers: nextOptions.customers || [] }
+    } else {
+      options.value = { staff: [], customers: [], pairing_enabled: false }
+    }
     if (issued.value && !links.value.some((link) => link.id === issued.value?.id && !link.verified_at && Date.parse(link.expires_at) > Date.now())) {
       issued.value = null
     }
+    if (linksResult.status === 'rejected' || optionsResult.status === 'rejected') {
+      error.value = 'personal_zalo_identity_load_error'
+    }
   } catch {
-    options.value.pairing_enabled = false
+    options.value = { staff: [], customers: [], pairing_enabled: false }
     error.value = 'personal_zalo_identity_load_error'
   } finally {
     loading.value = false

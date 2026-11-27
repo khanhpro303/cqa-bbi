@@ -130,4 +130,30 @@ describe('personal Zalo identity link management', () => {
     expect(wrapper.text()).not.toContain(en.personal_zalo_identity_verified)
     expect(document.activeElement).toBe(wrapper.get('h2').element)
   })
+
+  it('keeps active links revocable when identity options cannot load', async () => {
+    api.get.mockImplementation(async (path: string) => {
+      if (path.endsWith('/options')) throw new Error('options unavailable')
+      return { data: [{
+        id: 'link-3', kind: 'staff', target_id: 'staff', sender_id: '2048',
+        verified_at: '2026-11-27T00:00:00Z', expires_at: expiresAt,
+      }] }
+    })
+    api.delete.mockResolvedValue({ data: {} })
+
+    const wrapper = mountLinks()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(en.personal_zalo_identity_load_error)
+    expect(wrapper.text()).toContain(en.personal_zalo_identity_prerequisites)
+    expect(wrapper.text()).toContain(en.personal_zalo_identity_verified)
+    expect((wrapper.get(`select[aria-label="${en.personal_zalo_identity_person}"]`).element as HTMLSelectElement).disabled).toBe(true)
+
+    await wrapper.get('button[aria-label="Revoke the link for staff"]').trigger('click')
+    await wrapper.get('[role="dialog"]').findAll('button').find((button) => button.text() === en.revoke)!.trigger('click')
+    await flushPromises()
+
+    expect(api.delete).toHaveBeenCalledWith(`${endpoint}/link-3`)
+    expect(wrapper.text()).not.toContain(en.personal_zalo_identity_verified)
+  })
 })

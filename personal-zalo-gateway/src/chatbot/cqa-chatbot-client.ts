@@ -6,6 +6,7 @@ import type { GatewayAccountRecord, IncomingGatewayMessage } from '../types.js';
 
 const chatbotTimeoutMs = 55_000;
 const deliveryReceiptTimeoutMs = 5_000;
+const deliveryAuthorizationAttempts = 3;
 const maxImageBytes = 1 << 20;
 const maxEncodedImageLength = Math.ceil(maxImageBytes / 3) * 4;
 const maxResponseBytes = maxEncodedImageLength + (64 << 10);
@@ -24,6 +25,7 @@ export interface ChatbotReplyImage {
 
 export interface PersonalZaloChatbotReply {
   reply: string;
+  deliveryToken?: string;
   deliveryReceipt?: string;
   images?: [ChatbotReplyImage];
 }
@@ -33,6 +35,12 @@ export type PersonalZaloChatbotResult =
   | { outcome: 'no_reply' }
   | { outcome: 'retryable'; error: string }
   | { outcome: 'unknown'; error: string };
+
+export type PersonalZaloDeliveryAuthorization = 'allowed' | 'denied' | 'retryable';
+
+type DeliveryRequest =
+  | { kind: 'group_receipt'; receipt: string }
+  | { kind: 'direct_authorization'; token: string; part: 'text' | 'image'; digest: string };
 
 export function chatbotEndpoint(baseUrl: string): string | null {
   try {
@@ -75,7 +83,7 @@ export function buildChatbotRequest(
   message: IncomingGatewayMessage,
   deployment: PersonalZaloChatbotConfig,
   now = Date.now(),
-  deliveryReceipt?: string,
+  deliveryRequest?: DeliveryRequest,
 ): {
   url: string;
   requestId: string;
@@ -86,16 +94,20 @@ export function buildChatbotRequest(
 } | null {
   // A receipt follows a turn that already passed the freshness check. Keep
   // signing it at the current time while retaining the original sent_at.
-  const eligibilityNow = deliveryReceipt ? message.timestamp : now;
+  const eligibilityNow = deliveryRequest ? message.timestamp : now;
   if (!isChatbotEligibleMessage(message, eligibilityNow)) return null;
   const url = chatbotEndpoint(deployment.baseUrl);
   const accountExternalId = account.accountExternalId || account.zaloUid || '';
   if (!url || deployment.secret.length < 32 || !zaloUID.test(accountExternalId)) return null;
 
   const requestId = randomUUID();
-  if (deliveryReceipt !== undefined && (message.threadType !== 'group' || !receiptUUID.test(deliveryReceipt))) return null;
+  if (deliveryRequest?.kind === 'group_receipt' &&
+      (message.threadType !== 'group' || !receiptUUID.test(deliveryRequest.receipt))) return null;
+  if (deliveryRequest?.kind === 'direct_authorization' &&
+      (message.threadType !== 'user' || deliveryRequest.token.length < 16 || deliveryRequest.token.length > 4_096 ||
+       !/^[a-f0-9]{64}$/.test(deliveryRequest.digest))) return null;
   const payload: Record<string, unknown> = {
-    schema_version: message.threadType === 'group' ? 'personal-zalo-chatbot-v2' : 'personal-zalo-chatbot-v1',
+    schema_version: message.threadType === 'group' ? 'personal-zalo-chatbot-v2' : 'personal-zalo-chatbot-v3',
     request_id: requestId,
     tenant_id: account.tenantId,
     channel_id: account.channelId,
@@ -107,7 +119,12 @@ export function buildChatbotRequest(
     sent_at: new Date(message.timestamp).toISOString(),
     text: message.content,
   };
-  if (deliveryReceipt) payload.delivery_receipt = deliveryReceipt;
+  if (deliveryRequest?.kind === 'group_receipt') payload.delivery_receipt = deliveryRequest.receipt;
+  if (deliveryRequest?.kind === 'direct_authorization') {
+    payload.delivery_token = deliveryRequest.token;
+    payload.delivery_part = deliveryRequest.part;
+    payload.delivery_digest = deliveryRequest.digest;
+  }
   const body = JSON.stringify(payload);
   const signed = signInternalRequestBody(account.importSecret, body, requestId, now);
   const chatbotSignature = signInternalRequestBody(deployment.secret, body, requestId, now).signature;
@@ -159,7 +176,12 @@ export async function requestPersonalZaloChatbotTurn(
     const reply: PersonalZaloChatbotReply = { reply: payload.reply };
     if (message.threadType === 'group' && typeof payload.delivery_receipt === 'string' && receiptUUID.test(payload.delivery_receipt)) {
       reply.deliveryReceipt = payload.delivery_receipt;
-    } else if (message.threadType === 'user' && Array.isArray(payload.images)) {
+    } else if (message.threadType === 'user') {
+      if (typeof payload.delivery_token !== 'string' || payload.delivery_token.length < 16 || payload.delivery_token.length > 4_096) {
+        return { outcome: 'unknown', error: 'invalid_cqa_delivery_token' };
+      }
+      reply.deliveryToken = payload.delivery_token;
+      if (!Array.isArray(payload.images)) return { outcome: 'reply', reply };
       const image = decodeReplyImage(payload.images[0]);
       if (image) reply.images = [image];
     }
@@ -180,7 +202,12 @@ function isDefinitelyUnsentTransportError(error: unknown): boolean {
   return code === 'ECONNREFUSED' || code === 'ENETUNREACH' || code === 'EHOSTUNREACH' || code === 'EAI_AGAIN';
 }
 
-async function readReplyPayload(response: Response): Promise<{ reply?: unknown; images?: unknown; delivery_receipt?: unknown } | null> {
+async function readReplyPayload(response: Response): Promise<{
+  reply?: unknown;
+  delivery_token?: unknown;
+  images?: unknown;
+  delivery_receipt?: unknown;
+} | null> {
   const reader = response.body?.getReader();
   if (!reader) return null;
   const chunks: Uint8Array[] = [];
@@ -200,6 +227,53 @@ async function readReplyPayload(response: Response): Promise<{ reply?: unknown; 
   } finally {
     reader.releaseLock();
   }
+}
+
+export async function authorizePersonalZaloChatbotDelivery(
+  account: GatewayAccountRecord,
+  message: IncomingGatewayMessage,
+  deliveryToken: string,
+  part: 'text' | 'image',
+  digest: string,
+): Promise<PersonalZaloDeliveryAuthorization> {
+  const deployment = personalZaloChatbotConfig();
+  if (!deployment || message.threadType !== 'user') return 'denied';
+
+  for (let attempt = 0; attempt < deliveryAuthorizationAttempts; attempt++) {
+    const request = buildChatbotRequest(account, message, deployment, Date.now(), {
+      kind: 'direct_authorization', token: deliveryToken, part, digest,
+    });
+    if (!request) return 'denied';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), deliveryReceiptTimeoutMs);
+    try {
+      const response = await fetch(request.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CQA-Request-Id': request.requestId,
+          'X-CQA-Timestamp': request.timestamp,
+          'X-CQA-Signature': request.signature,
+          'X-CQA-Chatbot-Signature': request.chatbotSignature,
+        },
+        body: request.body,
+        signal: controller.signal,
+        redirect: 'error',
+      });
+      if (response.status === 204) return 'denied';
+      if (response.ok) {
+        const payload = await response.json().catch(() => null) as { allowed?: unknown } | null;
+        return payload?.allowed === true ? 'allowed' : 'denied';
+      }
+      if (response.status < 500) return 'denied';
+    } catch (error) {
+      logger.warn('[chatbot] CQA personal Zalo delivery authorization failed', error);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (attempt + 1 < deliveryAuthorizationAttempts) await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+  }
+  return 'retryable';
 }
 
 function decodeReplyImage(value: unknown): ChatbotReplyImage | null {
@@ -233,7 +307,9 @@ export async function acknowledgePersonalZaloChatbotDelivery(
   if (!deployment || message.threadType !== 'group') return;
   // The original turn already passed the live-message age check. Receipts use
   // that same immutable identity even when Zalo sending waited in the queue.
-  const request = buildChatbotRequest(account, message, deployment, Date.now(), deliveryReceipt);
+  const request = buildChatbotRequest(account, message, deployment, Date.now(), {
+    kind: 'group_receipt', receipt: deliveryReceipt,
+  });
   if (!request) return;
 
   const controller = new AbortController();

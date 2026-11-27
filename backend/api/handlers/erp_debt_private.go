@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"log"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -41,6 +42,8 @@ const debtCustomerPickByCodeText = "Có nhiều khách khớp. Anh/chị cho mì
 // customerCacheResolveLimit caps how many customer codes a single private-bot
 // debt lookup may resolve from the local cache, keeping DS_KHACH_HANG bounded.
 const customerCacheResolveLimit = 20
+
+var debtPeriodPhrase = regexp.MustCompile(`(?i)(?:trong\s+)?(?:tháng này|thang nay|tháng trước|thang truoc|quý này|quy nay)`)
 
 // customerQueryStopwords are accent-folded words stripped before tokenizing a
 // debt-by-customer query, so "công nợ của khách hàng EGO" reduces to ["EGO"].

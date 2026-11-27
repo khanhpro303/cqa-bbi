@@ -25,7 +25,7 @@ const personalZaloTextLimit = 2000
 var personalZaloUIDPattern = regexp.MustCompile(`^[0-9]{1,64}$`)
 
 type personalZaloChatbotRequest struct {
-	SchemaVersion     string    `json:"schema_version" binding:"required,oneof=personal-zalo-chatbot-v1 personal-zalo-chatbot-v2"`
+	SchemaVersion     string    `json:"schema_version" binding:"required,oneof=personal-zalo-chatbot-v1 personal-zalo-chatbot-v2 personal-zalo-chatbot-v3"`
 	RequestID         string    `json:"request_id" binding:"required,max=64"`
 	TenantID          string    `json:"tenant_id" binding:"required,max=36"`
 	ChannelID         string    `json:"channel_id" binding:"required,max=36"`
@@ -37,6 +37,9 @@ type personalZaloChatbotRequest struct {
 	SentAt            time.Time `json:"sent_at" binding:"required"`
 	Text              string    `json:"text" binding:"required"`
 	DeliveryReceipt   string    `json:"delivery_receipt" binding:"omitempty,uuid4"`
+	DeliveryToken     string    `json:"delivery_token,omitempty" binding:"omitempty,max=4096"`
+	DeliveryPart      string    `json:"delivery_part,omitempty" binding:"omitempty,oneof=text image"`
+	DeliveryDigest    string    `json:"delivery_digest,omitempty" binding:"omitempty,len=64,hexadecimal"`
 }
 
 // NewPersonalZaloChatbotHandler receives live text turns from the
@@ -48,6 +51,8 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		"chatbot_active", "ai_engine_system_prompt", "ai_engine_system_prompt_internal",
 		"ai_agent_erp_token_public", "ai_agent_erp_token_private", "ai_agent_erp_token",
 	}, engine.LangflowSettingKeys...)
+	activationKeys := append([]string{"chatbot_active"}, erpActivationKeys...)
+	settingKeys = append(settingKeys, erpActivationKeys...)
 
 	return func(c *gin.Context) {
 		var req personalZaloChatbotRequest
@@ -61,9 +66,12 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 		req.Text = strings.TrimSpace(req.Text)
 		age := time.Since(req.SentAt)
+		preflight := req.DeliveryToken != "" || req.DeliveryPart != "" || req.DeliveryDigest != ""
 		if req.Text == "" || personalZaloTextBoundary(req.Text, personalZaloTextLimit) != len(req.Text) ||
 			!personalZaloUIDPattern.MatchString(req.AccountExternalID) || !normalizePersonalZaloChatbotRequest(&req) ||
-			(req.DeliveryReceipt == "" && (age > 2*time.Minute || age < -30*time.Second)) ||
+			(req.ThreadType == personalZaloThreadUser && req.SchemaVersion != personalZaloDirectProtocol) ||
+			(preflight && (req.ThreadType != personalZaloThreadUser || req.DeliveryToken == "" || req.DeliveryPart == "" || req.DeliveryDigest == "")) ||
+			(!preflight && req.DeliveryReceipt == "" && (age > 2*time.Minute || age < -30*time.Second)) ||
 			(req.DeliveryReceipt != "" && req.ThreadType != personalZaloThreadGroup) {
 			c.Status(http.StatusNoContent)
 			return
@@ -90,6 +98,23 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		if preflight {
+			checkPersonalZaloDelivery(c, ctx, cfg.EncryptionKey, channel, req, settings)
+			return
+		}
+		if req.ThreadType == personalZaloThreadUser && channel.ExternalID == "" {
+			channel, err = bindPersonalZaloAccount(ctx, req.TenantID, req.ChannelID, req.AccountExternalID, true)
+			if errors.Is(err, gorm.ErrRecordNotFound) || isMySQLDuplicateEntry(err) || errors.Is(err, gorm.ErrDuplicatedKey) ||
+				(err == nil && channel.ExternalID != req.AccountExternalID) {
+				c.Status(http.StatusNoContent)
+				return
+			}
+			if err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "channel_binding_failed"})
+				return
+			}
+		}
+
 		sessionConfig, err := parsePersonalZaloSessionConfig(channel, cfg)
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_session_unavailable"})
@@ -110,7 +135,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 				c.Status(http.StatusNoContent)
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"reply": verificationReply})
+			writePersonalZaloDirectReply(c, cfg.EncryptionKey, req, gin.H{"reply": verificationReply}, personalZaloERPIdentity{}, personalZaloDirectGrant{})
 			return
 		}
 		req.Text = redactPersonalZaloPairingCodes(req.Text)
@@ -126,7 +151,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 				return
 			}
 			if identity.AgentType == "" {
-				c.JSON(http.StatusOK, gin.H{"reply": personalZaloVerificationRequiredReply})
+				writePersonalZaloDirectReply(c, cfg.EncryptionKey, req, gin.H{"reply": personalZaloVerificationRequiredReply}, identity, personalZaloDirectGrant{})
 				return
 			}
 			if sessionConfig.SessionWelcomeMessage == cfg.ChatbotSessionWelcomeMessage {
@@ -201,7 +226,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			c.Status(http.StatusNoContent)
 			return
 		}
-		settings, err = loadPersonalZaloChatbotSettings(ctx, req.TenantID, "chatbot_active")
+		settings, err = loadPersonalZaloChatbotSettings(ctx, req.TenantID, activationKeys...)
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_settings_unavailable"})
 			return
@@ -213,7 +238,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		if identity.AgentType != "" {
 			latestIdentity, err := resolvePersonalZaloERPIdentity(ctx, latestChannel, req)
 			if err != nil || latestIdentity.AgentType != identity.AgentType || latestIdentity.ID != identity.ID ||
-				!directGrant.stillAuthorized(ctx, req, latestIdentity) {
+				!directGrant.stillAuthorized(ctx, req, latestIdentity, settings) {
 				c.Status(http.StatusNoContent)
 				return
 			}
@@ -246,6 +271,10 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			if receipt := awaitPersonalZaloGroupDelivery(ctx, req, groupTurn, reply); receipt != "" {
 				response["delivery_receipt"] = receipt
 			}
+		}
+		if req.ThreadType == personalZaloThreadUser {
+			writePersonalZaloDirectReply(c, cfg.EncryptionKey, req, response, identity, directGrant)
+			return
 		}
 		c.JSON(http.StatusOK, response)
 	}
