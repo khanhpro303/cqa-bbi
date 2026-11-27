@@ -552,7 +552,7 @@ export default {
   session_goodbye: 'Goodbye message',
   session_goodbye_hint: 'Sent when session closes successfully',
   session_timeout: 'Auto-close session timeout (minutes)',
-  personal_zalo_session_hint: 'Direct-message senders must verify their identity before using the chatbot. If a start keyword is configured, they must send it exactly as written. The session closes after the inactivity timeout below.',
+  personal_zalo_session_hint: 'If you set a start keyword, everyone who messages the bot directly must send it to start chatting, including unverified guests. Guests can look up public information only. An open session closes after the inactivity timeout.',
   personal_zalo_identity_title: 'Chatbot user verification',
   personal_zalo_identity_description: 'Link a 1:1 Zalo sender to a whitelisted staff member or an approved CRM customer.',
   personal_zalo_identity_connect_first: 'Connect the Zalo account and sync the first message on this channel before issuing a verification code.',

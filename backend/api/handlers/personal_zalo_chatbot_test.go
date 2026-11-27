@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
@@ -390,6 +393,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			t.Fatalf("guest ERP request %q: status=%d calls=%d body=%s", question, response.Code, flowCalls.Load(), response.Body)
 		}
 	}
+	channel.Metadata = `{"session_keyword":" ; \u00a0 ","session_timeout_minutes":7}`
 	fresh.RequestID, fresh.Text = "guest-goby-knowledge", gobyQuestion
 	guestResponse := submit(fresh, secret, gatewaySecret)
 	var guestReply struct{ Reply string }
@@ -398,6 +402,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 		!strings.Contains(guestResponse.Body.String(), "delivery_token") || flowCalls.Load() != 1 {
 		t.Fatalf("guest knowledge: status=%d calls=%d body=%s", guestResponse.Code, flowCalls.Load(), guestResponse.Body)
 	}
+	channel.Metadata = ""
 	tenantCredentials.Store(false)
 	customerVerified.Store(true)
 	fresh.RequestID, fresh.Text = "public-greeting", "Hello"
@@ -534,6 +539,60 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusNoContent {
 		t.Fatalf("an in-flight turn may not deliver after the sender loses access: %s", response.Body.String())
 	}
+
+	t.Run("guest must open a configured session", func(t *testing.T) {
+		addr := os.Getenv("TEST_REDIS_ADDR")
+		if addr == "" {
+			t.Skip("TEST_REDIS_ADDR not set")
+		}
+		client := redis.NewClient(&redis.Options{Addr: addr})
+		if err := client.Ping(t.Context()).Err(); err != nil {
+			t.Fatal(err)
+		}
+		originalRedis := db.RedisClient
+		db.RedisClient = client
+		t.Cleanup(func() { db.RedisClient = originalRedis; _ = client.Close() })
+		customerVerified.Store(false)
+		staffVerified.Store(false)
+		req := fresh
+		req.ThreadType, req.SenderID = personalZaloThreadUser, req.ThreadID
+		sessionKey := personalZaloSessionKey(req)
+		t.Cleanup(func() { _ = client.Del(context.WithoutCancel(t.Context()), sessionKey).Err() })
+
+		send := func(id, message string, status int, reply string, flowCallsAdded int32) {
+			t.Helper()
+			req.RequestID, req.MessageID, req.Text = "guest-session-"+id, id, message
+			calls := flowCalls.Load()
+			response := submit(req, secret, gatewaySecret)
+			if response.Code != status || flowCalls.Load()-calls != flowCallsAdded {
+				t.Fatalf("%s: status=%d body=%s, flow calls=%d", id, response.Code, response.Body, flowCalls.Load()-calls)
+			}
+			if status == http.StatusOK {
+				var output struct {
+					Reply string `json:"reply"`
+					Token string `json:"delivery_token"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &output); err != nil || output.Reply != reply || output.Token == "" {
+					t.Fatalf("%s: unexpected reply or delivery token: %s", id, response.Body)
+				}
+			}
+		}
+
+		channel.Metadata = `{"session_keyword":"chào bull","complaint_cases":true}`
+		send("complaint-before-opening", "Cho tôi gặp nhân viên", http.StatusNoContent, "", 0)
+		channel.Metadata = `{"session_keyword":"chào bull; bắt đầu","session_end_keyword":"kết thúc","session_welcome_message":"Mời anh/chị đặt câu hỏi","session_goodbye_message":"Hẹn gặp lại"}`
+		send("partial-keyword", "chào bull, tư vấn giúp em", http.StatusNoContent, "", 0)
+		send("verify-before-opening", "verify", http.StatusOK, personalZaloInvalidPairingReply, 0)
+		send("open", " CHÀO BULL ", http.StatusOK, "Mời anh/chị đặt câu hỏi", 0)
+		send("follow-up", gobyQuestion, http.StatusOK, gobyAnswer, 1)
+		send("close", "kết thúc", http.StatusOK, "Hẹn gặp lại", 0)
+		send("closed-follow-up", gobyQuestion, http.StatusNoContent, "", 0)
+		send("reopen", "bắt đầu", http.StatusOK, "Mời anh/chị đặt câu hỏi", 0)
+		if err := client.Expire(t.Context(), sessionKey, -time.Second).Err(); err != nil {
+			t.Fatal(err)
+		}
+		send("expired-follow-up", gobyQuestion, http.StatusNoContent, "", 0)
+	})
 }
 
 func TestPersonalZaloTextBoundaryCountsUTF16(t *testing.T) {
