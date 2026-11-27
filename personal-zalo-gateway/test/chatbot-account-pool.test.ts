@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -57,7 +58,7 @@ class TestListener extends EventEmitter {
 
 async function connectFixture(
   t: TestContext,
-  options: { ownId?: string; sendMessage?: (text: string, threadId: string, type: number) => Promise<unknown> } = {},
+  options: { ownId?: string; groupIds?: string[]; sendMessage?: (text: string, threadId: string, type: number) => Promise<unknown> } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pzgw-pool-'));
   const stateFile = path.join(dir, 'state.json');
@@ -76,6 +77,7 @@ async function connectFixture(
     listener,
     getOwnId: () => options.ownId || 'test-account',
     getUserInfo: async () => ({}),
+    getAllGroups: async () => ({ gridVerMap: Object.fromEntries((options.groupIds ?? []).map((id) => [id, '1'])) }),
     getGroupInfo: async () => ({ gridInfoMap: {} }),
     sendMessage: options.sendMessage || (async () => ({})),
   }));
@@ -708,12 +710,18 @@ test('a manual photo during bot upload wins even when both images have empty cap
     return { message: null, attachment: [{ msgId: 90005 }] };
   });
   ({ listener } = await connectFixture(t, { ownId: '10001', sendMessage }));
-  const fetch = t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) =>
-    deliveryAuthorization(request) ?? directReply({ reply: 'Hướng dẫn', images: [knowledgeImage] }));
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) => {
+    const body = JSON.parse(String(request.body));
+    if (body.schema_version === 'personal-zalo-internbot-v1') return new Response(null, { status: 400 });
+    return deliveryAuthorization(request) ?? directReply({ reply: 'Hướng dẫn', images: [knowledgeImage] });
+  });
 
   await listener.message(directMessage('90001'));
   assert.equal(sendMessage.mock.callCount(), 2);
-  assert.equal(fetch.mock.callCount(), 3, 'only the original generation and its delivery checks run');
+  const schemas = fetch.mock.calls.map((call) => JSON.parse(String(call.arguments[1]?.body)).schema_version);
+  assert.deepEqual(schemas, [
+    'personal-zalo-chatbot-v3', 'personal-zalo-chatbot-v3', 'personal-zalo-chatbot-v3', 'personal-zalo-internbot-v1',
+  ], 'the queued turn can be observed by Internbot but cannot trigger a legacy chatbot reply');
 });
 
 test('a manual photo before attachment delivery suppresses the bot photo', { timeout: 5000 }, async (t) => {
@@ -792,4 +800,116 @@ test('a disconnect before a queued image never replays the already sent text', {
   const retained = (await store.listChatbotTurns(connectedAccount.id))[0]?.[1];
   assert.equal(retained?.reply?.reply, 'Một lần');
   assert.equal(retained?.reply?.images, undefined);
+});
+
+const internbotGroup = '80008';
+const internbotText = 'Internbot · Phản hồi đề xuất';
+
+function internbotReply(groupId = internbotGroup, images?: unknown[]): Response {
+  return Response.json({ internbot_delivery: { group_id: groupId, text: internbotText, token: deliveryToken, images } });
+}
+
+test('an Internbot draft from a direct chat sends text and authorized images only to the supervisor group',
+  { timeout: 6000 }, async (t) => {
+    configureTestChatbot(t);
+    const imageToken = 'image-delivery-token-at-least-16';
+    const sendMessage = t.mock.fn(async (_outbound: unknown, _threadId: string, _type: number) => ({}));
+    const { listener } = await connectFixture(t, { ownId: '10001', groupIds: [internbotGroup], sendMessage });
+    const authorizations: Array<{ part: string; digest: string; token: string }> = [];
+    t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
+      const payload = JSON.parse(String(init.body));
+      assert.equal(payload.thread_id, '20002');
+      if (url.endsWith('/internbot/delivery')) {
+        assert.equal(payload.supervisor_group_id, internbotGroup);
+        authorizations.push({ part: payload.delivery_part, digest: payload.delivery_digest, token: payload.delivery_token });
+        return new Response(null, { status: 200 });
+      }
+      assert.equal(url.endsWith('/personal-zalo'), true);
+      assert.equal(payload.supports_internbot, true);
+      return internbotReply(internbotGroup, [{ ...knowledgeImage, delivery_token: imageToken }]);
+    });
+
+    await listener.message(directMessage('95001'));
+
+    assert.deepEqual(sendMessage.mock.calls.map(({ arguments: [, threadId, type] }) => [threadId, type]),
+      [[internbotGroup, 1], [internbotGroup, 1]]);
+    assert.deepEqual(authorizations, [
+      { part: 'text', digest: createHash('sha256').update(internbotText).digest('hex'), token: deliveryToken },
+      { part: 'image', digest: createHash('sha256').update(Buffer.from(knowledgeImageBase64, 'base64')).digest('hex'), token: imageToken },
+    ]);
+  });
+
+test('a manual response in a customer group does not suppress its pending Internbot draft', async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async (_outbound: unknown, _threadId: string, _type: number) => ({}));
+  const { listener } = await connectFixture(t, { ownId: '10001', groupIds: [internbotGroup], sendMessage });
+  let started!: () => void;
+  const requestStarted = new Promise<void>((resolve) => { started = resolve; });
+  let release!: () => void;
+  const releaseRequest = new Promise<void>((resolve) => { release = resolve; });
+  const turnSchemas: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    if (url.endsWith('/internbot/delivery')) return new Response(null, { status: 200 });
+    assert.equal(url.endsWith('/personal-zalo'), true);
+    turnSchemas.push(body.schema_version);
+    if (body.message_id === '95101') {
+      started();
+      await releaseRequest;
+      return internbotReply();
+    }
+    return new Response(null, { status: 204 });
+  });
+
+  const first = listener.message(groupMessage('95101'));
+  await requestStarted;
+  await listener.message(groupMessage('95102'));
+  await listener.message({ ...groupMessage('95103', '10001'), isSelf: true });
+  release();
+  await first;
+
+  assert.deepEqual(turnSchemas, ['personal-zalo-chatbot-v2', 'personal-zalo-internbot-v1']);
+  assert.deepEqual(sendMessage.mock.calls.map((call) => call.arguments), [[internbotText, internbotGroup, 1]]);
+});
+
+test('Internbot stops delivery when the supervisor group is no longer present, is the source, or CQA denies sending', async (t) => {
+  configureTestChatbot(t);
+  const groupIds = [internbotGroup];
+  const sendMessage = t.mock.fn(async () => ({}));
+  const { listener } = await connectFixture(t, { ownId: '10001', groupIds, sendMessage });
+  let approvals = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
+    if (url.endsWith('/internbot/delivery')) {
+      approvals++;
+      return new Response(null, { status: 204 });
+    }
+    const body = JSON.parse(String(init.body));
+    return internbotReply(body.message_id === '95202' ? body.thread_id : internbotGroup);
+  });
+
+  await listener.message(groupMessage('95201'));
+  await listener.message(groupMessage('95202'));
+  groupIds.length = 0;
+  await listener.message(groupMessage('95203'));
+
+  assert.equal(approvals, 1);
+  assert.equal(sendMessage.mock.callCount(), 0);
+});
+
+test('an ambiguous Internbot Zalo send is retained separately from legacy drafts and is never replayed', async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async () => { throw new Error('transport ended during delivery'); });
+  const { account, listener, store } = await connectFixture(t, { ownId: '10001', groupIds: [internbotGroup], sendMessage });
+  t.mock.method(globalThis, 'fetch', async (url: string) => url.endsWith('/internbot/delivery') ?
+    new Response(null, { status: 200 }) : internbotReply());
+
+  const message = groupMessage('95301');
+  await listener.message(message);
+  await listener.message(message);
+
+  const [[, retained]] = await store.listChatbotTurns(account.id);
+  assert.equal(sendMessage.mock.callCount(), 1);
+  assert.equal(retained.status, 'unknown');
+  assert.equal(retained.reply, undefined);
+  assert.equal(retained.internbotReply?.groupId, internbotGroup);
 });

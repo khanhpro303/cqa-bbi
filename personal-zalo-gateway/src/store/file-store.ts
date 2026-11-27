@@ -9,6 +9,7 @@ import type {
   GatewayChatbotTurnRecord,
   GatewayChatbotTurnStatus,
   GatewayConversationRecord,
+  GatewayInternbotReply,
   GatewayStoreShape,
   IncomingGatewayMessage,
   SyncBatchConversation,
@@ -261,7 +262,7 @@ export class GatewayStore {
     accountId: string,
     messageId: string,
     status: GatewayChatbotTurnStatus,
-    changes: { reply?: GatewayChatbotReply; lastError?: string } = {},
+    changes: { reply?: GatewayChatbotReply; internbotReply?: GatewayInternbotReply; lastError?: string } = {},
   ): Promise<boolean> {
     return this.updateState((state) => {
       const turn = state.accounts[accountId]?.chatbotTurns?.[messageId];
@@ -269,6 +270,7 @@ export class GatewayStore {
       turn.status = status;
       turn.updatedAt = nowISO();
       if (changes.reply !== undefined) turn.reply = changes.reply;
+      if (changes.internbotReply !== undefined) turn.internbotReply = changes.internbotReply;
       if (changes.lastError !== undefined) turn.lastError = changes.lastError;
       return true;
     });
@@ -308,6 +310,21 @@ export class GatewayStore {
         if (turn.message.threadType === threadType && turn.message.threadId === threadId &&
             (!senderUid || turn.message.senderUid === senderUid) &&
             turn.status !== 'unknown' && turn.status !== 'failed' && turn.status !== 'expired') {
+          delete turns[messageId];
+        }
+      }
+    });
+  }
+
+  async noteManualChatbotReply(accountId: string, threadType: IncomingGatewayMessage['threadType'], threadId: string): Promise<void> {
+    await this.updateState((state) => {
+      const turns = state.accounts[accountId]?.chatbotTurns;
+      if (!turns) return;
+      for (const [messageId, turn] of Object.entries(turns)) {
+        if (turn.message.threadType !== threadType || turn.message.threadId !== threadId) continue;
+        if (turn.status === 'captured' || turn.status === 'pending' || turn.status === 'processing') {
+          turn.manuallyAnswered = true;
+        } else if ((turn.status === 'ready' || turn.status === 'sending') && !turn.internbotReply) {
           delete turns[messageId];
         }
       }

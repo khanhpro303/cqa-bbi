@@ -61,6 +61,7 @@ func AutoMigrate() error {
 		&models.Channel{},
 		&models.PersonalZaloThreadApproval{},
 		&models.PersonalZaloRosterState{},
+		&models.PersonalZaloInternbotRoster{},
 		&models.Conversation{},
 		&models.Message{},
 		&models.ChatSession{},

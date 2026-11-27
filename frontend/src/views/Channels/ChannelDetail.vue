@@ -126,6 +126,15 @@
         {{ gatewayAlert.message }}
       </v-alert>
 
+      <v-alert v-if="isInternbot && canManageInternbot && gatewayAccount?.status === 'connected'" type="info" variant="tonal" class="mb-4">
+        <div class="d-flex align-center justify-space-between flex-wrap ga-2">
+          {{ $t('personal_zalo_internbot_group_setup') }}
+          <v-btn size="small" color="primary" variant="text" @click="openChannelEditor">
+            {{ $t('personal_zalo_internbot_configure') }}
+          </v-btn>
+        </div>
+      </v-alert>
+
       <v-row class="mb-2">
         <v-col cols="12" md="7">
           <v-sheet rounded="lg" border class="pa-4 h-100">
@@ -320,7 +329,7 @@
     </v-card>
 
     <PersonalZaloApprovals
-      v-if="isPersonalZalo && canReviewPersonalZaloApprovals"
+      v-if="isPersonalZalo && !isInternbot && canReviewPersonalZaloApprovals"
       :key="`${tenantId}:${channelId}`"
       :tenant-id="tenantId"
       :channel-id="channelId"
@@ -435,6 +444,7 @@ import { useUserStore } from '../../stores/users'
 import ChannelEditDialog from '../../components/channels/ChannelEditDialog.vue'
 import PersonalZaloIdentityLinks from '../../components/channels/PersonalZaloIdentityLinks.vue'
 import PersonalZaloApprovals from '../../components/channels/PersonalZaloApprovals.vue'
+import { readPersonalZaloBotSettings } from '../../components/channels/personalZaloBotSettings'
 
 const route = useRoute()
 const router = useRouter()
@@ -458,6 +468,8 @@ const metadata = computed(() => {
   try { return JSON.parse(channel.value?.metadata || '{}') } catch { return {} }
 })
 const canReviewPersonalZaloApprovals = computed(() => ['owner', 'admin'].includes(authStore.tenantPerms.role))
+const isInternbot = computed(() => isPersonalZalo.value && readPersonalZaloBotSettings(channel.value?.metadata).chatbot_mode === 'internbot')
+const canManageInternbot = computed(() => canReviewPersonalZaloApprovals.value && authStore.canEdit('channels'))
 
 const syncing = ref(false)
 const testing = ref(false)

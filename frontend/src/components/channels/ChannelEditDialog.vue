@@ -23,6 +23,30 @@
             <v-window-item :id="dialogId + '-general'" value="general" role="tabpanel" :aria-labelledby="dialogId + '-general-tab'" class="pt-3">
               <v-text-field v-model="editForm.name" :label="$t('channel_name')" class="mb-3" />
               <v-switch v-model="editForm.is_active" :label="$t('active')" color="primary" density="compact" class="mb-3" />
+              <template v-if="editChannelType === 'personal_zalo_import'">
+                <PersonalZaloBotModePicker
+                  :model-value="editBotSettings.chatbot_mode"
+                  :disabled="!canManageBotMode || saving"
+                  @update:model-value="changeBotMode"
+                />
+                <template v-if="open && initialChannel && canManageBotMode && editBotSettings.chatbot_mode === 'internbot'">
+                  <PersonalZaloInternbotSettings
+                    v-if="savedBotSettings.chatbot_mode === 'internbot'"
+                    :key="editChannelId"
+                    v-model="editBotSettings"
+                    :tenant-id="tenantId"
+                    :channel-id="initialChannel.id"
+                    :channel-active="editForm.is_active"
+                    :master-active="chatbotStore.isLoaded(tenantId) ? chatbotStore.isActive(tenantId) : undefined"
+                    :saved-group-id="savedBotSettings.supervisor_group_id"
+                    :saved-enabled="savedBotSettings.internbot_enabled"
+                    :disabled="saving"
+                  />
+                  <v-alert v-else type="info" variant="tonal" density="compact" class="mb-3">
+                    {{ $t('personal_zalo_internbot_save_mode_first') }}
+                  </v-alert>
+                </template>
+              </template>
               <v-select
                 v-if="editChannelType === 'personal_zalo_import'"
                 v-model="editForm.sync_scope"
@@ -132,10 +156,15 @@
 import { isAxiosError } from 'axios'
 import { computed, reactive, ref, shallowRef, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from '../../stores/auth'
 import { useChannelStore, type Channel } from '../../stores/channels'
+import { useChatbotStore } from '../../stores/chatbot'
 import ComplaintCaseSettings from './ComplaintCaseSettings.vue'
+import PersonalZaloBotModePicker from './PersonalZaloBotModePicker.vue'
 import PersonalZaloGroupSettings from './PersonalZaloGroupSettings.vue'
+import PersonalZaloInternbotSettings from './PersonalZaloInternbotSettings.vue'
 import ZaloGroupSettings from './ZaloGroupSettings.vue'
+import { readPersonalZaloBotSettings, type PersonalZaloBotMode } from './personalZaloBotSettings'
 import { personalZaloGroupSettingsPatch, readPersonalZaloGroupSettings } from './personalZaloGroupSettings'
 import { readZaloGroupSettings, zaloGroupSettingsPatch } from './zaloGroupSettings'
 
@@ -144,6 +173,8 @@ const open = defineModel<boolean>({ required: true })
 const emit = defineEmits<{ saved: [channelId: string] }>()
 const { t } = useI18n()
 const channelStore = useChannelStore()
+const authStore = useAuthStore()
+const chatbotStore = useChatbotStore()
 const dialogId = useId()
 const showSaved = ref(false)
 
@@ -170,6 +201,9 @@ const initialChannel = shallowRef<Channel>()
 const editChannelId = computed(() => initialChannel.value?.id)
 const editChannelType = computed(() => initialChannel.value?.channel_type)
 const isZaloChatbotChannel = computed(() => editChannelType.value === 'zalo_oa' || editChannelType.value === 'personal_zalo_import')
+const canManageBotMode = computed(() => authStore.canEdit('channels') && ['owner', 'admin'].includes(authStore.tenantPerms?.role ?? ''))
+const editBotSettings = ref(readPersonalZaloBotSettings())
+const savedBotSettings = ref(readPersonalZaloBotSettings())
 const editForm = reactive({
   name: '', is_active: true, sync_files: false, sync_interval: 15, sync_scope: 'all',
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
@@ -208,6 +242,11 @@ watch(open, (isOpen) => {
   saveError.value = ''
   initialChannel.value = { ...channel }
   editOriginalMeta = metadata
+  savedBotSettings.value = readPersonalZaloBotSettings(metadata)
+  editBotSettings.value = { ...savedBotSettings.value }
+  if (channel.channel_type === 'personal_zalo_import' && savedBotSettings.value.chatbot_mode === 'internbot' && canManageBotMode.value) {
+    void chatbotStore.fetchStatus(props.tenantId)
+  }
   hasLegacyLangflowOverride.value = LEGACY_LANGFLOW_META_KEYS.some((key) => Boolean(metadata[key]))
   Object.assign(editForm, {
     name: channel.name,
@@ -227,6 +266,11 @@ watch(open, (isOpen) => {
   editPersonalGroupSettings.value = readPersonalZaloGroupSettings(metadata)
   initialSettings = settingsMetadata()
 }, { immediate: true })
+
+function changeBotMode(mode: PersonalZaloBotMode) {
+  if (!canManageBotMode.value || mode === editBotSettings.value.chatbot_mode) return
+  editBotSettings.value = { ...editBotSettings.value, chatbot_mode: mode, internbot_enabled: false }
+}
 
 function readMetadata(raw: string): Record<string, unknown> {
   try {
@@ -250,6 +294,7 @@ function settingsMetadata(): Record<string, unknown> {
       sync_scope: editForm.sync_scope,
       ...sessionSettings,
       ...personalZaloGroupSettingsPatch(editPersonalGroupSettings.value),
+      ...editBotSettings.value,
     }
   }
 
@@ -292,6 +337,10 @@ async function saveEdit() {
     changes.handover_alert_group_id = settings.handover_alert_group_id
     changes.personal_zalo_handover_staff_id = settings.personal_zalo_handover_staff_id
   }
+  if (channel.channel_type === 'personal_zalo_import' && 'supervisor_group_id' in changes) {
+    changes.internbot_enabled = settings.internbot_enabled
+  }
+  if (!editForm.is_active && changes.internbot_enabled === true) changes.internbot_enabled = false
   const payload: Record<string, unknown> = {}
   if (editForm.name && editForm.name !== channel.name) payload.name = editForm.name
   if (editForm.is_active !== channel.is_active) payload.is_active = editForm.is_active
@@ -311,8 +360,14 @@ async function saveEdit() {
     showSaved.value = true
     emit('saved', channel.id)
   } catch (error: unknown) {
-    const details = isAxiosError<{ details?: string }>(error) && error.response?.data?.details
-    saveError.value = details || t('error')
+    const response = isAxiosError<{ error?: string; details?: string }>(error) ? error.response?.data : undefined
+    const errorLabels = {
+      internbot_enable_separately: 'personal_zalo_internbot_save_mode_first',
+      internbot_supervisor_unavailable: 'personal_zalo_internbot_group_unavailable',
+      personal_zalo_roster_unavailable: 'personal_zalo_internbot_groups_unavailable',
+    } as const
+    const label = response?.error && errorLabels[response.error as keyof typeof errorLabels]
+    saveError.value = label ? t(label) : response?.details || t('error')
   } finally {
     saving.value = false
   }

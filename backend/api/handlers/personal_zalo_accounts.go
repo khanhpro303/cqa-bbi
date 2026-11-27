@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/api/contracts"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"gorm.io/gorm"
 )
 
 const personalZaloAccountOwnersKey = "account_owners"
@@ -70,18 +70,17 @@ func PutPersonalZaloAccountOwners(c *gin.Context) {
 		return
 	}
 
-	updatedMetadata, err := encodePersonalZaloAccountOwners(channel.Metadata, owners)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "encode_metadata_failed"})
-		return
-	}
-
-	if err := db.DB.Model(&models.Channel{}).
-		Where("id = ? AND tenant_id = ?", channel.ID, channel.TenantID).
-		Updates(map[string]interface{}{
-			"metadata":   updatedMetadata,
-			"updated_at": time.Now(),
-		}).Error; err != nil {
+	if err := db.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		latest, err := lockPersonalZaloRosterChannel(tx, channel.TenantID, channel.ID)
+		if err != nil {
+			return err
+		}
+		updatedMetadata, err := encodePersonalZaloAccountOwners(latest.Metadata, owners)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&latest).Update("metadata", updatedMetadata).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update_channel_failed"})
 		return
 	}

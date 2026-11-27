@@ -35,6 +35,7 @@ type personalZaloDirectGrant struct {
 	turnID            string
 	prompt            string
 	complaintGuide    string
+	draftGuide        string
 	showImages        bool
 	advicePermissions *engine.GroupPermissionContext
 }
@@ -141,6 +142,13 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 	}
 	if g.complaintGuide != "" {
 		prompt = strings.TrimSpace(prompt + "\n\n" + g.complaintGuide)
+	}
+	if g.draftGuide != "" {
+		if prompt == "" {
+			input = g.draftGuide + "\n\nTin nhắn của khách:\n" + input
+		} else {
+			prompt += "\n\n" + g.draftGuide
+		}
 	}
 	if g.agentToken != "" {
 		input, prompt = engine.AddProductAdviceInstruction(input, prompt)

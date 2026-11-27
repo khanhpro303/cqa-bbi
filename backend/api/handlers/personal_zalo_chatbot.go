@@ -26,7 +26,7 @@ const personalZaloTextLimit = 2000
 var personalZaloUIDPattern = regexp.MustCompile(`^[0-9]{1,64}$`)
 
 type personalZaloChatbotRequest struct {
-	SchemaVersion     string    `json:"schema_version" binding:"required,oneof=personal-zalo-chatbot-v1 personal-zalo-chatbot-v2 personal-zalo-chatbot-v3"`
+	SchemaVersion     string    `json:"schema_version" binding:"required,oneof=personal-zalo-chatbot-v1 personal-zalo-chatbot-v2 personal-zalo-chatbot-v3 personal-zalo-internbot-v1"`
 	RequestID         string    `json:"request_id" binding:"required,max=64"`
 	TenantID          string    `json:"tenant_id" binding:"required,max=36"`
 	ChannelID         string    `json:"channel_id" binding:"required,max=36"`
@@ -40,6 +40,9 @@ type personalZaloChatbotRequest struct {
 	BotMentioned      bool      `json:"bot_mentioned,omitempty"`
 	GroupWakeText     *string   `json:"group_wake_text,omitempty"`
 	MultipleImages    bool      `json:"multiple_images,omitempty"`
+	SupportsInternbot bool      `json:"supports_internbot,omitempty"`
+	SourceName        string    `json:"source_name,omitempty" binding:"max=128"`
+	SenderName        string    `json:"sender_name,omitempty" binding:"max=128"`
 	DeliveryReceipt   string    `json:"delivery_receipt" binding:"omitempty,uuid4"`
 	DeliveryToken     string    `json:"delivery_token,omitempty" binding:"omitempty,max=4096"`
 	DeliveryPart      string    `json:"delivery_part,omitempty" binding:"omitempty,oneof=text image"`
@@ -49,14 +52,8 @@ type personalZaloChatbotRequest struct {
 // NewPersonalZaloChatbotHandler receives live text turns from the
 // authenticated gateway. The gateway owns the Zalo session and sends the reply.
 func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
-	langflow := engine.NewLangflowClient(cfg)
-	scopedLangflow := engine.NewLangflowPreviewClient(cfg)
-	settingKeys := append([]string{
-		"chatbot_active", "ai_engine_system_prompt", "ai_engine_system_prompt_internal",
-		"ai_agent_erp_token_public", "ai_agent_erp_token_private", "ai_agent_erp_token",
-	}, engine.LangflowSettingKeys...)
+	ai := newPersonalZaloAI(cfg)
 	activationKeys := append([]string{"chatbot_active"}, erpActivationKeys...)
-	settingKeys = append(settingKeys, erpActivationKeys...)
 
 	return func(c *gin.Context) {
 		var req personalZaloChatbotRequest
@@ -71,6 +68,17 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		req.Text = strings.TrimSpace(req.Text)
 		age := time.Since(req.SentAt)
 		preflight := req.DeliveryToken != "" || req.DeliveryPart != "" || req.DeliveryDigest != ""
+		internbotOnly := req.SchemaVersion == personalZaloInternbotProtocol
+		if internbotOnly {
+			if !req.SupportsInternbot || preflight || req.DeliveryReceipt != "" {
+				c.Status(http.StatusNoContent)
+				return
+			}
+			req.SchemaVersion = personalZaloDirectProtocol
+			if req.ThreadType == personalZaloThreadGroup {
+				req.SchemaVersion = "personal-zalo-chatbot-v2"
+			}
+		}
 		if (req.Text == "" && !req.BotMentioned) || personalZaloTextBoundary(req.Text, personalZaloTextLimit) != len(req.Text) ||
 			!personalZaloUIDPattern.MatchString(req.AccountExternalID) || !normalizePersonalZaloChatbotRequest(&req) ||
 			((req.BotMentioned || req.GroupWakeText != nil) && req.ThreadType != personalZaloThreadGroup) ||
@@ -85,6 +93,15 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
 		defer cancel()
+		if req.SupportsInternbot && !preflight && req.DeliveryReceipt == "" {
+			if ai.handleInternbotTurn(c, ctx, req) {
+				return
+			}
+			if internbotOnly {
+				c.Status(http.StatusNoContent)
+				return
+			}
+		}
 		channel, enabled, err := personalZaloChatbotChannel(ctx, req)
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_settings_unavailable"})
@@ -94,7 +111,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			c.Status(http.StatusNoContent)
 			return
 		}
-		settings, err := loadPersonalZaloChatbotSettings(ctx, req.TenantID, settingKeys...)
+		settings, err := loadPersonalZaloChatbotSettings(ctx, req.TenantID, ai.settingKeys...)
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_settings_unavailable"})
 			return
@@ -196,80 +213,34 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			requestedHandover = true
 			turn = personalZaloTurn{RunFlow: true, FlowScope: personalZaloLegacyFlowScope(req)}
 		}
-		reply := turn.Reply
-		var imageSelection personalZaloImageSelection
-		var directGrant personalZaloDirectGrant
-		complaintTurn := complaints && turn.RunFlow
+		generation := personalZaloAIResult{reply: turn.Reply, handover: handover, complaint: complaints && turn.RunFlow}
 		if turn.RunFlow && !handover {
 			flowCtx := ctx
-			if complaintTurn {
-				// Reserve time to recheck the channel and notify staff if the
-				// flow times out without recording the complaint.
+			if generation.complaint {
+				// Reserve time to recheck the channel and notify staff on timeout.
 				deadline, _ := ctx.Deadline()
 				var cancelFlow context.CancelFunc
 				flowCtx, cancelFlow = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
 				defer cancelFlow()
 			}
-			flow := engine.ResolveTenantLangflowConfig(settings, cfg)
-			switch {
-			case guest:
-				result, runErr := runPersonalZaloGuest(flowCtx, scopedLangflow, cfg, flow, req, turn.FlowScope, complaintTurn, false)
-				if errors.Is(runErr, engine.ErrGuestKnowledgeNotConfigured) {
-					reply = engine.GuestKnowledgeUnavailableReply
-				} else {
-					err = runErr
-					reply, imageSelection.knowledgeIDs = engine.ParsePersonalZaloKnowledgeImageReply(result.Text)
-				}
-			case identity.AgentType != "":
-				if personalZaloMatchesKeyword(req.Text, "hello;hi;xin chào;chào;alo") {
-					reply = personalZaloDirectGreeting(identity.AgentType)
-					complaintTurn = false
-				} else {
-					directGrant, err = preparePersonalZaloDirectGrant(ctx, cfg, req, identity, flow, turn.FlowScope, settings)
-					if err == nil && complaintTurn {
-						err = directGrant.allowComplaints(ctx, cfg.EncryptionKey, req, identity)
-					}
-					if err != nil {
-						c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_settings_unavailable"})
-						return
-					}
-					reply, imageSelection, err = directGrant.run(flowCtx, scopedLangflow, channel, req)
-				}
-				handover = personalZaloHasHandoverDestination(channel) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
-			case complaintTurn && flow.PublicFlowIDSource == engine.LangflowSourceTenant && flow.APIKeySource == engine.LangflowSourceTenant:
-				var result engine.LangflowResult
-				result, err = runPersonalZaloGuest(flowCtx, scopedLangflow, cfg, flow, req, turn.FlowScope, true, staffGroupComplaint)
-				reply, _ = engine.ParseKnowledgeImageReply(result.Text, 0)
-			default:
-				if flow.APIURL == "" || flow.PublicFlowID == "" || strings.EqualFold(flow.PublicFlowID, flow.FlowID) {
-					if !complaintTurn {
-						c.Status(http.StatusNoContent)
-						return
-					}
-					break
-				}
-				systemPrompt := strings.TrimSpace(settings["ai_engine_system_prompt"].ValuePlain)
-				instruction := ""
-				if systemPrompt != "" {
-					instruction = personalZaloHandoverPrompt(channel)
-					if instruction != "" {
-						systemPrompt += "\n\n" + instruction
-					}
-				}
-				input, systemPrompt := engine.AddProductAdviceInstruction(req.Text, systemPrompt)
-				reply, err = langflow.RunFlowWithOverrides(flowCtx, turn.FlowScope, turn.FlowScope,
-					input, flow.APIURL, flow.APIKey, flow.PublicFlowID, systemPrompt)
-				reply, _ = engine.ParseKnowledgeImageReply(reply, 0)
-				handover = instruction != "" && (addressed || !groupTurn.Staff) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
+			generation, err = ai.generate(ctx, flowCtx, channel, req, settings, personalZaloAIOptions{
+				scope: turn.FlowScope, identity: identity, guest: guest, complaint: generation.complaint,
+				canHandover: addressed || !groupTurn.Staff, staffGroupComplaint: staffGroupComplaint,
+			})
+			if generation.settingsError {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_settings_unavailable"})
+				return
 			}
-			if err != nil && !complaintTurn {
+			if err != nil && !generation.complaint {
 				c.JSON(http.StatusBadGateway, gin.H{"error": "chatbot_reply_failed"})
 				return
 			}
-			if !complaintTurn {
-				reply = personalZaloStripHandoverMarker(reply)
+			if !generation.complaint {
+				generation.reply = personalZaloStripHandoverMarker(generation.reply)
 			}
 		}
+		reply, imageSelection, directGrant := generation.reply, generation.images, generation.grant
+		handover, complaintTurn := generation.handover, generation.complaint
 		flowErr := err
 		reply = strings.TrimSpace(reply)
 		if !complaintTurn && !handover && reply == "" {
@@ -433,6 +404,9 @@ func personalZaloChatbotChannel(ctx context.Context, req personalZaloChatbotRequ
 	metadata, err := decodeMetadataObject(channel.Metadata)
 	if err != nil {
 		return channel, false, err
+	}
+	if mode, _ := metadata["chatbot_mode"].(string); mode == "internbot" {
+		return channel, false, nil
 	}
 	scope, _ := metadata["sync_scope"].(string)
 	if req.ThreadType == personalZaloThreadGroup {

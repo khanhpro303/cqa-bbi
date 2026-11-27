@@ -8,6 +8,7 @@ import type {
   GatewayAccountRecord,
   GatewayChatbotReply,
   GatewayChatbotTurnRecord,
+  GatewayInternbotReply,
   IncomingGatewayMessage,
   SessionData,
 } from '../types.js';
@@ -15,14 +16,16 @@ import {
   acknowledgePersonalZaloChatbotDelivery,
   authorizePersonalZaloChatbotDelivery,
   authorizePersonalZaloGroupAccess,
+  authorizePersonalZaloInternbotDelivery,
   isChatbotEligibleMessage,
   requestPersonalZaloChatbotTurn,
   type ChatbotReplyImage,
   type PersonalZaloChatbotReply,
+  type PersonalZaloInternbotReply,
 } from '../chatbot/cqa-chatbot-client.js';
 import { FloodDetector, RateLimiter, SelfEchoShield } from '../chatbot/zalo-message-guards.js';
 import { attachZaloListener, type ChatbotSelfMessage } from './listener.js';
-import { captureRoster, probeRoster, pushRosterSnapshot, type RosterSnapshot } from './roster.js';
+import { captureRoster, hasGroupMembership, probeRoster, pushRosterSnapshot, type RosterSnapshot } from './roster.js';
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -57,6 +60,8 @@ export interface PoolHealthSnapshot {
 
 interface ActiveChatbotThread {
   cancelled: boolean;
+  manuallyAnswered?: boolean;
+  mode?: 'chatbot' | 'internbot';
   threadId: string;
   threadType: IncomingGatewayMessage['threadType'];
   pendingEcho?: {
@@ -99,6 +104,11 @@ interface ZaloSendReceipt {
 
 function cancelChatbotTurn(active: ActiveChatbotThread): void {
   active.cancelled = true;
+}
+
+function noteManualReply(active: ActiveChatbotThread): void {
+  active.manuallyAnswered = true;
+  if (active.mode === 'chatbot') cancelChatbotTurn(active);
 }
 
 type ChatbotSendOutcome = 'sent' | 'cancelled' | 'deferred' | 'unknown' | 'failed';
@@ -382,9 +392,9 @@ export class ZaloAccountPool {
     if (threadType === 'group') {
       if (chatbot.guards.echoShield.isEcho(threadKey, message.text)) return;
       for (const active of chatbot.threads.values()) {
-        if (active.threadType === 'group' && active.threadId === threadId) cancelChatbotTurn(active);
+        if (active.threadType === 'group' && active.threadId === threadId) noteManualReply(active);
       }
-      await this.store.cancelChatbotTurns(accountId, threadType, threadId);
+      await this.store.noteManualChatbotReply(accountId, threadType, threadId);
       return;
     }
 
@@ -397,8 +407,8 @@ export class ZaloAccountPool {
       pending.candidates.add(message.id);
       return;
     }
-    if (active) cancelChatbotTurn(active);
-    await this.store.cancelChatbotTurns(accountId, threadType, threadId);
+    if (active) noteManualReply(active);
+    await this.store.noteManualChatbotReply(accountId, threadType, threadId);
   }
 
   private async handleLiveMessage(
@@ -451,13 +461,17 @@ export class ZaloAccountPool {
         chatbot.rescanRequested = false;
         const turns = await this.store.listChatbotTurns(accountId);
         for (const [messageId, turn] of turns) {
-          if (turn.status !== 'pending' && turn.status !== 'ready') continue;
+          if (!isQueuedChatbotTurn(turn)) continue;
           const message = turn.message;
           const threadKey = chatbotThreadKey(message.threadType, message.threadId, message.senderUid);
           if (chatbot.threads.has(threadKey)) continue;
           const activeOfType = [...chatbot.threads.values()].filter((active) => active.threadType === message.threadType).length;
           if (activeOfType >= 3) continue;
-          const active: ActiveChatbotThread = { cancelled: false, threadId: message.threadId, threadType: message.threadType };
+          const active: ActiveChatbotThread = {
+            cancelled: false, threadId: message.threadId, threadType: message.threadType,
+            manuallyAnswered: turn.manuallyAnswered,
+            mode: turn.status === 'ready' ? 'chatbot' : turn.status === 'internbot_ready' ? 'internbot' : undefined,
+          };
           chatbot.threads.set(threadKey, active);
           const task = this.processChatbotTurn(accountId, ownId, instance, active, messageId, turn)
             .catch((error) => logger.error(`[zalo:${accountId}] durable chatbot turn failed`, error))
@@ -465,7 +479,7 @@ export class ZaloAccountPool {
               chatbot.threads.delete(threadKey);
               const remaining = await this.store.listChatbotTurns(accountId);
               const threadPending = remaining.some(([, queued]) =>
-                (queued.status === 'pending' || queued.status === 'ready') &&
+                isQueuedChatbotTurn(queued) &&
                 chatbotThreadKey(queued.message.threadType, queued.message.threadId, queued.message.senderUid) === threadKey);
               if (!threadPending) {
                 chatbot.waiters.get(threadKey)?.resolve();
@@ -501,7 +515,7 @@ export class ZaloAccountPool {
     initial: GatewayChatbotTurnRecord,
   ): Promise<void> {
     const message = initial.message;
-    if (!initial.reply && !isChatbotEligibleMessage(message)) {
+    if (initial.status === 'pending' && !isChatbotEligibleMessage(message)) {
       await this.store.updateChatbotTurn(accountId, messageId, 'expired', { lastError: 'chatbot_turn_expired_before_dispatch' });
       return;
     }
@@ -514,7 +528,13 @@ export class ZaloAccountPool {
     }
     if (!this.chatbotAccountMatches(account, ownId) || !this.canSendChatbotReply(accountId, instance)) return;
 
-    let reply = initial.reply ? restoreChatbotReply(initial.reply) : undefined;
+    let reply: PersonalZaloChatbotReply | PersonalZaloInternbotReply | undefined;
+    if (initial.status === 'ready' && initial.reply) reply = restoreChatbotReply(initial.reply);
+    if (initial.status === 'internbot_ready' && initial.internbotReply) reply = restoreInternbotReply(initial.internbotReply);
+    if (initial.status !== 'pending' && !reply) {
+      await this.store.updateChatbotTurn(accountId, messageId, 'failed', { lastError: 'invalid_stored_chatbot_reply' });
+      return;
+    }
     if (!reply) {
       if (!await this.store.transitionChatbotTurn(accountId, messageId, 'pending', 'processing')) return;
       const latestAccount = await this.store.getAccount(accountId);
@@ -527,7 +547,9 @@ export class ZaloAccountPool {
         await this.store.transitionChatbotTurn(accountId, messageId, 'processing', 'pending');
         return;
       }
-      let result = await requestPersonalZaloChatbotTurn(latestAccount, message);
+      const requestTurn = (current: GatewayAccountRecord) => requestPersonalZaloChatbotTurn(current, message,
+        Boolean(active.manuallyAnswered || current.chatbotTurns?.[messageId]?.manuallyAnswered));
+      let result = await requestTurn(latestAccount);
       for (let attempt = 1; result.outcome === 'retryable' && attempt < 3; attempt++) {
         await delay(attempt * 250);
         const retryAccount = await this.store.getAccount(accountId);
@@ -540,7 +562,11 @@ export class ZaloAccountPool {
           await this.store.transitionChatbotTurn(accountId, messageId, 'processing', 'pending');
           return;
         }
-        result = await requestPersonalZaloChatbotTurn(retryAccount, message);
+        result = await requestTurn(retryAccount);
+      }
+      if (active.cancelled || (result.outcome !== 'internbot_reply' && active.manuallyAnswered)) {
+        await this.store.completeChatbotTurn(accountId, messageId);
+        return;
       }
       if (result.outcome === 'no_reply') {
         await this.store.completeChatbotTurn(accountId, messageId);
@@ -555,23 +581,32 @@ export class ZaloAccountPool {
         return;
       }
       reply = result.reply;
-      await this.store.updateChatbotTurn(accountId, messageId, 'ready', { reply: storeChatbotReply(reply) });
+      if (result.outcome === 'internbot_reply') {
+        active.mode = 'internbot';
+        await this.store.updateChatbotTurn(accountId, messageId, 'internbot_ready', {
+          internbotReply: storeInternbotReply(result.reply),
+        });
+      } else {
+        active.mode = 'chatbot';
+        await this.store.updateChatbotTurn(accountId, messageId, 'ready', { reply: storeChatbotReply(result.reply) });
+      }
     }
 
+    const isInternbot = 'groupId' in reply;
     const outcome = await this.sendChatbotReply(
       instance.chatbot!, active, instance, account!, message, messageId, reply,
     );
     if (active.cancelled) {
-      await this.store.cancelChatbotTurns(accountId, message.threadType, message.threadId, message.senderUid);
+      if (active.manuallyAnswered) await this.store.noteManualChatbotReply(accountId, message.threadType, message.threadId);
       return;
     }
     if (outcome === 'deferred') {
-      await this.store.updateChatbotTurn(accountId, messageId, 'ready');
+      await this.store.updateChatbotTurn(accountId, messageId, isInternbot ? 'internbot_ready' : 'ready');
       return;
     }
     if (outcome === 'unknown' || outcome === 'failed') return;
     await this.store.completeChatbotTurn(accountId, messageId);
-    if (outcome === 'sent' && reply.deliveryReceipt) {
+    if (outcome === 'sent' && 'deliveryReceipt' in reply && reply.deliveryReceipt) {
       await acknowledgePersonalZaloChatbotDelivery(account!, message, reply.deliveryReceipt);
     }
   }
@@ -591,15 +626,22 @@ export class ZaloAccountPool {
     expectedAccount: GatewayAccountRecord,
     message: IncomingGatewayMessage,
     messageId: string,
-    reply: PersonalZaloChatbotReply,
+    reply: PersonalZaloChatbotReply | PersonalZaloInternbotReply,
   ): Promise<ChatbotSendOutcome> {
     const accountId = expectedAccount.id;
     const { rateLimiter, echoShield, floodDetector } = chatbot.guards;
-    const threadKey = chatbotThreadKey(message.threadType, message.threadId);
+    const internbot = 'groupId' in reply ? reply : undefined;
+    const targetType = internbot ? 'group' : message.threadType;
+    const targetID = internbot ? internbot.groupId : message.threadId;
+    const readyStatus = internbot ? 'internbot_ready' : 'ready';
+    const threadKey = chatbotThreadKey(targetType, targetID);
+    const retainReply = () => 'groupId' in reply ? { internbotReply: storeInternbotReply(reply, false) } :
+      { reply: storeChatbotReply(reply, false) };
+    const textToken = 'groupId' in reply ? reply.token : reply.deliveryToken;
     const send = async (
       outbound: ChatbotOutboundMessage,
-      expectedStatus: 'ready' | 'sending',
-      deliveryToken = reply.deliveryToken,
+      expectedStatus: 'ready' | 'internbot_ready' | 'sending',
+      deliveryToken = textToken,
     ): Promise<ChatbotSendOutcome> => {
       let sent = false;
       let invoked = false;
@@ -627,23 +669,38 @@ export class ZaloAccountPool {
             }
             return;
           }
-          if (message.threadType === 'user') {
+          if (internbot) {
+            try {
+              if (!await hasGroupMembership(instance.api, targetID)) {
+                cancelled = true;
+                return;
+              }
+            } catch {
+              await this.store.updateChatbotTurn(accountId, messageId, 'failed', {
+                lastError: 'internbot_group_membership_unavailable', ...retainReply(),
+              });
+              failed = true;
+              return;
+            }
+          }
+          if (internbot || message.threadType === 'user') {
             if (!deliveryToken) {
               cancelled = true;
               return;
             }
-            const authorization = await authorizePersonalZaloChatbotDelivery(
-              account, message, deliveryToken, typeof outbound === 'string' ? 'text' : 'image',
-              createHash('sha256').update(typeof outbound === 'string' ? Buffer.from(outbound, 'utf8') : outbound.attachments[0].data).digest('hex'),
-            );
+            const part = typeof outbound === 'string' ? 'text' : 'image';
+            const digest = createHash('sha256')
+              .update(typeof outbound === 'string' ? Buffer.from(outbound, 'utf8') : outbound.attachments[0].data).digest('hex');
+            const authorization = internbot ?
+              await authorizePersonalZaloInternbotDelivery(account, message, targetID, deliveryToken, part, digest) :
+              await authorizePersonalZaloChatbotDelivery(account, message, deliveryToken, part, digest);
             if (authorization === 'denied') {
               cancelled = true;
               return;
             }
             if (authorization === 'retryable') {
               await this.store.updateChatbotTurn(accountId, messageId, 'failed', {
-                lastError: `delivery_authorization_unavailable_${typeof outbound === 'string' ? 'text' : 'image'}`,
-                reply: storeChatbotReply(reply, false),
+                lastError: `delivery_authorization_unavailable_${part}`, ...retainReply(),
               });
               failed = true;
               return;
@@ -662,7 +719,7 @@ export class ZaloAccountPool {
               return;
             }
           }
-          if (message.threadType === 'group') {
+          if (!internbot && message.threadType === 'group') {
             const authorization = await authorizePersonalZaloGroupAccess(
               expectedAccount, message, new Date(message.timestamp).toISOString(),
             );
@@ -672,7 +729,7 @@ export class ZaloAccountPool {
             }
             if (authorization === 'retryable') {
               await this.store.updateChatbotTurn(accountId, messageId, 'failed', {
-                lastError: 'group_approval_unavailable', reply: storeChatbotReply(reply, false),
+                lastError: 'group_approval_unavailable', ...retainReply(),
               });
               failed = true;
               return;
@@ -690,16 +747,16 @@ export class ZaloAccountPool {
             return;
           }
           if (!this.canSendChatbotReply(accountId, instance) || currentAccount.status !== 'connected') {
-            if (expectedStatus === 'ready') {
-              await this.store.transitionChatbotTurn(accountId, messageId, 'sending', 'ready');
+            if (expectedStatus !== 'sending') {
+              await this.store.transitionChatbotTurn(accountId, messageId, 'sending', expectedStatus);
             }
             return;
           }
           if (typeof outbound === 'string') echoShield.recordSent(threadKey, outbound);
           recordAttempt();
           invoked = true;
-          if (message.threadType === 'group') {
-            await instance.api.sendMessage(outbound, message.threadId, 1);
+          if (targetType === 'group') {
+            await instance.api.sendMessage(outbound, targetID, 1);
           } else {
             await this.sendDirectChatbotMessage(chatbot, active, instance, message.threadId, outbound);
           }
@@ -708,7 +765,7 @@ export class ZaloAccountPool {
       } catch (error) {
         if (invoked) {
           await this.store.updateChatbotTurn(accountId, messageId, 'unknown', {
-            lastError: String(error), reply: storeChatbotReply(reply, false),
+            lastError: String(error), ...retainReply(),
           });
           return 'unknown';
         }
@@ -718,9 +775,9 @@ export class ZaloAccountPool {
     };
 
     try {
-      const textOutcome = await send(reply.reply, 'ready');
+      const textOutcome = await send('groupId' in reply ? reply.text : reply.reply, readyStatus);
       if (textOutcome !== 'sent') return textOutcome;
-      const images = message.threadType === 'user' ? reply.images ?? [] : [];
+      const images = internbot || message.threadType === 'user' ? reply.images ?? [] : [];
       for (const image of images) {
         if (active.cancelled) return 'cancelled';
         const imageOutcome = await send({
@@ -730,12 +787,12 @@ export class ZaloAccountPool {
             filename: image.filename,
             metadata: { totalSize: image.data.length, width: image.width, height: image.height },
           }],
-        }, 'sending', image.deliveryToken ?? reply.deliveryToken);
+        }, 'sending', image.deliveryToken ?? textToken);
         if (imageOutcome === 'unknown') return 'unknown';
         if (imageOutcome === 'deferred') {
           await this.store.updateChatbotTurn(accountId, messageId, 'failed', {
             lastError: 'text_sent_image_not_sent',
-            reply: storeChatbotReply(reply, false),
+            ...retainReply(),
           });
           return 'failed';
         }
@@ -745,7 +802,7 @@ export class ZaloAccountPool {
     } catch (error) {
       logger.warn(`[zalo:${accountId}] chatbot send failed`, error);
       await this.store.updateChatbotTurn(accountId, messageId, 'failed', {
-        lastError: String(error), reply: storeChatbotReply(reply, false),
+        lastError: String(error), ...retainReply(),
       });
       return 'failed';
     }
@@ -774,7 +831,7 @@ export class ZaloAccountPool {
         chatbot.guards.directEchoIds.recordSent(chatbotThreadKey('user', threadId), id);
       }
     } finally {
-      if (pending.candidates.size > 0) cancelChatbotTurn(active);
+      if (pending.candidates.size > 0) noteManualReply(active);
       active.pendingEcho = undefined;
     }
   }
@@ -842,7 +899,7 @@ export class ZaloAccountPool {
         0,
       ),
       queuedChatbotTurns: turns.filter((turn) =>
-        ['captured', 'pending', 'processing', 'ready', 'sending'].includes(turn.status)).length,
+        isQueuedChatbotTurn(turn) || ['captured', 'processing', 'sending'].includes(turn.status)).length,
       unknownChatbotTurns: turns.filter((turn) => turn.status === 'unknown').length,
       failedChatbotTurns: turns.filter((turn) => turn.status === 'failed' || turn.status === 'expired').length,
     };
@@ -995,6 +1052,26 @@ export class ZaloAccountPool {
 function chatbotThreadKey(threadType: IncomingGatewayMessage['threadType'], threadId: string, senderUid = ''): string {
   if (threadType === 'group' && senderUid) return `group:${threadId}:${senderUid}`;
   return `${threadType}:${threadId}`;
+}
+
+function isQueuedChatbotTurn(turn: GatewayChatbotTurnRecord): boolean {
+  return turn.status === 'pending' || turn.status === 'ready' || turn.status === 'internbot_ready';
+}
+
+function storeInternbotReply(reply: PersonalZaloInternbotReply, includeImages = true): GatewayInternbotReply {
+  return {
+    groupId: reply.groupId,
+    content: storeChatbotReply({ reply: reply.text, deliveryToken: reply.token, images: reply.images }, includeImages),
+  };
+}
+
+function restoreInternbotReply(reply: GatewayInternbotReply): PersonalZaloInternbotReply | undefined {
+  const { reply: text, deliveryToken: token, images } = restoreChatbotReply(reply.content);
+  if (!token) return undefined;
+  return {
+    groupId: reply.groupId, text, token,
+    images: images?.flatMap((image) => image.deliveryToken ? [{ ...image, deliveryToken: image.deliveryToken }] : []),
+  };
 }
 
 function storeChatbotReply(reply: PersonalZaloChatbotReply, includeImages = true): GatewayChatbotReply {

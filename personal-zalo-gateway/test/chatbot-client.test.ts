@@ -184,11 +184,15 @@ test('a group delivery receipt preserves the original identity and is independen
   assert.ok(receipt);
   const initialBody = JSON.parse(initial.body);
   const receiptBody = JSON.parse(receipt.body);
+  const { supports_internbot, sender_name, source_name, ...originalTurn } = initialBody;
   assert.notEqual(receipt.requestId, initial.requestId);
   assert.deepEqual(
     { ...receiptBody, request_id: initialBody.request_id, delivery_receipt: undefined },
-    { ...initialBody, delivery_receipt: undefined },
+    { ...originalTurn, delivery_receipt: undefined },
   );
+  assert.equal(supports_internbot, true);
+  assert.equal(sender_name, 'Khách hàng');
+  assert.equal(source_name, undefined);
   assert.equal(receiptBody.delivery_receipt, deliveryReceipt);
   assert.notEqual(receipt.signature, initial.signature);
 

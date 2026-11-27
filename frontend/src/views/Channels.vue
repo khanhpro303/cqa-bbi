@@ -55,12 +55,24 @@
             </div>
           </div>
 
-          <!-- Per-channel auto-reply is shown only when the backend exposes that capability. -->
-          <div v-if="ch.supports_auto_reply" class="mb-2">
+          <div v-if="ch.supports_auto_reply || personalZaloBots[ch.id]" class="mb-2">
             <div class="d-flex align-center justify-space-between">
-              <span class="text-caption text-grey">{{ $t('chatbot_channel_autoreply_short') }}</span>
+              <span class="text-caption text-grey">{{ $t(personalZaloBots[ch.id] ? 'personal_zalo_bot_mode' : 'chatbot_channel_autoreply_short') }}</span>
               <div class="d-flex align-center ga-3" @click.stop>
-                <template v-if="chatbotStatusLoaded">
+                <v-chip v-if="personalZaloBots[ch.id]" size="x-small" variant="tonal" color="primary">
+                  {{ personalZaloBots[ch.id]?.chatbot_mode === 'internbot' ? 'Internbot' : 'Chatbot' }}
+                </v-chip>
+                <template v-if="personalZaloBots[ch.id]?.chatbot_mode === 'internbot'">
+                  <span v-if="!personalZaloBots[ch.id]?.supervisor_group_id" class="text-caption text-medium-emphasis">
+                    {{ $t('personal_zalo_internbot_no_group_selected') }}
+                  </span>
+                  <span v-else-if="chatbotStatusLoaded" class="text-caption font-weight-medium" :class="ch.is_active && chatbotActive && personalZaloBots[ch.id]?.internbot_enabled ? 'text-success' : 'text-grey'">
+                    {{ $t(ch.is_active && chatbotActive && personalZaloBots[ch.id]?.internbot_enabled ? 'chatbot_status_on' : 'chatbot_status_off') }}
+                  </span>
+                  <v-btn v-else-if="chatbotStatusError" icon="mdi-refresh" size="x-small" variant="text" color="warning" :aria-label="$t('refresh')" :loading="chatbotStatusLoading" @click.stop="fetchChatbotStatus" />
+                  <span v-else class="text-caption text-grey">{{ $t('loading') }}</span>
+                </template>
+                <template v-else-if="ch.supports_auto_reply && chatbotStatusLoaded">
                   <v-switch
                     :model-value="ch.auto_reply_enabled && chatbotActive"
                     hide-details
@@ -75,8 +87,8 @@
                   </span>
                   <v-btn v-if="chatbotStatusError" icon="mdi-refresh" size="x-small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click.stop="fetchChatbotStatus" />
                 </template>
-                <v-btn v-else-if="chatbotStatusError" icon="mdi-refresh" size="x-small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click.stop="fetchChatbotStatus" />
-                <template v-else>
+                <v-btn v-else-if="ch.supports_auto_reply && chatbotStatusError" icon="mdi-refresh" size="x-small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click.stop="fetchChatbotStatus" />
+                <template v-else-if="ch.supports_auto_reply">
                   <v-progress-circular indeterminate size="20" width="2" color="grey" class="mx-3" />
                   <span class="text-caption text-grey">{{ $t('loading') }}</span>
                 </template>
@@ -197,6 +209,7 @@
             <v-alert type="info" variant="tonal" class="mb-3">
               {{ $t('personal_zalo_note') }}
             </v-alert>
+            <PersonalZaloBotModePicker v-model="newChannel.chatbot_mode" :disabled="!canCreateInternbot || creating" />
             <v-select
               v-model="newChannel.sync_scope"
               :items="[
@@ -297,6 +310,8 @@ import api from '../api'
 import FacebookPageConnect from '../components/channels/FacebookPageConnect.vue'
 import ChannelEditDialog from '../components/channels/ChannelEditDialog.vue'
 import ChannelAvatar from '../components/channels/ChannelAvatar.vue'
+import PersonalZaloBotModePicker from '../components/channels/PersonalZaloBotModePicker.vue'
+import { readPersonalZaloBotSettings, type PersonalZaloBotMode } from '../components/channels/personalZaloBotSettings'
 
 const route = useRoute()
 const router = useRouter()
@@ -325,6 +340,10 @@ const chatbotActive = computed(() => chatbotStore.isActive(tenantId.value))
 const chatbotStatusLoaded = computed(() => chatbotStore.isLoaded(tenantId.value))
 const chatbotStatusLoading = computed(() => chatbotStore.isLoading(tenantId.value))
 const chatbotStatusError = computed(() => chatbotStore.hasError(tenantId.value))
+const canCreateInternbot = computed(() => ['owner', 'admin'].includes(authStore.tenantPerms?.role ?? ''))
+const personalZaloBots = computed(() => Object.fromEntries(channelStore.channels
+  .filter(channel => channel.channel_type === 'personal_zalo_import')
+  .map(channel => [channel.id, readPersonalZaloBotSettings(channel.metadata)])))
 
 function canToggleAutoReply(ch: any) {
   if (!authStore.canEdit('channels')) return false
@@ -363,6 +382,7 @@ const newChannel = reactive({
   sync_files: false,
   sync_interval: 15,
   sync_scope: 'all',
+  chatbot_mode: 'chatbot' as PersonalZaloBotMode,
 })
 
 onMounted(() => {
@@ -473,11 +493,15 @@ async function createPersonalZalo() {
       channel_type: 'personal_zalo_import',
       name: newChannel.name,
       credentials: {},
-      metadata: JSON.stringify({ sync_scope: newChannel.sync_scope }),
+      metadata: JSON.stringify({
+        sync_scope: newChannel.sync_scope,
+        ...(canCreateInternbot.value && newChannel.chatbot_mode === 'internbot' && { chatbot_mode: 'internbot' }),
+      }),
     })
     showDialog.value = false
     newChannel.name = ''
     newChannel.creds = {}
+    newChannel.chatbot_mode = 'chatbot'
     showSnack(t('personal_zalo_created'), 'success')
     await channelStore.fetchChannels(tenantId.value)
     const channelId = created?.id || created?.data?.id
