@@ -512,3 +512,28 @@ it('keeps OA details and history when personal Zalo requests finish after naviga
   expect(wrapper.text()).toContain('OA sync')
   expect(wrapper.text()).not.toContain('invalid Messenger journey input')
 })
+
+it('renders the segmented bot mode toggle cleanly on both channel cards and the edit dialog', async () => {
+  const { wrapper } = await mountPage(false, true, undefined, 'admin')
+
+  const row = wrapper.get('.bot-mode-row--personal')
+  expect(row.find('.bot-mode-row__label').exists()).toBe(true)
+  expect(row.find('.bot-mode-row__status').exists()).toBe(true)
+
+  const cardPicker = row.getComponent(PersonalZaloBotModePicker)
+  const cardToggle = cardPicker.get('.bot-mode-toggle')
+  expect(cardToggle.classes()).toContain('bot-mode-toggle--compact')
+  expect(cardToggle.attributes('variant')).toBe('text')
+  const cardButtons = cardPicker.findAll('button.bot-mode-option')
+  expect(cardButtons).toHaveLength(2)
+  expect(cardButtons[0]!.attributes('rounded')).toBe('md')
+  expect(cardButtons[0]!.classes()).toContain('bot-mode-option--active')
+  expect(cardButtons[1]!.classes()).not.toContain('bot-mode-option--active')
+
+  await wrapper.get(editButton).trigger('click')
+  const dialogPicker = wrapper.get('[role="dialog"]').getComponent(PersonalZaloBotModePicker)
+  const dialogToggle = dialogPicker.get('.bot-mode-toggle')
+  expect(dialogToggle.classes()).not.toContain('bot-mode-toggle--compact')
+  expect(dialogToggle.attributes('variant')).toBe('text')
+  expect(dialogPicker.get('button[value="chatbot"]').classes()).toContain('bot-mode-option--active')
+})
