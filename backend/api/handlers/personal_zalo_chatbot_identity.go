@@ -30,8 +30,7 @@ const (
 	personalZaloPairingTTL       = 15 * time.Minute
 	personalZaloPairingAttempts  = 5
 
-	personalZaloVerificationRequiredReply = "Dạ, trợ lý chỉ phục vụ tài khoản Zalo đã được xác thực. Anh/chị vui lòng liên hệ nhân viên để được cấp mã xác thực cho kênh này ạ."
-	personalZaloInvalidPairingReply       = "Dạ, mã xác thực không hợp lệ, đã được sử dụng hoặc đã hết hạn. Anh/chị vui lòng liên hệ nhân viên để được hỗ trợ ạ."
+	personalZaloInvalidPairingReply = "Dạ, mã xác thực không hợp lệ, đã được sử dụng hoặc đã hết hạn. Anh/chị vui lòng liên hệ nhân viên để được hỗ trợ ạ."
 )
 
 type personalZaloERPIdentity struct {

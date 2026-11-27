@@ -92,10 +92,12 @@ func TestKnowledgePreviewMCPExposesOnlyKnowledgeSearch(t *testing.T) {
 		t.Fatalf("preview tool = %v, want %s", tool["name"], knowledgeMCPToolName)
 	}
 
-	blocked := callKnowledgePreviewMCP(t, "tenant-a", token, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"complaint_record","arguments":{}}}`)
-	errorBody, ok := blocked["error"].(map[string]any)
-	if !ok || errorBody["code"] != float64(-32602) || errorBody["message"] != "Tool unavailable in knowledge preview" {
-		t.Fatalf("preview mutation call was not blocked: %v", blocked)
+	for _, name := range []string{"search_products", "search_product_variants", "inventory_by_sku", "inventory_by_line", "lookup_order", "lookup_debt", "order_cart_checkout", "complaint_record"} {
+		blocked := callKnowledgePreviewMCP(t, "tenant-a", token, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"`+name+`","arguments":{}}}`)
+		errorBody, ok := blocked["error"].(map[string]any)
+		if !ok || errorBody["code"] != float64(-32602) || errorBody["message"] != "Tool unavailable in knowledge preview" {
+			t.Fatalf("knowledge-only credential called %s: %v", name, blocked)
+		}
 	}
 }
 

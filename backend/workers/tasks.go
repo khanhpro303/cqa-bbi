@@ -329,6 +329,7 @@ func erpAgentTokenFor(tenantID, agentType string) string {
 
 // HandleZaloWebhookTask processes the webhook task
 func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowClient, lookupOrderDelivery CurrentOrderDeliveryLookup) asynq.HandlerFunc {
+	guestLangflow := engine.NewLangflowPreviewClient(cfg)
 	var asynqClient *asynq.Client
 	if cfg.RedisURL != "" {
 		opt, err := asynq.ParseRedisURI(cfg.RedisURL)
@@ -749,6 +750,18 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			} else if !isMember {
 				log.Printf("[worker] Zalo user %s is not a member of GMF group %s (ID: %s). Skipping override.", payload.Sender.ID, matchedGroup.Name, matchedGroup.ZaloGroupID)
 			}
+		}
+
+		// A new 1:1 sender can ask the public bot about customer-facing
+		// documents before linking a CRM identity. This path deliberately stays
+		// outside the normal OA session and ERP permission machinery: the guest
+		// runner receives only a short-lived public knowledge credential, while
+		// ERP-shaped questions are answered with verification instructions.
+		if !isWhitelisted && !isCustomer && !hasGroup && matchedGroup.ZaloGroupID == "" {
+			if !payload.SignatureVerified || payload.EventName != "user_send_text" || payload.Sender.ID == "" || userText == "" {
+				return nil
+			}
+			return handleZaloOAGuestKnowledge(ctx, cfg, guestLangflow, adapter, *matchedChannel, payload, lfTenantCfg, userText)
 		}
 
 		// sessionKey is the ACTIVATION/base key: it stores the active session UUID

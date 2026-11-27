@@ -187,8 +187,13 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 		if staff {
 			wantFlow = "/api/v1/run/private-flow"
 		}
+		wantSessionPrefix := "personal-zalo-"
+		guest := !staff && !customerVerified.Load()
+		if guest {
+			wantSessionPrefix = "zalo-guest-"
+		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil || r.URL.Path != wantFlow ||
-			!strings.HasPrefix(input.SessionID, "personal-zalo-") || input.Tweaks["zalo_user_id"] != input.SessionID {
+			!strings.HasPrefix(input.SessionID, wantSessionPrefix) || input.Tweaks["zalo_user_id"] != input.SessionID {
 			t.Errorf("unexpected Langflow request: %s (want %s, decode err=%v)", r.URL.Path, wantFlow, err)
 		}
 		if r.Header.Get("X-API-Key") != "fixture-langflow-key" {
@@ -196,7 +201,17 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 		}
 		reply := "Chào bạn!"
 		token := r.Header.Get("X-LANGFLOW-GLOBAL-VAR-CQA_ERP_AGENT_TOKEN")
-		if (staff || customerERP.Load()) && !erpPaused.Load() {
+		if guest {
+			tweak, _ := input.Tweaks["Agent-fixture"].(map[string]any)
+			prompt, _ := tweak["system_prompt"].(string)
+			if resolveKnowledgePreviewAgent(key, channel.TenantID, token) != "public" ||
+				r.Header.Get("X-LANGFLOW-GLOBAL-VAR-ERP_PERMISSION_TOKEN") != "" ||
+				input.Tweaks["permission_token"] != nil || input.Tweaks["customer_code"] != nil ||
+				!strings.Contains(prompt, "Khách trong phiên này chưa xác thực") {
+				t.Error("guest flow did not receive only the public knowledge credential and guest prompt")
+			}
+			reply = "Dạ, em có thể tư vấn chính sách đổi size."
+		} else if (staff || customerERP.Load()) && !erpPaused.Load() {
 			sessionDuringERP.Store(input.SessionID)
 			if disableERPDuringNextTurn.Swap(false) {
 				erpPaused.Store(true)
@@ -348,15 +363,25 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 		t.Fatalf("ineligible requests called Langflow %d times", calls)
 	}
 	customerVerified.Store(false)
-	fresh.RequestID = "unknown-sender"
-	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK ||
-		!strings.Contains(response.Body.String(), personalZaloVerificationRequiredReply) || flowCalls.Load() != 0 {
-		t.Fatalf("unverified sender must not call Langflow (status=%d, calls=%d)", response.Code, flowCalls.Load())
+	tenantCredentials.Store(true)
+	for i, question := range []string{"Báo giá LS2 FF901", "Còn hàng không?", "Đơn hàng của tôi tới đâu?", "Xem công nợ"} {
+		fresh.RequestID, fresh.Text = fmt.Sprintf("guest-erp-%d", i), question
+		if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK ||
+			!strings.Contains(response.Body.String(), engine.GuestKnowledgeVerificationReply) || flowCalls.Load() != 0 {
+			t.Fatalf("guest ERP request %q: status=%d calls=%d body=%s", question, response.Code, flowCalls.Load(), response.Body)
+		}
 	}
+	fresh.RequestID, fresh.Text = "guest-knowledge", "Chính sách đổi size thế nào?"
+	guestResponse := submit(fresh, secret, gatewaySecret)
+	if guestResponse.Code != http.StatusOK || !strings.Contains(guestResponse.Body.String(), "tư vấn chính sách đổi size") ||
+		!strings.Contains(guestResponse.Body.String(), "delivery_token") || flowCalls.Load() != 1 {
+		t.Fatalf("guest knowledge: status=%d calls=%d body=%s", guestResponse.Code, flowCalls.Load(), guestResponse.Body)
+	}
+	tenantCredentials.Store(false)
 	customerVerified.Store(true)
 	fresh.RequestID, fresh.Text = "public-greeting", "Hello"
 	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK ||
-		!strings.Contains(response.Body.String(), personalZaloDirectGreeting("public")) || flowCalls.Load() != 0 {
+		!strings.Contains(response.Body.String(), personalZaloDirectGreeting("public")) || flowCalls.Load() != 1 {
 		t.Fatalf("a greeting must receive the public welcome without calling Langflow (status=%d, calls=%d)", response.Code, flowCalls.Load())
 	}
 	fresh.Text = "Tra giúp sản phẩm"
@@ -367,12 +392,12 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"reply":"Chào bạn!"`) || strings.Contains(response.Body.String(), `"images"`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusConflict || flowCalls.Load() != 1 {
+	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusConflict || flowCalls.Load() != 2 {
 		t.Fatalf("replay status=%d, Langflow calls=%d", response.Code, flowCalls.Load())
 	}
 	pauseOnNextTurn.Store(true)
 	fresh.RequestID, fresh.MessageID = "paused-turn", "msg-2"
-	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusNoContent || flowCalls.Load() != 2 {
+	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusNoContent || flowCalls.Load() != 3 {
 		t.Fatalf("paused status=%d, Langflow calls=%d", response.Code, flowCalls.Load())
 	}
 

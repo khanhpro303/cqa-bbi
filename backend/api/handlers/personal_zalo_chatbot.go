@@ -150,19 +150,18 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_verification_unavailable"})
 				return
 			}
-			if identity.AgentType == "" {
-				writePersonalZaloDirectReply(c, cfg.EncryptionKey, req, gin.H{"reply": personalZaloVerificationRequiredReply}, identity, personalZaloDirectGrant{})
-				return
-			}
 			if sessionConfig.SessionWelcomeMessage == cfg.ChatbotSessionWelcomeMessage {
 				sessionConfig.SessionWelcomeMessage = personalZaloDirectGreeting(identity.AgentType)
 			}
 		}
+		guest := req.ThreadType == personalZaloThreadUser && identity.AgentType == ""
 		addressed := req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req.Text, sessionConfig)
 		groupTurn := preparePersonalZaloGroupTurn(ctx, channel, sessionConfig, req, addressed, workers.PersonalZaloGroupNeedsReply)
-		handover := personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
+		handover := !guest && personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
 		var turn personalZaloTurn
-		if !handover {
+		if guest {
+			turn = personalZaloTurn{RunFlow: true, FlowScope: personalZaloLegacyFlowScope(req)}
+		} else if !handover {
 			turn, err = planPersonalZaloTurn(ctx, sessionConfig, req, groupTurn.Inferred)
 			if err != nil {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_session_unavailable"})
@@ -174,7 +173,16 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		var directGrant personalZaloDirectGrant
 		if turn.RunFlow {
 			flow := engine.ResolveTenantLangflowConfig(settings, cfg)
-			if identity.AgentType != "" {
+			switch {
+			case guest:
+				result, runErr := engine.RunGuestKnowledge(ctx, scopedLangflow, flow, cfg.EncryptionKey, req.TenantID, turn.FlowScope, req.Text)
+				if errors.Is(runErr, engine.ErrGuestKnowledgeNotConfigured) {
+					reply = engine.GuestKnowledgeUnavailableReply
+				} else {
+					err = runErr
+					reply, imageIDs = engine.ParseKnowledgeImageReply(result.Text, engine.MaxKnowledgeReplyImages)
+				}
+			case identity.AgentType != "":
 				if personalZaloMatchesKeyword(req.Text, "hello;hi;xin chào;chào;alo") {
 					reply = personalZaloDirectGreeting(identity.AgentType)
 				} else {
@@ -186,7 +194,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 					reply, imageIDs, err = directGrant.run(ctx, scopedLangflow, channel, req)
 				}
 				handover = personalZaloHasHandoverDestination(channel) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
-			} else {
+			default:
 				if flow.APIURL == "" || flow.PublicFlowID == "" || strings.EqualFold(flow.PublicFlowID, flow.FlowID) {
 					c.Status(http.StatusNoContent)
 					return
