@@ -615,6 +615,8 @@ export default {
   personal_zalo_roster_unavailable: 'Chưa có danh sách người và nhóm Zalo cá nhân để duyệt. Hãy kết nối, đồng bộ tài khoản rồi thử lại.',
   personal_zalo_roster_conflict: 'Một số người hoặc nhóm Zalo cá nhân đã biết vẫn cần quyết định trước khi bật tự động trả lời.',
   personal_zalo_bot_mode: 'Chế độ chatbot',
+  personal_zalo_bot_mode_updated: 'Đã chuyển sang {mode}',
+  personal_zalo_bot_mode_update_failed: 'Không thể đổi chế độ chatbot',
   personal_zalo_chatbot_mode_hint: 'Tự động trả lời trong các hội thoại đã được duyệt.',
   personal_zalo_internbot_hint: 'Soạn phản hồi cho tin nhắn của khách và chỉ gửi bản nháp vào nhóm giám thị.',
   personal_zalo_internbot_save_mode_first: 'Lưu chế độ trước, sau đó chọn nhóm giám thị và bật Internbot.',

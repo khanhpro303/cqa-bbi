@@ -56,12 +56,24 @@
           </div>
 
           <div v-if="ch.supports_auto_reply || personalZaloBots[ch.id]" class="mb-2">
-            <div class="d-flex align-center justify-space-between">
-              <span class="text-caption text-grey">{{ $t(personalZaloBots[ch.id] ? 'personal_zalo_bot_mode' : 'chatbot_channel_autoreply_short') }}</span>
-              <div class="d-flex align-center ga-3" @click.stop>
-                <v-chip v-if="personalZaloBots[ch.id]" size="x-small" variant="tonal" color="primary">
-                  {{ personalZaloBots[ch.id]?.chatbot_mode === 'internbot' ? 'Internbot' : 'Chatbot' }}
-                </v-chip>
+            <div class="d-flex align-center justify-space-between" :class="{ 'flex-wrap ga-2': personalZaloBots[ch.id] }">
+              <div class="d-flex flex-wrap align-center ga-2">
+                <span class="text-caption text-grey">{{ $t(personalZaloBots[ch.id] ? 'personal_zalo_bot_mode' : 'chatbot_channel_autoreply_short') }}</span>
+                <div v-if="personalZaloBots[ch.id]" @click.stop>
+                  <PersonalZaloBotModePicker
+                    v-if="canToggleAutoReply(ch)"
+                    compact
+                    :model-value="personalZaloBots[ch.id]!.chatbot_mode"
+                    :disabled="savingBotSettingsIds.has(ch.id)"
+                    :aria-busy="savingBotSettingsIds.has(ch.id)"
+                    @update:model-value="mode => changeChannelBotMode(ch, mode)"
+                  />
+                  <v-chip v-else size="x-small" variant="tonal" color="primary">
+                    {{ personalZaloBots[ch.id]?.chatbot_mode === 'internbot' ? 'Internbot' : 'Chatbot' }}
+                  </v-chip>
+                </div>
+              </div>
+              <div class="d-flex align-center ga-3 ms-auto" @click.stop>
                 <template v-if="personalZaloBots[ch.id]?.chatbot_mode === 'internbot'">
                   <span v-if="!personalZaloBots[ch.id]?.supervisor_group_id" class="text-caption text-medium-emphasis">
                     {{ $t('personal_zalo_internbot_no_group_selected') }}
@@ -78,8 +90,8 @@
                     hide-details
                     density="compact"
                     color="success"
-                    :loading="togglingAutoReplyId === ch.id"
-                    :disabled="!canToggleAutoReply(ch) || !ch.is_active || !chatbotActive || togglingAutoReplyId === ch.id"
+                    :loading="savingBotSettingsIds.has(ch.id)"
+                    :disabled="!canToggleAutoReply(ch) || !ch.is_active || !chatbotActive || savingBotSettingsIds.has(ch.id)"
                     @update:model-value="(v: any) => toggleAutoReply(ch, !!v)"
                   />
                   <span class="text-caption font-weight-medium" :class="(ch.auto_reply_enabled && chatbotActive) ? 'text-success' : 'text-grey'">
@@ -303,6 +315,7 @@
 import { ref, computed, reactive, shallowRef, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { isAxiosError } from 'axios'
 import { useChannelStore, type Channel } from '../stores/channels'
 import { useChatbotStore } from '../stores/chatbot'
 import { useAuthStore } from '../stores/auth'
@@ -335,7 +348,7 @@ const snackColor = ref('success')
 
 // Per-channel auto-reply is capability-driven by the backend; the tenant master
 // switch (chatbot_active) gates every supported channel.
-const togglingAutoReplyId = ref('')
+const savingBotSettingsIds = reactive(new Set<string>())
 const chatbotActive = computed(() => chatbotStore.isActive(tenantId.value))
 const chatbotStatusLoaded = computed(() => chatbotStore.isLoaded(tenantId.value))
 const chatbotStatusLoading = computed(() => chatbotStore.isLoading(tenantId.value))
@@ -356,8 +369,30 @@ function fetchChatbotStatus() {
   return chatbotStore.fetchStatus(tenantId.value)
 }
 
+async function changeChannelBotMode(channel: Channel, mode: PersonalZaloBotMode) {
+  const settings = personalZaloBots.value[channel.id]
+  if (!settings || settings.chatbot_mode === mode || !canToggleAutoReply(channel) ||
+      savingBotSettingsIds.has(channel.id)) return
+
+  savingBotSettingsIds.add(channel.id)
+  try {
+    await channelStore.updateChannel(tenantId.value, channel.id, {
+      metadata: JSON.stringify({ chatbot_mode: mode, internbot_enabled: false }),
+      auto_reply_enabled: false,
+    })
+    showSnack(t('personal_zalo_bot_mode_updated', { mode: mode === 'internbot' ? 'Internbot' : 'Chatbot' }), 'success')
+    refreshEditedChannels()
+  } catch (error: unknown) {
+    const code = isAxiosError<{ error?: string }>(error) ? error.response?.data?.error : undefined
+    showSnack(t(code === 'personal_zalo_roster_conflict' ? 'personal_zalo_roster_conflict' : 'personal_zalo_bot_mode_update_failed'), 'error')
+  } finally {
+    savingBotSettingsIds.delete(channel.id)
+  }
+}
+
 async function toggleAutoReply(ch: any, val: boolean) {
-  togglingAutoReplyId.value = ch.id
+  if (savingBotSettingsIds.has(ch.id)) return
+  savingBotSettingsIds.add(ch.id)
   try {
     await channelStore.updateChannel(tenantId.value, ch.id, { auto_reply_enabled: val })
     showSnack(val ? t('chatbot_status_on') : t('chatbot_status_off'), 'success')
@@ -371,7 +406,7 @@ async function toggleAutoReply(ch: any, val: boolean) {
         : code || t('error')
     showSnack(message, 'error')
   } finally {
-    togglingAutoReplyId.value = ''
+    savingBotSettingsIds.delete(ch.id)
   }
 }
 

@@ -616,6 +616,8 @@ export default {
   personal_zalo_roster_unavailable: 'Personal Zalo contacts and groups are not available for review yet. Connect and sync the account, then try again.',
   personal_zalo_roster_conflict: 'Some known Personal Zalo contacts or groups still need a decision before auto-reply can be enabled.',
   personal_zalo_bot_mode: 'Chatbot mode',
+  personal_zalo_bot_mode_updated: 'Switched to {mode}',
+  personal_zalo_bot_mode_update_failed: 'Could not change chatbot mode',
   personal_zalo_chatbot_mode_hint: 'Replies automatically in approved chats.',
   personal_zalo_internbot_hint: 'Drafts replies to customer messages and sends them only to a supervisor group.',
   personal_zalo_internbot_save_mode_first: 'Save the mode change first. Then choose a supervisor group and enable Internbot.',

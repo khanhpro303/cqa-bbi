@@ -80,10 +80,12 @@ export interface PersonalZaloGroupsResponse {
 export const useChannelStore = defineStore('channels', () => {
   const channels = ref<Channel[]>([])
   const accountOwners = ref<PersonalZaloAccountOwner[]>([])
+  let channelListRequest = 0
 
   async function fetchChannels(tenantId: string) {
+    const request = ++channelListRequest
     const { data } = await api.get(`/tenants/${tenantId}/channels`)
-    channels.value = data
+    if (request === channelListRequest) channels.value = data
   }
 
   async function createChannel(tenantId: string, payload: Record<string, unknown>) {

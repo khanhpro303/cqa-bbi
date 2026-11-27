@@ -233,6 +233,80 @@ it('creates an Internbot channel in setup mode before connecting Zalo', async ()
   })
 })
 
+it('switches modes from a personal Zalo card without opening the editor or enabling the bot', async () => {
+  storedChannel.metadata = JSON.stringify({ ...originalMetadata, supervisor_group_id: '101' })
+  const { wrapper, channelStore } = await mountPage(false, true, undefined, 'admin')
+  const picker = wrapper.getComponent(PersonalZaloBotModePicker)
+  expect(picker.props('compact')).toBe(true)
+  expect(picker.props('modelValue')).toBe('chatbot')
+
+  await picker.get('button[value="internbot"]').trigger('click')
+  picker.vm.$emit('update:modelValue', 'internbot')
+  await flushPromises()
+
+  expect(wrapper.vm.$route.path).toBe('/tenant/channels')
+  expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  expect(api.put).toHaveBeenNthCalledWith(1, channelPath, {
+    auto_reply_enabled: false,
+    metadata: JSON.stringify({ chatbot_mode: 'internbot', internbot_enabled: false }),
+  })
+  expect(picker.props('modelValue')).toBe('internbot')
+  expect(JSON.parse(channelStore.channels[0]!.metadata)).toMatchObject({
+    supervisor_group_id: '101', account_owners: ['keep'],
+  })
+
+  picker.vm.$emit('update:modelValue', 'chatbot')
+  await flushPromises()
+  expect(api.put).toHaveBeenNthCalledWith(2, channelPath, {
+    auto_reply_enabled: false,
+    metadata: JSON.stringify({ chatbot_mode: 'chatbot', internbot_enabled: false }),
+  })
+  expect(picker.props('modelValue')).toBe('chatbot')
+  expect(channelStore.channels[0]!.auto_reply_enabled).toBe(false)
+})
+
+it('retains the saved mode when the inline update fails', async () => {
+  api.put.mockRejectedValueOnce(new Error('update failed'))
+  const { wrapper, channelStore } = await mountPage(false, true, undefined, 'owner')
+  const picker = wrapper.getComponent(PersonalZaloBotModePicker)
+  picker.vm.$emit('update:modelValue', 'internbot')
+  await flushPromises()
+
+  expect(picker.props('modelValue')).toBe('chatbot')
+  expect(picker.props('disabled')).toBe(false)
+  expect(channelStore.channels[0]!.auto_reply_enabled).toBe(true)
+  expect(wrapper.text()).toContain(en.personal_zalo_bot_mode_update_failed)
+})
+
+it('keeps the newly saved mode when an earlier channel list response arrives late', async () => {
+  const { wrapper, channelStore } = await mountPage(false, true, undefined, 'admin')
+  const staleChannel = { ...storedChannel }
+  let finishEarlierList!: () => void
+  api.get.mockImplementationOnce(() => new Promise(resolve => {
+    finishEarlierList = () => resolve({ data: [staleChannel, oa] })
+  }))
+  const earlierList = channelStore.fetchChannels('tenant')
+
+  const picker = wrapper.getComponent(PersonalZaloBotModePicker)
+  picker.vm.$emit('update:modelValue', 'internbot')
+  await flushPromises()
+  finishEarlierList()
+  await earlierList
+  await flushPromises()
+
+  expect(picker.props('modelValue')).toBe('internbot')
+})
+
+it.each([
+  ['personal_zalo_import', 'member', true],
+  ['personal_zalo_import', 'member', false],
+  ['zalo_oa', 'admin', true],
+])('does not show the card mode picker for %s with role %s and write permission %s', async (type, role, writable) => {
+  storedChannel.channel_type = type
+  const { wrapper } = await mountPage(false, writable, undefined, role)
+  expect(wrapper.findComponent(PersonalZaloBotModePicker).exists()).toBe(false)
+})
+
 it('saves the mode change before exposing Internbot enablement', async () => {
   const { wrapper } = await mountPage(false, true, undefined, 'admin')
   await wrapper.get(editButton).trigger('click')
