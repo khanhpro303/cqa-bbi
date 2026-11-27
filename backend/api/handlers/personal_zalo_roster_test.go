@@ -45,7 +45,7 @@ func TestPersonalZaloRosterSnapshotValidation(t *testing.T) {
 
 func TestPersonalZaloRosterApprovalLifecycleMySQL(t *testing.T) {
 	database := facebookOAuthTestDatabase(t)
-	if err := database.AutoMigrate(&models.PersonalZaloRosterState{}, &models.PersonalZaloThreadApproval{}, &models.AppSetting{}, &models.CRMGroup{}); err != nil {
+	if err := database.AutoMigrate(&models.PersonalZaloRosterState{}, &models.PersonalZaloThreadApproval{}, &models.PersonalZaloInternbotRoster{}, &models.AppSetting{}, &models.CRMGroup{}); err != nil {
 		t.Fatal(err)
 	}
 	const tenant, channelID, account = "zalo-approvals-tenant", "zalo-approvals-channel", "111"
@@ -164,17 +164,23 @@ func TestPersonalZaloRosterApprovalLifecycleMySQL(t *testing.T) {
 	}
 	expectEvent := func() {
 		t.Helper()
-		select {
-		case event := <-events:
-			if event != realtime.EventPersonalZaloApprovalsUpdated {
-				t.Fatalf("unexpected SSE event: %s", event)
+		timeout := time.After(time.Second)
+		for {
+			select {
+			case event := <-events:
+				if event == realtime.EventPersonalZaloApprovalsUpdated {
+					return
+				}
+				if event != realtime.EventCRMPersonalZaloGroupsUpdated {
+					t.Fatalf("unexpected SSE event: %s", event)
+				}
+			case <-timeout:
+				t.Fatal("missing approval update SSE event")
 			}
-		case <-time.After(time.Second):
-			t.Fatal("missing approval update SSE event")
 		}
 	}
 
-	probe(http.StatusNoContent)
+	probe(http.StatusOK)
 	toggle(true, "member", http.StatusForbidden)
 	toggle(true, "admin", http.StatusOK)
 	expectEvent()
@@ -211,7 +217,7 @@ func TestPersonalZaloRosterApprovalLifecycleMySQL(t *testing.T) {
 	groupAccess(time.Now(), http.StatusNoContent)
 
 	toggle(false, "owner", http.StatusOK)
-	probe(http.StatusNoContent)
+	probe(http.StatusOK)
 	setRoster(start.Add(4*time.Millisecond), oldFriend, newFriend, newGroup, offFriend)
 	push(*liveRoster.Load())
 	list(personalZaloApproved, 1)

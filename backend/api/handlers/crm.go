@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -24,6 +25,8 @@ import (
 	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"github.com/vietbui/chat-quality-agent/realtime"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // CRM Group CRUD
@@ -91,6 +94,7 @@ func CreateCRMGroup(c *gin.Context) {
 		CustomerCode           string   `json:"customer_code"`
 		CustomerCodes          []string `json:"customer_codes"`
 		PersonalConversationID string   `json:"personal_conversation_id"`
+		PersonalZaloGroupID    string   `json:"personal_zalo_group_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -102,8 +106,18 @@ func CreateCRMGroup(c *gin.Context) {
 		return
 	}
 
-	if conversationID := strings.TrimSpace(req.PersonalConversationID); conversationID != "" {
-		linkPersonalZaloCRMGroup(c, tenantID, conversationID, req.Name, req.Description, codes)
+	conversationID := strings.TrimSpace(req.PersonalConversationID)
+	zaloGroupID := strings.TrimSpace(req.PersonalZaloGroupID)
+	if zaloGroupID != "" {
+		if conversationID != "" || !personalZaloUIDPattern.MatchString(zaloGroupID) || req.ChannelID == "" || len(req.ChannelID) > 36 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+		linkPersonalZaloCRMGroup(c, tenantID, "", req.ChannelID, zaloGroupID, req.Name, req.Description, codes)
+		return
+	}
+	if conversationID != "" {
+		linkPersonalZaloCRMGroup(c, tenantID, conversationID, "", "", req.Name, req.Description, codes)
 		return
 	}
 
@@ -201,19 +215,17 @@ func CreateCRMGroup(c *gin.Context) {
 		UpdatedAt:     now,
 	}
 
-	tx := db.DB.Begin()
-	if err := tx.Create(&group).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_create_group"})
+	saveContext, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
+	defer cancel()
+	if err := saveZaloOACRMGroup(saveContext, &group, codes); err != nil {
+		errorCode := "failed_to_create_group"
+		if errors.Is(err, errSetCRMGroupCodes) {
+			errorCode = "failed_to_set_group_codes"
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errorCode})
 		return
 	}
-	// Persist the group's full mã KH set (a group can serve several shops).
-	if _, err := db.SetGroupCustomerCodes(tx, tenantID, group.ID, codes, codes[0]); err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_set_group_codes"})
-		return
-	}
-	tx.Commit()
+	realtime.Publish(context.WithoutCancel(c.Request.Context()), tenantID, realtime.EventCRMPersonalZaloGroupsUpdated)
 
 	db.LogActivity(tenantID, middleware.GetUserID(c), middleware.GetUserEmail(c), "crm_group.create", "crm_group", group.ID,
 		fmt.Sprintf("Tạo nhóm GMF '%s' (zalo_group_id=%s, khách=%s)", group.Name, group.ZaloGroupID, group.CustomerCode), "", c.ClientIP())
@@ -222,6 +234,49 @@ func CreateCRMGroup(c *gin.Context) {
 	db.DB.Preload("Employees").Preload("Customers").Preload("Channel").First(&group, "id = ?", group.ID)
 
 	c.JSON(http.StatusCreated, group)
+}
+
+var errSetCRMGroupCodes = errors.New("failed to set CRM group customer codes")
+
+// Every writer that claims a Zalo group ID takes this lock before looking it up.
+func lockCRMGroupIdentity(tx *gorm.DB, tenantID string) error {
+	var tenant models.Tenant
+	return tx.Select("id").Clauses(clause.Locking{Strength: "UPDATE"}).Take(&tenant, "id = ?", tenantID).Error
+}
+
+func saveZaloOACRMGroup(ctx context.Context, group *models.CRMGroup, codes []string) error {
+	return db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockCRMGroupIdentity(tx, group.TenantID); err != nil {
+			return err
+		}
+		var existing models.CRMGroup
+		err := tx.Unscoped().Preload("Channel").
+			Where("tenant_id = ? AND zalo_group_id = ?", group.TenantID, group.ZaloGroupID).Take(&existing).Error
+		if err == nil {
+			// Zalo can add the personal account before returning the new GMF ID.
+			// Keep the CRM identity and its assigned codes if someone linked it in that gap.
+			if existing.Channel == nil || existing.Channel.ChannelType == "personal_zalo_import" {
+				existing.Channel = nil
+				if err := tx.Unscoped().Model(&existing).Updates(map[string]any{
+					"channel_id": group.ChannelID, "zalo_group_link": group.ZaloGroupLink, "zalo_asset_id": group.ZaloAssetID,
+				}).Error; err != nil {
+					return err
+				}
+			}
+			*group = existing
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if err := tx.Create(group).Error; err != nil {
+			return err
+		}
+		if _, err := db.SetGroupCustomerCodes(tx, group.TenantID, group.ID, codes, codes[0]); err != nil {
+			return errors.Join(errSetCRMGroupCodes, err)
+		}
+		return nil
+	})
 }
 
 func UpdateCRMGroup(c *gin.Context) {
@@ -254,7 +309,7 @@ func UpdateCRMGroup(c *gin.Context) {
 	group.Name = req.Name
 	group.Description = req.Description
 	group.UpdatedAt = time.Now()
-	if err := tx.Save(&group).Error; err != nil {
+	if err := tx.Model(&group).Updates(map[string]any{"name": group.Name, "description": group.Description, "updated_at": group.UpdatedAt}).Error; err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed_to_update_group"})
 		return
