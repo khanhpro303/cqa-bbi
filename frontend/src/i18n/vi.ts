@@ -551,7 +551,7 @@ export default {
   session_goodbye: 'Câu tạm biệt',
   session_goodbye_hint: 'Gửi khi đóng session thành công',
   session_timeout: 'Thời gian đóng session tự động (phút)',
-  personal_zalo_session_hint: 'Người nhắn 1:1 cần xác thực trước khi dùng chatbot. Nếu có từ khóa mở phiên, họ phải gửi đúng từ khóa đó. Phiên tự đóng sau thời gian không hoạt động đã đặt bên dưới.',
+  personal_zalo_session_hint: 'Nếu đặt từ khóa mở phiên, người nhắn 1:1 phải gửi đúng từ khóa để bắt đầu trò chuyện, kể cả khi chưa xác thực. Khách chưa xác thực chỉ có thể tra cứu thông tin công khai. Phiên đã mở sẽ tự đóng khi hết thời gian chờ.',
   personal_zalo_identity_title: 'Xác thực người dùng chatbot',
   personal_zalo_identity_description: 'Liên kết người nhắn 1:1 với nhân viên trong whitelist hoặc hồ sơ khách đã được duyệt trên CRM.',
   personal_zalo_identity_connect_first: 'Kết nối tài khoản Zalo và đồng bộ tin nhắn đầu tiên của kênh trước khi tạo mã xác thực.',

@@ -172,7 +172,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		requestedHandover := personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
 		handover := !complaints && !guest && requestedHandover
 		var turn personalZaloTurn
-		if guest {
+		if guest && strings.TrimSpace(strings.ReplaceAll(sessionConfig.SessionKeyword, ";", "")) == "" {
 			turn = personalZaloTurn{RunFlow: true, FlowScope: personalZaloLegacyFlowScope(req)}
 		} else if !handover {
 			turn, err = planPersonalZaloTurn(ctx, sessionConfig, req, groupTurn.Inferred)
@@ -181,7 +181,8 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 				return
 			}
 		}
-		if complaints && addressed && !turn.RunFlow && turn.Reply == "" &&
+		// A guest complaint reaches the public flow only after the guest can chat.
+		if !guest && complaints && addressed && !turn.RunFlow && turn.Reply == "" &&
 			!personalZaloMatchesKeyword(req.Text, sessionConfig.SessionEndKeyword) &&
 			(requestedHandover || workers.PersonalZaloComplaintNeedsHandover(ctx, req.TenantID, req.Text)) {
 			requestedHandover = true
