@@ -10,7 +10,7 @@ export interface ComplaintStream {
 export const DEFAULT_COMPLAINT_RESOLVED_DAYS = 14
 export const MAX_COMPLAINT_RESOLVED_DAYS = 90
 
-function readStreams(raw: unknown): ComplaintStream[] {
+export function readComplaintStreams(raw: unknown): ComplaintStream[] {
   if (!Array.isArray(raw)) return []
   return raw
     .filter((s) => s && typeof s === 'object')
@@ -51,7 +51,7 @@ export function normalizeStreams(streams: ComplaintStream[]): ComplaintStream[] 
   })
 }
 
-function readResolvedDays(raw: unknown) {
+export function readComplaintResolvedDays(raw: unknown) {
   const n = typeof raw === 'number' ? Math.round(raw) : NaN
   if (!Number.isFinite(n) || n < 1) return DEFAULT_COMPLAINT_RESOLVED_DAYS
   return Math.min(n, MAX_COMPLAINT_RESOLVED_DAYS)
@@ -71,8 +71,8 @@ export function readZaloGroupSettings(metadata: Record<string, unknown> = {}) {
     chat_memory_issue_alerts: metadata.chat_memory_issue_alerts !== false,
     chat_memory_profile_in_prompt: metadata.chat_memory_profile_in_prompt === true,
     complaint_cases: metadata.complaint_cases === true,
-    complaint_resolved_days: readResolvedDays(metadata.complaint_resolved_days),
-    complaint_streams: readStreams(metadata.complaint_streams),
+    complaint_resolved_days: readComplaintResolvedDays(metadata.complaint_resolved_days),
+    complaint_streams: readComplaintStreams(metadata.complaint_streams),
   }
 }
 
@@ -85,7 +85,7 @@ export function zaloGroupSettingsPatch(settings: ZaloGroupSettings, metadata: Re
     campaign_alert_group_id: settings.campaign_alerts_enabled ? settings.campaign_alert_group_id || '' : '',
     campaign_alert_outputs: settings.campaign_alerts_enabled ? settings.campaign_alert_outputs : [],
     handover_alert_group_id: settings.handover_alert_group_id || '',
-    complaint_resolved_days: readResolvedDays(Number(settings.complaint_resolved_days)),
+    complaint_resolved_days: readComplaintResolvedDays(Number(settings.complaint_resolved_days)),
     complaint_streams: normalizeStreams(settings.complaint_streams),
   }
   return Object.fromEntries(

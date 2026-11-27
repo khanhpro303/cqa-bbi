@@ -34,6 +34,7 @@ type personalZaloDirectGrant struct {
 	grantHash         string
 	turnID            string
 	prompt            string
+	complaintGuide    string
 	showImages        bool
 	advicePermissions *engine.GroupPermissionContext
 }
@@ -123,12 +124,18 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 	input, prompt := req.Text, g.prompt
 	if prompt != "" {
 		prompt += "\n\nKhi người dùng chỉ chào hỏi, chào ngắn gọn và hỏi họ cần hỗ trợ gì. Chỉ xác nhận kết quả tra cứu do công cụ trả về."
-		if g.permission == "" {
+		if g.turnID == "" {
 			prompt += " Phiên này chưa có quyền ERP. Chỉ tư vấn dựa trên tài liệu được phép dùng."
 		}
 		if handover := personalZaloHandoverPrompt(channel); handover != "" {
+			if g.complaintGuide != "" {
+				handover = "Với các tình huống ngoài hướng dẫn ghi nhận khiếu nại: " + handover
+			}
 			prompt += "\n\n" + handover
 		}
+	}
+	if g.complaintGuide != "" {
+		prompt = strings.TrimSpace(prompt + "\n\n" + g.complaintGuide)
 	}
 	if g.agentToken != "" {
 		input, prompt = engine.AddProductAdviceInstruction(input, prompt)

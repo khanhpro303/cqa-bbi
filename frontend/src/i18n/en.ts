@@ -1092,6 +1092,7 @@ export default {
   cm_tab_cases: "Complaints",
   complaint_cases_switch: "Record complaints as cases for staff",
   complaint_cases_switch_hint: "The bot records complaints (reading customer images too), merges follow-ups about an earlier problem, and alerts the stream's group (or the handover group above). Manage them on Customer insights, Complaints tab. Turn on only after the Langflow MCP Tools node lists complaint_record and AI Engine has a system prompt.",
+  personal_zalo_complaint_cases_switch_hint: "Record text complaints from personal Zalo 1:1 and group chats. Select an internal handover group above for fallback alerts and confirm Langflow has the complaint_record tool. Track cases in the Complaints tab of Customer insights.",
   complaint_resolved_days: "Days the bot still sees a resolved case",
   complaint_resolved_days_hint: "For this many days the bot still sees a resolved case (tells the customer it was handled when asked), and a 'still broken' report reopens it. Default 14, at most 90.",
   complaint_streams_title: "Complaint streams",
