@@ -1,4 +1,5 @@
 import { logger } from '../logger.js';
+import { isChatbotEligibleMessage } from '../chatbot/cqa-chatbot-client.js';
 import type { GatewayStore } from '../store/file-store.js';
 import type { IncomingGatewayMessage, ThreadType } from '../types.js';
 import { detectContentType, messageContentToString } from './helpers.js';
@@ -37,10 +38,11 @@ export interface ListenerContext {
   accountId: string;
   api: any;
   store: GatewayStore;
-  onDisconnected: (accountId: string) => Promise<void>;
+  onDisconnected: (accountId: string, code: number, reason: string) => Promise<void>;
   onConnected?: () => void;
+  isCurrent?: () => boolean;
   onLiveMessage?: (message: IncomingGatewayMessage) => Promise<void>;
-  onSelfMessage?: (threadId: string, threadType: ThreadType, message: ChatbotSelfMessage) => void;
+  onSelfMessage?: (threadId: string, threadType: ThreadType, message: ChatbotSelfMessage) => void | Promise<void>;
 }
 
 export interface ChatbotSelfMessage {
@@ -55,6 +57,8 @@ async function persistMessage(
   accountId: string,
   api: any,
   message: any,
+  queueChatbotTurn = false,
+  isCurrent = () => true,
 ): Promise<{ inserted: boolean; message: IncomingGatewayMessage }> {
   const isGroup = message.type === 1;
   const threadType: ThreadType = isGroup ? 'group' : 'user';
@@ -99,7 +103,12 @@ async function persistMessage(
     sourceContentIsString: typeof rawContent === 'string',
     sourceTimestampIsValid: explicitTimestamp !== null,
   };
-  const inserted = await store.recordIncomingMessage(accountId, incomingMessage);
+  if (!isCurrent()) return { inserted: false, message: incomingMessage };
+  const inserted = await store.recordIncomingMessage(
+    accountId,
+    incomingMessage,
+    queueChatbotTurn && isChatbotEligibleMessage(incomingMessage),
+  );
   return { inserted, message: incomingMessage };
 }
 
@@ -115,12 +124,15 @@ function parseExplicitZaloTimestamp(value: unknown): number | null {
 export function attachZaloListener(ctx: ListenerContext): void {
   const { accountId, api, store, onConnected, onDisconnected, onLiveMessage, onSelfMessage } = ctx;
   const listener = api.listener;
+  const isCurrent = ctx.isCurrent ?? (() => true);
 
   listener.on('connected', () => {
+    if (!isCurrent()) return;
     onConnected?.();
     logger.info(`[zalo:${accountId}] listener connected`);
     setTimeout(() => {
       try {
+        if (!isCurrent()) return;
         listener.requestOldMessages(0);
         listener.requestOldMessages(1);
       } catch (error) {
@@ -131,16 +143,17 @@ export function attachZaloListener(ctx: ListenerContext): void {
 
   listener.on('message', async (message: any) => {
     try {
+      if (!isCurrent()) return;
       if (onSelfMessage && message.isSelf && (message.type === 0 || message.type === 1)) {
         const content = message.data?.content;
-        onSelfMessage(String(message.threadId || ''), message.type === 1 ? 'group' : 'user', {
+        await onSelfMessage(String(message.threadId || ''), message.type === 1 ? 'group' : 'user', {
           id: String(message.data?.msgId ?? ''),
           contentType: detectContentType(message.data?.msgType, content),
           text: messageContentToString(content),
           description: typeof content?.description === 'string' ? content.description : undefined,
         });
       }
-      const persisted = await persistMessage(store, accountId, api, message);
+      const persisted = await persistMessage(store, accountId, api, message, Boolean(onLiveMessage), isCurrent);
       if (persisted.inserted && !persisted.message.isSelf && onLiveMessage) {
         return onLiveMessage(persisted.message).catch((error) => {
           logger.error(`[zalo:${accountId}] live chatbot dispatch failed`, error);
@@ -154,7 +167,8 @@ export function attachZaloListener(ctx: ListenerContext): void {
   listener.on('old_messages', async (messages: any[]) => {
     try {
       for (const message of messages) {
-        await persistMessage(store, accountId, api, message);
+        if (!isCurrent()) return;
+        await persistMessage(store, accountId, api, message, false, isCurrent);
       }
       logger.info(`[zalo:${accountId}] bootstrapped ${messages.length} old messages`);
     } catch (error) {
@@ -164,13 +178,13 @@ export function attachZaloListener(ctx: ListenerContext): void {
 
   listener.on('undo', async (data: any) => {
     const msgId = String(data?.data?.msgId || data?.msgId || '');
-    if (!msgId) return;
+    if (!msgId || !isCurrent()) return;
     await store.markMessageDeleted(accountId, msgId);
   });
 
   listener.on('closed', (code: number, reason: string) => {
     logger.warn(`[zalo:${accountId}] listener closed code=${code} reason=${reason}`);
-    return onDisconnected(accountId).catch((error) => {
+    return onDisconnected(accountId, code, reason).catch((error) => {
       logger.error(`[zalo:${accountId}] failed to record listener closure`, error);
     });
   });
@@ -179,5 +193,7 @@ export function attachZaloListener(ctx: ListenerContext): void {
     logger.error(`[zalo:${accountId}] listener error`, error);
   });
 
-  listener.start({ retryOnClose: true });
+  // AccountPool owns reconnect scheduling so a manual reconnect or QR login
+  // can invalidate an older timer without racing zca-js' internal retry loop.
+  listener.start({ retryOnClose: false });
 }

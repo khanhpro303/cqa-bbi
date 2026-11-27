@@ -5,6 +5,9 @@ import { logger } from '../logger.js';
 import type {
   AccountSyncBatch,
   GatewayAccountRecord,
+  GatewayChatbotReply,
+  GatewayChatbotTurnRecord,
+  GatewayChatbotTurnStatus,
   GatewayConversationRecord,
   GatewayStoreShape,
   IncomingGatewayMessage,
@@ -75,6 +78,7 @@ export class GatewayStore {
         createdAt: existing?.createdAt || now,
         updatedAt: now,
         threads: existing?.threads || {},
+        chatbotTurns: existing?.chatbotTurns || {},
       };
 
       state.accounts[id] = next;
@@ -107,7 +111,11 @@ export class GatewayStore {
     });
   }
 
-  async recordIncomingMessage(accountId: string, message: IncomingGatewayMessage): Promise<boolean> {
+  async recordIncomingMessage(
+    accountId: string,
+    message: IncomingGatewayMessage,
+    queueChatbotTurn = false,
+  ): Promise<boolean> {
     return this.updateState((state) => {
       const account = state.accounts[accountId];
       if (!account) {
@@ -161,13 +169,138 @@ export class GatewayStore {
           },
         };
         conversation.messageOrder.push(messageID);
+        if (queueChatbotTurn && !message.isSelf) {
+          account.chatbotTurns ??= {};
+          account.chatbotTurns[chatbotTurnKey(message)] = {
+            message,
+            tenantId: account.tenantId,
+            channelId: account.channelId,
+            accountExternalId: account.accountExternalId,
+            status: 'captured',
+            createdAt: nowISO(),
+            updatedAt: nowISO(),
+          };
+        }
+        conversation.pending = true;
       }
 
-      conversation.pending = true;
       account.threads[threadKey] = conversation;
       account.updatedAt = nowISO();
       account.lastError = '';
       return inserted;
+    });
+  }
+
+  async recoverChatbotTurns(accountId: string): Promise<void> {
+    await this.updateState((state) => {
+      const account = state.accounts[accountId];
+      if (!account) return;
+      for (const turn of Object.values(account.chatbotTurns || {})) {
+        if (turn.status === 'captured') {
+          turn.status = 'expired';
+          turn.lastError = 'gateway_restarted_before_chatbot_guards_completed';
+        }
+        if (turn.status === 'processing') {
+          turn.status = 'unknown';
+          turn.lastError = 'gateway_restarted_while_cqa_request_was_in_flight';
+        }
+        if (turn.status === 'sending') {
+          turn.status = 'unknown';
+          turn.lastError = 'gateway_restarted_while_zalo_send_was_in_flight';
+        }
+        turn.updatedAt = nowISO();
+      }
+    });
+  }
+
+  async activateChatbotTurn(accountId: string, message: IncomingGatewayMessage): Promise<string | null> {
+    return this.updateState((state) => {
+      const key = chatbotTurnKey(message);
+      const turn = state.accounts[accountId]?.chatbotTurns?.[key];
+      if (!turn || turn.status !== 'captured') return null;
+      turn.status = 'pending';
+      turn.updatedAt = nowISO();
+      return key;
+    });
+  }
+
+  async discardChatbotTurn(accountId: string, message: IncomingGatewayMessage): Promise<void> {
+    await this.updateState((state) => {
+      delete state.accounts[accountId]?.chatbotTurns?.[chatbotTurnKey(message)];
+    });
+  }
+
+  async listChatbotTurns(accountId: string): Promise<Array<[string, GatewayChatbotTurnRecord]>> {
+    const account = await this.getAccount(accountId);
+    return Object.entries(account?.chatbotTurns || {})
+      .sort((a, b) => a[1].message.timestamp - b[1].message.timestamp);
+  }
+
+  async updateChatbotTurn(
+    accountId: string,
+    messageId: string,
+    status: GatewayChatbotTurnStatus,
+    changes: { reply?: GatewayChatbotReply; lastError?: string } = {},
+  ): Promise<boolean> {
+    return this.updateState((state) => {
+      const turn = state.accounts[accountId]?.chatbotTurns?.[messageId];
+      if (!turn) return false;
+      turn.status = status;
+      turn.updatedAt = nowISO();
+      if (changes.reply !== undefined) turn.reply = changes.reply;
+      if (changes.lastError !== undefined) turn.lastError = changes.lastError;
+      return true;
+    });
+  }
+
+  async transitionChatbotTurn(
+    accountId: string,
+    messageId: string,
+    expected: GatewayChatbotTurnStatus,
+    status: GatewayChatbotTurnStatus,
+  ): Promise<boolean> {
+    return this.updateState((state) => {
+      const turn = state.accounts[accountId]?.chatbotTurns?.[messageId];
+      if (!turn || turn.status !== expected) return false;
+      turn.status = status;
+      turn.updatedAt = nowISO();
+      return true;
+    });
+  }
+
+  async completeChatbotTurn(accountId: string, messageId: string): Promise<void> {
+    await this.updateState((state) => {
+      delete state.accounts[accountId]?.chatbotTurns?.[messageId];
+    });
+  }
+
+  async cancelChatbotTurns(
+    accountId: string,
+    threadType: IncomingGatewayMessage['threadType'],
+    threadId: string,
+    senderUid?: string,
+  ): Promise<void> {
+    await this.updateState((state) => {
+      const turns = state.accounts[accountId]?.chatbotTurns;
+      if (!turns) return;
+      for (const [messageId, turn] of Object.entries(turns)) {
+        if (turn.message.threadType === threadType && turn.message.threadId === threadId &&
+            (!senderUid || turn.message.senderUid === senderUid) &&
+            turn.status !== 'unknown' && turn.status !== 'failed' && turn.status !== 'expired') {
+          delete turns[messageId];
+        }
+      }
+    });
+  }
+
+  async acknowledgeChatbotIssue(accountId: string, turnKey: string): Promise<boolean> {
+    return this.updateState((state) => {
+      const turns = state.accounts[accountId]?.chatbotTurns;
+      if (!turns || !Object.hasOwn(turns, turnKey)) return false;
+      const status = turns[turnKey].status;
+      if (status !== 'unknown' && status !== 'failed' && status !== 'expired') return false;
+      delete turns[turnKey];
+      return true;
     });
   }
 
@@ -204,11 +337,11 @@ export class GatewayStore {
 
     const conversationEntries = Object.entries(account.threads)
       .filter(([, conv]) => conv.pending)
-      .sort((a, b) => a[1].lastMessageAt.localeCompare(b[1].lastMessageAt))
-      .slice(0, maxConversations);
+      .sort((a, b) => a[1].lastMessageAt.localeCompare(b[1].lastMessageAt));
 
     const conversations: SyncBatchConversation[] = [];
     for (const [threadKey, conv] of conversationEntries) {
+      if (conversations.length >= maxConversations) break;
       const unsynced = conv.messageOrder
         .map((messageID) => conv.messages[messageID])
         .filter((msg) => !msg.syncedAt)
@@ -307,4 +440,8 @@ export class GatewayStore {
     await nextWrite;
     return result;
   }
+}
+
+function chatbotTurnKey(message: IncomingGatewayMessage): string {
+  return [message.threadType, message.threadId, message.senderUid, message.msgId].join(':');
 }

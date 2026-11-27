@@ -139,7 +139,7 @@ Luồng tối thiểu:
 4. Gọi `POST /api/v1/accounts/:accountId/login/qr` trên gateway và poll `GET /api/v1/accounts/:accountId` để lấy `qrImage`.
 5. Sau khi account connected, gateway tự nghe message mới và flush theo batch định kỳ sang CQA.
 
-Gateway hiện chạy mặc định ở `http://localhost:3100`.
+Khi gọi API quản trị trực tiếp, dùng bearer token `PERSONAL_ZALO_GATEWAY_ADMIN_SECRET` của deployment. Trên production, CQA gọi gateway qua mạng Compose nội bộ. [Hướng dẫn gateway](personal-zalo-gateway/README.md)
 
 ## Biến môi trường
 

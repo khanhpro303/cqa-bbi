@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { config, stateFilePath } from './config.js';
+import { registerHealthRoutes, type GatewayRuntimeState } from './health.js';
 import { logger } from './logger.js';
 import { registerAccountRoutes } from './routes/accounts.js';
 import { GatewayStore } from './store/file-store.js';
@@ -20,15 +21,38 @@ async function bootstrap(): Promise<void> {
     config.requestTimeoutMs,
   );
   const pool = new ZaloAccountPool(store);
+  const runtime: GatewayRuntimeState = { started: false, shuttingDown: false };
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdown = () => {
+    if (shutdownPromise) return shutdownPromise;
+    runtime.shuttingDown = true;
+    shutdownPromise = (async () => {
+      const [syncDrained] = await Promise.all([
+        syncService.shutdown(config.shutdownTimeoutMs),
+        pool.shutdown(config.shutdownTimeoutMs),
+      ]);
+      if (!syncDrained) logger.warn('shutdown timed out while imports were still active');
+      await app.close();
+      process.exit(0);
+    })();
+    return shutdownPromise;
+  };
+  const requestShutdown = () => {
+    void shutdown().catch((error) => {
+      logger.error('gateway shutdown failed', error);
+      process.exit(1);
+    });
+  };
+  process.on('SIGINT', () => {
+    requestShutdown();
+  });
+  process.on('SIGTERM', () => {
+    requestShutdown();
+  });
 
   await app.register(cors, { origin: true });
   await registerAccountRoutes(app, { store, syncService, pool });
-
-  app.get('/health', async () => ({
-    status: 'ok',
-    service: 'personal-zalo-gateway',
-    timestamp: new Date().toISOString(),
-  }));
+  registerHealthRoutes(app, store, pool, syncService, runtime);
 
   app.setErrorHandler((error, _request, reply) => {
     logger.error('request failed', error);
@@ -40,21 +64,11 @@ async function bootstrap(): Promise<void> {
   await app.listen({ host: config.host, port: config.port });
   logger.info(`personal-zalo-gateway listening on http://${config.host}:${config.port}`);
 
+  if (runtime.shuttingDown) return;
   await pool.bootstrapReconnects();
+  if (runtime.shuttingDown) return;
   syncService.start();
-
-  const shutdown = async () => {
-    syncService.stop();
-    await app.close();
-    process.exit(0);
-  };
-
-  process.on('SIGINT', () => {
-    void shutdown();
-  });
-  process.on('SIGTERM', () => {
-    void shutdown();
-  });
+  runtime.started = true;
 }
 
 void bootstrap();

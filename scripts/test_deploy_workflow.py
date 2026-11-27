@@ -110,6 +110,43 @@ class DeployWorkflowTest(unittest.TestCase):
             subprocess.run(["bash", "-ec", provision], cwd=directory, check=True)
             self.assertEqual(env.read_text(), first)
 
+    def test_provisions_a_gateway_admin_secret_without_printing_or_overwriting_it(self):
+        start = self.rollout.index("provision_personal_zalo_gateway_admin_secret() {")
+        end = self.rollout.index('exec 9>"$backup_root/.deploy.lock"', start)
+        provision = self.rollout[start:end] + "\nprovision_personal_zalo_gateway_admin_secret"
+        with tempfile.TemporaryDirectory() as directory:
+            env = Path(directory) / ".env"
+            env.write_text('DB_HOST=db\nPERSONAL_ZALO_GATEWAY_ADMIN_SECRET= "" # placeholder')
+            result = subprocess.run(
+                ["bash", "-ec", provision], cwd=directory, check=True, capture_output=True
+            )
+            first = env.read_text()
+            self.assertRegex(first, r"^DB_HOST=db\nPERSONAL_ZALO_GATEWAY_ADMIN_SECRET=[0-9a-f]{64}\n$")
+            self.assertEqual(result.stdout, b"")
+            self.assertEqual(result.stderr, b"")
+            self.assertEqual(env.stat().st_mode & 0o777, 0o600)
+            subprocess.run(["bash", "-ec", provision], cwd=directory, check=True)
+            self.assertEqual(env.read_text(), first)
+
+    def test_rejects_short_or_reused_gateway_admin_secret(self):
+        start = self.rollout.index("provision_personal_zalo_gateway_admin_secret() {")
+        end = self.rollout.index('exec 9>"$backup_root/.deploy.lock"', start)
+        provision = self.rollout[start:end] + "\nprovision_personal_zalo_gateway_admin_secret"
+        with tempfile.TemporaryDirectory() as directory:
+            env = Path(directory) / ".env"
+            env.write_text("PERSONAL_ZALO_GATEWAY_ADMIN_SECRET=short\n")
+            short = subprocess.run(["bash", "-ec", provision], cwd=directory, capture_output=True)
+            self.assertNotEqual(short.returncode, 0)
+            self.assertEqual(env.read_text(), "PERSONAL_ZALO_GATEWAY_ADMIN_SECRET=short\n")
+
+            shared = "a" * 64
+            env.write_text(
+                f"PERSONAL_ZALO_CHATBOT_SECRET={shared}\n"
+                f"PERSONAL_ZALO_GATEWAY_ADMIN_SECRET={shared}\n"
+            )
+            reused = subprocess.run(["bash", "-ec", provision], cwd=directory, capture_output=True)
+            self.assertNotEqual(reused.returncode, 0)
+
     def test_retention_runs_after_every_success_gate(self):
         app_health = self.rollout.index('test "$healthy" = 1')
         schema = self.rollout.index('test "$table_count" = 12')

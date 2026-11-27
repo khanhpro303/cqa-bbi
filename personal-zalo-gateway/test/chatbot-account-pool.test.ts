@@ -49,7 +49,6 @@ async function connectFixture(
   options: { ownId?: string; sendMessage?: (text: string, threadId: string, type: number) => Promise<unknown> } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pzgw-pool-'));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const stateFile = path.join(dir, 'state.json');
   const store = new GatewayStore(stateFile);
   await store.init();
@@ -70,6 +69,10 @@ async function connectFixture(
     sendMessage: options.sendMessage || (async () => ({})),
   }));
   const pool = new ZaloAccountPool(store);
+  t.after(async () => {
+    await pool.shutdown(1_000);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
   await pool.bootstrapReconnects();
   assert.equal((await store.getAccount(account.id))?.status, 'connected');
   return { account, stateFile, store, listener, login, pool };
@@ -94,7 +97,7 @@ test('a new direct text requests one CQA reply and sends it to the same Zalo use
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   }));
-  const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
+  const { listener, pool } = await connectFixture(t, { ownId: '10001', sendMessage });
   const incoming = {
     type: 0,
     threadId: '20002',
@@ -342,7 +345,7 @@ for (const change of ['manual reply', 'socket close', 'account reassignment'] as
   });
 }
 
-test('preserves only the latest follow-up while the conversation is busy', { timeout: 2000 }, async (t) => {
+test('preserves every follow-up while the conversation is busy', { timeout: 2000 }, async (t) => {
   configureTestChatbot(t);
   const sendMessage = t.mock.fn(async () => ({}));
   const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
@@ -357,7 +360,7 @@ test('preserves only the latest follow-up while the conversation is busy', { tim
       requestStarted();
       return pending;
     }
-    return Response.json({ reply: 'Trả lời tin mới nhất' });
+    return new Response(null, { status: 204 });
   });
   const processing = listener.message(directMessage('60001'));
   await started;
@@ -365,8 +368,8 @@ test('preserves only the latest follow-up while the conversation is busy', { tim
   await listener.message(directMessage('60003'));
   finishRequest(new Response(null, { status: 204 }));
   await processing;
-  assert.deepEqual(processed, ['60001', '60003']);
-  assert.equal(sendMessage.mock.callCount(), 1);
+  assert.deepEqual(processed, ['60001', '60002', '60003']);
+  assert.equal(sendMessage.mock.callCount(), 0);
 });
 
 test('paces sends across two channel records for the same Zalo account', { timeout: 6500 }, async (t) => {
@@ -502,4 +505,63 @@ test('a manual photo before attachment delivery suppresses the bot photo', { tim
 
   await listener.message(directMessage('91001'));
   assert.equal(sendMessage.mock.callCount(), 1);
+});
+
+test('a fourth direct conversation waits durably for a free chatbot slot', { timeout: 3000 }, async (t) => {
+  configureTestChatbot(t);
+  const { listener } = await connectFixture(t, { ownId: '10001' });
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  let started = 0;
+  let fourthStarted!: () => void;
+  const fourth = new Promise<void>((resolve) => { fourthStarted = resolve; });
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) => {
+    const id = JSON.parse(String(request.body)).message_id;
+    started++;
+    if (id === '92004') fourthStarted();
+    else await blocked;
+    return new Response(null, { status: 204 });
+  });
+
+  const active = ['92001', '92002', '92003'].map((id, index) =>
+    listener.message(directMessage(id, String(21001 + index))));
+  while (started < 3) await new Promise((resolve) => setTimeout(resolve, 1));
+  await listener.message(directMessage('92004', '21004'));
+  assert.equal(fetch.mock.callCount(), 3);
+  release();
+  await fourth;
+  await Promise.all(active);
+  assert.equal(fetch.mock.callCount(), 4);
+});
+
+test('an ambiguous CQA response is retained for operator attention without a Zalo retry', async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async () => ({}));
+  t.mock.method(globalThis, 'fetch', async () => new Response('failed', { status: 500 }));
+  const { listener, pool } = await connectFixture(t, { ownId: '10001', sendMessage });
+
+  await listener.message(directMessage('93001'));
+
+  assert.equal(sendMessage.mock.callCount(), 0);
+  assert.equal((await pool.healthSnapshot()).unknownChatbotTurns, 1);
+});
+
+test('a disconnect before a queued image never replays the already sent text', { timeout: 5000 }, async (t) => {
+  configureTestChatbot(t);
+  let textSent!: () => void;
+  const sent = new Promise<void>((resolve) => { textSent = resolve; });
+  const sendMessage = t.mock.fn(async (outbound: unknown) => {
+    if (typeof outbound === 'string') textSent();
+    return typeof outbound === 'string' ? { message: { msgId: 94002 }, attachment: [] } : {};
+  });
+  const { listener, pool } = await connectFixture(t, { ownId: '10001', sendMessage });
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: 'Một lần', images: [knowledgeImage] }));
+
+  const processing = listener.message(directMessage('94001'));
+  await sent;
+  await listener.close(1008);
+  await processing;
+
+  assert.equal(sendMessage.mock.callCount(), 1);
+  assert.equal((await pool.healthSnapshot()).failedChatbotTurns, 1);
 });

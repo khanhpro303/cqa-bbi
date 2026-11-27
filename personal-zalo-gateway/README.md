@@ -14,7 +14,10 @@ Sidecar mỏng cho `chat-quality-agent` để ingest `Zalo cá nhân`.
 
 ## API v1
 
-- `GET /health`
+Các route `/api/v1/accounts` yêu cầu header `Authorization: Bearer <token>`. Đặt cùng giá trị `PERSONAL_ZALO_GATEWAY_ADMIN_SECRET` (ít nhất 32 ký tự) cho CQA và gateway. Quy trình deploy VPS tự cấp khóa khi cài đặt lần đầu.
+
+- `GET /health` kiểm tra tiến trình HTTP.
+- `GET /ready` trả trạng thái listener, đồng bộ và lượt chatbot ở dạng tổng hợp. Kiểm tra phản hồi HTTP 503 để biết lý do dịch vụ suy giảm.
 - `GET /api/v1/accounts`
 - `GET /api/v1/accounts/:accountId`
 - `POST /api/v1/accounts`
@@ -58,13 +61,13 @@ Sidecar mỏng cho `chat-quality-agent` để ingest `Zalo cá nhân`.
 
 Luồng này dùng public flow của CQA. Bản hiện tại chưa truyền quyền ERP có phạm vi cho tài khoản Zalo cá nhân.
 
-Gateway xử lý tối đa ba lượt 1:1 và ba lượt nhóm đồng thời trên mỗi phiên Zalo. Mỗi người gửi trong một hội thoại có một tin mới nhất đang chờ. Khi tài khoản tự nhắn vào cùng hội thoại, gateway hủy phản hồi đang chờ trong hội thoại đó.
+Gateway xử lý tối đa ba lượt 1:1 và ba lượt nhóm đồng thời trên mỗi phiên Zalo. Các lượt hợp lệ chờ trong dữ liệu cục bộ khi hội thoại hoặc cả ba slot đang bận. Khi tài khoản tự nhắn vào cùng hội thoại, gateway hủy phản hồi đang chờ trong hội thoại đó.
 
 Ba lớp bảo vệ áp dụng trên từng tài khoản:
 - Giãn cách tối thiểu 3 giây và tối đa 20 lần gửi trong bất kỳ cửa sổ 60 giây nào.
 - Nhận diện tin bot lặp theo nội dung và hội thoại trong 30 giây.
 - Tạm ngưng chatbot 60 giây với người gửi quá 5 tin hợp lệ trong 3 giây. Tin nhắn vẫn được đồng bộ vào CQA.
 
-Tin đến ở hội thoại vượt giới hạn vẫn được đồng bộ. Khi AI hoặc thao tác gửi gặp lỗi, gateway vẫn lưu và đồng bộ tin nhắn theo lịch bình thường.
+Khi kết quả gọi CQA hoặc gửi Zalo chưa rõ, gateway giữ lượt để nhân viên đối chiếu. Dùng API quản trị `GET /api/v1/accounts/:accountId/delivery-issues` để lấy hội thoại và mã tin cần kiểm tra. Sau khi kiểm tra trên Zalo và hỗ trợ khách nếu cần, gọi `POST /api/v1/accounts/:accountId/delivery-issues/:key/acknowledge` với key đã URL-encode để đóng cảnh báo. Thao tác này giữ nguyên lịch sử hội thoại và không gửi tin cho khách.
 
 Thiết kế listener, chống phản hồi sự kiện hệ thống và gửi trả qua phiên cá nhân tham khảo kiến trúc của [Zalo Flow](https://github.com/aizaloapp/zalo-flow). Phần tích hợp này được triển khai riêng theo contract nội bộ của CQA.
