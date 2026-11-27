@@ -82,6 +82,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import api from '../../api'
+import type { Channel } from '../../stores/channels'
 import {
   personalZaloHandoverGroupOptions,
   personalZaloHandoverStaffOptions,
@@ -90,7 +91,7 @@ import {
   type PersonalZaloHandoverStaff,
 } from './personalZaloGroupSettings'
 
-const props = defineProps<{ tenantId: string; activeChannelIds: string[] }>()
+const props = defineProps<{ tenantId: string }>()
 const settings = defineModel<PersonalZaloGroupSettings>({ required: true })
 const handoverGroupOptions = ref<Array<{ title: string; value: string }>>([])
 const handoverStaffOptions = ref<Array<{ title: string; value: string }>>([])
@@ -115,12 +116,15 @@ onMounted(async () => {
       })
       .catch(() => { handoverGroupOptions.value = [] })
       .finally(() => { loadingGroups.value = false }),
-    api.get(`/tenants/${props.tenantId}/zalo-whitelist`)
-      .then(({ data }) => {
-        handoverStaffOptions.value = personalZaloHandoverStaffOptions(
-          Array.isArray(data) ? data as PersonalZaloHandoverStaff[] : [],
-          props.activeChannelIds,
-        )
+    Promise.all([
+      api.get<PersonalZaloHandoverStaff[]>(`/tenants/${props.tenantId}/zalo-whitelist`),
+      api.get<Channel[]>(`/tenants/${props.tenantId}/channels`),
+    ])
+      .then(([{ data: staff }, { data: channels }]) => {
+        const activeOAChannelIds = channels
+          .filter((channel) => channel.channel_type === 'zalo_oa' && channel.is_active)
+          .map((channel) => channel.id)
+        handoverStaffOptions.value = personalZaloHandoverStaffOptions(staff, activeOAChannelIds)
       })
       .catch(() => { handoverStaffOptions.value = [] })
       .finally(() => { loadingStaff.value = false }),
