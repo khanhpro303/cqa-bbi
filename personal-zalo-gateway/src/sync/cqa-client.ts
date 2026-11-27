@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { logger } from '../logger.js';
-import type { AccountSyncBatch } from '../types.js';
+import type { AccountSyncBatch, GatewayAccountRecord } from '../types.js';
 
 export interface CQAImportResponse {
   request_id: string;
@@ -73,6 +73,54 @@ export function buildSignedImportRequest(accountBatch: AccountSyncBatch): {
     ...signed,
     body,
   };
+}
+
+export interface CQAImportSettings {
+  active: boolean;
+  sync_interval_minutes?: number;
+}
+
+export async function fetchImportSettings(account: GatewayAccountRecord, timeoutMs: number): Promise<CQAImportSettings | undefined> {
+  const endpoint = new URL(account.importEndpoint);
+  endpoint.pathname = `${endpoint.pathname.replace(/\/$/, '')}/settings`;
+  const requestId = randomUUID();
+  const body = JSON.stringify({
+    request_id: requestId,
+    tenant_id: account.tenantId,
+    channel_id: account.channelId,
+    account_external_id: account.accountExternalId || account.zaloUid,
+  });
+  const signed = signInternalRequestBody(account.importSecret, body, requestId);
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CQA-Request-Id': signed.requestId,
+      'X-CQA-Timestamp': signed.timestamp,
+      'X-CQA-Signature': signed.signature,
+    },
+    body,
+    redirect: 'error',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (response.status === 404) {
+    // Older CQA releases did not have a settings route.
+    await response.body?.cancel();
+    return undefined;
+  }
+  if (response.status !== 200) {
+    await response.body?.cancel();
+    throw new Error(`cqa_import_settings_failed:${response.status}`);
+  }
+
+  const payload = await response.json() as Partial<CQAImportSettings> | null;
+  const minutes = payload?.sync_interval_minutes;
+  if (typeof payload?.active !== 'boolean' || (minutes !== undefined &&
+      (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440))) {
+    throw new Error('invalid_import_settings');
+  }
+  return { active: payload.active, sync_interval_minutes: minutes };
 }
 
 export async function sendImportBatch(

@@ -58,7 +58,7 @@
           <div v-if="ch.supports_auto_reply || personalZaloBots[ch.id]" class="mb-2">
             <div class="d-flex align-center justify-space-between" :class="{ 'flex-wrap ga-2': personalZaloBots[ch.id] }">
               <div class="d-flex flex-wrap align-center ga-2">
-                <span class="text-caption text-grey">{{ $t(personalZaloBots[ch.id] ? 'personal_zalo_bot_mode' : 'chatbot_channel_autoreply_short') }}</span>
+                <span class="text-caption text-grey">{{ $t(ch.channel_type === 'zalo_oa' || personalZaloBots[ch.id] ? 'personal_zalo_bot_mode' : 'chatbot_channel_autoreply_short') }}</span>
                 <div v-if="personalZaloBots[ch.id]" @click.stop>
                   <PersonalZaloBotModePicker
                     v-if="canToggleAutoReply(ch)"
@@ -124,13 +124,13 @@
 
           <v-divider class="mb-3 mt-auto" />
           <div class="d-flex ga-2 flex-wrap" @click.stop>
-            <v-btn v-if="ch.channel_type !== 'personal_zalo_import'" size="small" variant="tonal" color="primary" prepend-icon="mdi-sync" :loading="syncing === ch.id" :disabled="!ch.is_active" @click="syncNow(ch.id)">
+            <v-btn v-if="authStore.canEdit('channels')" size="small" variant="tonal" color="primary" prepend-icon="mdi-sync" :loading="syncing.has(ch.id)" :disabled="!ch.is_active || syncing.has(ch.id)" @click="syncNow(ch)">
               {{ $t('sync_now') }}
             </v-btn>
             <v-btn v-if="ch.channel_type !== 'personal_zalo_import' && ch.last_sync_status === 'error'" size="small" variant="tonal" color="warning" prepend-icon="mdi-link-variant" :loading="reauthing === ch.id" :disabled="!ch.is_active" @click="reauthChannel(ch.id)">
               {{ $t('reauth') }}
             </v-btn>
-            <v-btn v-if="ch.channel_type !== 'personal_zalo_import'" size="small" variant="text" color="primary" :disabled="!ch.is_active" @click="testConn(ch.id)">
+            <v-btn size="small" variant="text" color="primary" :disabled="!ch.is_active" @click="testConn(ch.id)">
               {{ $t('test_connection') }}
             </v-btn>
             <v-spacer />
@@ -238,7 +238,7 @@
           </template>
 
           <!-- Sync settings -->
-          <template v-if="newChannel.channel_type === 'zalo_oa' || (newChannel.channel_type === 'facebook' && facebookManualMode)">
+          <template v-if="newChannel.channel_type !== 'facebook' || facebookManualMode">
             <v-divider class="my-3" />
             <v-select
               v-model="newChannel.sync_interval"
@@ -246,13 +246,14 @@
               :label="$t('sync_interval')"
               density="compact"
               class="mb-3"
-              :hint="$t('sync_interval_hint')"
+              :hint="$t(newChannel.channel_type === 'personal_zalo_import' ? 'personal_zalo_sync_interval_hint' : 'sync_interval_hint')"
               persistent-hint
             />
-            <v-alert v-if="newChannel.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
+            <v-alert v-if="newChannel.channel_type !== 'personal_zalo_import' && newChannel.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
               {{ $t('sync_interval_warning') }}
             </v-alert>
             <v-switch
+              v-if="newChannel.channel_type !== 'personal_zalo_import'"
               v-model="newChannel.sync_files"
               :label="$t('sync_files')"
               :hint="$t('sync_files_hint')"
@@ -340,7 +341,7 @@ const editingChannel = shallowRef<Channel>()
 const editActivator = shallowRef<HTMLElement>()
 const facebookManualMode = ref(false)
 const creating = ref(false)
-const syncing = ref('')
+const syncing = reactive(new Set<string>())
 const reauthing = ref('')
 const snackbar = ref(false)
 const snackText = ref('')
@@ -530,6 +531,7 @@ async function createPersonalZalo() {
       credentials: {},
       metadata: JSON.stringify({
         sync_scope: newChannel.sync_scope,
+        sync_interval: newChannel.sync_interval,
         ...(canCreateInternbot.value && newChannel.chatbot_mode === 'internbot' && { chatbot_mode: 'internbot' }),
       }),
     })
@@ -564,19 +566,28 @@ async function toggleActive(ch: any) {
   }
 }
 
-async function syncNow(channelId: string) {
-  syncing.value = channelId
+async function syncNow(channel: Channel) {
+  if (syncing.has(channel.id)) return
+  syncing.add(channel.id)
   try {
-    const data = await channelStore.syncChannel(tenantId.value, channelId)
-    const msg = data?.conversations_synced != null
-      ? `${t('sync_now')}: ${data.conversations_synced} conversations, ${data.messages_synced} messages`
-      : t('success')
-    showSnack(msg, 'success')
+    if (channel.channel_type === 'personal_zalo_import') {
+      await channelStore.syncPersonalZaloGateway(tenantId.value, channel.id)
+      showSnack(t('personal_zalo_sync_started'), 'success')
+    } else {
+      const data = await channelStore.syncChannel(tenantId.value, channel.id)
+      const message = data?.conversations_synced != null
+        ? `${t('sync_now')}: ${data.conversations_synced} conversations, ${data.messages_synced} messages`
+        : t('success')
+      showSnack(message, 'success')
+    }
     await channelStore.fetchChannels(tenantId.value)
-  } catch (e: any) {
-    showSnack(e?.response?.data?.error || t('error'), 'error')
+  } catch (error: unknown) {
+    const response = isAxiosError<{ error?: string; message?: string }>(error) ? error.response?.data : undefined
+    const message = gatewayAccountNeedsConnection(response?.error) ? t('personal_zalo_connection_required')
+      : response?.message || response?.error || t(channel.channel_type === 'personal_zalo_import' ? 'personal_zalo_sync_failed' : 'error')
+    showSnack(message, 'error')
   } finally {
-    syncing.value = ''
+    syncing.delete(channel.id)
   }
 }
 
@@ -598,9 +609,16 @@ async function testConn(channelId: string) {
   try {
     await channelStore.testConnection(tenantId.value, channelId)
     showSnack(t('connection_ok'), 'success')
-  } catch (err: any) {
-    showSnack(err.response?.data?.error || t('connection_failed'), 'error')
+  } catch (error: unknown) {
+    const response = isAxiosError<{ error?: string }>(error) ? error.response?.data : undefined
+    const message = gatewayAccountNeedsConnection(response?.error) ? t('personal_zalo_connection_required')
+      : response?.error || t('connection_failed')
+    showSnack(message, 'error')
   }
+}
+
+function gatewayAccountNeedsConnection(error: string | undefined) {
+  return error === 'gateway_account_not_found' || error === 'gateway_account_not_connected' || error === 'channel_account_mismatch'
 }
 
 async function remove(channelId: string) {

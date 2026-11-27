@@ -158,6 +158,10 @@ func CreateChannel(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata"})
 			return
 		}
+		if req.ChannelType == "personal_zalo_import" && !validPersonalZaloSyncInterval(metadata) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_sync_interval"})
+			return
+		}
 		patch, err := checkPersonalZaloInternbotMetadata(req.ChannelType, metadata)
 		if err != nil || (patch.Enabled != nil && *patch.Enabled) || (patch.SupervisorGroupID != nil && *patch.SupervisorGroupID != "") {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_personal_zalo_internbot_settings"})
@@ -353,6 +357,10 @@ func UpdateChannel(c *gin.Context) {
 		metadata := req.Metadata
 		switch channel.ChannelType {
 		case "personal_zalo_import":
+			if !validPersonalZaloSyncInterval(incoming) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_sync_interval"})
+				return
+			}
 			merged, err := mergeChannelMetadata(channel.Metadata, req.Metadata)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata", "details": err.Error()})
@@ -805,7 +813,7 @@ func TestChannelConnection(c *gin.Context) {
 	}
 
 	if channels.IsExternallyManagedImport(channel.ChannelType) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "connection_managed_externally"})
+		testPersonalZaloGatewayConnection(c, channel)
 		return
 	}
 

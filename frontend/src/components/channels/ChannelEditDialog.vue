@@ -60,6 +60,18 @@
                 density="compact"
                 persistent-hint
               />
+              <template v-if="editChannelType === 'personal_zalo_import'">
+                <v-select
+                  v-model="editForm.personal_sync_interval"
+                  :items="personalSyncIntervalOptions"
+                  :label="$t('sync_interval')"
+                  :hint="$t('personal_zalo_sync_interval_hint')"
+                  density="compact"
+                  class="mt-3"
+                  persistent-hint
+                />
+                <p class="text-caption text-medium-emphasis mt-3 mb-0">{{ $t('personal_zalo_sync_files_unavailable') }}</p>
+              </template>
               <template v-else>
                 <v-select
                   v-model="editForm.sync_interval"
@@ -206,6 +218,7 @@ const editBotSettings = ref(readPersonalZaloBotSettings())
 const savedBotSettings = ref(readPersonalZaloBotSettings())
 const editForm = reactive({
   name: '', is_active: true, sync_files: false, sync_interval: 15, sync_scope: 'all',
+  personal_sync_interval: 'gateway' as number | 'gateway',
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
   casual_full_agent_turns: CASUAL_FULL_AGENT_TURNS_DEFAULT as number | string, casual_quiet_after: CASUAL_QUIET_AFTER_DEFAULT as number | string,
 })
@@ -232,6 +245,13 @@ const syncIntervalOptions = computed(() => [
   { title: t('sync_6h'), value: 360 },
   { title: t('sync_1d'), value: 1440 },
 ])
+const personalSyncIntervalOptions = computed(() => {
+  const selected = editForm.personal_sync_interval
+  const customOption = typeof selected === 'number' && !syncIntervalOptions.value.some(option => option.value === selected)
+    ? [{ title: t('minutes_unit', { count: selected }), value: selected }]
+    : []
+  return [{ title: t('personal_zalo_sync_gateway_default'), value: 'gateway' }, ...syncIntervalOptions.value, ...customOption]
+})
 
 watch(open, (isOpen) => {
   if (!isOpen) return
@@ -253,6 +273,8 @@ watch(open, (isOpen) => {
     is_active: channel.is_active,
     sync_files: metadata.sync_files === true,
     sync_interval: typeof metadata.sync_interval === 'number' && metadata.sync_interval > 0 ? metadata.sync_interval : 15,
+    personal_sync_interval: typeof metadata.sync_interval === 'number' && Number.isInteger(metadata.sync_interval) &&
+      metadata.sync_interval >= 1 && metadata.sync_interval <= 1440 ? metadata.sync_interval : 'gateway',
     sync_scope: metadata.sync_scope === 'direct' || metadata.sync_scope === 'group' ? metadata.sync_scope : 'all',
     session_keyword: typeof metadata.session_keyword === 'string' ? metadata.session_keyword : '',
     session_end_keyword: typeof metadata.session_end_keyword === 'string' ? metadata.session_end_keyword : '',
@@ -292,6 +314,7 @@ function settingsMetadata(): Record<string, unknown> {
   if (editChannelType.value === 'personal_zalo_import') {
     return {
       sync_scope: editForm.sync_scope,
+      sync_interval: editForm.personal_sync_interval === 'gateway' ? null : editForm.personal_sync_interval,
       ...sessionSettings,
       ...personalZaloGroupSettingsPatch(editPersonalGroupSettings.value),
       ...editBotSettings.value,
