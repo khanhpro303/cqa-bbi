@@ -3,7 +3,9 @@ package customercases
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/vietbui/chat-quality-agent/channels"
@@ -36,12 +38,25 @@ func EnabledFor(metadata string) bool {
 
 // sendAlert delivers a case alert; replaced in tests.
 var sendAlert = func(ctx context.Context, ch models.Channel, a engine.CaseAlert) bool {
-	adapter, err := channelAdapter(ch)
+	if ch.ChannelType != "personal_zalo_import" {
+		adapter, err := channelAdapter(ch)
+		if err != nil {
+			log.Printf("[cases] alert: adapter for channel %s: %v", ch.ID, err)
+			return false
+		}
+		return engine.NotifyCase(ctx, adapter, a)
+	}
+	destination, err := personalCaseAlertDestination(ctx, ch, a)
 	if err != nil {
-		log.Printf("[cases] alert: adapter for channel %s: %v", ch.ID, err)
+		log.Printf("[cases] alert: destination for personal channel %s: %v", ch.ID, err)
 		return false
 	}
-	return engine.NotifyCase(ctx, adapter, a)
+	adapter, err := channelAdapter(destination.oa)
+	if err != nil {
+		log.Printf("[cases] alert: adapter for channel %s: %v", destination.oa.ID, err)
+		return false
+	}
+	return engine.NotifyCaseToGroup(ctx, adapter, a, destination.groupID, destination.zaloGroupID)
 }
 
 // alertStaff tells staff about a new case, a reopened case, or a customer
@@ -78,10 +93,13 @@ func alertStaff(ctx context.Context, out *Outcome, r Report) bool {
 		return false
 	}
 	group := ""
-	if c.SubjectType == "group" {
+	if c.SubjectType == "group" || ch.ChannelType == "personal_zalo_import" {
 		group = r.ChatGroup
-		if group == "" {
+		if strings.TrimSpace(group) == "" {
 			group = c.CustomerName
+			if ch.ChannelType == "personal_zalo_import" {
+				group = r.ZaloGroupID
+			}
 		}
 	}
 	a := engine.CaseAlert{
@@ -89,6 +107,7 @@ func alertStaff(ctx context.Context, out *Outcome, r Report) bool {
 		ReporterName: r.ReporterName, CustomerName: c.CustomerName, CustomerCode: c.CustomerCode, ChatGroup: group,
 		TypeLabel: TypeLabel(c.Type), Severity: c.Severity, Title: c.Title, StatusLabel: StatusLabel(c.Status),
 		FollowupCount: c.FollowupCount, ImageCount: len(parseImages(c.Images)), FromSummary: r.Source == SourceSummary,
+		SourceGroupID: r.ZaloGroupID,
 	}
 	if st, ok := ParseSettings(ch.Metadata).Stream(c.Stream); ok {
 		a.StreamName, a.GroupID = st.Name, st.AlertGroupID
@@ -137,6 +156,7 @@ func AlertStreamMoved(ctx context.Context, c models.CustomerCase, actor string) 
 		TypeLabel: TypeLabel(c.Type), Severity: c.Severity, Title: c.Title, Detail: c.Detail, Evidence: c.Evidence,
 		StatusLabel: StatusLabel(c.Status), ImageCount: len(parseImages(c.Images)),
 		StreamName: st.Name, GroupID: st.AlertGroupID, MovedBy: actor,
+		SourceGroupID: c.ZaloGroupID,
 	}
 	if c.SubjectType == "group" {
 		a.ChatGroup = c.CustomerName
@@ -154,6 +174,58 @@ func joinNonEmpty(a, b string) string {
 		return a
 	}
 	return a + ". " + b
+}
+
+// The recipient and credentials are resolved together so a fallback OA can
+// only send to the matching fallback group.
+type personalCaseDestination struct {
+	oa          models.Channel
+	groupID     string
+	zaloGroupID string
+}
+
+func personalCaseAlertDestination(ctx context.Context, ch models.Channel, a engine.CaseAlert) (personalCaseDestination, error) {
+	groupID := strings.TrimSpace(a.GroupID)
+	handoverID := engine.ParseHandoverAlertGroupID(ch.Metadata)
+	if groupID == "" {
+		groupID = handoverID
+	}
+	destination, err := loadPersonalCaseDestination(ctx, ch.TenantID, groupID, a.SourceGroupID)
+	if err != nil && groupID != handoverID && handoverID != "" {
+		destination, err = loadPersonalCaseDestination(ctx, ch.TenantID, handoverID, a.SourceGroupID)
+	}
+	if err != nil {
+		return personalCaseDestination{}, err
+	}
+	return destination, nil
+}
+
+func loadPersonalCaseDestination(ctx context.Context, tenantID, groupID, sourceGroupID string) (personalCaseDestination, error) {
+	if groupID == "" {
+		return personalCaseDestination{}, fmt.Errorf("personal Zalo channel has no complaint alert group")
+	}
+	var group models.CRMGroup
+	err := db.DB.WithContext(ctx).
+		Where("id = ? AND tenant_id = ?", groupID, tenantID).
+		Where("COALESCE(TRIM(zalo_group_id), '') <> '' AND COALESCE(TRIM(channel_id), '') <> ''").
+		Where("COALESCE(TRIM(customer_code), '') = ''").
+		Where("NOT EXISTS (SELECT 1 FROM crm_group_customer_codes WHERE group_id = crm_groups.id)").
+		Where("NOT EXISTS (SELECT 1 FROM crm_group_customers WHERE group_id = crm_groups.id)").
+		First(&group).Error
+	if err != nil {
+		return personalCaseDestination{}, err
+	}
+	if strings.TrimSpace(sourceGroupID) != "" && strings.TrimSpace(sourceGroupID) == strings.TrimSpace(group.ZaloGroupID) {
+		return personalCaseDestination{}, fmt.Errorf("complaint alert group is the source customer chat")
+	}
+	var oa models.Channel
+	err = db.DB.WithContext(ctx).
+		Where("id = ? AND tenant_id = ? AND channel_type = ? AND is_active = ?", group.ChannelID, tenantID, "zalo_oa", true).
+		First(&oa).Error
+	if err != nil {
+		return personalCaseDestination{}, err
+	}
+	return personalCaseDestination{oa: oa, groupID: group.ID, zaloGroupID: strings.TrimSpace(group.ZaloGroupID)}, nil
 }
 
 func channelAdapter(ch models.Channel) (*channels.ZaloOAAdapter, error) {

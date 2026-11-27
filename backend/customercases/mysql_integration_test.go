@@ -3,6 +3,7 @@ package customercases
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -203,6 +204,58 @@ func TestRecordLifecycleMySQL(t *testing.T) {
 	}
 	if LastBotReportAt(ctx, tenantID, "user", "zu-1", "zu-1").Before(start) {
 		t.Fatal("LastBotReportAt")
+	}
+}
+
+func TestPersonalZaloCaseAlertUsesRecipientOA(t *testing.T) {
+	connectTestMySQL(t)
+	tenantID, oaID := setupTenant(t)
+	if err := db.DB.Model(&models.Channel{}).Where("id = ?", oaID).Update("is_active", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	personalID := pkg.NewUUID()
+	groupID := pkg.NewUUID()
+	streamID := pkg.NewUUID()
+	now := time.Now()
+	personal := models.Channel{
+		ID: personalID, TenantID: tenantID, ChannelType: "personal_zalo_import", Name: "Personal", IsActive: true,
+		CredentialsEncrypted: []byte("fixture"),
+		Metadata:             fmt.Sprintf(`{"complaint_cases":true,"handover_alert_group_id":%q,"complaint_streams":[{"key":"bao_hanh","name":"Bảo hành","alert_group_id":%q}]}`, groupID, streamID),
+		CreatedAt:            now, UpdatedAt: now,
+	}
+	if err := db.DB.Create(&personal).Error; err != nil {
+		t.Fatal(err)
+	}
+	groups := []models.CRMGroup{
+		{ID: groupID, TenantID: tenantID, ChannelID: oaID, ZaloGroupID: "staff-fallback", Name: "Staff fallback", CreatedAt: now, UpdatedAt: now},
+		{ID: streamID, TenantID: tenantID, ChannelID: oaID, ZaloGroupID: "staff-stream", Name: "Staff stream", CreatedAt: now, UpdatedAt: now},
+	}
+	if err := db.DB.Create(&groups).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	destination, err := personalCaseAlertDestination(t.Context(), personal, engine.CaseAlert{GroupID: streamID})
+	if err != nil || destination.oa.ID != oaID || destination.groupID != streamID || destination.zaloGroupID != "staff-stream" {
+		t.Fatalf("stream destination = %+v, %v", destination, err)
+	}
+	if err := db.DB.Model(&groups[1]).Update("customer_code", "S001").Error; err != nil {
+		t.Fatal(err)
+	}
+	destination, err = personalCaseAlertDestination(t.Context(), personal, engine.CaseAlert{GroupID: streamID})
+	if err != nil || destination.oa.ID != oaID || destination.groupID != groupID || destination.zaloGroupID != "staff-fallback" {
+		t.Fatalf("fallback destination = %+v, %v", destination, err)
+	}
+	if _, err := personalCaseAlertDestination(t.Context(), personal, engine.CaseAlert{GroupID: streamID, SourceGroupID: "staff-fallback"}); err == nil {
+		t.Fatal("source chat must never receive the complaint alert")
+	}
+
+	streams := TenantStreams(t.Context(), tenantID)
+	found := false
+	for _, stream := range streams {
+		found = found || stream.Key == "bao_hanh" && stream.Name == "Bảo hành"
+	}
+	if !found {
+		t.Fatalf("personal stream missing from tenant streams: %+v", streams)
 	}
 }
 

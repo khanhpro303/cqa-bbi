@@ -58,7 +58,7 @@ func writePersonalZaloDirectReply(c *gin.Context, key string, req personalZaloCh
 		Role:             identity.AgentType, IdentityID: identity.ID, Permissions: grant.grantHash,
 		TextDigest: personalZaloIdentityDigest(response["reply"].(string)),
 	}
-	if grant.permission != "" {
+	if grant.turnID != "" {
 		claims.Credential = personalZaloIdentityDigest(grant.agentToken)
 	}
 	images, _ := response["images"].([]personalZaloKnowledgeImage)

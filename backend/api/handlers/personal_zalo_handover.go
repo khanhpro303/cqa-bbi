@@ -14,6 +14,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/customercases"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
@@ -154,7 +155,7 @@ func validatePersonalZaloChatbotMetadata(ctx context.Context, tenantID string, m
 			return errors.New("session_timeout_minutes must be a whole number from 0 to 1440")
 		}
 	}
-	for _, key := range []string{"personal_zalo_group_reply_enabled", "group_assistant_mode", "group_staff_call_only"} {
+	for _, key := range []string{"personal_zalo_group_reply_enabled", "group_assistant_mode", "group_staff_call_only", customercases.MetaEnabled} {
 		if value, exists := metadata[key]; exists {
 			if _, ok := value.(bool); !ok {
 				return fmt.Errorf("%s must be true or false", key)
@@ -175,8 +176,31 @@ func validatePersonalZaloChatbotMetadata(ctx context.Context, tenantID string, m
 	staffID, _ := metadata["personal_zalo_handover_staff_id"].(string)
 	groupID, staffID = strings.TrimSpace(groupID), strings.TrimSpace(staffID)
 	if groupID != "" || staffID != "" {
-		_, err := resolvePersonalZaloHandoverDestination(ctx, tenantID, groupID, staffID)
-		return err
+		if _, err := resolvePersonalZaloHandoverDestination(ctx, tenantID, groupID, staffID); err != nil {
+			return err
+		}
+	}
+	if errKey, err := normalizeComplaintSettings(tenantID, metadata); err != nil {
+		return fmt.Errorf("%s: %w", errKey, err)
+	}
+	complaints, _ := metadata[customercases.MetaEnabled].(bool)
+	if !complaints {
+		return nil
+	}
+	// Every complaint needs a reliable group fallback. The decision model may
+	// fail to select a stream, and case alerts are group notifications even
+	// when ordinary personal-Zalo handovers are configured for one employee.
+	if groupID == "" {
+		return errors.New("complaint cases require an internal handover alert group")
+	}
+	streams, _ := customercases.NormalizeStreams(metadata[customercases.MetaStreams])
+	for _, stream := range streams {
+		if stream.AlertGroupID == "" {
+			continue
+		}
+		if _, err := resolvePersonalZaloHandoverDestination(ctx, tenantID, stream.AlertGroupID, ""); err != nil {
+			return fmt.Errorf("complaint stream %s: %w", stream.Name, err)
+		}
 	}
 	return nil
 }

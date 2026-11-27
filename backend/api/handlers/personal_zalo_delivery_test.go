@@ -26,7 +26,7 @@ func TestPersonalZaloDirectReplySignsEveryImage(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
 	writePersonalZaloDirectReply(context, key, req, response, personalZaloERPIdentity{ID: "staff", AgentType: "private"}, personalZaloDirectGrant{
-		grantHash: "permission-hash", permission: "permission-token", agentToken: "agent-token",
+		grantHash: "permission-hash", permission: "permission-token", agentToken: "agent-token", turnID: "fixture-turn",
 	})
 	if recorder.Code != 200 {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())

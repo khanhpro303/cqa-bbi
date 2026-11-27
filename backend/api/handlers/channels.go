@@ -403,7 +403,7 @@ func mergeChannelMetadata(existingRaw, incomingRaw string) (map[string]interface
 }
 
 // normalizeComplaintSettings checks the complaint case settings in merged
-// zalo_oa metadata: complaint_resolved_days is a whole number of days
+// Zalo channel metadata: complaint_resolved_days is a whole number of days
 // (1-90) and every complaint stream is valid and alerts a usable group.
 func normalizeComplaintSettings(tenantID string, merged map[string]interface{}) (string, error) {
 	if v, ok := merged[customercases.MetaResolvedDays]; ok && v != nil {

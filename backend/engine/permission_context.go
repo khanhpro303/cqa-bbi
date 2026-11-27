@@ -48,6 +48,9 @@ type GroupPermissionContext struct {
 	// TurnID identifies the chat turn the token was signed for; complaint
 	// reports carry it so the worker can tell what this turn recorded.
 	TurnID string `json:"turn_id,omitempty"`
+	// ComplaintTurnID is the stable gateway message ID for cases. Personal
+	// Zalo ERP prompts use a separate, unique TurnID for each execution.
+	ComplaintTurnID string `json:"complaint_turn_id,omitempty"`
 	// UnansweredLookupID is unique to the current signed chatbot attempt.
 	UnansweredLookupID string `json:"unanswered_lookup_id,omitempty"`
 	// Complaints: complaint handling is on for this turn (channel switch and

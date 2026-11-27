@@ -306,6 +306,9 @@ type CaseAlert struct {
 	// the channel's handover alert group.
 	StreamName string
 	GroupID    string
+	// SourceGroupID is the Zalo group where the customer reported the
+	// problem. Alerts must never be sent back into that customer chat.
+	SourceGroupID string
 	// MovedBy: staff who moved the case to this stream (Kind "moved").
 	MovedBy string
 }
@@ -409,13 +412,35 @@ func NotifyCase(ctx context.Context, sender HandoverGroupSender, a CaseAlert) bo
 		logAlert("", "failed", "alert_group_misconfigured")
 		return false
 	}
+	return NotifyCaseToGroup(ctx, sender, a, groupID, group.ZaloGroupID)
+}
+
+// NotifyCaseToGroup sends a case alert to one already validated CRM group.
+// It is used by personal Zalo, where the source channel has no OA credentials
+// and the sender must be the OA linked to this exact recipient group.
+func NotifyCaseToGroup(ctx context.Context, sender HandoverGroupSender, a CaseAlert, groupID, zaloGroupID string) bool {
+	groupID = strings.TrimSpace(groupID)
+	zaloGroupID = strings.TrimSpace(zaloGroupID)
+	logAlert := func(body, status, errMsg string) {
+		recordHandoverAlertLog(HandoverAlert{TenantID: a.TenantID}, groupID, body, status, errMsg)
+	}
+	if groupID == "" || zaloGroupID == "" {
+		log.Printf("[case-alert] exact alert destination is missing")
+		logAlert("", "failed", "alert_group_misconfigured")
+		return false
+	}
+	if source := strings.TrimSpace(a.SourceGroupID); source != "" && source == zaloGroupID {
+		log.Printf("[case-alert] refusing to send case alert back to source group %s", source)
+		logAlert("", "failed", "alert_group_is_source_chat")
+		return false
+	}
 	loc, err := time.LoadLocation(tenantTimezone(a.TenantID))
 	if err != nil || loc == nil {
 		loc = time.Local
 	}
 	msg := BuildCaseAlertMessage(a, time.Now().In(loc))
-	if err := sender.SendGroupMessage(ctx, group.ZaloGroupID, msg); err != nil {
-		log.Printf("[case-alert] send to group %s failed: %v", group.ZaloGroupID, err)
+	if err := sender.SendGroupMessage(ctx, zaloGroupID, msg); err != nil {
+		log.Printf("[case-alert] send to group %s failed: %v", zaloGroupID, err)
 		logAlert(msg, "failed", err.Error())
 		return false
 	}
