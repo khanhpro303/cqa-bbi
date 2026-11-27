@@ -171,17 +171,26 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		complaints := customercases.EnabledFor(channel.Metadata) && !groupTurn.Staff && req.Text != ""
 		requestedHandover := personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
 		handover := !complaints && !guest && requestedHandover
+		directSessionRequired := req.ThreadType == personalZaloThreadUser &&
+			strings.TrimSpace(strings.ReplaceAll(sessionConfig.SessionKeyword, ";", "")) != ""
 		var turn personalZaloTurn
-		if guest && strings.TrimSpace(strings.ReplaceAll(sessionConfig.SessionKeyword, ";", "")) == "" {
+		if guest && !directSessionRequired {
 			turn = personalZaloTurn{RunFlow: true, FlowScope: personalZaloLegacyFlowScope(req)}
-		} else if !handover {
+		} else if directSessionRequired || !handover {
 			turn, err = planPersonalZaloTurn(ctx, sessionConfig, req, groupTurn.Inferred)
 			if err != nil {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_session_unavailable"})
 				return
 			}
 		}
-		// A guest complaint reaches the public flow only after the guest can chat.
+		if directSessionRequired && !turn.RunFlow {
+			if turn.Reply == "" {
+				c.Status(http.StatusNoContent)
+				return
+			}
+			// A session keyword takes precedence if it also matches a handover phrase.
+			handover = false
+		}
 		if !guest && complaints && addressed && !turn.RunFlow && turn.Reply == "" &&
 			!personalZaloMatchesKeyword(req.Text, sessionConfig.SessionEndKeyword) &&
 			(requestedHandover || workers.PersonalZaloComplaintNeedsHandover(ctx, req.TenantID, req.Text)) {
@@ -192,7 +201,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		var imageSelection personalZaloImageSelection
 		var directGrant personalZaloDirectGrant
 		complaintTurn := complaints && turn.RunFlow
-		if turn.RunFlow {
+		if turn.RunFlow && !handover {
 			flowCtx := ctx
 			if complaintTurn {
 				// Reserve time to recheck the channel and notify staff if the
