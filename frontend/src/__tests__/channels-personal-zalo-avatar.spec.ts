@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   put: vi.fn(),
   delete: vi.fn(),
   push: vi.fn(),
+  tenantPermissions: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -30,7 +31,7 @@ vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 vi.mock('../stores/auth', () => ({
-  useAuthStore: () => ({ canEdit: () => true }),
+  useAuthStore: () => ({ canEdit: () => true, tenantPerms: mocks.tenantPermissions() }),
 }))
 
 const Container = defineComponent({
@@ -74,6 +75,12 @@ const VIconStub = defineComponent({
 const VCardStub = defineComponent({
   name: 'VCard',
   setup: (_, { slots, attrs }) => () => h('article', { ...attrs, class: ['v-card-stub', attrs.class] }, slots.default?.()),
+})
+
+const VSwitchStub = defineComponent({
+  name: 'VSwitch',
+  props: { disabled: Boolean },
+  setup: (props) => () => h('input', { type: 'checkbox', disabled: props.disabled }),
 })
 
 const HiddenStub = defineComponent({ setup: () => () => null })
@@ -126,7 +133,7 @@ function mountChannels(channels: Channel[]) {
         VImg: VImgStub,
         VIcon: VIconStub,
         VChip: Container,
-        VSwitch: HiddenStub,
+        VSwitch: VSwitchStub,
         VBtn: HiddenStub,
         VDivider: HiddenStub,
         VSpacer: HiddenStub,
@@ -146,6 +153,23 @@ function mountChannels(channels: Channel[]) {
 describe('Channels personal Zalo avatar rendering', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset())
+  })
+
+  it.each([
+    { role: undefined, disabled: true },
+    { role: 'member', disabled: true },
+    { role: 'admin', disabled: false },
+    { role: 'owner', disabled: false },
+  ])('sets the personal Zalo auto-reply switch for role $role', async ({ role, disabled }) => {
+    mocks.tenantPermissions.mockReturnValue(role ? { role } : undefined)
+    const wrapper = mountChannels([makeChannel({ is_active: true })])
+    await flushPromises()
+
+    const switches = wrapper.get('article.v-card-stub').findAllComponents(VSwitchStub)
+    expect(switches).toHaveLength(2)
+    expect(switches[1]?.props('disabled')).toBe(disabled)
+
+    wrapper.unmount()
   })
 
   it('renders personal Zalo avatar inside v-avatar with placeholder fallback icon', async () => {

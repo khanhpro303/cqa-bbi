@@ -328,7 +328,9 @@ const chatbotStatusError = computed(() => chatbotStore.hasError(tenantId.value))
 
 function canToggleAutoReply(ch: any) {
   if (!authStore.canEdit('channels')) return false
-  return ch.channel_type !== 'personal_zalo_import' || ['owner', 'admin'].includes(authStore.tenantPerms.role)
+  if (ch.channel_type !== 'personal_zalo_import') return true
+  const role = authStore.tenantPerms?.role
+  return role === 'owner' || role === 'admin'
 }
 
 function fetchChatbotStatus() {
