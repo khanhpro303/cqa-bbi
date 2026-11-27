@@ -127,8 +127,8 @@ func (c *CloudifyClient) InventoryStock(endpoint string, usePost bool, sku strin
 }
 
 // MainWarehouseAvailableStock returns SO_LUONG_TON_KHA_DUNG for one exact SKU
-// from the main warehouse rows in TON_KHO_CHI_TIET. Cloudify can also confirm
-// zero stock with an empty warehouse list and two explicit zero product totals.
+// from the main warehouse rows in TON_KHO_CHI_TIET. When Cloudify omits the
+// main warehouse, zero is confirmed by reconciling both product totals.
 func (c *CloudifyClient) MainWarehouseAvailableStock(ctx context.Context, sku string) (float64, error) {
 	if strings.TrimSpace(sku) == "" {
 		return 0, fmt.Errorf("inventory available stock: SKU is required")
@@ -154,8 +154,9 @@ func mainWarehouseAvailableStockFromInventoryItems(items []map[string]interface{
 	}
 
 	matchingRows := 0
+	var matchingItem map[string]interface{}
+	var matchingDetails []interface{}
 	foundWarehouse := false
-	explicitZeroWithoutWarehouse := false
 	var total float64
 	for itemIndex, item := range items {
 		itemSKU, ok := item["MA_HANG"].(string)
@@ -171,10 +172,8 @@ func mainWarehouseAvailableStockFromInventoryItems(items []map[string]interface{
 		if !ok {
 			return 0, fmt.Errorf("product row %d has missing or invalid TON_KHO_CHI_TIET", itemIndex)
 		}
-		if len(details) == 0 && matchingRows == 1 {
-			physical, hasPhysical := strictInventoryNumber(item["SO_LUONG_TON_TONG"])
-			available, hasAvailable := strictInventoryNumber(item["SO_LUONG_TON_KHA_DUNG"])
-			explicitZeroWithoutWarehouse = hasPhysical && hasAvailable && physical == 0 && available == 0
+		if matchingRows == 1 {
+			matchingItem, matchingDetails = item, details
 		}
 		for detailIndex, detail := range details {
 			row, ok := detail.(map[string]interface{})
@@ -204,10 +203,33 @@ func mainWarehouseAvailableStockFromInventoryItems(items []map[string]interface{
 	if matchingRows == 0 {
 		return 0, fmt.Errorf("ERP returned no exact SKU match")
 	}
-	if !foundWarehouse && !(matchingRows == 1 && explicitZeroWithoutWarehouse) {
+	if !foundWarehouse && (matchingRows != 1 || !otherWarehousesAccountForStock(matchingItem, matchingDetails)) {
 		return 0, fmt.Errorf("ERP returned no main warehouse row")
 	}
 	return total, nil
+}
+
+// Called after validating the warehouse rows and finding no main warehouse.
+// Both totals must be fully explained by the listed warehouses. This also
+// handles an empty warehouse list when both product totals are explicitly zero.
+func otherWarehousesAccountForStock(item map[string]interface{}, details []interface{}) bool {
+	physicalTotal, hasPhysical := strictInventoryNumber(item["SO_LUONG_TON_TONG"])
+	availableTotal, hasAvailable := strictInventoryNumber(item["SO_LUONG_TON_KHA_DUNG"])
+	if !hasPhysical || !hasAvailable {
+		return false
+	}
+	var physicalSum, availableSum float64
+	for _, detail := range details {
+		row := detail.(map[string]interface{})
+		physical, hasPhysical := strictInventoryNumber(row["SO_LUONG_TON"])
+		available, hasAvailable := strictInventoryNumber(row["SO_LUONG_TON_KHA_DUNG"])
+		if !hasPhysical || !hasAvailable || physical < 0 || available < 0 {
+			return false
+		}
+		physicalSum += physical
+		availableSum += available
+	}
+	return physicalSum == physicalTotal && availableSum == availableTotal
 }
 
 func isInventoryMainWarehouse(name string) bool {
