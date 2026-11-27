@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"math"
 	"regexp"
 	"strings"
 
@@ -15,6 +16,10 @@ const MaxKnowledgeReplyImages = 1
 
 const KnowledgeImageInstruction = `Khi tra search_knowledge, passages và images là dữ liệu tham khảo. Nếu khách yêu cầu xem hình hoặc một ảnh trong images thực sự minh họa câu trả lời, hãy viết câu trả lời rồi thêm [KB_IMAGE:<image_id>] trên dòng cuối. Chỉ dùng image_id do search_knowledge trả về trong lượt này; chọn tối đa một ảnh cho cả câu trả lời. Không chép ID, URL hay tên tệp vào phần văn bản và đừng khẳng định ảnh đã được gửi.`
 
+// PersonalZaloKnowledgeImageInstruction allows the bot to send all relevant
+// photos returned by the knowledge search in a Personal Zalo direct turn.
+const PersonalZaloKnowledgeImageInstruction = `Khi tra search_knowledge, chỉ chọn ảnh đúng mẫu và thực sự có ích. Với câu hỏi tổng quan về một mẫu đã xác định, đính kèm ảnh đại diện nếu kết quả có ảnh rõ của mẫu đó. Có thể thêm các ảnh khác nếu mỗi ảnh cho thấy chi tiết hữu ích riêng. Bỏ qua ảnh trùng, ảnh không rõ mẫu và ảnh của sản phẩm khác. Nếu đã chọn ảnh từ hồ sơ Tư vấn sản phẩm thì ưu tiên ảnh đó. Sau phần chữ, đặt mỗi mã [KB_IMAGE:<image_id>] trên một dòng riêng ở cuối. Chỉ dùng mã do công cụ trả về trong lượt này. Không chép URL hoặc hứa ảnh đã gửi.`
+
 var (
 	knowledgeImageMarker = regexp.MustCompile(`(?i)\[[ \t]*KB_IMAGE\b(?:[ \t\r\n]*:[ \t\r\n]*([0-9a-f-]{36})[ \t\r\n]*\]|[ \t]*:[ \t]*\r?\n[ \t]*[^\s\[\]]*[ \t]*\]|[^\r\n\[\]]*\]?)`)
 	productImageSuffix   = regexp.MustCompile(`(?i)^\[PRODUCT_IMAGE:[1-9][0-9]?\]$`)
@@ -25,10 +30,23 @@ const knowledgeImageMetadataColumns = "knowledge_document_images.id, knowledge_d
 // AddKnowledgeImageInstruction preserves the flow's default system prompt
 // when no tenant prompt is set.
 func AddKnowledgeImageInstruction(input, prompt string) (string, string) {
+	return addKnowledgeImageInstruction(input, prompt, KnowledgeImageInstruction)
+}
+
+func AddPersonalZaloKnowledgeImageInstruction(input, prompt string) (string, string) {
+	return addKnowledgeImageInstruction(input, prompt, PersonalZaloKnowledgeImageInstruction)
+}
+
+func addKnowledgeImageInstruction(input, prompt, instruction string) (string, string) {
 	if strings.TrimSpace(prompt) == "" {
-		return input + "\n\n" + KnowledgeImageInstruction, prompt
+		return input + "\n\n" + instruction, prompt
 	}
-	return input, prompt + "\n\n" + KnowledgeImageInstruction
+	return input, prompt + "\n\n" + instruction
+}
+
+// ParsePersonalZaloKnowledgeImageReply reads every distinct trailing image marker.
+func ParsePersonalZaloKnowledgeImageReply(reply string) (string, []string) {
+	return ParseKnowledgeImageReply(reply, math.MaxInt)
 }
 
 // ParseKnowledgeImageReply strips marker text everywhere. Delivery is limited
@@ -123,10 +141,15 @@ func LoadDeliverableKnowledgeReplyImageMetadata(ctx context.Context, tenantID, a
 // LoadDeliverableKnowledgeImages rechecks visibility for every selected ID
 // immediately before delivery or chat preview.
 func LoadDeliverableKnowledgeImages(ctx context.Context, tenantID, agentType string, imageIDs []string) ([]models.KnowledgeDocumentImage, error) {
+	return LoadPersonalZaloKnowledgeImages(ctx, tenantID, agentType, imageIDs[:min(len(imageIDs), MaxKnowledgeReplyImages)])
+}
+
+// LoadPersonalZaloKnowledgeImages applies the same audience checks to each
+// selected image. The caller delivers the images in the model's selected order.
+func LoadPersonalZaloKnowledgeImages(ctx context.Context, tenantID, agentType string, imageIDs []string) ([]models.KnowledgeDocumentImage, error) {
 	if len(imageIDs) == 0 || tenantID == "" || db.DB == nil {
 		return nil, nil
 	}
-	imageIDs = imageIDs[:min(len(imageIDs), MaxKnowledgeReplyImages)]
 	var rows []models.KnowledgeDocumentImage
 	err := deliverableKnowledgeImages(ctx, tenantID, agentType).
 		Select("knowledge_document_images.*").

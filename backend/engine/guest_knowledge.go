@@ -57,6 +57,16 @@ func guestKnowledgeRequiresVerification(text string) bool {
 // RunGuestKnowledge calls the tenant's public flow with an MCP credential that
 // exposes only public documents. It supplies no ERP grant or customer identity.
 func RunGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text string) (LangflowResult, error) {
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, KnowledgeImageInstruction)
+}
+
+// RunPersonalZaloGuestKnowledge keeps the public knowledge grant and enables
+// the Personal Zalo attachment policy.
+func RunPersonalZaloGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text string) (LangflowResult, error) {
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, PersonalZaloKnowledgeImageInstruction)
+}
+
+func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, imageInstruction string) (LangflowResult, error) {
 	if guestKnowledgeRequiresVerification(text) {
 		return LangflowResult{Text: GuestKnowledgeVerificationReply}, nil
 	}
@@ -69,7 +79,7 @@ func RunGuestKnowledge(ctx context.Context, client *LangflowClient, flow Langflo
 		return LangflowResult{}, err
 	}
 	session := fmt.Sprintf("zalo-guest-%x", sha256.Sum256([]byte(tenantID+"\x00"+scope)))
-	input, prompt := AddKnowledgeImageInstruction(text, guestKnowledgePrompt)
+	input, prompt := addKnowledgeImageInstruction(text, guestKnowledgePrompt, imageInstruction)
 	result, err := client.RunFlowWithCustomerUsage(ctx, session, session, input,
 		flow.APIURL, flow.APIKey, flow.PublicFlowID, "", "", token, prompt)
 	if err != nil {

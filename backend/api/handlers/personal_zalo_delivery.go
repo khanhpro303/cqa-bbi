@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"github.com/vietbui/chat-quality-agent/workers"
+	"gorm.io/gorm"
 )
 
 const personalZaloDirectProtocol = "personal-zalo-chatbot-v3"
@@ -28,6 +31,7 @@ type personalZaloDeliveryClaims struct {
 	TextDigest  string `json:"text_hash"`
 	ImageID     string `json:"image_id,omitempty"`
 	ImageDigest string `json:"image_hash,omitempty"`
+	ImageSource string `json:"image_source,omitempty"`
 }
 
 func personalZaloDeliveryKey(key string) []byte {
@@ -38,6 +42,10 @@ func personalZaloDeliveryKey(key string) []byte {
 
 func personalZaloDeliveryBinding(req personalZaloChatbotRequest) string {
 	return personalZaloIdentityDigest(strings.Join([]string{req.TenantID, req.ChannelID, req.AccountExternalID, req.ThreadID, req.SenderID, req.MessageID, req.SentAt.UTC().Format(time.RFC3339Nano)}, "\x00"))
+}
+
+func signPersonalZaloDeliveryClaims(key string, claims personalZaloDeliveryClaims) (string, error) {
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(personalZaloDeliveryKey(key))
 }
 
 func writePersonalZaloDirectReply(c *gin.Context, key string, req personalZaloChatbotRequest, response gin.H, identity personalZaloERPIdentity, grant personalZaloDirectGrant) {
@@ -53,14 +61,40 @@ func writePersonalZaloDirectReply(c *gin.Context, key string, req personalZaloCh
 	if grant.permission != "" {
 		claims.Credential = personalZaloIdentityDigest(grant.agentToken)
 	}
-	if images, ok := response["images"].([]personalZaloKnowledgeImage); ok && len(images) == 1 {
+	images, _ := response["images"].([]personalZaloKnowledgeImage)
+	// Older gateways only decode one image and only use the top-level token.
+	if !req.MultipleImages && len(images) > 1 {
+		images = images[:1]
+	}
+	if len(images) == 1 && (!req.MultipleImages || !images[0].product) {
 		imageHash := sha256.Sum256(images[0].Data)
 		claims.ImageID, claims.ImageDigest = images[0].ID, hex.EncodeToString(imageHash[:])
+		if images[0].product {
+			claims.ImageSource = "product"
+		}
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(personalZaloDeliveryKey(key))
+	token, err := signPersonalZaloDeliveryClaims(key, claims)
 	if err != nil {
 		c.Status(http.StatusServiceUnavailable)
 		return
+	}
+	for i := range images {
+		imageClaims := claims
+		imageClaims.TextDigest = ""
+		imageClaims.ImageSource = ""
+		imageHash := sha256.Sum256(images[i].Data)
+		imageClaims.ImageID, imageClaims.ImageDigest = images[i].ID, hex.EncodeToString(imageHash[:])
+		if images[i].product {
+			imageClaims.ImageSource = "product"
+		}
+		images[i].DeliveryToken, err = signPersonalZaloDeliveryClaims(key, imageClaims)
+		if err != nil {
+			c.Status(http.StatusServiceUnavailable)
+			return
+		}
+	}
+	if len(images) > 0 {
+		response["images"] = images
 	}
 	response["delivery_token"] = token
 	c.JSON(http.StatusOK, response)
@@ -68,6 +102,7 @@ func writePersonalZaloDirectReply(c *gin.Context, key string, req personalZaloCh
 
 func checkPersonalZaloDelivery(c *gin.Context, ctx context.Context, key string, channel models.Channel, req personalZaloChatbotRequest, settings map[string]models.AppSetting) {
 	var claims personalZaloDeliveryClaims
+	var currentPermissions *engine.GroupPermissionContext
 	if key == "" || !personalZaloIdentityAccountMatches(channel, req) {
 		c.Status(http.StatusNoContent)
 		return
@@ -107,9 +142,26 @@ func checkPersonalZaloDelivery(c *gin.Context, ctx context.Context, key string, 
 				c.Status(http.StatusNoContent)
 				return
 			}
+			currentPermissions = &current
 		}
 	}
 	if req.DeliveryPart == "image" {
+		if claims.ImageSource == "product" {
+			if currentPermissions == nil {
+				c.Status(http.StatusNoContent)
+				return
+			}
+			if _, err := workers.LoadPersonalZaloProductAdviceImage(ctx, currentPermissions, claims.ImageID); err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					c.Status(http.StatusNoContent)
+				} else {
+					c.Status(http.StatusServiceUnavailable)
+				}
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"allowed": true})
+			return
+		}
 		images, err := engine.LoadDeliverableKnowledgeReplyImageMetadata(ctx, req.TenantID, claims.Role, claims.ImageID)
 		if err != nil {
 			c.Status(http.StatusServiceUnavailable)

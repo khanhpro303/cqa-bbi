@@ -38,6 +38,7 @@ type personalZaloChatbotRequest struct {
 	Text              string    `json:"text"`
 	BotMentioned      bool      `json:"bot_mentioned,omitempty"`
 	GroupWakeText     *string   `json:"group_wake_text,omitempty"`
+	MultipleImages    bool      `json:"multiple_images,omitempty"`
 	DeliveryReceipt   string    `json:"delivery_receipt" binding:"omitempty,uuid4"`
 	DeliveryToken     string    `json:"delivery_token,omitempty" binding:"omitempty,max=4096"`
 	DeliveryPart      string    `json:"delivery_part,omitempty" binding:"omitempty,oneof=text image"`
@@ -173,18 +174,18 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			}
 		}
 		reply := turn.Reply
-		var imageIDs []string
+		var imageSelection personalZaloImageSelection
 		var directGrant personalZaloDirectGrant
 		if turn.RunFlow {
 			flow := engine.ResolveTenantLangflowConfig(settings, cfg)
 			switch {
 			case guest:
-				result, runErr := engine.RunGuestKnowledge(ctx, scopedLangflow, flow, cfg.EncryptionKey, req.TenantID, turn.FlowScope, req.Text)
+				result, runErr := engine.RunPersonalZaloGuestKnowledge(ctx, scopedLangflow, flow, cfg.EncryptionKey, req.TenantID, turn.FlowScope, req.Text)
 				if errors.Is(runErr, engine.ErrGuestKnowledgeNotConfigured) {
 					reply = engine.GuestKnowledgeUnavailableReply
 				} else {
 					err = runErr
-					reply, imageIDs = engine.ParseKnowledgeImageReply(result.Text, engine.MaxKnowledgeReplyImages)
+					reply, imageSelection.knowledgeIDs = engine.ParsePersonalZaloKnowledgeImageReply(result.Text)
 				}
 			case identity.AgentType != "":
 				if personalZaloMatchesKeyword(req.Text, "hello;hi;xin chào;chào;alo") {
@@ -195,7 +196,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 						c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_settings_unavailable"})
 						return
 					}
-					reply, imageIDs, err = directGrant.run(ctx, scopedLangflow, channel, req)
+					reply, imageSelection, err = directGrant.run(ctx, scopedLangflow, channel, req)
 				}
 				handover = personalZaloHasHandoverDestination(channel) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
 			default:
@@ -275,8 +276,12 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			reply = strings.TrimSpace(reply[:personalZaloTextBoundary(reply, personalZaloTextLimit-1)]) + "…"
 		}
 		response := gin.H{"reply": reply}
-		if !handover && len(imageIDs) > 0 {
-			if images := personalZaloKnowledgeReplyImages(ctx, req.TenantID, identity.AgentType, imageIDs); len(images) > 0 {
+		if !handover {
+			images := personalZaloProductReplyImages(ctx, directGrant.advicePermissions, imageSelection.products)
+			if len(images) == 0 {
+				images = personalZaloKnowledgeReplyImages(ctx, req.TenantID, identity.AgentType, imageSelection.knowledgeIDs)
+			}
+			if len(images) > 0 {
 				response["images"] = images
 			}
 		}
@@ -294,18 +299,28 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 }
 
 type personalZaloKnowledgeImage struct {
-	ID string `json:"id"`
+	ID            string `json:"id"`
+	DeliveryToken string `json:"delivery_token,omitempty"`
 	channels.ZaloImage
+	product bool
 }
 
 func personalZaloKnowledgeReplyImages(ctx context.Context, tenantID, audience string, imageIDs []string) []personalZaloKnowledgeImage {
-	rows, err := engine.LoadDeliverableKnowledgeImages(ctx, tenantID, audience, imageIDs)
+	rows, err := engine.LoadPersonalZaloKnowledgeImages(ctx, tenantID, audience, imageIDs)
 	if err != nil {
 		log.Printf("[personal-zalo] failed to load knowledge image tenant=%s: %v", tenantID, err)
 		return nil
 	}
-	var images []personalZaloKnowledgeImage
+	byID := make(map[string]models.KnowledgeDocumentImage, len(rows))
 	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	var images []personalZaloKnowledgeImage
+	for _, id := range imageIDs {
+		row, ok := byID[id]
+		if !ok {
+			continue
+		}
 		attachment, err := channels.PrepareZaloImage(row.Data)
 		if err != nil {
 			log.Printf("[personal-zalo] failed to prepare knowledge image %s: %v", row.ID, err)
