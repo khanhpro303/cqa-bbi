@@ -151,14 +151,19 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		internal.POST("/imports/personal-zalo", handlers.NewPersonalZaloImportHandler(engine.NewIngestService()))
 	}
 
-	r.POST("/api/internal/chatbot/personal-zalo",
-		func(c *gin.Context) {
-			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
-			c.Next()
-		},
-		middleware.InternalHMACAuth(middleware.PersonalZaloChatbotSecretResolver(cfg.EncryptionKey, os.Getenv("PERSONAL_ZALO_CHATBOT_SECRET")), 5*time.Minute),
-		handlers.NewPersonalZaloChatbotHandler(cfg),
+	personalZaloAuth := middleware.InternalHMACAuth(
+		middleware.PersonalZaloChatbotSecretResolver(cfg.EncryptionKey, os.Getenv("PERSONAL_ZALO_CHATBOT_SECRET")), 5*time.Minute,
 	)
+	personalZaloChatbot := r.Group("/api/internal/chatbot/personal-zalo", func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+		c.Next()
+	}, personalZaloAuth)
+	personalZaloChatbot.POST("", handlers.NewPersonalZaloChatbotHandler(cfg))
+	personalZaloChatbot.POST("/thread-access", handlers.CheckPersonalZaloGroupThreadAccess)
+	r.POST("/api/internal/imports/personal-zalo/roster", func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 12<<20)
+		c.Next()
+	}, personalZaloAuth, handlers.IngestPersonalZaloRoster)
 
 	abzInternal := r.Group("/api/internal/abz")
 	abzInternal.Use(middleware.ABZExportHMACAuth(cfg.ABZExportSecret, cfg.ABZExportTenantID, 5*time.Minute))
@@ -218,6 +223,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/channels/:channelId/personal-zalo-gateway/connect", middleware.RequirePermission("channels", "w"), handlers.ConnectPersonalZaloGateway)
 			tenant.POST("/channels/:channelId/personal-zalo-gateway/reconnect", middleware.RequirePermission("channels", "w"), handlers.ReconnectPersonalZaloGateway)
 			tenant.POST("/channels/:channelId/personal-zalo-gateway/sync", middleware.RequirePermission("channels", "w"), handlers.SyncPersonalZaloGateway)
+			personalZaloApprovals := tenant.Group("/channels/:channelId/personal-zalo/approvals", middleware.RequireRole("owner", "admin"))
+			personalZaloApprovals.GET("", handlers.GetPersonalZaloApprovals)
+			personalZaloApprovals.PUT("/:threadType/:threadId", handlers.DecidePersonalZaloApproval)
 			personalZaloIdentity := tenant.Group("/channels/:channelId/personal-zalo/identity-links", middleware.RequireRole("owner", "admin"))
 			personalZaloIdentity.GET("", handlers.ListPersonalZaloIdentityLinks)
 			personalZaloIdentity.GET("/options", handlers.ListPersonalZaloIdentityOptions)

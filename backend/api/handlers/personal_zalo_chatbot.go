@@ -104,21 +104,23 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		if channel.ExternalID != req.AccountExternalID {
+			c.Status(http.StatusNoContent)
+			return
+		}
+		approved, err := personalZaloThreadApproved(ctx, req)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_approval_unavailable"})
+			return
+		}
+		if !approved {
+			c.Status(http.StatusNoContent)
+			return
+		}
+
 		if preflight {
 			checkPersonalZaloDelivery(c, ctx, cfg.EncryptionKey, channel, req, settings)
 			return
-		}
-		if req.ThreadType == personalZaloThreadUser && channel.ExternalID == "" {
-			channel, err = bindPersonalZaloAccount(ctx, req.TenantID, req.ChannelID, req.AccountExternalID, true)
-			if errors.Is(err, gorm.ErrRecordNotFound) || isMySQLDuplicateEntry(err) || errors.Is(err, gorm.ErrDuplicatedKey) ||
-				(err == nil && channel.ExternalID != req.AccountExternalID) {
-				c.Status(http.StatusNoContent)
-				return
-			}
-			if err != nil {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "channel_binding_failed"})
-				return
-			}
 		}
 
 		sessionConfig, err := parsePersonalZaloSessionConfig(channel, cfg)
@@ -147,10 +149,6 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		req.Text = redactPersonalZaloPairingCodes(req.Text)
 		var identity personalZaloERPIdentity
 		if req.ThreadType == personalZaloThreadUser {
-			if channel.ExternalID != req.AccountExternalID {
-				c.Status(http.StatusNoContent)
-				return
-			}
 			identity, err = resolvePersonalZaloERPIdentity(ctx, channel, req)
 			if err != nil {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_verification_unavailable"})
@@ -285,6 +283,15 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		if !enabled {
+			c.Status(http.StatusNoContent)
+			return
+		}
+		approved, err = personalZaloThreadApproved(ctx, req)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_approval_unavailable"})
+			return
+		}
+		if !approved {
 			c.Status(http.StatusNoContent)
 			return
 		}

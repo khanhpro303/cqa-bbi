@@ -48,6 +48,17 @@ function registerAuthorizedAccountRoutes(app: FastifyInstance, deps: AccountRout
     return sanitizeAccount(account);
   });
 
+  app.get('/api/v1/accounts/:accountId/roster', async (request, reply) => {
+    const { accountId } = request.params as { accountId: string };
+    const account = await deps.store.getAccount(accountId);
+    if (!account) return reply.status(404).send({ error: 'account_not_found' });
+    try {
+      return await deps.pool.captureRoster(accountId);
+    } catch (error) {
+      return reply.status(409).send({ error: error instanceof Error ? error.message : 'account_not_connected' });
+    }
+  });
+
   app.post('/api/v1/accounts', async (request, reply) => {
     const body = request.body as {
       tenantId?: string;

@@ -67,7 +67,7 @@
                     density="compact"
                     color="success"
                     :loading="togglingAutoReplyId === ch.id"
-                    :disabled="!authStore.canEdit('channels') || !ch.is_active || !chatbotActive || togglingAutoReplyId === ch.id"
+                    :disabled="!canToggleAutoReply(ch) || !ch.is_active || !chatbotActive || togglingAutoReplyId === ch.id"
                     @update:model-value="(v: any) => toggleAutoReply(ch, !!v)"
                   />
                   <span class="text-caption font-weight-medium" :class="(ch.auto_reply_enabled && chatbotActive) ? 'text-success' : 'text-grey'">
@@ -326,6 +326,11 @@ const chatbotStatusLoaded = computed(() => chatbotStore.isLoaded(tenantId.value)
 const chatbotStatusLoading = computed(() => chatbotStore.isLoading(tenantId.value))
 const chatbotStatusError = computed(() => chatbotStore.hasError(tenantId.value))
 
+function canToggleAutoReply(ch: any) {
+  if (!authStore.canEdit('channels')) return false
+  return ch.channel_type !== 'personal_zalo_import' || ['owner', 'admin'].includes(authStore.tenantPerms.role)
+}
+
 function fetchChatbotStatus() {
   return chatbotStore.fetchStatus(tenantId.value)
 }
@@ -337,7 +342,13 @@ async function toggleAutoReply(ch: any, val: boolean) {
     showSnack(val ? t('chatbot_status_on') : t('chatbot_status_off'), 'success')
     await channelStore.fetchChannels(tenantId.value)
   } catch (e: any) {
-    showSnack(e?.response?.data?.error || t('error'), 'error')
+    const code = e?.response?.data?.error
+    const message = code === 'personal_zalo_roster_unavailable'
+      ? t('personal_zalo_roster_unavailable')
+      : code === 'personal_zalo_roster_conflict'
+        ? t('personal_zalo_roster_conflict')
+        : code || t('error')
+    showSnack(message, 'error')
   } finally {
     togglingAutoReplyId.value = ''
   }

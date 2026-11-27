@@ -70,6 +70,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	oaLinkedGroup := false
 	publicFlow := "public-flow"
 	var pauseDuringFlow atomic.Bool
+	var denyApproval atomic.Bool
 	var tenantCredentials atomic.Bool
 	var requestHandover atomic.Bool
 	var staffVerified atomic.Bool
@@ -93,6 +94,15 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 				return
 			}
 			*row = channel
+		case *models.PersonalZaloThreadApproval:
+			if !slices.Contains(q.Statement.Vars, any(channel.ID)) ||
+				!slices.Contains(q.Statement.Vars, any(channel.ExternalID)) ||
+				!slices.Contains(q.Statement.Vars, any(personalZaloApproved)) {
+				t.Error("approval lookup must pin the channel, account and approved status")
+			}
+			if denyApproval.Load() {
+				q.AddError(gorm.ErrRecordNotFound)
+			}
 		case *[]models.AppSetting:
 			if !slices.Contains(q.Statement.Vars, any(channel.TenantID)) {
 				t.Error("settings query did not scope to tenant")
@@ -325,6 +335,16 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 		{name: "wrong channel secret", signingSecret: "other-secret", want: http.StatusUnauthorized},
 		{name: "different tenant", signingSecret: secret, want: http.StatusUnauthorized, setup: func(r *personalZaloChatbotRequest) func() { r.TenantID = "other-tenant"; return nil }},
 		{name: "different account", signingSecret: secret, want: http.StatusNoContent, setup: func(r *personalZaloChatbotRequest) func() { r.AccountExternalID = "900"; return nil }},
+		{name: "direct not approved", signingSecret: secret, want: http.StatusNoContent, setup: func(r *personalZaloChatbotRequest) func() {
+			denyApproval.Store(true)
+			return func() { denyApproval.Store(false) }
+		}},
+		{name: "mentioned group not approved", signingSecret: secret, want: http.StatusNoContent, setup: func(r *personalZaloChatbotRequest) func() {
+			r.SchemaVersion, r.ThreadType, r.SenderID, r.BotMentioned = "personal-zalo-chatbot-v2", "group", "789", true
+			channel.Metadata = `{"personal_zalo_group_reply_enabled":true}`
+			denyApproval.Store(true)
+			return func() { channel.Metadata = ""; denyApproval.Store(false) }
+		}},
 		{name: "old message", signingSecret: secret, want: http.StatusNoContent, setup: func(r *personalZaloChatbotRequest) func() { r.SentAt = time.Now().Add(-3 * time.Minute); return nil }},
 		{name: "self conversation", signingSecret: secret, want: http.StatusNoContent, setup: func(r *personalZaloChatbotRequest) func() { r.ThreadID = r.AccountExternalID; return nil }},
 		{name: "legacy opt-in off", signingSecret: secret, want: http.StatusNoContent, setup: func(_ *personalZaloChatbotRequest) func() {

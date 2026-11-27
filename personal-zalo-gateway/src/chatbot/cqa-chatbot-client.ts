@@ -315,6 +315,42 @@ export async function authorizePersonalZaloChatbotDelivery(
   return 'retryable';
 }
 
+export async function authorizePersonalZaloGroupAccess(
+  account: GatewayAccountRecord,
+  message: IncomingGatewayMessage,
+  sentAt: string,
+): Promise<PersonalZaloDeliveryAuthorization> {
+  const deployment = personalZaloChatbotConfig();
+  if (!deployment || message.threadType !== 'group' || !/^\d{1,64}$/.test(message.threadId)) return 'denied';
+  const url = chatbotEndpoint(deployment.baseUrl);
+  const accountExternalId = account.accountExternalId || account.zaloUid || '';
+  if (!url || !/^\d{1,64}$/.test(accountExternalId)) return 'denied';
+  const endpoint = `${url}/thread-access`;
+  for (let attempt = 0; attempt < deliveryAuthorizationAttempts; attempt++) {
+    const requestId = randomUUID();
+    const body = JSON.stringify({ request_id: requestId, tenant_id: account.tenantId, channel_id: account.channelId,
+      account_external_id: accountExternalId, thread_type: 'group', thread_id: message.threadId, sent_at: sentAt });
+    const now = Date.now();
+    const signed = signInternalRequestBody(account.importSecret, body, requestId, now);
+    const chatbotSignature = signInternalRequestBody(deployment.secret, body, requestId, now).signature;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), deliveryReceiptTimeoutMs);
+    try {
+      const response = await fetch(endpoint, { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-CQA-Request-Id': requestId, 'X-CQA-Timestamp': signed.timestamp,
+        'X-CQA-Signature': signed.signature, 'X-CQA-Chatbot-Signature': chatbotSignature,
+      }, body, signal: controller.signal, redirect: 'error' });
+      if (response.status === 204) return 'denied';
+      if (response.status === 200) return 'allowed';
+      if (response.status < 500) return 'denied';
+    } catch (error) {
+      logger.warn('[chatbot] CQA personal Zalo group authorization failed', error);
+    } finally { clearTimeout(timer); }
+    if (attempt + 1 < deliveryAuthorizationAttempts) await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+  }
+  return 'retryable';
+}
+
 function decodeReplyImage(value: unknown): ChatbotReplyImage | null {
   if (!value || typeof value !== 'object') return null;
   const { filename, media_type, width, height, data_base64, delivery_token } = value as Record<string, unknown>;

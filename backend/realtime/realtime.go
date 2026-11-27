@@ -25,8 +25,9 @@ import (
 const EventZaloWhitelistUpdated = "zalo_whitelist_updated"
 
 const (
-	EventCloudifyOrdersUpdated  = "cloudify_orders_updated"
-	EventCRMGroupMembersUpdated = "crm_group_members_updated"
+	EventPersonalZaloApprovalsUpdated = "personal_zalo_approvals_updated"
+	EventCloudifyOrdersUpdated        = "cloudify_orders_updated"
+	EventCRMGroupMembersUpdated       = "crm_group_members_updated"
 )
 
 func channelName(tenantID string) string {

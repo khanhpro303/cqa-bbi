@@ -319,6 +319,13 @@
       </div>
     </v-card>
 
+    <PersonalZaloApprovals
+      v-if="isPersonalZalo && canReviewPersonalZaloApprovals"
+      :key="`${tenantId}:${channelId}`"
+      :tenant-id="tenantId"
+      :channel-id="channelId"
+    />
+
     <!-- Sync result alert -->
     <v-alert v-if="syncResult" :type="syncResult.type" closable class="mb-4" @click:close="syncResult = null">
       {{ syncResult.message }}
@@ -427,6 +434,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useUserStore } from '../../stores/users'
 import ChannelEditDialog from '../../components/channels/ChannelEditDialog.vue'
 import PersonalZaloIdentityLinks from '../../components/channels/PersonalZaloIdentityLinks.vue'
+import PersonalZaloApprovals from '../../components/channels/PersonalZaloApprovals.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -449,6 +457,7 @@ const isPersonalZalo = computed(() => channel.value?.channel_type === 'personal_
 const metadata = computed(() => {
   try { return JSON.parse(channel.value?.metadata || '{}') } catch { return {} }
 })
+const canReviewPersonalZaloApprovals = computed(() => ['owner', 'admin'].includes(authStore.tenantPerms.role))
 
 const syncing = ref(false)
 const testing = ref(false)

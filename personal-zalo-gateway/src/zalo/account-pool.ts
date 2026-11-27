@@ -14,6 +14,7 @@ import type {
 import {
   acknowledgePersonalZaloChatbotDelivery,
   authorizePersonalZaloChatbotDelivery,
+  authorizePersonalZaloGroupAccess,
   isChatbotEligibleMessage,
   requestPersonalZaloChatbotTurn,
   type ChatbotReplyImage,
@@ -21,6 +22,7 @@ import {
 } from '../chatbot/cqa-chatbot-client.js';
 import { FloodDetector, RateLimiter, SelfEchoShield } from '../chatbot/zalo-message-guards.js';
 import { attachZaloListener, type ChatbotSelfMessage } from './listener.js';
+import { captureRoster, probeRoster, pushRosterSnapshot, type RosterSnapshot } from './roster.js';
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -36,6 +38,7 @@ interface ZaloInstance {
   listenerClosed?: boolean;
   listenerOpened?: boolean;
   chatbot?: ChatbotSession;
+  rosterGroupNames?: Map<string, string>;
 }
 
 export interface PoolHealthSnapshot {
@@ -108,9 +111,31 @@ export class ZaloAccountPool {
   private readonly pendingOperations = new Set<Promise<unknown>>();
   private readonly connectionGenerations = new Map<string, number>();
   private readonly connectionAttempts = new Map<string, { kind: 'qr' | 'reconnect'; promise: Promise<void> }>();
+  private readonly rosterTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly rosterIntervals = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly rosterRunning = new Set<string>();
+  private readonly rosterRequested = new Set<string>();
   private shuttingDown = false;
 
   constructor(private readonly store: GatewayStore) {}
+
+  async captureRoster(accountId: string): Promise<RosterSnapshot> {
+    const instance = this.instances.get(accountId);
+    const account = await this.store.getAccount(accountId);
+    const ownId = account?.zaloUid || '';
+    if (!instance || !instance.api || !this.canSendChatbotReply(accountId, instance) ||
+        !this.chatbotAccountMatches(account, ownId)) {
+      throw new Error('account_not_connected');
+    }
+    const snapshot = await captureRoster(instance.api, account, instance.rosterGroupNames ??= new Map());
+    const current = await this.store.getAccount(accountId);
+    if (!this.canSendChatbotReply(accountId, instance) || !this.chatbotAccountMatches(current, ownId) ||
+        current.tenantId !== account.tenantId || current.channelId !== account.channelId ||
+        current.importSecret !== account.importSecret) {
+      throw new Error('account_connection_changed');
+    }
+    return snapshot;
+  }
 
   async bootstrapReconnects(): Promise<void> {
     const accounts = await this.store.listAccounts();
@@ -229,6 +254,7 @@ export class ZaloAccountPool {
   }
 
   disconnect(accountId: string): void {
+    this.clearRosterRefresh(accountId);
     const instance = this.instances.get(accountId);
     this.connectionGenerations.set(accountId, (this.connectionGenerations.get(accountId) ?? 0) + 1);
     this.connectionAttempts.delete(accountId);
@@ -318,6 +344,7 @@ export class ZaloAccountPool {
       onConnected: () => {
         instance.listenerClosed = false;
         instance.listenerOpened = true;
+        if (chatbot) this.requestRosterRefresh(accountId, instance, true);
       },
       onDisconnected: (id, code) => {
         instance.listenerClosed = true;
@@ -333,8 +360,12 @@ export class ZaloAccountPool {
             return this.handleSelfMessage(accountId, chatbot, threadId, threadType, message);
           }
         : undefined,
+      onRosterEvent: chatbot ? () => this.requestRosterRefresh(accountId, instance) : undefined,
     });
     if (chatbot) {
+      const interval = setInterval(() => this.requestRosterRefresh(accountId, instance), 5 * 60_000);
+      interval.unref();
+      this.rosterIntervals.set(accountId, interval);
       void this.trackOperation(this.drainChatbotQueue(accountId, ownId, instance))
         .catch((error) => logger.error(`[zalo:${accountId}] chatbot recovery drain failed`, error));
     }
@@ -631,6 +662,22 @@ export class ZaloAccountPool {
               return;
             }
           }
+          if (message.threadType === 'group') {
+            const authorization = await authorizePersonalZaloGroupAccess(
+              expectedAccount, message, new Date(message.timestamp).toISOString(),
+            );
+            if (authorization === 'denied') {
+              cancelled = true;
+              return;
+            }
+            if (authorization === 'retryable') {
+              await this.store.updateChatbotTurn(accountId, messageId, 'failed', {
+                lastError: 'group_approval_unavailable', reply: storeChatbotReply(reply, false),
+              });
+              failed = true;
+              return;
+            }
+          }
           if (!await this.store.transitionChatbotTurn(accountId, messageId, expectedStatus, 'sending')) {
             cancelled = true;
             return;
@@ -732,6 +779,50 @@ export class ZaloAccountPool {
     }
   }
 
+  private requestRosterRefresh(accountId: string, instance: ZaloInstance, immediate = false): void {
+    if (this.shuttingDown || !this.canSendChatbotReply(accountId, instance)) return;
+    this.rosterRequested.add(accountId);
+    if (this.rosterTimers.has(accountId) || this.rosterRunning.has(accountId)) return;
+    const timer = setTimeout(() => {
+      this.rosterTimers.delete(accountId);
+      void this.refreshRoster(accountId, instance);
+    }, immediate ? 0 : 500);
+    timer.unref();
+    this.rosterTimers.set(accountId, timer);
+  }
+
+  private async refreshRoster(accountId: string, instance: ZaloInstance): Promise<void> {
+    const deployment = personalZaloChatbotConfig();
+    if (!deployment || !this.canSendChatbotReply(accountId, instance)) return;
+    this.rosterRunning.add(accountId);
+    this.rosterRequested.delete(accountId);
+    try {
+      const account = await this.store.getAccount(accountId);
+      if (!this.chatbotAccountMatches(account, account?.zaloUid || '') || !await probeRoster(account, deployment) ||
+          !this.canSendChatbotReply(accountId, instance)) return;
+      const snapshot = await this.captureRoster(accountId);
+      const current = await this.store.getAccount(accountId);
+      if (!this.canSendChatbotReply(accountId, instance) || !this.chatbotAccountMatches(current, snapshot.account_external_id) ||
+          current.tenantId !== account.tenantId || current.channelId !== account.channelId ||
+          current.importSecret !== account.importSecret) return;
+      await pushRosterSnapshot(current, snapshot, deployment);
+    } catch (error) {
+      logger.warn(`[zalo:${accountId}] roster refresh failed`, error);
+    } finally {
+      this.rosterRunning.delete(accountId);
+      const current = this.instances.get(accountId);
+      if (current && this.rosterRequested.has(accountId)) this.requestRosterRefresh(accountId, current);
+    }
+  }
+
+  private clearRosterRefresh(accountId: string): void {
+    clearInterval(this.rosterIntervals.get(accountId));
+    clearTimeout(this.rosterTimers.get(accountId));
+    this.rosterIntervals.delete(accountId);
+    this.rosterTimers.delete(accountId);
+    this.rosterRequested.delete(accountId);
+  }
+
   async healthSnapshot(): Promise<PoolHealthSnapshot> {
     const accounts = await this.store.listAccounts();
     const statuses = accounts.map((account) => account.status);
@@ -759,6 +850,10 @@ export class ZaloAccountPool {
 
   async shutdown(timeoutMs: number): Promise<void> {
     this.shuttingDown = true;
+    for (const timer of this.rosterIntervals.values()) clearInterval(timer);
+    this.rosterIntervals.clear();
+    for (const timer of this.rosterTimers.values()) clearTimeout(timer);
+    this.rosterTimers.clear();
     this.connectionAttempts.clear();
     for (const timer of this.reconnectTimers.values()) clearTimeout(timer);
     this.reconnectTimers.clear();
@@ -782,6 +877,7 @@ export class ZaloAccountPool {
 
   private async handleDisconnect(accountId: string, instance: ZaloInstance, code: number): Promise<void> {
     if (this.shuttingDown || this.instances.get(accountId) !== instance) return;
+    this.clearRosterRefresh(accountId);
     instance.status = 'disconnected';
     await this.store.setAccountRuntime(accountId, {
       status: 'disconnected',
@@ -838,6 +934,7 @@ export class ZaloAccountPool {
 
   private replaceInstance(accountId: string, next: ZaloInstance): void {
     const previous = this.instances.get(accountId);
+    this.clearRosterRefresh(accountId);
     this.clearReconnectTimer(accountId);
     this.instances.set(accountId, next);
     this.stopInstance(accountId, previous);
