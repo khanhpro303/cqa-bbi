@@ -540,7 +540,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 		t.Fatalf("an in-flight turn may not deliver after the sender loses access: %s", response.Body.String())
 	}
 
-	t.Run("guest must open a configured session", func(t *testing.T) {
+	t.Run("configured session gates direct replies", func(t *testing.T) {
 		addr := os.Getenv("TEST_REDIS_ADDR")
 		if addr == "" {
 			t.Skip("TEST_REDIS_ADDR not set")
@@ -561,7 +561,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 
 		send := func(id, message string, status int, reply string, flowCallsAdded int32) {
 			t.Helper()
-			req.RequestID, req.MessageID, req.Text = "guest-session-"+id, id, message
+			req.RequestID, req.MessageID, req.Text = "direct-session-"+id, id, message
 			calls := flowCalls.Load()
 			response := submit(req, secret, gatewaySecret)
 			if response.Code != status || flowCalls.Load()-calls != flowCallsAdded {
@@ -578,8 +578,24 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			}
 		}
 
-		channel.Metadata = `{"session_keyword":"chào bull","complaint_cases":true}`
-		send("complaint-before-opening", "Cho tôi gặp nhân viên", http.StatusNoContent, "", 0)
+		const handoverRequest = "Cho tôi gặp nhân viên"
+		for _, sender := range []struct {
+			name            string
+			customer, staff bool
+		}{
+			{name: "guest"},
+			{name: "customer", customer: true},
+			{name: "staff", staff: true},
+		} {
+			customerVerified.Store(sender.customer)
+			staffVerified.Store(sender.staff)
+			channel.Metadata = `{"session_keyword":"chào bull","handover_alert_group_id":"unavailable-group"}`
+			send(sender.name+"-handover-before-opening", handoverRequest, http.StatusNoContent, "", 0)
+			channel.Metadata = `{"session_keyword":"chào bull","complaint_cases":true}`
+			send(sender.name+"-complaint-before-opening", handoverRequest, http.StatusNoContent, "", 0)
+		}
+		customerVerified.Store(false)
+		staffVerified.Store(false)
 		channel.Metadata = `{"session_keyword":"chào bull; bắt đầu","session_end_keyword":"kết thúc","session_welcome_message":"Mời anh/chị đặt câu hỏi","session_goodbye_message":"Hẹn gặp lại"}`
 		send("partial-keyword", "chào bull, tư vấn giúp em", http.StatusNoContent, "", 0)
 		send("verify-before-opening", "verify", http.StatusOK, personalZaloInvalidPairingReply, 0)
@@ -592,6 +608,12 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			t.Fatal(err)
 		}
 		send("expired-follow-up", gobyQuestion, http.StatusNoContent, "", 0)
+
+		customerVerified.Store(true)
+		channel.Metadata = `{"session_keyword":"chào bull; nói chuyện với nhân viên","session_welcome_message":"Mời anh/chị đặt câu hỏi","handover_alert_group_id":"unavailable-group"}`
+		send("open-with-handover-phrase", "nói chuyện với nhân viên", http.StatusOK, "Mời anh/chị đặt câu hỏi", 0)
+		send("handover-in-open-session", handoverRequest, http.StatusOK, personalZaloHandoverUnavailable, 0)
+		send("handover-after-session-closed", handoverRequest, http.StatusNoContent, "", 0)
 	})
 }
 
