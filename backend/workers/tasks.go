@@ -2038,6 +2038,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		var adviceImages []models.ProductAdvisoryImage
 		if intent == "IN_SCOPE" && !complaintHandover && !strings.HasPrefix(userText, "#") {
+			langflowInput, systemPromptToUse = engine.AddProductAdviceInstruction(langflowInput, systemPromptToUse)
 			advice, adviceErr := productAdviceForTurn(ctx, &permCtx, input, func() []chatmemory.RecentTurn {
 				if matchedGroup.ZaloGroupID != "" {
 					return chatmemory.RecentTurnsForSender(ctx, sessionID, msgID, input, payload.Sender.ID, 2)

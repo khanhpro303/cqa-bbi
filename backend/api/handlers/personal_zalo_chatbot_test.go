@@ -34,6 +34,8 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	const secret = "test-personal-zalo-channel-secret"
 	const gatewaySecret = "test-deployment-gateway-signing-secret"
 	const imageID = "cea6c2f1-40bc-4c42-a256-e2f676d24e9d"
+	const gobyQuestion = "Bull ơi, cho tôi thông tin giày goby với"
+	const gobyAnswer = "Dạ, LS2 Goby Man có 3 điểm nổi bật ạ.\n• CE EN 13634:2017, mức 2|2|2|2 WR.\n• Cổ cao bảo vệ mắt cá, gót và ngón chân.\n• Da bò và chi tiết phản quang."
 	var pngData bytes.Buffer
 	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 3, 4))); err != nil {
 		t.Fatal(err)
@@ -212,10 +214,11 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			if resolveKnowledgePreviewAgent(key, channel.TenantID, token) != "public" ||
 				r.Header.Get("X-LANGFLOW-GLOBAL-VAR-ERP_PERMISSION_TOKEN") != "" ||
 				input.Tweaks["permission_token"] != nil || input.Tweaks["customer_code"] != nil ||
-				!strings.Contains(prompt, "Khách trong phiên này chưa xác thực") {
+				input.Text != gobyQuestion || !strings.Contains(prompt, "Khách trong phiên này chưa xác thực") ||
+				!strings.Contains(prompt, "3–4 gạch đầu dòng thật ngắn") {
 				t.Error("guest flow did not receive only the public knowledge credential and guest prompt")
 			}
-			reply = "Dạ, em có thể tư vấn chính sách đổi size."
+			reply = gobyAnswer
 		} else if (staff || customerERP.Load()) && !erpPaused.Load() {
 			sessionDuringERP.Store(input.SessionID)
 			if disableERPDuringNextTurn.Swap(false) {
@@ -233,7 +236,8 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			if staff {
 				wantPrompt = "Hỗ trợ nhân viên."
 			}
-			if !strings.HasPrefix(prompt, wantPrompt) || !strings.Contains(prompt, "chào ngắn gọn") {
+			if !strings.HasPrefix(prompt, wantPrompt) || !strings.Contains(prompt, "chào ngắn gọn") ||
+				!strings.Contains(prompt, "3–4 gạch đầu dòng thật ngắn") {
 				t.Errorf("%s flow received the wrong prompt", wantAgent)
 			}
 			if err != nil || permissions == nil || !permissions.PersonalZalo || permissions.AgentType != wantAgent ||
@@ -386,9 +390,11 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			t.Fatalf("guest ERP request %q: status=%d calls=%d body=%s", question, response.Code, flowCalls.Load(), response.Body)
 		}
 	}
-	fresh.RequestID, fresh.Text = "guest-knowledge", "Chính sách đổi size thế nào?"
+	fresh.RequestID, fresh.Text = "guest-goby-knowledge", gobyQuestion
 	guestResponse := submit(fresh, secret, gatewaySecret)
-	if guestResponse.Code != http.StatusOK || !strings.Contains(guestResponse.Body.String(), "tư vấn chính sách đổi size") ||
+	var guestReply struct{ Reply string }
+	if err := json.Unmarshal(guestResponse.Body.Bytes(), &guestReply); err != nil ||
+		guestResponse.Code != http.StatusOK || guestReply.Reply != gobyAnswer ||
 		!strings.Contains(guestResponse.Body.String(), "delivery_token") || flowCalls.Load() != 1 {
 		t.Fatalf("guest knowledge: status=%d calls=%d body=%s", guestResponse.Code, flowCalls.Load(), guestResponse.Body)
 	}

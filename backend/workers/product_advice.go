@@ -221,8 +221,8 @@ Dùng dữ liệu danh mục dưới đây khi liên quan đúng với dòng kh�
 		if note := adviceField(profile.Notes, 1600); note != "" {
 			fmt.Fprintf(&prompt, "Ghi chú: %q\n", note)
 		}
-		if content := adviceField(profile.ScrapedContent, 2300); content != "" {
-			fmt.Fprintf(&prompt, "Website: %q\n", content)
+		for _, passage := range productAdvicePassages(profile.ScrapedContent) {
+			fmt.Fprintf(&prompt, "Đoạn gốc từ website: %q\n", passage)
 		}
 		if allowPhoto {
 			for _, image := range profile.Images {
@@ -233,6 +233,17 @@ Dùng dữ liệu danh mục dưới đây khi liên quan đúng với dòng kh�
 	}
 	prompt.WriteString("</du_lieu_san_pham>")
 	return prompt.String(), images
+}
+
+// PersonalZaloProductAdvice uses the same catalog checks and source excerpts as
+// OA. Personal Zalo delivers knowledge images through its own reply format.
+func PersonalZaloProductAdvice(ctx context.Context, perm *engine.GroupPermissionContext, message string) (string, error) {
+	profiles, err := findProductAdvice(ctx, perm, message)
+	if err != nil {
+		return "", err
+	}
+	prompt, _ := productAdviceContext(profiles, false)
+	return prompt, nil
 }
 
 func adviceField(value string, limit int) string {
