@@ -8,6 +8,7 @@ export interface Channel {
   channel_type: string
   name: string
   external_id: string
+  avatar_url?: string
   is_active: boolean
   supports_auto_reply: boolean
   auto_reply_enabled: boolean

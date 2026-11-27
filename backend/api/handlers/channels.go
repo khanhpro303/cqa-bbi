@@ -50,6 +50,7 @@ type ChannelResponse struct {
 	ChannelType            string                               `json:"channel_type"`
 	Name                   string                               `json:"name"`
 	ExternalID             string                               `json:"external_id"`
+	AvatarURL              string                               `json:"avatar_url,omitempty"`
 	IsActive               bool                                 `json:"is_active"`
 	SupportsAutoReply      bool                                 `json:"supports_auto_reply"`
 	AutoReplyEnabled       bool                                 `json:"auto_reply_enabled"`
@@ -92,7 +93,53 @@ func ListChannels(c *gin.Context) {
 		results[i] = channelToResponse(ch)
 		results[i].ConversationCount = countMap[ch.ID]
 	}
+	if cfg, err := config.Load(); err == nil {
+		enrichPersonalZaloAvatars(c.Request.Context(), tenantID, results, cfg.PersonalZaloGatewayBaseURL)
+	}
 	c.JSON(http.StatusOK, results)
+}
+
+const personalZaloListAvatarTimeout = 2 * time.Second
+
+func enrichPersonalZaloAvatars(ctx context.Context, tenantID string, channels []ChannelResponse, gatewayBaseURL string) {
+	if strings.TrimSpace(gatewayBaseURL) == "" {
+		return
+	}
+	hasPersonalZalo := false
+	for _, ch := range channels {
+		if ch.ChannelType == "personal_zalo_import" {
+			hasPersonalZalo = true
+			break
+		}
+	}
+	if !hasPersonalZalo {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, personalZaloListAvatarTimeout)
+	defer cancel()
+
+	accounts, err := listPersonalZaloGatewayAccountsContext(lookupCtx, gatewayBaseURL)
+	if err != nil {
+		log.Printf("[channels] list personal Zalo avatars failed: %v", err)
+		return
+	}
+
+	for i := range channels {
+		if channels[i].ChannelType != "personal_zalo_import" {
+			continue
+		}
+		account := findPersonalZaloGatewayAccount(accounts, tenantID, channels[i].ID)
+		if account == nil {
+			continue
+		}
+		if avatar := strings.TrimSpace(account.AvatarURL); avatar != "" {
+			channels[i].AvatarURL = avatar
+		}
+	}
 }
 
 func CreateChannel(c *gin.Context) {

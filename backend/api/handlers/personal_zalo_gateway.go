@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -316,8 +317,12 @@ func decodePersonalZaloImportCredentials(channel models.Channel, cfg *config.Con
 }
 
 func listPersonalZaloGatewayAccounts(baseURL string) ([]personalZaloGatewayAccountRecord, error) {
+	return listPersonalZaloGatewayAccountsContext(context.Background(), baseURL)
+}
+
+func listPersonalZaloGatewayAccountsContext(ctx context.Context, baseURL string) ([]personalZaloGatewayAccountRecord, error) {
 	var resp personalZaloGatewayListResponse
-	if err := personalZaloGatewayJSON(baseURL, http.MethodGet, "/api/v1/accounts", nil, &resp); err != nil {
+	if err := personalZaloGatewayJSONContext(ctx, baseURL, http.MethodGet, "/api/v1/accounts", nil, &resp); err != nil {
 		return nil, err
 	}
 	return resp.Accounts, nil
@@ -358,6 +363,13 @@ func personalZaloGatewayAction(baseURL, accountID, action string) error {
 }
 
 func personalZaloGatewayJSON(baseURL, method, path string, payload interface{}, out interface{}) error {
+	return personalZaloGatewayJSONContext(context.Background(), baseURL, method, path, payload, out)
+}
+
+func personalZaloGatewayJSONContext(ctx context.Context, baseURL, method, path string, payload interface{}, out interface{}) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var body io.Reader
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
@@ -367,7 +379,7 @@ func personalZaloGatewayJSON(baseURL, method, path string, payload interface{}, 
 		body = bytes.NewReader(encoded)
 	}
 
-	req, err := http.NewRequest(method, strings.TrimRight(baseURL, "/")+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(baseURL, "/")+path, body)
 	if err != nil {
 		return err
 	}
