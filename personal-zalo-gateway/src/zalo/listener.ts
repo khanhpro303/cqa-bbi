@@ -97,6 +97,7 @@ async function persistMessage(
     threadId: String(message.threadId || ''),
     threadType,
     groupName,
+    mentions: queueChatbotTurn && isGroup && Array.isArray(message.data?.mentions) ? message.data.mentions : undefined,
     attachments: [],
     rawData: {
       message_type: message.data?.msgType || '',

@@ -62,6 +62,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	t.Cleanup(func() { db.DB = originalDB; _ = pool.Close() })
 
 	masterEnabled := true
+	oaLinkedGroup := false
 	publicFlow := "public-flow"
 	var pauseDuringFlow atomic.Bool
 	var tenantCredentials atomic.Bool
@@ -137,6 +138,10 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			*row = models.ZaloCustomer{ID: "customer", TenantID: channel.TenantID, Status: "approved", CustomerCode: "S001"}
 		case *[]models.CRMGroup:
 			*row = []models.CRMGroup{{ID: "customer-group", Name: "Test customers"}}
+		case *[]string:
+			if oaLinkedGroup && strings.Contains(q.Statement.SQL.String(), "crm_groups.zalo_group_id") {
+				*row = []string{"oa-linked-group"}
+			}
 		case *[]models.ERPEndpoint:
 			ep := models.ERPEndpoint{Resource: "orders", ScopeType: "all", IsEnabled: true, GroupID: "customer-group"}
 			if staffVerified.Load() {
@@ -324,7 +329,17 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			return func() { channel.Metadata = "" }
 		}},
 		{name: "group replies default off", signingSecret: secret, want: http.StatusNoContent, setup: func(req *personalZaloChatbotRequest) func() {
-			req.SchemaVersion, req.ThreadType, req.SenderID, req.Text = "personal-zalo-chatbot-v2", "group", "789", "Bot ơi"
+			req.SchemaVersion, req.ThreadType, req.SenderID, req.Text, req.BotMentioned = "personal-zalo-chatbot-v2", "group", "789", "", true
+			return nil
+		}},
+		{name: "personal tag in OA-linked group", signingSecret: secret, want: http.StatusNoContent, setup: func(req *personalZaloChatbotRequest) func() {
+			req.SchemaVersion, req.ThreadType, req.SenderID, req.Text, req.BotMentioned = "personal-zalo-chatbot-v2", "group", "789", "", true
+			channel.Metadata = `{"personal_zalo_group_reply_enabled":true}`
+			oaLinkedGroup = true
+			return func() { channel.Metadata, oaLinkedGroup = "", false }
+		}},
+		{name: "direct chat cannot carry a group tag", signingSecret: secret, want: http.StatusNoContent, setup: func(req *personalZaloChatbotRequest) func() {
+			req.BotMentioned = true
 			return nil
 		}},
 		{name: "group with direct sync scope", signingSecret: secret, want: http.StatusNoContent, setup: func(req *personalZaloChatbotRequest) func() {

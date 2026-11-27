@@ -45,8 +45,41 @@ func TestZaloSessionStartForStaffCall(t *testing.T) {
 				SessionEndKeyword:  "Tạm biệt Bull",
 			}
 			staffGated := staffCallOnlyOn(meta, tt.groupID, tt.crm, tt.customerCode, tt.role)
-			if got := zaloSessionStartFor(meta, tt.text, staffGated, tt.assistant); got != tt.want {
+			if got := zaloSessionStartFor(meta, tt.text, false, staffGated, tt.assistant); got != tt.want {
 				t.Fatalf("session start = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestZaloSessionStartForAccountMention(t *testing.T) {
+	meta := ChannelMetadata{SessionKeyword: "Chào Bull", GroupBotNames: "Bull"}
+	if got := zaloSessionStartFor(meta, "tra giúp mã FF399", true, false, false); got != zaloSessionAccountMention {
+		t.Fatalf("account mention start = %v, want account mention", got)
+	}
+	if got := zaloSessionStartFor(meta, "Chào Bull", true, false, false); got != zaloSessionManual {
+		t.Fatalf("opening keyword with account mention = %v, want manual", got)
+	}
+}
+
+func TestStripGroupBotAccountMention(t *testing.T) {
+	tests := []struct {
+		name, text, accountID, wantText string
+		wantMention                     bool
+	}{
+		{"question", "[@607812198688816074] tra giúp mã FF399", "607812198688816074", "tra giúp mã FF399", true},
+		{"tag only", "  [@607812198688816074] ", "607812198688816074", "", true},
+		{"repeated", "[@607812198688816074] tra [@607812198688816074] giúp", "607812198688816074", "tra  giúp", true},
+		{"preserve whitespace", "[@607812198688816074] tra\t  giúp", "607812198688816074", "tra\t  giúp", true},
+		{"another member", "[@8756287263669629130] tra giúp", "607812198688816074", "[@8756287263669629130] tra giúp", false},
+		{"group mention", "[@group] tra giúp", "607812198688816074", "[@group] tra giúp", false},
+		{"missing account", "[@607812198688816074] tra giúp", "", "[@607812198688816074] tra giúp", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotMention := stripGroupBotAccountMention(tt.text, tt.accountID)
+			if gotText != tt.wantText || gotMention != tt.wantMention {
+				t.Fatalf("got (%q, %v), want (%q, %v)", gotText, gotMention, tt.wantText, tt.wantMention)
 			}
 		})
 	}

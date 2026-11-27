@@ -78,6 +78,36 @@ export function isChatbotEligibleMessage(message: IncomingGatewayMessage, now = 
     !friendSystemEvent.test(text);
 }
 
+function groupMentionTurn(message: IncomingGatewayMessage, accountExternalId: string) {
+  const { content, mentions } = message;
+  if (message.threadType !== 'group' || !Array.isArray(mentions) || mentions.length === 0) {
+    return { text: content };
+  }
+  const spans = mentions.filter((mention) => mention && typeof mention.uid === 'string' &&
+    Number.isInteger(mention.pos) && Number.isInteger(mention.len) &&
+    mention.pos >= 0 && mention.len > 0 && mention.pos + mention.len <= content.length);
+  if (spans.length === 0) return { text: content };
+
+  // Visible names of other people still matter to the question and classifier.
+  // Remove their tags only from the text used to look for typed bot aliases.
+  let botMentioned = false;
+  let text = '';
+  let wakeText = '';
+  let end = 0;
+  for (const { uid, pos, len } of spans.sort((a, b) => a.pos - b.pos)) {
+    if (pos < end) continue;
+    const ownTag = uid === accountExternalId;
+    const beforeTag = content.slice(end, pos);
+    wakeText += beforeTag + ' ';
+    text += beforeTag + (ownTag ? ' ' : content.slice(pos, pos + len));
+    botMentioned ||= ownTag;
+    end = pos + len;
+  }
+  wakeText = (wakeText + content.slice(end)).trim();
+  if (!botMentioned) return { text: content, wakeText };
+  return { botMentioned, text: wakeText ? (text + content.slice(end)).trim() : '' };
+}
+
 export function buildChatbotRequest(
   account: GatewayAccountRecord,
   message: IncomingGatewayMessage,
@@ -99,6 +129,8 @@ export function buildChatbotRequest(
   const url = chatbotEndpoint(deployment.baseUrl);
   const accountExternalId = account.accountExternalId || account.zaloUid || '';
   if (!url || deployment.secret.length < 32 || !zaloUID.test(accountExternalId)) return null;
+  const { botMentioned, text, wakeText } = groupMentionTurn(message, accountExternalId);
+  if (!botMentioned && !(wakeText ?? text).trim()) return null;
 
   const requestId = randomUUID();
   if (deliveryRequest?.kind === 'group_receipt' &&
@@ -117,8 +149,10 @@ export function buildChatbotRequest(
     sender_id: message.senderUid,
     message_id: message.msgId,
     sent_at: new Date(message.timestamp).toISOString(),
-    text: message.content,
+    text,
   };
+  if (botMentioned) payload.bot_mentioned = true;
+  if (wakeText !== undefined) payload.group_wake_text = wakeText;
   if (deliveryRequest?.kind === 'group_receipt') payload.delivery_receipt = deliveryRequest.receipt;
   if (deliveryRequest?.kind === 'direct_authorization') {
     payload.delivery_token = deliveryRequest.token;

@@ -126,6 +126,44 @@ test('a fresh group text carries separate group and sender identities', () => {
   assert.equal(payload.sender_id, '20002');
 });
 
+test('group tags wake only the addressed account and do not act as configured names', () => {
+  const now = Date.now();
+  const group: IncomingGatewayMessage = {
+    ...message(now),
+    threadType: 'group',
+    threadId: '50005',
+    content: '😀 @Bull kiểm tra giúp',
+    mentions: [{ uid: '20003', pos: 3, len: 5 }],
+  };
+  const other = buildChatbotRequest(account, group, deployment, now);
+  assert.ok(other);
+  const otherPayload = JSON.parse(other.body);
+  assert.equal(otherPayload.bot_mentioned, undefined);
+  assert.equal(otherPayload.text, group.content);
+  assert.equal(otherPayload.group_wake_text.replace(/\s+/g, ' '), '😀 kiểm tra giúp');
+
+  const namedQuestion = '@Tư vấn hỏi đơn của @Lan';
+  const botAndOther = buildChatbotRequest(account, { ...group, content: namedQuestion, mentions: [
+    { uid: '10001', pos: 0, len: '@Tư vấn'.length },
+    { uid: '20003', pos: namedQuestion.indexOf('@Lan'), len: '@Lan'.length },
+  ] }, deployment, now);
+  assert.ok(botAndOther);
+  const botPayload = JSON.parse(botAndOther.body);
+  assert.equal(botPayload.bot_mentioned, true);
+  assert.equal(botPayload.text, 'hỏi đơn của @Lan');
+
+  const onlyTag = { ...group, content: '@Tên tài khoản' };
+  for (const uid of ['-1', '100010', group.threadId]) {
+    const mentions = [{ uid, pos: 0, len: onlyTag.content.length }];
+    assert.equal(buildChatbotRequest(account, { ...onlyTag, mentions }, deployment, now), null);
+  }
+
+  const plainText = buildChatbotRequest(account, { ...group, mentions: undefined }, deployment, now);
+  assert.ok(plainText);
+  assert.equal(JSON.parse(plainText.body).text, group.content);
+  assert.equal(JSON.parse(plainText.body).bot_mentioned, undefined);
+});
+
 test('a group delivery receipt preserves the original identity and is independently signed', async (t) => {
   t.after(() => {
     delete process.env.PERSONAL_ZALO_CHATBOT_BASE_URL;

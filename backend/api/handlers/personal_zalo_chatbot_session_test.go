@@ -48,14 +48,18 @@ func TestPersonalZaloGroupAddressing(t *testing.T) {
 		SessionKeyword: "Chào Bull;hi bull", SessionEndKeyword: "Tạm biệt Bull", GroupBotNames: "Bull;bot",
 	}
 	for _, text := range []string{"chào bull", "Hi Bull", "Bull ơi kiểm tra giúp", "@bot kiểm tra giúp", "nhờ BOT tra giúp"} {
-		if !personalZaloGroupMessageAddressed(text, session) {
+		if !personalZaloGroupMessageAddressed(personalZaloChatbotRequest{Text: text}, session) {
 			t.Errorf("%q should address the bot", text)
 		}
 	}
 	for _, text := range []string{"mọi người kiểm tra giúp", "robot kiểm tra giúp", "bullish quá", "anh ơi mai em giao"} {
-		if personalZaloGroupMessageAddressed(text, session) {
+		if personalZaloGroupMessageAddressed(personalZaloChatbotRequest{Text: text}, session) {
 			t.Errorf("%q should stay silent", text)
 		}
+	}
+	withoutTag := "kiểm tra giúp"
+	if personalZaloGroupMessageAddressed(personalZaloChatbotRequest{Text: "@Bull kiểm tra giúp", GroupWakeText: &withoutTag}, session) {
+		t.Error("a real tag of someone whose display name matches the alias should stay silent")
 	}
 }
 
@@ -149,12 +153,24 @@ func TestPersonalZaloConfiguredSessions(t *testing.T) {
 	groupTwo := groupOne
 	groupTwo.SenderID = "789"
 	keys = append(keys, personalZaloSessionKey(groupOne), personalZaloSessionKey(groupTwo))
+	tagOnly := groupOne
+	tagOnly.Text, tagOnly.BotMentioned = "", true
+	tagged, err := planPersonalZaloTurn(t.Context(), session, tagOnly, false)
+	if err != nil || tagged.RunFlow || tagged.Reply != "xin chào" || tagged.FlowScope == "" {
+		t.Fatalf("tag-only group turn = %+v, err=%v", tagged, err)
+	}
+	tagWithQuestion := groupTwo
+	tagWithQuestion.Text, tagWithQuestion.BotMentioned = "FF399 còn hàng không?", true
+	question, err := planPersonalZaloTurn(t.Context(), session, tagWithQuestion, false)
+	if err != nil || !question.RunFlow || question.Reply != "" || question.FlowScope == "" {
+		t.Fatalf("tagged group question = %+v, err=%v", question, err)
+	}
 	first, err := planPersonalZaloTurn(t.Context(), session, groupOne, false)
-	if err != nil || !first.RunFlow {
+	if err != nil || !first.RunFlow || first.FlowScope != tagged.FlowScope {
 		t.Fatalf("first group turn = %+v, err=%v", first, err)
 	}
 	second, err := planPersonalZaloTurn(t.Context(), session, groupTwo, false)
-	if err != nil || !second.RunFlow || second.FlowScope == first.FlowScope {
+	if err != nil || !second.RunFlow || second.FlowScope == first.FlowScope || second.FlowScope != question.FlowScope {
 		t.Fatalf("per-sender group isolation failed: first=%+v second=%+v err=%v", first, second, err)
 	}
 	if err := client.Expire(t.Context(), personalZaloSessionKey(groupOne), -time.Second).Err(); err != nil {

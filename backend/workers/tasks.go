@@ -449,7 +449,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return enqueueZaloOrderScreenshot(ctx, asynqClient, matchedChannel, resolvedGroup, payload.Message.MsgID)
 		}
 
-		userText := strings.TrimSpace(payload.Message.Text)
+		messageText := strings.TrimSpace(payload.Message.Text)
+		userText := messageText
 		attachmentText := parseAttachmentText(payload.Message.Attachments)
 		if attachmentText != "" {
 			if userText == "" {
@@ -785,6 +786,33 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// answers only when needed (group_assistant.go).
 		groupAssistant := groupAssistantOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode)
 		groupName, groupRole := groupSpeaker(isWhitelisted, isCustomer, whitelistRec.Name, customerRec.Name)
+		botAccountMentioned := false
+		groupMessageEvent := payload.EventName == "user_send_group_text" || payload.EventName == "user_send_group_image"
+		if payload.SignatureVerified && groupMessageEvent && hasGroup && matchedGroup.ZaloGroupID != "" &&
+			matchedGroup.ChannelID == matchedChannel.ID && (isWhitelisted || isCustomer) {
+			botAccountID := strings.TrimSpace(zaloCreds.OAId)
+			if botAccountID == "" {
+				botAccountID = strings.TrimSpace(matchedChannel.ExternalID)
+			}
+			incomingOAID := strings.TrimSpace(payload.OAID)
+			if botAccountID != "" && incomingOAID != "" && incomingOAID != botAccountID {
+				botAccountID = ""
+			} else if botAccountID == "" {
+				botAccountID = incomingOAID
+			}
+			strippedText, mentioned := stripGroupBotAccountMention(messageText, botAccountID)
+			if mentioned {
+				botAccountMentioned = true
+				userText = strippedText
+				if attachmentText != "" {
+					if userText == "" {
+						userText = strings.TrimSpace(attachmentText)
+					} else {
+						userText += "\n" + strings.TrimSpace(attachmentText)
+					}
+				}
+			}
+		}
 		// Staff in a customer group mostly talk to the customer; their
 		// messages reach the bot only when they call it (group_staff.go).
 		staffGated := staffCallOnlyOn(meta, matchedGroup.ZaloGroupID, hasGroup, matchedGroup.CustomerCode, groupRole)
@@ -831,7 +859,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		sessionTTL := time.Duration(meta.SessionTimeout)*time.Minute + time.Minute
 		if activeSessionID == "" {
-			start := zaloSessionStartFor(meta, userText, staffGated, groupAssistant)
+			start := zaloSessionStartFor(meta, userText, botAccountMentioned, staffGated, groupAssistant)
 			if start == zaloSessionStayClosed {
 				log.Printf("[zalo-drop] reason=no_session sender=%s key=%s", payload.Sender.ID, sessionKey)
 				return nil
@@ -887,6 +915,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				return nil
 			case opened && start == zaloSessionStaffCall:
 				log.Printf("[group-staff] opened session %s for group %s", activeSessionID, matchedGroup.ZaloGroupID)
+			case opened && start == zaloSessionAccountMention:
+				log.Printf("[group-mention] opened session %s for group %s", activeSessionID, matchedGroup.ZaloGroupID)
 			case opened && start == zaloSessionAssistant:
 				log.Printf("[group-assistant] opened session %s for group %s", activeSessionID, matchedGroup.ZaloGroupID)
 			}
@@ -991,6 +1021,18 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
+		// A tag with no accompanying question is the account-level equivalent of
+		// an opening keyword. It uses the common keep-alive above, then returns the
+		// configured welcome before any draft handling, classifier or model call.
+		if botAccountMentioned && userText == "" {
+			if err := adapter.SendGroupMessage(ctx, matchedGroup.ZaloGroupID, meta.SessionWelcomeMessage); err != nil {
+				log.Printf("[worker] failed to send account-mention welcome: %v", err)
+			} else if staffGated {
+				markStaffEngaged(ctx, sessionKey, payload.Sender.ID)
+			}
+			return nil
+		}
+
 		// Legacy raw history in Astra, read by the flow's history retriever.
 		// Off by default: the flow's own history store already writes each
 		// turn, and chat memory keeps the full transcript in MySQL.
@@ -1041,7 +1083,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return chatmemory.RecentTurns(ctx, sessionID, msgID, input, 0)
 		})
 		staffTurnKind := staffTurnUngated
-		if staffGated {
+		if staffGated && !botAccountMentioned {
 			staffTurnKind = classifyStaffTurn(ctx, meta, matchedChannel.TenantID, sessionKey, workKey, payload.Sender.ID, userText)
 		}
 		publicChat := !isWhitelisted || matchedGroup.ZaloGroupID != ""
@@ -1054,10 +1096,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			(staffTurnKind != staffTurnNotForBot && (orderPeriod || (awaiting && isExpectedLookupFollowup(userText)))) {
 			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
 			intent, classified = "IN_SCOPE", "IN_SCOPE"
-		} else if staffTurnKind == staffTurnCalled {
-			// A staff member called the bot by name: answer without asking
+		} else if botAccountMentioned || staffTurnKind == staffTurnCalled {
+			// The sender explicitly called the bot: answer without asking
 			// the classifier, which could read the call as group chatter.
-			log.Printf("[group-staff] group %s staff %s called the bot", matchedGroup.ZaloGroupID, payload.Sender.ID)
+			log.Printf("[group-chatbot] group %s sender %s called the bot", matchedGroup.ZaloGroupID, payload.Sender.ID)
 			intent, classified = "IN_SCOPE", "IN_SCOPE"
 		} else if staffTurnKind == staffTurnNotForBot {
 			// Staff talking to the customer: not for the bot. No classifier

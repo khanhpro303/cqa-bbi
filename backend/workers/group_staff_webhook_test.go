@@ -21,10 +21,11 @@ import (
 
 func TestStaffGroupWebhookAnswersInOpeningTurn(t *testing.T) {
 	const (
-		key      = "0123456789abcdef0123456789abcdef"
-		question = "Bull ơi, Giày LS2 Zoe Man - Black H-V Yellow - 44 còn tồn khả dụng không?"
-		answer   = "Dạ, em chưa tra được tồn của mẫu giày này."
-		welcome  = "Bull xin chào."
+		key         = "0123456789abcdef0123456789abcdef"
+		question    = "Bull ơi, Giày LS2 Zoe Man - Black H-V Yellow - 44 còn tồn khả dụng không?"
+		tagQuestion = "Giày LS2 Zoe Man - Black H-V Yellow - 44 còn tồn khả dụng không?"
+		answer      = "Dạ, em chưa tra được tồn của mẫu giày này."
+		welcome     = "Bull xin chào."
 	)
 	database, err := gorm.Open(mysql.New(mysql.Config{
 		DSN:                       "fixture@tcp(127.0.0.1:3306)/fixture",
@@ -86,6 +87,7 @@ func TestStaffGroupWebhookAnswersInOpeningTurn(t *testing.T) {
 
 	var replies []string
 	flowCalls := 0
+	wantFlowInput := question
 	transport := http.DefaultTransport
 	http.DefaultTransport = stockTestTransport(func(req *http.Request) (*http.Response, error) {
 		var body string
@@ -96,7 +98,9 @@ func TestStaffGroupWebhookAnswersInOpeningTurn(t *testing.T) {
 				Text      string `json:"input_value"`
 				SessionID string `json:"session_id"`
 			}
-			if err := json.NewDecoder(req.Body).Decode(&input); err != nil || input.Text != question || input.SessionID == "" {
+			err := json.NewDecoder(req.Body).Decode(&input)
+			inputStartsWithQuestion := input.Text == wantFlowInput || strings.HasPrefix(input.Text, wantFlowInput+"\n")
+			if err != nil || !inputStartsWithQuestion || strings.Contains(input.Text, "[@oa]") || input.SessionID == "" {
 				t.Errorf("opening turn payload = %+v, %v", input, err)
 			}
 			permissions, err := engine.VerifyPermissionToken(req.Header.Get("X-Langflow-Global-Var-ERP_PERMISSION_TOKEN"), key)
@@ -126,21 +130,37 @@ func TestStaffGroupWebhookAnswersInOpeningTurn(t *testing.T) {
 		LangflowPublicFlowID: "public", ChatbotSessionWelcomeMessage: welcome}
 	handle := HandleZaloWebhookTask(cfg, engine.NewLangflowClient(cfg), nil)
 	for _, tc := range []struct {
-		text, reply string
-		flowCalls   int
+		text, reply, flowInput string
+		flowCalls              int
+		unsigned               bool
+		incomingOAID           string
+		staffCallDisabled      bool
 	}{
-		{"Chào Bull", welcome, 0},
-		{"Hi Bull", welcome, 0},
-		{question, answer, 1},
+		{"Chào Bull", welcome, "", 0, false, "oa", false},
+		{"Hi Bull", welcome, "", 0, false, "oa", false},
+		{question, answer, question, 1, false, "oa", false},
+		{"[@oa] " + tagQuestion, answer, tagQuestion, 1, false, "oa", false},
+		{"[@oa] " + tagQuestion, answer, tagQuestion, 1, false, "oa", true},
+		{"[@oa]", welcome, "", 0, false, "oa", false},
+		{"[@another-account] " + tagQuestion, "", "", 0, false, "oa", false},
+		{"[@oa] " + tagQuestion, "", "", 0, true, "oa", false},
+		{"[@oa] " + tagQuestion, "", "", 0, false, "conflicting-oa", false},
 	} {
+		if tc.staffCallDisabled {
+			channel.Metadata = `{"session_keyword":"Chào Bull; Hi Bull","group_staff_call_only":false,"group_bot_names":"Bull;bot"}`
+		} else {
+			channel.Metadata = `{"session_keyword":"Chào Bull; Hi Bull","group_staff_call_only":true,"group_bot_names":"Bull;bot"}`
+		}
 		payload := ZaloWebhookPayload{EventName: "user_send_group_text"}
 		payload.Sender.ID, payload.Recipient.ID, payload.Message.Text = "sender", group.ZaloGroupID, tc.text
+		payload.OAID, payload.SignatureVerified = tc.incomingOAID, !tc.unsigned
 		task, err := NewZaloWebhookTask(payload)
 		if err != nil {
 			t.Fatal(err)
 		}
 		replies = nil
 		flowCalls = 0
+		wantFlowInput = tc.flowInput
 		err = handle(context.Background(), task)
 		if flowCalls > 0 && err == nil {
 			select {
@@ -149,7 +169,11 @@ func TestStaffGroupWebhookAnswersInOpeningTurn(t *testing.T) {
 				t.Fatal("chatbot usage write did not finish")
 			}
 		}
-		if err != nil || flowCalls != tc.flowCalls || len(replies) != 1 || replies[0] != tc.reply {
+		wantReplies := 0
+		if tc.reply != "" {
+			wantReplies = 1
+		}
+		if err != nil || flowCalls != tc.flowCalls || len(replies) != wantReplies || (tc.reply != "" && replies[0] != tc.reply) {
 			t.Fatalf("opening with %q: got replies %v, flow calls %d, error %v", tc.text, replies, flowCalls, err)
 		}
 	}
