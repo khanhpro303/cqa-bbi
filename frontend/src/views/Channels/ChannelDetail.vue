@@ -252,6 +252,15 @@
       </v-row>
     </v-card>
 
+    <PersonalZaloIdentityLinks
+      v-if="isPersonalZalo && ['owner', 'admin'].includes(authStore.tenantPerms.role)"
+      :key="`${channel.id}:${channel.external_id || ''}`"
+      :tenant-id="tenantId"
+      :channel-id="channelId"
+      :account-bound="Boolean(channel.external_id)"
+      :channel-allows-pairing="channel.is_active && channel.auto_reply_enabled && metadata.sync_scope !== 'group'"
+    />
+
     <v-card v-if="channel.channel_type === 'personal_zalo_import'" class="pa-4 mb-4">
       <div class="text-subtitle-1 font-weight-bold mb-3">
         <v-icon start size="small">mdi-api</v-icon>
@@ -417,6 +426,7 @@ import type { ChannelSyncLog, PersonalZaloGatewayState } from '../../stores/chan
 import { useAuthStore } from '../../stores/auth'
 import { useUserStore } from '../../stores/users'
 import ChannelEditDialog from '../../components/channels/ChannelEditDialog.vue'
+import PersonalZaloIdentityLinks from '../../components/channels/PersonalZaloIdentityLinks.vue'
 
 const route = useRoute()
 const router = useRouter()

@@ -848,6 +848,9 @@ func handleCartTool(ctx context.Context, tenantID, agentType, permissionToken st
 	if permissions.TenantID != tenantID || permissions.AgentType != agentType {
 		return result(gin.H{"error": "forbidden_token"}, true)
 	}
+	if permissions.PersonalZalo {
+		return result(gin.H{"error": "forbidden_scope", "message": "Kênh Zalo cá nhân hỗ trợ tra cứu ERP. Vui lòng dùng Zalo OA để thao tác giỏ hàng."}, true)
+	}
 	if !isERPActive(tenantID, agentType) {
 		return result(gin.H{"error": "erp_inactive", "message": "Tích hợp ERP đang tắt."}, true)
 	}

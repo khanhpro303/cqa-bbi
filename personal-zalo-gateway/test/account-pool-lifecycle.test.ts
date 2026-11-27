@@ -68,10 +68,29 @@ test('deduplicates concurrent reconnect and QR login attempts', async (t) => {
   const qrOne = pool.loginQR(account.id);
   const qrTwo = pool.loginQR(account.id);
   assert.strictEqual(qrOne, qrTwo);
-  finishQR(api('10002'));
+  finishQR(api('10001'));
   await qrOne;
   assert.equal(loginQR.mock.callCount(), 1);
-  assert.equal((await store.getAccount(account.id))?.zaloUid, '10002');
+  assert.equal((await store.getAccount(account.id))?.zaloUid, '10001');
+});
+
+test('rejects a QR scanned by another Zalo account without recoding the binding', async (t) => {
+  const { account, pool, store } = await fixture(t);
+  const originalListener = new LifecycleListener();
+  const wrongListener = new LifecycleListener();
+  t.mock.method(Zalo.prototype, 'login', async () => api('10001', originalListener));
+  t.mock.method(Zalo.prototype, 'loginQR', async () => api('20002', wrongListener));
+
+  await pool.reconnect(account.id, session);
+  await pool.loginQR(account.id);
+
+  const saved = await store.getAccount(account.id);
+  assert.equal(saved?.zaloUid, '10001');
+  assert.equal(saved?.accountExternalId, '10001');
+  assert.equal(saved?.status, 'qr_pending');
+  assert.equal(saved?.lastError, 'account_identity_mismatch');
+  assert.equal(saved?.sessionData, undefined);
+  assert.equal(wrongListener.stopped, 1);
 });
 
 test('a newer QR login fences a stale reconnect completion', async (t) => {

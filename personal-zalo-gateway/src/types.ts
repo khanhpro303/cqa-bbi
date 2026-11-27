@@ -26,6 +26,7 @@ export interface GatewayMessageRecord {
   rawData: Record<string, unknown>;
   syncedAt?: string;
   deletedAt?: string;
+  historyOnly?: boolean;
 }
 
 export interface GatewayConversationRecord {
@@ -81,6 +82,7 @@ export interface GatewayChatbotReplyImage {
 
 export interface GatewayChatbotReply {
   reply: string;
+  deliveryToken?: string;
   images?: GatewayChatbotReplyImage[];
   deliveryReceipt?: string;
 }

@@ -98,3 +98,19 @@ test('create responses are authenticated and redacted', async () => {
     await app.close();
   }
 });
+
+test('an existing account binding cannot be repointed to another channel', async () => {
+  const { app, account } = await fixture();
+  try {
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/api/v1/accounts/${account.id}`,
+      headers: { authorization: `Bearer ${adminSecret}` },
+      payload: { tenantId: account.tenantId, channelId: 'another-channel' },
+    });
+    assert.equal(response.statusCode, 409);
+    assert.equal(response.json().error, 'account_binding_immutable');
+  } finally {
+    await app.close();
+  }
+});

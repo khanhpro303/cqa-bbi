@@ -59,6 +59,7 @@ async function persistMessage(
   message: any,
   queueChatbotTurn = false,
   isCurrent = () => true,
+  historyOnly = false,
 ): Promise<{ inserted: boolean; message: IncomingGatewayMessage }> {
   const isGroup = message.type === 1;
   const threadType: ThreadType = isGroup ? 'group' : 'user';
@@ -108,6 +109,7 @@ async function persistMessage(
     accountId,
     incomingMessage,
     queueChatbotTurn && isChatbotEligibleMessage(incomingMessage),
+    historyOnly,
   );
   return { inserted, message: incomingMessage };
 }
@@ -168,7 +170,7 @@ export function attachZaloListener(ctx: ListenerContext): void {
     try {
       for (const message of messages) {
         if (!isCurrent()) return;
-        await persistMessage(store, accountId, api, message, false, isCurrent);
+        await persistMessage(store, accountId, api, message, false, isCurrent, true);
       }
       logger.info(`[zalo:${accountId}] bootstrapped ${messages.length} old messages`);
     } catch (error) {

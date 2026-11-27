@@ -3,6 +3,7 @@ import { createHmac } from 'node:crypto';
 import test from 'node:test';
 import {
   acknowledgePersonalZaloChatbotDelivery,
+  authorizePersonalZaloChatbotDelivery,
   buildChatbotRequest,
   chatbotEndpoint,
   isChatbotEligibleMessage,
@@ -28,6 +29,7 @@ const deployment = {
   baseUrl: 'http://app:8080/internal-prefix/',
   secret: 'chatbot-deployment-secret-32-bytes!',
 };
+const deliveryToken = 'test-delivery-token-at-least-16';
 
 function message(now: number): IncomingGatewayMessage {
   return {
@@ -57,7 +59,7 @@ test('buildChatbotRequest derives endpoint, scopes identity and signs the exact 
   const request = buildChatbotRequest(account, message(now), deployment, now);
   assert.ok(request);
   const payload = JSON.parse(request.body);
-  assert.equal(payload.schema_version, 'personal-zalo-chatbot-v1');
+  assert.equal(payload.schema_version, 'personal-zalo-chatbot-v3');
   assert.equal(payload.account_external_id, '10001');
   assert.equal(payload.thread_id, '20002');
   assert.equal(payload.thread_type, 'user');
@@ -135,7 +137,9 @@ test('a group delivery receipt preserves the original identity and is independen
   const groupMessage = { ...message(now), threadType: 'group' as const, threadId: '50005' };
   const deliveryReceipt = '123e4567-e89b-42d3-a456-426614174000';
   const initial = buildChatbotRequest(account, groupMessage, deployment, now);
-  const receipt = buildChatbotRequest(account, groupMessage, deployment, now + 1, deliveryReceipt);
+  const receipt = buildChatbotRequest(account, groupMessage, deployment, now + 1, {
+    kind: 'group_receipt', receipt: deliveryReceipt,
+  });
   assert.ok(initial);
   assert.ok(receipt);
   const initialBody = JSON.parse(initial.body);
@@ -189,6 +193,26 @@ test('CQA 204, failures and oversized replies do not produce a reply', async (t)
   assert.equal(JSON.stringify(headers).includes(deployment.secret), false);
 });
 
+test('direct delivery authorization is freshly signed and binds the exact outbound digest', async (t) => {
+  t.after(() => {
+    delete process.env.PERSONAL_ZALO_CHATBOT_BASE_URL;
+    delete process.env.PERSONAL_ZALO_CHATBOT_SECRET;
+  });
+  process.env.PERSONAL_ZALO_CHATBOT_BASE_URL = deployment.baseUrl;
+  process.env.PERSONAL_ZALO_CHATBOT_SECRET = deployment.secret;
+  const digest = 'a'.repeat(64);
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({ allowed: true }));
+
+  assert.equal(await authorizePersonalZaloChatbotDelivery(account, message(Date.now()), deliveryToken, 'text', digest), 'allowed');
+  const request = fetchMock.mock.calls[0]?.arguments[1] as RequestInit;
+  const body = JSON.parse(String(request.body));
+  assert.equal(body.schema_version, 'personal-zalo-chatbot-v3');
+  assert.equal(body.delivery_token, deliveryToken);
+  assert.equal(body.delivery_part, 'text');
+  assert.equal(body.delivery_digest, digest);
+  assert.equal((request.headers as Record<string, string>)['X-CQA-Chatbot-Signature']?.length, 64);
+});
+
 test('chatbot request stays disabled without a strong deployment secret and trusted base URL', async (t) => {
   t.after(() => {
     delete process.env.PERSONAL_ZALO_CHATBOT_BASE_URL;
@@ -212,10 +236,10 @@ test('decodes one bounded CQA image and preserves text when media is invalid', a
   const text = 'Xem hướng dẫn đính kèm';
   const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jHioAAAAASUVORK5CYII=';
   const image = { filename: 'kb-image.png', media_type: 'image/png', width: 1, height: 1, data_base64: base64 };
-  const mock = t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: text, images: [image, image] }));
+  const mock = t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: text, delivery_token: deliveryToken, images: [image, image] }));
 
   assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), {
-    reply: text, images: [{ filename: image.filename, width: 1, height: 1, data: Buffer.from(base64, 'base64') }],
+    reply: text, deliveryToken, images: [{ filename: image.filename, width: 1, height: 1, data: Buffer.from(base64, 'base64') }],
   });
 
   const receipt = '123e4567-e89b-42d3-a456-426614174000';
@@ -235,11 +259,11 @@ test('decodes one bounded CQA image and preserves text when media is invalid', a
     { ...image, data_base64: Buffer.from('hello world').toString('base64') },
     { ...image, data_base64: oversized.toString('base64') },
   ]) {
-    mock.mock.mockImplementation(async () => Response.json({ reply: text, images: [badImage] }));
-    assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), { reply: text });
+    mock.mock.mockImplementation(async () => Response.json({ reply: text, delivery_token: deliveryToken, images: [badImage] }));
+    assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), { reply: text, deliveryToken });
   }
-  mock.mock.mockImplementation(async () => Response.json({ reply: text }));
-  assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), { reply: text });
+  mock.mock.mockImplementation(async () => Response.json({ reply: text, delivery_token: deliveryToken }));
+  assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), { reply: text, deliveryToken });
 });
 
 test('abandons a CQA response above the wire size limit', async (t) => {

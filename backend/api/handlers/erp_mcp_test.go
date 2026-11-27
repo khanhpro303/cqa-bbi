@@ -59,6 +59,11 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *atomic.Int32) {
 	missingStock := models.CachedProduct{MA: "MISSING-STOCK", MA_CHA: "INCOMPLETE-LINE", LIST_TEN_NHOM_VTHH: "Mũ", NHAN_HIEU_NAME: "Bulldog"}
 	err = database.Callback().Query().After("gorm:query").Register("fixture:warehouse", func(q *gorm.DB) {
 		switch result := q.Statement.Dest.(type) {
+		case *[]models.AppSetting:
+			*result = []models.AppSetting{
+				{SettingKey: "erp_integration_active", ValuePlain: "true"},
+				{SettingKey: "erp_private_active", ValuePlain: "true"},
+			}
 		case *[]models.CachedProduct:
 			sql, vars := q.Statement.SQL.String(), q.Statement.Vars
 			switch {
@@ -94,17 +99,12 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *atomic.Int32) {
 				result.ValuePlain = "fixture-agent-token"
 			case "ai_agent_erp_token_public":
 				result.ValuePlain = "fixture-public-token"
-			case "erp_private_active":
-				result.ValuePlain = "true"
 			case "erp_api_url":
 				result.ValuePlain = "https://warehouse-mcp.test"
 			case "erp_api_username":
 				result.ValuePlain = "fixture-user"
 			case "erp_branch_name":
 				result.ValuePlain = "Fixture branch"
-			}
-			if strings.Contains(q.Statement.SQL.String(), "setting_key = 'erp_integration_active'") {
-				result.ValuePlain = "true"
 			}
 			if strings.Contains(q.Statement.SQL.String(), "setting_key = 'erp_api_password'") {
 				result.ValuePlain = os.Getenv("DB_PASSWORD")

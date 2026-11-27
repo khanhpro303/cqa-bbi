@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 const testPersonalZaloGatewayAdminSecret = "gateway-admin-test-secret-at-least-32-bytes"
@@ -55,6 +57,32 @@ func TestDeterminePersonalZaloGatewayNextAction(t *testing.T) {
 				t.Fatalf("determinePersonalZaloGatewayNextAction() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRestrictPersonalZaloGatewayStateHidesLoginQRFromReadOnlyMember(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	state := personalZaloGatewayConnectResponse{Account: &personalZaloGatewayAccountClient{
+		ID: "account", Status: "qr_pending", QRImage: "data:image/png;base64,secret-login-qr",
+	}}
+	reader, _ := gin.CreateTestContext(httptest.NewRecorder())
+	reader.Set("tenant_role", "member")
+	reader.Set("tenant_permissions", `{"channels":"r"}`)
+	restrictPersonalZaloGatewayState(reader, &state)
+	if state.Account.QRImage != "" {
+		t.Fatal("read-only channel access exposed the active Zalo login QR")
+	}
+	if state.Account.ID != "account" || state.Account.Status != "qr_pending" {
+		t.Fatalf("safe gateway status was removed: %+v", state.Account)
+	}
+
+	state.Account.QRImage = "data:image/png;base64,secret-login-qr"
+	writer, _ := gin.CreateTestContext(httptest.NewRecorder())
+	writer.Set("tenant_role", "member")
+	writer.Set("tenant_permissions", `{"channels":"rw"}`)
+	restrictPersonalZaloGatewayState(writer, &state)
+	if state.Account.QRImage == "" {
+		t.Fatal("channel writer lost the Zalo login QR")
 	}
 }
 

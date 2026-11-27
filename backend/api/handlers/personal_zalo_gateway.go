@@ -87,8 +87,16 @@ func GetPersonalZaloGatewayState(c *gin.Context) {
 		c.JSON(statusCode, gin.H{"error": "gateway_request_failed", "details": err.Error()})
 		return
 	}
+	restrictPersonalZaloGatewayState(c, &resp)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+func restrictPersonalZaloGatewayState(c *gin.Context, resp *personalZaloGatewayConnectResponse) {
+	if resp == nil || resp.Account == nil || canManageChannelCredentials(c) {
+		return
+	}
+	resp.Account.QRImage = ""
 }
 
 func ConnectPersonalZaloGateway(c *gin.Context) {

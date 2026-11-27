@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -171,6 +172,14 @@ func ERPQuery(c *gin.Context) {
 	// Enforce permitted resources & scope. product_variants inherits the
 	// products grant via permissionResource (same cache, finer read).
 	allowed, scopeType, productGroups := permCtx.IsResourceAllowed(permissionResource(req.Resource))
+	// Personal staff grants have no customer or assigned-group mapping. A
+	// restricted private scope must never become an unfiltered customer read.
+	if permCtx.PersonalZalo && permCtx.AgentType == "private" && scopeType != "all" {
+		switch req.Resource {
+		case "orders", "customers", "debt":
+			allowed = false
+		}
+	}
 	// Brand (nhãn hiệu) boundary — a second filter parallel to productGroups,
 	// resolved alongside it and threaded through the same chokepoints. allBrands
 	// (or an empty list) means no brand restriction → legacy behavior preserved.
@@ -676,6 +685,10 @@ func ERPQuery(c *gin.Context) {
 
 	// ── 8. If no credentials → fallback mock (dev only) ──────────────────
 	if erpURL == "" || erpLogin == "" || erpPassword == "" {
+		if permCtx.PersonalZalo {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "erp_credentials_missing"})
+			return
+		}
 		var allowedGroups []string
 		if permCtx.AgentType == "private" {
 			allowedGroups = []string{}
@@ -999,27 +1012,27 @@ func resolveAgentType(tenantID, token string) string {
 // ---------------------------------------------------------------------------
 
 func isERPActive(tenantID, agentType string) bool {
-	if agentType == "private" {
-		activeKey := "erp_private_active"
-		var s models.AppSetting
-		if err := db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, activeKey).First(&s).Error; err == nil {
-			return s.ValuePlain == "true"
+	settings, err := loadPersonalZaloChatbotSettings(context.Background(), tenantID, erpActivationKeys...)
+	return err == nil && erpActiveForRole(settings, agentType)
+}
+
+var erpActivationKeys = []string{"erp_private_active", "erp_integration_active", "erp_api_url"}
+
+func erpActiveForRole(settings map[string]models.AppSetting, agentType string) bool {
+	switch agentType {
+	case "private":
+		if flag, ok := settings["erp_private_active"]; ok {
+			return flag.ValuePlain == "true"
 		}
+	case "public":
+		// Public resource permissions belong to CRM groups.
+	default:
+		return false
 	}
-
-	// Fallback to global flag
-	var global models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_integration_active'", tenantID).First(&global).Error; err == nil {
-		return global.ValuePlain == "true"
+	if flag, ok := settings["erp_integration_active"]; ok {
+		return flag.ValuePlain == "true"
 	}
-
-	// Check if API URL is configured
-	var urlSetting models.AppSetting
-	if err := db.DB.Where("tenant_id = ? AND setting_key = 'erp_api_url'", tenantID).First(&urlSetting).Error; err == nil {
-		return urlSetting.ValuePlain != ""
-	}
-
-	return false
+	return strings.TrimSpace(settings["erp_api_url"].ValuePlain) != ""
 }
 
 // ---------------------------------------------------------------------------
@@ -1909,8 +1922,8 @@ func checkAndIncrementRateLimit(tenantID, groupID, groupName string) (bool, erro
 // scope="own" — a store owner who runs several shops resolves to several codes,
 // so debt/orders/customer queries aggregate across all their shops. Priority:
 // the codes signed into the token (permCtx.CustomerCodes, set by the worker);
-// then the single permCtx.CustomerCode; then the codes assigned to the caller's
-// CRM group(s) (token-less fallback). Returns the full MA values (labels
+// then the single permCtx.CustomerCode; then, for OA, codes assigned to the
+// caller's CRM group(s) in legacy grants. Returns the full MA values (labels
 // preserved) so DS_KHACH_HANG matching works.
 func resolveOwnCustomerCodes(permCtx *engine.GroupPermissionContext, tenantID string) []string {
 	if len(permCtx.CustomerCodes) > 0 {
@@ -1918,6 +1931,9 @@ func resolveOwnCustomerCodes(permCtx *engine.GroupPermissionContext, tenantID st
 	}
 	if code := strings.TrimSpace(permCtx.CustomerCode); code != "" {
 		return []string{code}
+	}
+	if permCtx.PersonalZalo {
+		return nil
 	}
 	var groupIDs []string
 	for _, grp := range permCtx.Groups {
@@ -2284,8 +2300,9 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				}
 				prompt := fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search)
 
-				adapter, activeChannel, adapterErr := loadZaloOAAdapterFor(tenantID, permCtx)
-				if adapterErr != nil {
+				if permCtx.PersonalZalo {
+					recordPersonalZaloInventoryPrompt(c.Request.Context(), permCtx, search)
+				} else if adapter, activeChannel, adapterErr := loadZaloOAAdapterFor(tenantID, permCtx); adapterErr != nil {
 					log.Printf("[inventory_query] cannot send exact-web Zalo Rich Message: %v", adapterErr)
 					// Keep the numbered menu so the worker can resend it and a "1"/"2" reply still resolves.
 					storePendingDisambiguationOptions(c.Request.Context(), tenantID, permCtx, buttons)
@@ -2402,8 +2419,9 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						}
 						prompt := fmt.Sprintf("Bạn muốn kiểm tra tồn kho cho '%s' theo dòng sản phẩm hay mã SKU cụ thể?", search)
 
-						adapter, activeChannel, adapterErr := loadZaloOAAdapterFor(tenantID, permCtx)
-						if adapterErr != nil {
+						if permCtx.PersonalZalo {
+							recordPersonalZaloInventoryPrompt(c.Request.Context(), permCtx, search)
+						} else if adapter, activeChannel, adapterErr := loadZaloOAAdapterFor(tenantID, permCtx); adapterErr != nil {
 							log.Printf("[inventory_query] cannot send Zalo Rich Message: %v", adapterErr)
 							// Keep the numbered menu so the worker can resend it and a "1"/"2" reply still resolves.
 							storePendingDisambiguationOptions(c.Request.Context(), tenantID, permCtx, buttons)
@@ -2589,7 +2607,12 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				}
 			}
 
-			if state, ok := takeOrdersCustomerState(ctxReq, tenantID, permCtx); ok {
+			state, hasState := takeOrdersCustomerState(ctxReq, tenantID, permCtx)
+			if hasState && permCtx.PersonalZalo {
+				state.Codes = scopeApprovedOrdersCodes(state.Codes, scopeType, ownCodes, allowedCodes)
+				hasState = len(state.Codes) != 0
+			}
+			if hasState {
 				switch state.Stage {
 				case engine.OrderCustomerStagePick:
 					// "tất cả" is the explicit escape: keep every previously-matched
@@ -2856,7 +2879,7 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			//    shops returns one profile per shop so the LLM can present them
 			//    grouped by mã/tên cửa hàng.
 			ownCodes := resolveOwnCustomerCodes(permCtx, tenantID)
-			if len(ownCodes) == 0 && permCtx.ZaloUserID != "" {
+			if len(ownCodes) == 0 && permCtx.ZaloUserID != "" && !permCtx.PersonalZalo {
 				var customerRec models.ZaloCustomer
 				if err := db.DB.Where("tenant_id = ? AND zalo_user_id = ? AND status = ?", tenantID, permCtx.ZaloUserID, "approved").First(&customerRec).Error; err == nil {
 					ownCodes = db.GetZaloCustomerCodes(tenantID, customerRec.ID, customerRec.CustomerCode)
@@ -2960,6 +2983,16 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			}
 
 			promptText := debtPeriodPromptText
+			if permCtx.PersonalZalo && permCtx.AgentType == "private" && partnerID != "" {
+				code, resolveErr := resolveCustomerCodeFromPartnerID(client, partnerID)
+				if resolveErr != nil {
+					err = resolveErr
+					break
+				}
+				storeDebtCustomerState(c.Request.Context(), tenantID, permCtx, engine.DebtCustomerState{
+					Stage: engine.DebtCustomerStagePeriod, Codes: []string{code},
+				})
+			}
 
 			// Deliver the period question to the customer ourselves, exactly like
 			// the inventory dòng-vs-SKU picker above. The Langflow agent only ever
@@ -3062,7 +3095,28 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 				}
 			}
 
-			if state, ok := takeDebtCustomerState(ctxReq, tenantID, permCtx); ok {
+			state, hasState := takeDebtCustomerState(ctxReq, tenantID, permCtx)
+			if hasState && permCtx.PersonalZalo {
+				state.Codes = scopeApprovedDebtCodes(state.Codes, scopeType, ownCodes, allowedDebtCodes)
+				hasState = len(state.Codes) != 0
+			}
+			_, _, hasPeriod := parseDebtPeriodFromSearch(search)
+			customerSearch := strings.TrimSpace(debtPeriodPhrase.ReplaceAllString(search, " "))
+			customerTokens := tokenizeCustomerQuery(customerSearch)
+			namedCustomer := len(customerTokens) > 0 && !(hasPeriod && allCustomersReplyWords[foldDebtSearch(strings.Join(customerTokens, " "))])
+			if permCtx.PersonalZalo && !hasState && hasPeriod && strings.Trim(customerSearch, " .,;:?!") == "" {
+				// A bare period is a continuation. If its customer selection expired
+				// or could not be stored, ask again before reading any ledger.
+				pushDebtPrompt(debtCustomerPromptText)
+				debtPromptResponse()
+				return
+			}
+			if hasPeriod && namedCustomer {
+				// A newly named customer takes precedence over a previous pick.
+				// A missing or ambiguous match must not widen to the whole ledger.
+				hasState = false
+			}
+			if hasState {
 				switch state.Stage {
 				case engine.DebtCustomerStagePick:
 					// "tất cả" is the explicit escape: keep every previously-matched
@@ -3124,35 +3178,29 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 						return
 					}
 				}
-			} else if _, _, isPeriod := parseDebtPeriodFromSearch(search); !isPeriod {
-				// Fresh turn naming a concrete customer (not a period word — a bare
-				// period with no in-flight state is a scope-wide continuation left
-				// to the legacy resolution below). Generic "công nợ của khách hàng"
-				// was already answered by the customer prompt above.
-				if len(tokenizeCustomerQuery(search)) > 0 {
-					approved := scopeApprovedDebtCodes(resolveDebtCustomerCodes(tenantID, search), scopeType, ownCodes, allowedDebtCodes)
-					switch {
-					case len(approved) == 0:
-						// Nothing in scope — ask again for a code/name (the legacy
-						// safety net's behaviour, kept here for the resolved path).
-						pushDebtPrompt(debtCustomerPromptText)
-						debtPromptResponse()
-						return
-					case len(approved) > 1:
-						storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePick, Codes: approved})
-						pushDebtPickPrompt(approved)
-						debtPromptResponse()
-						return
-					}
-					// Exactly one customer resolved and (per the outer guard) no
-					// period named yet → ask which period before querying. A
-					// customer named together with a period in one message is rare
-					// and falls through to the legacy scope-wide path, as before.
+			} else if namedCustomer {
+				approved := scopeApprovedDebtCodes(resolveCachedCustomerCodesFromTokens(tenantID, customerTokens), scopeType, ownCodes, allowedDebtCodes)
+				switch {
+				case len(approved) == 0:
+					// Nothing in scope — ask again for a code/name (the legacy
+					// safety net's behaviour, kept here for the resolved path).
+					pushDebtPrompt(debtCustomerPromptText)
+					debtPromptResponse()
+					return
+				case len(approved) > 1:
+					storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePick, Codes: approved})
+					pushDebtPickPrompt(approved)
+					debtPromptResponse()
+					return
+				}
+				if !hasPeriod {
 					storeDebtCustomerState(ctxReq, tenantID, permCtx, engine.DebtCustomerState{Stage: engine.DebtCustomerStagePeriod, Codes: approved})
 					pushDebtPrompt(debtPeriodPromptText)
 					debtPromptResponse()
 					return
 				}
+				targetCustomerCodes = approved
+				privateDebtResolved = true
 			}
 		}
 
@@ -3166,9 +3214,11 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			} else {
 				if partnerID != "" {
 					code, errCode := resolveCustomerCodeFromPartnerID(client, partnerID)
-					if errCode == nil && code != "" {
-						targetCustomerCodes = []string{code}
+					if errCode != nil {
+						err = errCode
+						break
 					}
+					targetCustomerCodes = []string{code}
 				} else if search != "" {
 					_, _, isPeriod := parseDebtPeriodFromSearch(search)
 					if !isPeriod {
@@ -3256,12 +3306,16 @@ func respondWithLiveDataV2(c *gin.Context, client *pkg.CloudifyClient, resource,
 			"BAO_GOM_SO_LIEU_CHI_NHANH_PHU_THUOC": "true",
 			"DS_KHACH_HANG":                       strings.Join(targetCustomerCodes, ","),
 		}
-		data, err = client.SearchCustomEndpoint(debtEndpoint, params)
+		data, err = client.SearchCustomEndpointContext(c.Request.Context(), debtEndpoint, params)
 
 		if err == nil && data != nil {
 			mappedData := make([]map[string]interface{}, 0, len(data))
 			for _, item := range data {
-				mappedData = append(mappedData, mapDebtItemForLLM(item))
+				row := mapDebtItemForLLM(item)
+				if len(targetCustomerCodes) > 0 && !codesContain(targetCustomerCodes, getMapString(row, "MA_KHACH_HANG")) {
+					continue
+				}
+				mappedData = append(mappedData, row)
 			}
 			data = mappedData
 		}
@@ -4093,18 +4147,26 @@ func searchProductsByWebNameFromCache(ctx context.Context, tenantID, keyword str
 	return results, "", nil
 }
 
-// resolveZaloGroupID returns the Zalo group ID for the customer's active group
-// chat (empty for 1:1 DMs) so the session key matches the one the worker builds
-// in workers/tasks.go. Returns "" when no group is resolvable.
 // recordPromptDelivery tells the worker whether a backend-pushed Zalo prompt
-// actually went out, keyed by the same work key the worker uses. Only new
-// tokens (with ChannelID) can be keyed; legacy tokens are skipped.
+// went out. Personal Zalo receipts are scoped to the signed gateway attempt.
 func recordPromptDelivery(ctx context.Context, permCtx *engine.GroupPermissionContext, text string, sendErr error) {
 	if permCtx == nil || permCtx.ChannelID == "" || permCtx.ZaloUserID == "" {
 		return
 	}
+	if permCtx.PersonalZalo {
+		engine.RecordPromptDelivery(ctx, permCtx.TurnID, text, sendErr)
+		return
+	}
 	key := engine.BuildSessionKey(permCtx.ChannelID, permCtx.ZaloUserID, permCtx.ZaloGroupID)
 	engine.RecordPromptDelivery(ctx, key, text, sendErr)
+}
+
+var errPersonalZaloPromptDeferred = errors.New("the originating gateway turn delivers personal Zalo replies")
+
+func recordPersonalZaloInventoryPrompt(ctx context.Context, permCtx *engine.GroupPermissionContext, search string) {
+	text := fmt.Sprintf("Anh/chị muốn kiểm tra tồn kho của cả dòng hay một biến thể của %q? "+
+		"Anh/chị nhắn “tồn cả dòng” kèm tên dòng, hoặc gửi mã SKU. Nếu chưa có mã SKU, anh/chị gửi tên dòng, màu và size giúp em nhé.", search)
+	recordPromptDelivery(ctx, permCtx, text, errPersonalZaloPromptDeferred)
 }
 
 func resolveZaloGroupID(tenantID string, permCtx *engine.GroupPermissionContext) string {
@@ -4167,6 +4229,9 @@ func storePendingDisambiguationOptions(ctx context.Context, tenantID string, per
 // period, orders range) silently vanish when a tenant has several OA channels.
 // Falls back to the legacy "first active channel" lookup for old tokens.
 func loadZaloOAAdapterFor(tenantID string, permCtx *engine.GroupPermissionContext) (*channels.ZaloOAAdapter, *models.Channel, error) {
+	if permCtx != nil && permCtx.PersonalZalo {
+		return nil, nil, errPersonalZaloPromptDeferred
+	}
 	if permCtx == nil || permCtx.ChannelID == "" {
 		return loadActiveZaloOAAdapter(tenantID)
 	}
@@ -4184,6 +4249,20 @@ func loadZaloOAAdapterFor(tenantID string, permCtx *engine.GroupPermissionContex
 		return nil, &ch, fmt.Errorf("invalid credentials json: %w", err)
 	}
 	return zalotoken.NewAdapter(ch.ID, zaloCreds, cfg.EncryptionKey), &ch, nil
+}
+
+func erpCustomerStateKey(tenantID string, permCtx *engine.GroupPermissionContext) (string, error) {
+	if permCtx.PersonalZalo {
+		if permCtx.PersonalZaloSessionID == "" {
+			return "", errors.New("personal Zalo ERP continuation requires a signed session ID")
+		}
+		return "personal-zalo-erp-state:" + permCtx.PersonalZaloSessionID, nil
+	}
+	_, activeChannel, err := loadZaloOAAdapterFor(tenantID, permCtx)
+	if err != nil {
+		return "", err
+	}
+	return engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, resolveZaloGroupID(tenantID, permCtx)), nil
 }
 
 // loadActiveZaloOAAdapter looks up the tenant's active Zalo OA channel,

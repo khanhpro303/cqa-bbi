@@ -50,16 +50,17 @@ Các route `/api/v1/accounts` yêu cầu header `Authorization: Bearer <token>`.
    ```
 
 2. Đặt `PERSONAL_ZALO_CHATBOT_BASE_URL` trỏ tới CQA đáng tin cậy. Docker Compose dùng mặc định `http://app:8080`. Môi trường chạy trực tiếp phải khai báo giá trị này rõ ràng.
-3. Trong **AI Engine** của CQA, cấu hình Langflow và **public flow** dùng để trả lời khách hàng.
+3. Trong **AI Engine** của CQA, cấu hình hai flow Langflow riêng cho khách hàng (Public) và nhân viên (Private). Bật ERP và đặt token, quyền tra cứu cho từng nhóm người dùng theo cấu hình CQA.
 4. Tạo kênh Zalo cá nhân với phạm vi đồng bộ `direct` hoặc `all`, kết nối tài khoản bằng QR và xác nhận trạng thái đã kết nối.
 5. Bật công tắc chatbot toàn tenant, sau đó bật **Tự động trả lời** trên chính kênh Zalo cá nhân.
-6. Gửi một tin nhắn văn bản 1:1 mới tới tài khoản. Tin lịch sử, ảnh/tệp, tin do chính tài khoản gửi và bản ghi trùng không kích hoạt chatbot.
+6. Trong chi tiết kênh, owner hoặc admin mở **Xác thực người dùng chatbot**, chọn nhân viên trong whitelist hoặc khách đã được duyệt và cấp lệnh `verify`. Gửi lệnh cho đúng người trong hội thoại riêng. Người nhận nhắn lệnh vào kênh Zalo cá nhân để liên kết tài khoản. Mã có hạn và dùng được một lần.
+7. Gửi một tin nhắn văn bản 1:1 mới tới tài khoản. Tin lịch sử, ảnh/tệp, tin do chính tài khoản gửi và bản ghi trùng không kích hoạt chatbot.
 
 **Kênh chat → Chỉnh sửa → Chatbot & Session** cho phép đặt từ khóa mở/đóng phiên, lời chào, lời kết và số phút không hoạt động. Dùng dấu `;` để nhập nhiều từ khóa. Khi đặt từ khóa mở, bot 1:1 chờ từ khóa trước khi bắt đầu phiên. Bỏ trống từ khóa mở để bot trả lời ngay.
 
 **Kênh chat → Chỉnh sửa → Nhóm Zalo** cho phép bật trả lời nhóm và đặt tên gọi bot. Chọn phạm vi đồng bộ có nhóm, sau đó nhắn `Bot ơi, tư vấn giúp` trong nhóm có tài khoản cá nhân đó. Mỗi người gửi có phiên riêng. Có thể chọn một nhóm nhân viên đã liên kết OA hoặc một nhân viên trong whitelist để nhận yêu cầu chuyển tiếp. Trong nhóm, gọi bot kèm yêu cầu, ví dụ `Bot ơi, cho tôi gặp nhân viên`.
 
-Luồng này dùng public flow của CQA. Bản hiện tại chưa truyền quyền ERP có phạm vi cho tài khoản Zalo cá nhân.
+Trong chat 1:1, nhân viên đã liên kết dùng flow Private và quyền tra cứu `private_bot` của tenant. Khách đã liên kết dùng flow Public. Quyền ERP của khách giới hạn trong các nhóm được cấp và các mã khách được gắn với hồ sơ CRM của họ. Người chưa liên kết chỉ nhận hướng dẫn xác thực. Luồng tra cứu không cấp thao tác tạo, sửa hoặc huỷ đơn qua ERP.
 
 Gateway xử lý tối đa ba lượt 1:1 và ba lượt nhóm đồng thời trên mỗi phiên Zalo. Các lượt hợp lệ chờ trong dữ liệu cục bộ khi hội thoại hoặc cả ba slot đang bận. Khi tài khoản tự nhắn vào cùng hội thoại, gateway hủy phản hồi đang chờ trong hội thoại đó.
 

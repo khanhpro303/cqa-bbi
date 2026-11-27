@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"log"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -41,6 +42,8 @@ const debtCustomerPickByCodeText = "Có nhiều khách khớp. Anh/chị cho mì
 // customerCacheResolveLimit caps how many customer codes a single private-bot
 // debt lookup may resolve from the local cache, keeping DS_KHACH_HANG bounded.
 const customerCacheResolveLimit = 20
+
+var debtPeriodPhrase = regexp.MustCompile(`(?i)(?:trong\s+)?(?:tháng này|thang nay|tháng trước|thang truoc|quý này|quy nay)`)
 
 // customerQueryStopwords are accent-folded words stripped before tokenizing a
 // debt-by-customer query, so "công nợ của khách hàng EGO" reduces to ["EGO"].
@@ -358,27 +361,22 @@ func scopeApprovedDebtCodes(resolved []string, scopeType string, ownCodes []stri
 }
 
 // storeDebtCustomerState persists the debt-by-customer flow state under the
-// worker's session key so the next free-text turn resumes it. No-op when no
-// active OA channel exists.
+// originating chat's session key so the next free-text turn resumes it.
 func storeDebtCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, state engine.DebtCustomerState) {
-	_, activeChannel, err := loadZaloOAAdapterFor(tenantID, permCtx)
-	if err != nil || activeChannel == nil {
-		log.Printf("[debt_query] cannot store debt-customer state (no active OA channel): %v", err)
+	sessionKey, err := erpCustomerStateKey(tenantID, permCtx)
+	if err != nil {
+		log.Printf("[debt_query] cannot store debt-customer state: %v", err)
 		return
 	}
-	groupID := resolveZaloGroupID(tenantID, permCtx)
-	sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
 	engine.StoreDebtCustomerState(ctx, sessionKey, state, orderCustomerSessionTimeout())
 }
 
 // takeDebtCustomerState returns and clears any stored debt-by-customer flow
 // state for this staff member's session.
 func takeDebtCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext) (engine.DebtCustomerState, bool) {
-	_, activeChannel, err := loadZaloOAAdapterFor(tenantID, permCtx)
-	if err != nil || activeChannel == nil {
+	sessionKey, err := erpCustomerStateKey(tenantID, permCtx)
+	if err != nil {
 		return engine.DebtCustomerState{}, false
 	}
-	groupID := resolveZaloGroupID(tenantID, permCtx)
-	sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
 	return engine.TakeDebtCustomerState(ctx, sessionKey)
 }

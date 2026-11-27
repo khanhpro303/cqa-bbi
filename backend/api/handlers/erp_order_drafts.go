@@ -166,6 +166,9 @@ func handleOrderDraftTool(ctx context.Context, tenantID, agentType, permissionTo
 	if permissions.TenantID != tenantID || permissions.AgentType != agentType {
 		return result(gin.H{"error": "forbidden_token"}, true)
 	}
+	if permissions.PersonalZalo {
+		return result(gin.H{"error": "forbidden_scope", "message": "Kênh Zalo cá nhân hỗ trợ tra cứu ERP. Vui lòng dùng Zalo OA để tạo, sửa hoặc hủy đơn."}, true)
+	}
 	if !isERPActive(tenantID, agentType) {
 		return result(gin.H{"error": "erp_inactive", "message": "Tích hợp ERP đang tắt."}, true)
 	}

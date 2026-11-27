@@ -276,27 +276,22 @@ func sendOrdersCustomerPickPrompt(ctx context.Context, tenantID string, permCtx 
 }
 
 // storeOrdersCustomerState persists the orders-by-customer flow state under the
-// worker's session key so the next free-text turn resumes it. No-op when no
-// active OA channel exists.
+// originating chat's session key so the next free-text turn resumes it.
 func storeOrdersCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext, state engine.OrderCustomerState) {
-	_, activeChannel, err := loadZaloOAAdapterFor(tenantID, permCtx)
-	if err != nil || activeChannel == nil {
-		log.Printf("[orders_query] cannot store order-customer state (no active OA channel): %v", err)
+	sessionKey, err := erpCustomerStateKey(tenantID, permCtx)
+	if err != nil {
+		log.Printf("[orders_query] cannot store order-customer state: %v", err)
 		return
 	}
-	groupID := resolveZaloGroupID(tenantID, permCtx)
-	sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
 	engine.StoreOrderCustomerState(ctx, sessionKey, state, orderCustomerSessionTimeout())
 }
 
 // takeOrdersCustomerState returns and clears any stored orders-by-customer flow
 // state for this staff member's session.
 func takeOrdersCustomerState(ctx context.Context, tenantID string, permCtx *engine.GroupPermissionContext) (engine.OrderCustomerState, bool) {
-	_, activeChannel, err := loadZaloOAAdapterFor(tenantID, permCtx)
-	if err != nil || activeChannel == nil {
+	sessionKey, err := erpCustomerStateKey(tenantID, permCtx)
+	if err != nil {
 		return engine.OrderCustomerState{}, false
 	}
-	groupID := resolveZaloGroupID(tenantID, permCtx)
-	sessionKey := engine.BuildSessionKey(activeChannel.ID, permCtx.ZaloUserID, groupID)
 	return engine.TakeOrderCustomerState(ctx, sessionKey)
 }

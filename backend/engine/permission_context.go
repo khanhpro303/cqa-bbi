@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -33,6 +35,12 @@ type GroupPermissionContext struct {
 	// Omitted from old tokens → handlers fall back to legacy guessing.
 	ChannelID   string `json:"channel_id,omitempty"`
 	ZaloGroupID string `json:"zalo_group_id,omitempty"`
+	// PersonalZalo keeps ERP prompts on the personal gateway and limits tools
+	// to reads supported by that transport.
+	PersonalZalo bool `json:"personal_zalo,omitempty"`
+	// PersonalZaloSessionID binds continuation state to the verified identity,
+	// account, effective permissions and personal chat session.
+	PersonalZaloSessionID string `json:"personal_zalo_session_id,omitempty"`
 	// GroupGuest: the sender is in a group chat without being a CRM member of
 	// it. Their complaints are their own, not the group's: complaint tools use
 	// the sender's chat and customer code, never the group's.
@@ -231,6 +239,77 @@ func ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, 
 // (private = full access, enforced at gateway level).
 func ResolvePermissions(tenantID, zaloUserID, customerCode, agentType string) GroupPermissionContext {
 	return ResolvePermissionsWithGroup(tenantID, zaloUserID, customerCode, agentType, "")
+}
+
+// ResolvePersonalZaloERPPermissions builds the grant for an already verified
+// personal Zalo sender. Public grants resolve by the bound CRM record ID.
+func ResolvePersonalZaloERPPermissions(ctx context.Context, tenantID, channelID, senderID, agentType string, customer models.ZaloCustomer) (GroupPermissionContext, error) {
+	permissions := GroupPermissionContext{
+		TenantID: tenantID, ChannelID: channelID, ZaloUserID: senderID, AgentType: agentType, PersonalZalo: true,
+	}
+	if db.DB == nil || tenantID == "" || channelID == "" || senderID == "" {
+		return permissions, errors.New("ERP permission context is unavailable")
+	}
+	database := db.DB.WithContext(ctx)
+	if agentType == "private" {
+		var endpoints []models.ERPEndpoint
+		if err := database.Where("tenant_id = ? AND group_id = ?", tenantID, "private_bot").Order("resource").
+			Find(&endpoints).Error; err != nil {
+			return permissions, fmt.Errorf("load private ERP permissions: %w", err)
+		}
+		group := GroupPermission{GroupID: "private_bot", GroupName: "Private Chatbot"}
+		for _, endpoint := range endpoints {
+			group.Resources = append(group.Resources, resourcePermissionFromEndpoint(endpoint))
+		}
+		permissions.Groups = []GroupPermission{group}
+		return permissions, nil
+	}
+	if agentType != "public" || customer.ID == "" {
+		return permissions, errors.New("verified customer is required for public ERP permissions")
+	}
+	var verified models.ZaloCustomer
+	if err := database.Where("id = ? AND tenant_id = ? AND status = ?", customer.ID, tenantID, "approved").Take(&verified).Error; err != nil {
+		return permissions, fmt.Errorf("load verified ERP customer: %w", err)
+	}
+	if err := database.Model(&models.ZaloCustomerCode{}).
+		Where("tenant_id = ? AND zalo_customer_id = ? AND TRIM(customer_code) <> ''", tenantID, verified.ID).
+		Order("is_primary DESC, customer_code ASC").Pluck("customer_code", &permissions.CustomerCodes).Error; err != nil {
+		return permissions, fmt.Errorf("load verified ERP customer codes: %w", err)
+	}
+	if len(permissions.CustomerCodes) == 0 && strings.TrimSpace(verified.CustomerCode) != "" {
+		permissions.CustomerCodes = []string{strings.TrimSpace(verified.CustomerCode)}
+	}
+	if len(permissions.CustomerCodes) == 0 {
+		return permissions, nil
+	}
+	permissions.CustomerCode = permissions.CustomerCodes[0]
+
+	linkedGroups := database.Model(&models.CRMGroupCustomer{}).
+		Select("group_id").Where("zalo_customer_id = ?", verified.ID)
+	var groups []models.CRMGroup
+	if err := database.Select("id", "name").Where("tenant_id = ? AND id IN (?)", tenantID, linkedGroups).Order("id").Find(&groups).Error; err != nil {
+		return permissions, fmt.Errorf("load verified ERP customer groups: %w", err)
+	}
+	if len(groups) == 0 {
+		return permissions, nil
+	}
+	groupIDs := make([]string, 0, len(groups))
+	byGroup := make(map[string]int, len(groups))
+	for index, group := range groups {
+		groupIDs = append(groupIDs, group.ID)
+		byGroup[group.ID] = index
+		permissions.Groups = append(permissions.Groups, GroupPermission{GroupID: group.ID, GroupName: group.Name})
+	}
+	var endpoints []models.ERPEndpoint
+	if err := database.Where("tenant_id = ? AND group_id IN ?", tenantID, groupIDs).Order("group_id, resource").
+		Find(&endpoints).Error; err != nil {
+		return permissions, fmt.Errorf("load public ERP permissions: %w", err)
+	}
+	for _, endpoint := range endpoints {
+		group := &permissions.Groups[byGroup[endpoint.GroupID]]
+		group.Resources = append(group.Resources, customerGroupPermission(endpoint))
+	}
+	return permissions, nil
 }
 
 // ---------------------------------------------------------------------------

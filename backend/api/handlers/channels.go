@@ -1426,7 +1426,7 @@ func enrichPersonalZaloImportResponse(c *gin.Context, resp *ChannelResponse, ch 
 	resp.ImportEndpoint = getBaseURL(c) + "/api/internal/imports/personal-zalo"
 	resp.ImportEndpointInternal = getInternalBaseURL(c, cfg) + "/api/internal/imports/personal-zalo"
 	resp.ImportSecretMasked = pkg.MaskSecret(creds.ImportSecret)
-	if includeSecret {
+	if includeSecret && canManageChannelCredentials(c) {
 		resp.ImportSecret = creds.ImportSecret
 	}
 	usersByID, err := loadTenantUsersByID(ch.TenantID)
@@ -1442,6 +1442,26 @@ func enrichPersonalZaloImportResponse(c *gin.Context, resp *ChannelResponse, ch 
 		return
 	}
 	resp.AccountOwners = accountOwners
+}
+
+func canManageChannelCredentials(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	role := middleware.GetTenantRole(c)
+	if role == "owner" || role == "admin" {
+		return true
+	}
+	var permissions map[string]string
+	if err := json.Unmarshal([]byte(c.GetString("tenant_permissions")), &permissions); err != nil {
+		return false
+	}
+	for _, permission := range permissions["channels"] {
+		if permission == 'w' {
+			return true
+		}
+	}
+	return false
 }
 
 func GetChannelSyncHistory(c *gin.Context) {
