@@ -76,6 +76,33 @@
       data-testid="personal-zalo-handover-staff"
       @update:model-value="selectStaff"
     />
+
+    <v-divider class="my-4" />
+    <v-switch
+      v-model="settings.complaint_cases"
+      :label="$t('complaint_cases_switch')"
+      :hint="$t('personal_zalo_complaint_cases_switch_hint')"
+      persistent-hint
+      density="compact"
+      color="primary"
+      data-testid="personal-zalo-complaint-cases"
+    />
+    <template v-if="settings.complaint_cases">
+      <v-text-field
+        v-model.number="settings.complaint_resolved_days"
+        type="number"
+        min="1"
+        :max="MAX_COMPLAINT_RESOLVED_DAYS"
+        :label="$t('complaint_resolved_days')"
+        :hint="$t('complaint_resolved_days_hint')"
+        persistent-hint
+        density="compact"
+        class="mt-3"
+        style="max-width: 320px"
+        data-testid="personal-zalo-complaint-resolved-days"
+      />
+      <ComplaintStreams v-model="settings.complaint_streams" :group-options="handoverGroupOptions" />
+    </template>
   </div>
 </template>
 
@@ -83,6 +110,8 @@
 import { onMounted, ref } from 'vue'
 import api from '../../api'
 import type { Channel } from '../../stores/channels'
+import ComplaintStreams from './ComplaintStreams.vue'
+import { MAX_COMPLAINT_RESOLVED_DAYS } from './zaloGroupSettings'
 import {
   personalZaloHandoverGroupOptions,
   personalZaloHandoverStaffOptions,

@@ -57,7 +57,17 @@ func guestKnowledgeRequiresVerification(text string) bool {
 // RunGuestKnowledge calls the tenant's public flow with an MCP credential that
 // exposes only public documents. It supplies no ERP grant or customer identity.
 func RunGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text string) (LangflowResult, error) {
-	if guestKnowledgeRequiresVerification(text) {
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, "", "")
+}
+
+// RunGuestKnowledgeWithComplaint adds a turn-scoped complaint grant. Regular
+// knowledge previews keep their original tools and ERP verification checks.
+func RunGuestKnowledgeWithComplaint(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide string) (LangflowResult, error) {
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, guide)
+}
+
+func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide string) (LangflowResult, error) {
+	if permission == "" && guestKnowledgeRequiresVerification(text) {
 		return LangflowResult{Text: GuestKnowledgeVerificationReply}, nil
 	}
 	if flow.APIURL == "" || flow.APIKey == "" || flow.PublicFlowID == "" || sameGuestFlowID(flow.FlowID, flow.PublicFlowID) ||
@@ -69,9 +79,13 @@ func RunGuestKnowledge(ctx context.Context, client *LangflowClient, flow Langflo
 		return LangflowResult{}, err
 	}
 	session := fmt.Sprintf("zalo-guest-%x", sha256.Sum256([]byte(tenantID+"\x00"+scope)))
-	input, prompt := AddKnowledgeImageInstruction(text, guestKnowledgePrompt)
+	prompt := guestKnowledgePrompt
+	if permission != "" {
+		prompt += "\n\nNgoại lệ cho khiếu nại: dùng complaint_record theo hướng dẫn dưới đây, kể cả khi khiếu nại liên quan đến một đơn hàng, giá hoặc công nợ. Vẫn yêu cầu xác thực khi khách chỉ muốn tra cứu ERP.\n\n" + guide
+	}
+	input, prompt := AddKnowledgeImageInstruction(text, prompt)
 	result, err := client.RunFlowWithCustomerUsage(ctx, session, session, input,
-		flow.APIURL, flow.APIKey, flow.PublicFlowID, "", "", token, prompt)
+		flow.APIURL, flow.APIKey, flow.PublicFlowID, "", permission, token, prompt)
 	if err != nil {
 		return LangflowResult{}, err
 	}

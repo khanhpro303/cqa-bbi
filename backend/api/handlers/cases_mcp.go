@@ -136,6 +136,12 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 		Source: customercases.SourceBot, TurnID: p.TurnID, SubjectOnly: p.GroupGuest, Retry: p.Retry, Type: args.Type, Severity: args.Severity,
 		Title: args.Title, Detail: args.Detail, Evidence: args.Evidence,
 	}
+	if p.PersonalZalo {
+		if p.ComplaintTurnID == "" {
+			return customercases.Report{}, "Không xác định được tin nhắn để ghi nhận."
+		}
+		r.TurnID, r.Retry = p.ComplaintTurnID, true
+	}
 	// A group's cases belong to the group, except for a sender who is not a
 	// CRM member of it (GroupGuest): theirs stay their own, matched only with
 	// their own chat and customer code.
@@ -144,8 +150,21 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 	}
 	if db.DB != nil {
 		var ch models.Channel
-		if err := db.DB.WithContext(ctx).Select("id, metadata").Where("id = ? AND tenant_id = ?", p.ChannelID, p.TenantID).First(&ch).Error; err != nil || !customercases.EnabledFor(ch.Metadata) {
+		if err := db.DB.WithContext(ctx).Select("id, metadata, channel_type, is_active, personal_zalo_auto_reply_enabled").Where("id = ? AND tenant_id = ?", p.ChannelID, p.TenantID).First(&ch).Error; err != nil || !customercases.EnabledFor(ch.Metadata) {
 			return customercases.Report{}, complaintsOffMessage
+		}
+		if p.PersonalZalo {
+			meta, _ := decodeMetadataObject(ch.Metadata)
+			scope, _ := meta["sync_scope"].(string)
+			groups, _ := meta["personal_zalo_group_reply_enabled"].(bool)
+			if ch.ChannelType != "personal_zalo_import" || !ch.IsActive || !ch.PersonalZaloAutoReplyEnabled ||
+				(p.ZaloGroupID == "" && scope == "group") || (p.ZaloGroupID != "" && (!groups || scope == "direct")) {
+				return customercases.Report{}, complaintsOffMessage
+			}
+			settings, err := loadPersonalZaloChatbotSettings(ctx, p.TenantID, "chatbot_active")
+			if err != nil || !personalZaloChatbotMasterEnabled(settings) {
+				return customercases.Report{}, complaintsOffMessage
+			}
 		}
 		r.ReporterName = zaloPersonName(p.TenantID, p.ZaloUserID)
 		r.CustomerName = r.ReporterName
@@ -170,7 +189,9 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 		}
 		r.CustomerCode, r.CustomerName = code, name
 	}
-	r.SessionID = engine.ResolveActiveSessionID(ctx, p.ChannelID, p.ZaloUserID, p.ZaloGroupID)
+	if !p.PersonalZalo {
+		r.SessionID = engine.ResolveActiveSessionID(ctx, p.ChannelID, p.ZaloUserID, p.ZaloGroupID)
+	}
 
 	since := time.Now().Add(-complaintImageWindow)
 	if last := customercases.LastBotReportAt(ctx, r.TenantID, r.SubjectType, r.SubjectID, p.ZaloUserID); last.After(since) {

@@ -25,6 +25,9 @@ func TestPersonalZaloChatbotMetadataValidation(t *testing.T) {
 		{"session_timeout_minutes": 5.5},
 		{"session_timeout_minutes": float64(1441)},
 		{"personal_zalo_group_reply_enabled": "true"},
+		{"complaint_cases": "true"},
+		{"complaint_cases": true},
+		{"complaint_resolved_days": float64(0)},
 		{"session_keyword": "Xin chào; Gọi bot", "session_end_keyword": "GỌI BOT"},
 		{"handover_alert_group_id": "group", "personal_zalo_handover_staff_id": "staff"},
 	} {
@@ -72,6 +75,22 @@ func TestPersonalZaloHandoverDestinationsMySQL(t *testing.T) {
 	target, err := resolvePersonalZaloHandoverDestination(ctx, "source", "staff-group", "")
 	if err != nil || !target.isGroup || target.id != "123" || target.channel.ID != oa.ID {
 		t.Fatalf("unexpected group destination: %#v, %v", target, err)
+	}
+	if err := validatePersonalZaloChatbotMetadata(ctx, "source", map[string]any{
+		"complaint_cases":         true,
+		"handover_alert_group_id": "staff-group",
+		"complaint_resolved_days": float64(14),
+		"complaint_streams": []any{
+			map[string]any{"key": "bao_hanh", "name": "Bảo hành", "alert_group_id": "staff-group"},
+		},
+	}); err != nil {
+		t.Fatalf("valid personal complaint settings rejected: %v", err)
+	}
+	if err := validatePersonalZaloChatbotMetadata(ctx, "source", map[string]any{
+		"complaint_cases": true, "handover_alert_group_id": "staff-group",
+		"complaint_streams": []any{map[string]any{"key": "x", "name": "X", "alert_group_id": "customer-group"}},
+	}); err == nil {
+		t.Fatal("accepted customer group as a personal complaint stream destination")
 	}
 	target, err = resolvePersonalZaloHandoverDestination(ctx, "source", "", "staff")
 	if err != nil || target.isGroup || target.id != "789" || target.channel.ID != oa.ID {

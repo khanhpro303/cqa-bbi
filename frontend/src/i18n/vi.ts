@@ -1092,6 +1092,7 @@ export default {
   cm_tab_cases: "Khiếu nại",
   complaint_cases_switch: "Ghi khiếu nại thành case để nhân viên xử lý",
   complaint_cases_switch_hint: "Bot ghi nhận khiếu nại (đọc cả ảnh khách gửi), tự gộp khi khách hỏi lại vấn đề cũ và báo vào nhóm của luồng xử lý (hoặc nhóm cảnh báo handover ở trên). Quản lý ở trang Insights khách, tab Khiếu nại. Chỉ bật sau khi node MCP Tools trong Langflow đã có công cụ complaint_record và AI Engine có system prompt.",
+  personal_zalo_complaint_cases_switch_hint: "Ghi nhận khiếu nại bằng tin nhắn từ chat 1:1 và nhóm Zalo cá nhân. Chọn nhóm nội bộ nhận chuyển tiếp ở trên để nhận cảnh báo dự phòng và kiểm tra Langflow đã có công cụ complaint_record. Theo dõi case tại Insights khách, tab Khiếu nại.",
   complaint_resolved_days: "Số ngày bot còn nhớ case đã xử lý xong",
   complaint_resolved_days_hint: "Trong số ngày này, bot vẫn thấy case đã xử lý (báo khách là đã xong khi khách hỏi) và nếu khách báo vẫn còn lỗi thì mở lại case cũ. Mặc định 14 ngày, tối đa 90.",
   complaint_streams_title: "Luồng xử lý khiếu nại",

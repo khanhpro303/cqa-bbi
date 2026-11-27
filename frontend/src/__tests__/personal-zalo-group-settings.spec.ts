@@ -15,6 +15,9 @@ describe('personal Zalo group settings', () => {
       group_bot_names: '',
       handover_alert_group_id: '',
       personal_zalo_handover_staff_id: '',
+      complaint_cases: false,
+      complaint_resolved_days: 14,
+      complaint_streams: [],
     })
 
     const settings = readPersonalZaloGroupSettings({
@@ -24,6 +27,9 @@ describe('personal Zalo group settings', () => {
       group_bot_names: ' Bull;bot ',
       handover_alert_group_id: 'staff-group',
       personal_zalo_handover_staff_id: 'staff-person',
+      complaint_cases: true,
+      complaint_resolved_days: 30,
+      complaint_streams: [{ key: '', name: ' Bảo hành ', description: ' Hàng lỗi ', alert_group_id: 'warranty-group' }],
     })
     expect(personalZaloGroupSettingsPatch(settings)).toEqual({
       personal_zalo_group_reply_enabled: true,
@@ -32,6 +38,9 @@ describe('personal Zalo group settings', () => {
       group_bot_names: 'Bull;bot',
       handover_alert_group_id: 'staff-group',
       personal_zalo_handover_staff_id: '',
+      complaint_cases: true,
+      complaint_resolved_days: 30,
+      complaint_streams: [{ key: 'bao_hanh', name: 'Bảo hành', description: 'Hàng lỗi', alert_group_id: 'warranty-group' }],
     })
   })
 
