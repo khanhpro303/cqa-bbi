@@ -211,8 +211,9 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 						systemPrompt += "\n\n" + instruction
 					}
 				}
+				input, systemPrompt := engine.AddProductAdviceInstruction(req.Text, systemPrompt)
 				reply, err = langflow.RunFlowWithOverrides(ctx, turn.FlowScope, turn.FlowScope,
-					req.Text, flow.APIURL, flow.APIKey, flow.PublicFlowID, systemPrompt)
+					input, flow.APIURL, flow.APIKey, flow.PublicFlowID, systemPrompt)
 				reply, _ = engine.ParseKnowledgeImageReply(reply, 0)
 				handover = instruction != "" && (addressed || !groupTurn.Staff) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
 			}

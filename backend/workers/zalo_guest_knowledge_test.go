@@ -21,8 +21,8 @@ import (
 func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 	const (
 		key       = "0123456789abcdef0123456789abcdef"
-		question  = "Chính sách đổi trả như thế nào?"
-		answer    = "Dạ, sản phẩm được đổi theo chính sách dành cho khách hàng."
+		question  = gobyQuestion
+		answer    = "Dạ, LS2 Goby Man có 3 điểm nổi bật ạ.\n• CE EN 13634:2017, mức 2|2|2|2 WR.\n• Cổ cao bảo vệ mắt cá, gót và ngón chân.\n• Da bò và chi tiết phản quang."
 		channelID = "channel"
 		tenantID  = "tenant"
 		senderID  = "123456789012345678"
@@ -106,6 +106,11 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 				input.Tweaks["zalo_user_id"] != input.SessionID || !strings.HasPrefix(input.SessionID, "zalo-guest-") ||
 				strings.Contains(input.SessionID, senderID) {
 				t.Errorf("guest Langflow payload = %+v", input)
+			}
+			agent, _ := input.Tweaks["Agent-fixture"].(map[string]any)
+			prompt, _ := agent["system_prompt"].(string)
+			if !strings.Contains(prompt, "3–4 gạch đầu dòng thật ngắn") || !strings.Contains(prompt, "Giữ nguyên mã tiêu chuẩn") {
+				t.Error("Goby question did not receive the concise, source-grounded product instruction")
 			}
 			body = fmt.Sprintf(`{"provider":"OpenAI","outputs":[{"outputs":[{"results":{"message":{"text":%q,"properties":{"usage":{"input_tokens":9,"output_tokens":7,"model_name":"gpt-5.4"}}}}}]}]}`, answer)
 		case "openapi.zalo.me/v3.0/oa/message/cs":

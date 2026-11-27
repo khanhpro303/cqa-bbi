@@ -95,16 +95,18 @@ func TestFindProductAdviceMySQL(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	})
-	good, hidden, unrelated := pkg.NewUUID(), pkg.NewUUID(), pkg.NewUUID()
+	good, hidden, unrelated, goby := pkg.NewUUID(), pkg.NewUUID(), pkg.NewUUID(), pkg.NewUUID()
 	rows := []models.CachedProduct{
 		{ID: pkg.NewUUID(), TenantID: tenant, MA: "SKU901", MA_CHA: "PARENT901", TEN_DONG_BO_WEB: "Mũ bảo hiểm LS2 FF399", NHAN_HIEU_NAME: "LS2", LIST_TEN_NHOM_VTHH: "Mũ"},
 		{ID: pkg.NewUUID(), TenantID: tenant, MA: "SKU902", MA_CHA: "PARENT902", TEN_DONG_BO_WEB: "Mũ bảo hiểm MT FF399", NHAN_HIEU_NAME: "MT", LIST_TEN_NHOM_VTHH: "Mũ"},
 		{ID: pkg.NewUUID(), TenantID: otherTenant, MA: "SKU901", MA_CHA: "PARENT901", TEN_DONG_BO_WEB: "Mũ bảo hiểm LS2 FF399", NHAN_HIEU_NAME: "LS2", LIST_TEN_NHOM_VTHH: "Mũ"},
+		{ID: pkg.NewUUID(), TenantID: tenant, MA: "SP457662", MA_CHA: "GOBY", TEN_DONG_BO_WEB: "Giày bảo hộ LS2 Goby Man", NHAN_HIEU_NAME: "LS2", LIST_TEN_NHOM_VTHH: "Giày"},
 	}
 	profiles := []models.ProductAdvisory{
 		{ID: good, TenantID: tenant, ParentCode: "PARENT901", WebName: rows[0].TEN_DONG_BO_WEB, Notes: "Vỏ nhẹ"},
 		{ID: hidden, TenantID: tenant, ParentCode: "PARENT902", WebName: rows[1].TEN_DONG_BO_WEB, Notes: "Vỏ nhẹ"},
 		{ID: unrelated, TenantID: otherTenant, ParentCode: "PARENT901", WebName: rows[2].TEN_DONG_BO_WEB, Notes: "Dữ liệu tenant khác"},
+		{ID: goby, TenantID: tenant, ParentCode: "GOBY", WebName: rows[3].TEN_DONG_BO_WEB, ScrapedContent: gobyProductDetails},
 	}
 	photos := []models.ProductAdvisoryImage{
 		{ID: pkg.NewUUID(), TenantID: tenant, ProductAdvisoryID: good, Enabled: true},
@@ -128,5 +130,19 @@ func TestFindProductAdviceMySQL(t *testing.T) {
 		if len(found) != 1 || found[0].ID != good || len(found[0].Images) != 1 || found[0].Images[0].ID != photos[0].ID {
 			t.Fatalf("query %q returned unexpected profiles: %+v", query, found)
 		}
+	}
+	perm.Groups[0].Resources[0].ProductGroups = []string{"giày"}
+	found, err := productAdviceForTurn(context.Background(), &perm, gobyQuestion, nil)
+	if err != nil || len(found) != 1 || found[0].ID != goby {
+		t.Fatalf("OA lookup for %q returned %d profiles, error: %v", gobyQuestion, len(found), err)
+	}
+	oaContext, _ := productAdviceContext(found, false)
+	personalContext, err := PersonalZaloProductAdvice(context.Background(), &perm, gobyQuestion)
+	if err != nil || oaContext != personalContext || !strings.Contains(oaContext, "CE EN 13634:2017 — 2|2|2|2 WR") {
+		t.Fatalf("OA and Personal Zalo must get the same Goby source evidence (error: %v)", err)
+	}
+	perm.Groups[0].Resources[0].ProductGroups = []string{"mũ"}
+	if denied, err := PersonalZaloProductAdvice(context.Background(), &perm, gobyQuestion); err != nil || denied != "" {
+		t.Fatalf("Goby context outside the personal Zalo product scope: %q (%v)", denied, err)
 	}
 }
