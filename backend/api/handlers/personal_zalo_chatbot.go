@@ -166,7 +166,8 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			inferredComplaint = handover
 			return reply
 		})
-		complaints := customercases.EnabledFor(channel.Metadata) && !groupTurn.Staff && req.Text != ""
+		staffGroupComplaint := groupTurn.Staff && addressed
+		complaints := customercases.EnabledFor(channel.Metadata) && (!groupTurn.Staff || staffGroupComplaint) && req.Text != ""
 		requestedHandover := personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
 		handover := !complaints && !guest && requestedHandover
 		directSessionRequired := req.ThreadType == personalZaloThreadUser &&
@@ -212,7 +213,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			flow := engine.ResolveTenantLangflowConfig(settings, cfg)
 			switch {
 			case guest:
-				result, runErr := runPersonalZaloGuest(flowCtx, scopedLangflow, cfg, flow, req, turn.FlowScope, complaintTurn)
+				result, runErr := runPersonalZaloGuest(flowCtx, scopedLangflow, cfg, flow, req, turn.FlowScope, complaintTurn, false)
 				if errors.Is(runErr, engine.ErrGuestKnowledgeNotConfigured) {
 					reply = engine.GuestKnowledgeUnavailableReply
 				} else {
@@ -237,7 +238,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 				handover = personalZaloHasHandoverDestination(channel) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
 			case complaintTurn && flow.PublicFlowIDSource == engine.LangflowSourceTenant && flow.APIKeySource == engine.LangflowSourceTenant:
 				var result engine.LangflowResult
-				result, err = runPersonalZaloGuest(flowCtx, scopedLangflow, cfg, flow, req, turn.FlowScope, true)
+				result, err = runPersonalZaloGuest(flowCtx, scopedLangflow, cfg, flow, req, turn.FlowScope, true, staffGroupComplaint)
 				reply, _ = engine.ParseKnowledgeImageReply(result.Text, 0)
 			default:
 				if flow.APIURL == "" || flow.PublicFlowID == "" || strings.EqualFold(flow.PublicFlowID, flow.FlowID) {
@@ -328,7 +329,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			}
 			var discardImages bool
 			reply, discardImages = finishPersonalZaloComplaint(ctx, cfg, latestChannel, req, reply,
-				inferredComplaint || requestedHandover || handover || reply == personalZaloAIHandoverMarker)
+				inferredComplaint || requestedHandover || handover || reply == personalZaloAIHandoverMarker, staffGroupComplaint)
 			handover = false
 			if discardImages {
 				imageSelection = personalZaloImageSelection{}
@@ -440,15 +441,8 @@ func personalZaloChatbotChannel(ctx context.Context, req personalZaloChatbotRequ
 			return channel, false, nil
 		}
 
-		// Keep the group with its linked OA even while the OA is paused or the
-		// CRM group is archived. The personal bot must not take over.
-		var groupIDs []string
-		err := db.DB.WithContext(ctx).Model(&models.CRMGroup{}).Unscoped().
-			Joins("JOIN channels AS oa ON oa.id = crm_groups.channel_id AND oa.tenant_id = crm_groups.tenant_id").
-			Where("crm_groups.tenant_id = ? AND crm_groups.zalo_group_id = ? AND oa.channel_type = ?",
-				req.TenantID, req.ThreadID, "zalo_oa").
-			Limit(1).Pluck("crm_groups.id", &groupIDs).Error
-		return channel, err == nil && len(groupIDs) == 0, err
+		blocked, err := personalZaloGroupBlocked(ctx, req.TenantID, req.ThreadID)
+		return channel, err == nil && !blocked, err
 	}
 	return channel, scope != "group", nil
 }
