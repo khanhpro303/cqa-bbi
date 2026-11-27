@@ -326,16 +326,28 @@ docker exec cqa-app sh -c 'test -n "$(find /app/static/assets -name "ServiceQual
 docker exec cqa-nginx nginx -t
 docker exec cqa-personal-zalo-gateway wget -q -T 5 -O /dev/null http://127.0.0.1:3100/health
 docker exec cqa-personal-zalo-gateway node --input-type=module -e '
-  const response = await fetch("http://127.0.0.1:3100/ready", { signal: AbortSignal.timeout(10000) });
-  const { ready, accounts, pool, sync } = await response.json();
-  if (response.status !== (ready ? 200 : 503) || !accounts || !pool || !sync) {
-    throw new Error("Gateway readiness probe unavailable");
+  import { setTimeout as delay } from "node:timers/promises";
+
+  const deadline = Date.now() + 45_000;
+  while (true) {
+    const response = await fetch("http://127.0.0.1:3100/ready", { signal: AbortSignal.timeout(5000) });
+    const { ready, accounts, pool, sync } = await response.json();
+    if (response.status !== (ready ? 200 : 503) || !accounts || !pool || !sync) {
+      throw new Error("Gateway readiness probe unavailable");
+    }
+    const starting = !sync.running || pool.connectingAccounts > 0 || pool.scheduledReconnects > 0 ||
+      pool.connectedAccounts + pool.disconnectedAccounts + pool.qrPendingAccounts < pool.totalAccounts;
+    if ((!starting && sync.inFlight === 0) || Date.now() >= deadline) {
+      console.log("Gateway readiness:", JSON.stringify({ready, accounts, pool, sync}));
+      break;
+    }
+    await delay(2500);
   }
-  console.log("Gateway readiness:", JSON.stringify({ready, accounts, pool, sync}));
 '
 if [[ -f docker-compose.override.yml ]]; then
   test "$(docker inspect -f '{{len .HostConfig.PortBindings}}' cqa-personal-zalo-gateway)" = 0
 fi
+gateway_started_at=$(docker inspect -f '{{.State.StartedAt}}' cqa-personal-zalo-gateway)
 docker exec cqa-app node --input-type=module -e '
   const secret = process.env.PERSONAL_ZALO_GATEWAY_ADMIN_SECRET?.trim();
   if (!secret || secret.length < 32) throw new Error("Gateway admin secret unavailable");
@@ -359,8 +371,11 @@ docker exec cqa-app node --input-type=module -e '
     }
   }
   const sessions = payload.accounts.filter((account) => account.hasSession).length;
-  console.log(`Personal Zalo gateway management API verified: accounts=${payload.accounts.length}, reusable_sessions=${sessions}`);
-'
+  const startedAt = Date.parse(process.argv[1]);
+  if (!Number.isFinite(startedAt)) throw new Error("Gateway startup time unavailable");
+  const imported = payload.accounts.filter((account) => Date.parse(account.lastImportedAt) >= startedAt).length;
+  console.log(`Personal Zalo gateway management API verified: accounts=${payload.accounts.length}, reusable_sessions=${sessions}, imported_since_start=${imported}`);
+' "$gateway_started_at"
 if ! public_health; then
   reload_nginx
   for attempt in $(seq 1 5); do

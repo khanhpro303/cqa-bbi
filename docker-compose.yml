@@ -49,7 +49,6 @@ services:
       context: ./personal-zalo-gateway
     container_name: cqa-personal-zalo-gateway
     restart: unless-stopped
-    stop_grace_period: 65s
     env_file:
       - .env
     environment:
@@ -61,7 +60,6 @@ services:
       - PERSONAL_ZALO_GATEWAY_MAX_BATCH_CONVERSATIONS=${PERSONAL_ZALO_GATEWAY_MAX_BATCH_CONVERSATIONS:-20}
       - PERSONAL_ZALO_GATEWAY_MAX_MESSAGES_PER_CONVERSATION=${PERSONAL_ZALO_GATEWAY_MAX_MESSAGES_PER_CONVERSATION:-200}
       - PERSONAL_ZALO_GATEWAY_REQUEST_TIMEOUT_MS=${PERSONAL_ZALO_GATEWAY_REQUEST_TIMEOUT_MS:-20000}
-      - PERSONAL_ZALO_GATEWAY_SHUTDOWN_TIMEOUT_MS=${PERSONAL_ZALO_GATEWAY_SHUTDOWN_TIMEOUT_MS:-60000}
     ports:
       - "3100:3100"
     volumes:
