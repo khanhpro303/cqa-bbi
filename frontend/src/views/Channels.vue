@@ -56,10 +56,10 @@
           </div>
 
           <div v-if="ch.supports_auto_reply || personalZaloBots[ch.id]" class="mb-2">
-            <div class="d-flex align-center justify-space-between" :class="{ 'flex-wrap ga-2': personalZaloBots[ch.id] }">
-              <div class="d-flex flex-wrap align-center ga-2">
-                <span class="text-caption text-grey">{{ $t(ch.channel_type === 'zalo_oa' || personalZaloBots[ch.id] ? 'personal_zalo_bot_mode' : 'chatbot_channel_autoreply_short') }}</span>
-                <div v-if="personalZaloBots[ch.id]" @click.stop>
+            <div class="d-flex align-center justify-space-between bot-mode-row" :class="{ 'bot-mode-row--personal': personalZaloBots[ch.id] }">
+              <div class="d-flex align-center bot-mode-row__label">
+                <span class="text-caption text-grey text-no-wrap">{{ $t(ch.channel_type === 'zalo_oa' || personalZaloBots[ch.id] ? 'personal_zalo_bot_mode' : 'chatbot_channel_autoreply_short') }}</span>
+                <div v-if="personalZaloBots[ch.id]" class="flex-shrink-0" @click.stop>
                   <PersonalZaloBotModePicker
                     v-if="canToggleAutoReply(ch)"
                     compact
@@ -73,16 +73,16 @@
                   </v-chip>
                 </div>
               </div>
-              <div class="d-flex align-center ga-3 ms-auto" @click.stop>
+              <div class="d-flex align-center ms-auto" :class="personalZaloBots[ch.id] ? 'bot-mode-row__status' : 'ga-3'" @click.stop>
                 <template v-if="personalZaloBots[ch.id]?.chatbot_mode === 'internbot'">
-                  <span v-if="!personalZaloBots[ch.id]?.supervisor_group_id" class="text-caption text-medium-emphasis">
+                  <span v-if="!personalZaloBots[ch.id]?.supervisor_group_id" class="text-caption text-medium-emphasis text-no-wrap">
                     {{ $t('personal_zalo_internbot_no_group_selected') }}
                   </span>
-                  <span v-else-if="chatbotStatusLoaded" class="text-caption font-weight-medium" :class="ch.is_active && chatbotActive && personalZaloBots[ch.id]?.internbot_enabled ? 'text-success' : 'text-grey'">
+                  <span v-else-if="chatbotStatusLoaded" class="text-caption font-weight-medium text-no-wrap" :class="ch.is_active && chatbotActive && personalZaloBots[ch.id]?.internbot_enabled ? 'text-success' : 'text-grey'">
                     {{ $t(ch.is_active && chatbotActive && personalZaloBots[ch.id]?.internbot_enabled ? 'chatbot_status_on' : 'chatbot_status_off') }}
                   </span>
                   <v-btn v-else-if="chatbotStatusError" icon="mdi-refresh" size="x-small" variant="text" color="warning" :aria-label="$t('refresh')" :loading="chatbotStatusLoading" @click.stop="fetchChatbotStatus" />
-                  <span v-else class="text-caption text-grey">{{ $t('loading') }}</span>
+                  <span v-else class="text-caption text-grey text-no-wrap">{{ $t('loading') }}</span>
                 </template>
                 <template v-else-if="ch.supports_auto_reply && chatbotStatusLoaded">
                   <v-switch
@@ -94,7 +94,7 @@
                     :disabled="!canToggleAutoReply(ch) || !ch.is_active || !chatbotActive || savingBotSettingsIds.has(ch.id)"
                     @update:model-value="(v: any) => toggleAutoReply(ch, !!v)"
                   />
-                  <span class="text-caption font-weight-medium" :class="(ch.auto_reply_enabled && chatbotActive) ? 'text-success' : 'text-grey'">
+                  <span class="text-caption font-weight-medium text-no-wrap" :class="(ch.auto_reply_enabled && chatbotActive) ? 'text-success' : 'text-grey'">
                     {{ (ch.auto_reply_enabled && chatbotActive) ? $t('chatbot_status_on') : $t('chatbot_status_off') }}
                   </span>
                   <v-btn v-if="chatbotStatusError" icon="mdi-refresh" size="x-small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click.stop="fetchChatbotStatus" />
@@ -102,7 +102,7 @@
                 <v-btn v-else-if="ch.supports_auto_reply && chatbotStatusError" icon="mdi-refresh" size="x-small" variant="text" color="warning" :title="$t('error')" :loading="chatbotStatusLoading" @click.stop="fetchChatbotStatus" />
                 <template v-else-if="ch.supports_auto_reply">
                   <v-progress-circular indeterminate size="20" width="2" color="grey" class="mx-3" />
-                  <span class="text-caption text-grey">{{ $t('loading') }}</span>
+                  <span class="text-caption text-grey text-no-wrap">{{ $t('loading') }}</span>
                 </template>
               </div>
             </div>
@@ -676,3 +676,25 @@ const syncIntervalOptions = computed(() => [
   { title: t('sync_1d'), value: 1440 },
 ])
 </script>
+
+<style scoped>
+.bot-mode-row {
+  gap: 8px;
+}
+
+.bot-mode-row--personal {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  column-gap: 6px;
+}
+
+.bot-mode-row__label {
+  gap: 6px;
+  min-width: 0;
+}
+
+.bot-mode-row__status {
+  gap: 6px;
+  flex-shrink: 0;
+}
+</style>
