@@ -14,8 +14,9 @@ const endpoint = '/tenants/tenant/channels/personal/personal-zalo/identity-links
 const expiresAt = '2099-11-27T00:00:00Z'
 const verify = 'verify example-one-use-code'
 const select = {
+  name: 'TestSelect',
   props: ['modelValue', 'label', 'items'],
-  emits: ['update:modelValue'],
+  emits: ['update:modelValue', 'update:search'],
   template: '<select :aria-label="label" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option></select>',
 }
 const dialog = defineComponent({
@@ -58,6 +59,65 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('personal Zalo identity link management', () => {
+  it('links an existing 1:1 chat to OA staff with pairing off and no verification command', async () => {
+    api.get.mockImplementation(async (path: string) => {
+      if (path.endsWith('/options')) {
+        return { data: { pairing_enabled: false, staff: [{ id: 'staff', name: 'Lâm Khải', channel_name: 'BBI' }] } }
+      }
+      if (path.endsWith('/direct-conversations')) {
+        return { data: [{ id: 'direct-chat', name: 'Lâm Khải', sender_id: '1024' }] }
+      }
+      return { data: [{ id: 'pending-link', kind: 'staff', target_id: 'staff', expires_at: expiresAt }] }
+    })
+    api.post.mockResolvedValue({ data: {
+      id: 'pending-link', kind: 'staff', target_id: 'staff', expires_at: expiresAt,
+      verified_at: '2026-11-27T00:00:00Z', sender_id: '1024',
+    } })
+    const wrapper = mountLinks(true, false)
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === en.personal_zalo_identity_quick_link)!.trigger('click')
+    const directChat = wrapper.get(`select[aria-label="${en.personal_zalo_identity_direct_chat}"]`)
+    const staff = wrapper.get(`select[aria-label="${en.personal_zalo_identity_staff}"]`)
+    await vi.waitFor(() => expect(directChat.text()).toContain('Lâm Khải · 1024'))
+    expect(staff.text()).toContain('Lâm Khải · BBI')
+    await directChat.setValue('direct-chat')
+    await staff.setValue('staff')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(api.post).toHaveBeenCalledWith(`${endpoint}/approve-staff`, { conversation_id: 'direct-chat', target_id: 'staff' })
+    expect(wrapper.text()).toContain('Lâm Khải is now linked to this channel.')
+    expect(wrapper.text()).toContain(en.personal_zalo_identity_verified)
+    expect(wrapper.text()).not.toContain(en.personal_zalo_identity_pending)
+    expect(wrapper.find(`input[aria-label="${en.personal_zalo_identity_command}"]`).exists()).toBe(false)
+  })
+
+  it('requires a new selection when the admin edits a selected chat or staff search', async () => {
+    api.get.mockImplementation(async (path: string) => {
+      if (path.endsWith('/options')) return { data: { staff: [{ id: 'staff', name: 'An' }] } }
+      if (path.endsWith('/direct-conversations')) return { data: [{ id: 'chat', name: 'An', sender_id: '1024' }] }
+      return { data: [] }
+    })
+    const wrapper = mountLinks()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === en.personal_zalo_identity_quick_link)!.trigger('click')
+    const [chat, staff] = wrapper.findAllComponents({ name: 'TestSelect' })
+    const approve = () => wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(chat.text()).toContain('An · 1024'))
+    await chat.setValue('chat')
+    await staff.setValue('staff')
+    chat.vm.$emit('update:search', 'different chat')
+    await approve()
+    expect(api.post).not.toHaveBeenCalled()
+    expect(chat.text()).not.toContain('An · 1024')
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(`${endpoint}/direct-conversations`,
+      expect.objectContaining({ params: { q: 'different chat' } })))
+    await chat.setValue('chat')
+    chat.vm.$emit('update:search', 'An · 1024')
+    staff.vm.$emit('update:search', 'different staff')
+    await approve()
+    expect(api.post).not.toHaveBeenCalled()
+  })
+
   it('waits for the channel to bind its Zalo account', async () => {
     const wrapper = mountLinks(false)
     await flushPromises()

@@ -6,8 +6,13 @@
         {{ $t('personal_zalo_identity_title') }}
       </h2>
       <v-spacer />
+      <v-btn v-if="accountBound" size="small" variant="tonal"
+        :prepend-icon="quickLink ? 'mdi-key-outline' : 'mdi-link-variant'"
+        :disabled="busy" @click="toggleQuickLink">
+        {{ $t(quickLink ? 'personal_zalo_identity_use_code' : 'personal_zalo_identity_quick_link') }}
+      </v-btn>
       <v-btn v-if="accountBound" size="small" variant="text" prepend-icon="mdi-refresh"
-        :loading="loading" :disabled="issuing || revoking !== ''" @click="refresh">
+        :loading="loading" :disabled="busy" @click="refresh">
         {{ $t('refresh') }}
       </v-btn>
     </div>
@@ -17,13 +22,35 @@
       {{ $t('personal_zalo_identity_connect_first') }}
     </v-alert>
     <template v-else>
-      <v-alert v-if="!pairingEnabled && !loading" type="info" variant="tonal" density="compact" class="mb-4">
+      <v-alert v-if="!quickLink && !pairingEnabled && !loading" type="info" variant="tonal" density="compact" class="mb-4">
         {{ $t('personal_zalo_identity_prerequisites') }}
       </v-alert>
       <v-alert v-if="error" type="error" variant="tonal" density="compact" role="alert" class="mb-4">
         {{ $t(error) }}
       </v-alert>
-      <form @submit.prevent="issue">
+      <v-alert v-if="approvalNotice && links.some((link) => link.id === approvalNotice?.id)"
+        type="success" variant="tonal" density="compact" role="status" class="mb-4">
+        {{ $t('personal_zalo_identity_approved', { name: approvalNotice.name }) }}
+      </v-alert>
+      <form v-if="quickLink" @submit.prevent="approve">
+        <p class="text-body-2 text-medium-emphasis mb-3">{{ $t('personal_zalo_identity_quick_help') }}</p>
+        <v-alert v-if="conversationError" type="error" variant="tonal" density="compact" class="mb-3">
+          {{ $t('personal_zalo_identity_chat_load_error') }}
+        </v-alert>
+        <div class="d-flex flex-wrap ga-3 align-start">
+          <v-autocomplete v-model="conversationId" v-model:search="conversationSearch" :items="conversationOptions"
+            :label="$t('personal_zalo_identity_direct_chat')" :no-data-text="$t('personal_zalo_identity_no_direct_chat')"
+            density="compact" variant="outlined" hide-details clearable no-filter
+            :disabled="busy" :loading="searching" class="identity-field" />
+          <v-autocomplete v-model="targetId" v-model:search="staffSearch" :items="targetOptions" :label="$t('personal_zalo_identity_staff')"
+            density="compact" variant="outlined" hide-details :disabled="busy" :loading="loading"
+            class="identity-field" />
+          <v-btn type="submit" color="primary" :loading="approving" :disabled="busy || !canApprove">
+            {{ $t('personal_zalo_identity_approve') }}
+          </v-btn>
+        </div>
+      </form>
+      <form v-else @submit.prevent="issue">
         <div class="d-flex flex-wrap ga-3 align-start">
           <v-select :model-value="kind" :items="kindOptions" :label="$t('personal_zalo_identity_kind')"
             density="compact" variant="outlined" hide-details :disabled="busy || !pairingEnabled"
@@ -37,7 +64,7 @@
         </div>
       </form>
 
-      <v-sheet v-if="issued" border rounded="lg" class="pa-3 mt-4" aria-live="polite">
+      <v-sheet v-if="issued && !quickLink" border rounded="lg" class="pa-3 mt-4" aria-live="polite">
         <div class="d-flex align-start ga-2 mb-2">
           <p class="text-body-2 flex-grow-1">{{ $t('personal_zalo_identity_send', { name: issued.name }) }}</p>
           <v-btn icon="mdi-close" size="small" variant="text"
@@ -94,6 +121,7 @@ import api from '../../api'
 type IdentityKind = 'staff' | 'customer'
 type IdentityOption = { id: string; name: string; channel_name?: string; customer_code?: string }
 type IdentityOptions = { staff: IdentityOption[]; customers: IdentityOption[]; pairing_enabled: boolean }
+type DirectConversation = { id: string; name: string; sender_id: string }
 type IdentityLink = {
   id: string
   kind: IdentityKind
@@ -112,6 +140,16 @@ const targetId = ref<string | null>(null)
 const options = ref<IdentityOptions>({ staff: [], customers: [], pairing_enabled: false })
 const links = ref<IdentityLink[]>([])
 const issued = ref<IssuedLink | null>(null)
+const quickLink = ref(false)
+const approving = ref(false)
+const approvalNotice = ref<{ id: string; name: string } | null>(null)
+const conversationId = ref<string | null>(null)
+const conversationSearch = ref('')
+const staffSearch = ref('')
+const conversations = ref<DirectConversation[]>([])
+const searching = ref(false)
+const conversationError = ref(false)
+const conversationRefresh = ref(0)
 const pendingRevoke = ref<IdentityLink | null>(null)
 const loading = ref(false)
 const issuing = ref(false)
@@ -121,7 +159,7 @@ const copied = ref(false)
 const sectionHeading = ref<HTMLElement | null>(null)
 let revokeActivator: HTMLElement | null = null
 
-const busy = computed(() => loading.value || issuing.value || revoking.value !== '')
+const busy = computed(() => loading.value || issuing.value || approving.value || revoking.value !== '')
 const pairingEnabled = computed(() => props.channelAllowsPairing && options.value.pairing_enabled)
 const revokeTitle = computed(() => pendingRevoke.value
   ? t('personal_zalo_identity_revoke_name', { name: targetName(pendingRevoke.value.kind, pendingRevoke.value.target_id) })
@@ -134,6 +172,15 @@ const targetOptions = computed(() => sourceOptions(kind.value).map((person) => (
   title: [person.name, person.channel_name || person.customer_code].filter(Boolean).join(' · '),
   value: person.id,
 })))
+const conversationOptions = computed(() => conversations.value.map((conversation) => ({
+  title: conversation.name ? `${conversation.name} · ${conversation.sender_id}` : conversation.sender_id,
+  value: conversation.id,
+})))
+const selectedConversation = computed(() => conversationOptions.value.find((item) => item.value === conversationId.value))
+const selectedStaff = computed(() => targetOptions.value.find((item) => item.value === targetId.value))
+const canApprove = computed(() => selectedConversation.value && selectedStaff.value &&
+  (!conversationSearch.value || selectedConversation.value.title === conversationSearch.value) &&
+  (!staffSearch.value || selectedStaff.value.title === staffSearch.value))
 
 function sourceOptions(identityKind: IdentityKind) {
   return identityKind === 'staff' ? options.value.staff : options.value.customers
@@ -159,10 +206,21 @@ function selectKind(value: IdentityKind) {
   targetId.value = null
 }
 
+function toggleQuickLink() {
+  quickLink.value = !quickLink.value
+  selectKind('staff')
+  conversationId.value = null
+  conversationSearch.value = ''
+  staffSearch.value = ''
+  approvalNotice.value = null
+  error.value = ''
+}
+
 async function refresh() {
   if (!props.accountBound || loading.value) return
   loading.value = true
   error.value = ''
+  conversationRefresh.value++
   const [linksResult, optionsResult] = await Promise.allSettled([
     api.get<IdentityLink[]>(endpoint.value),
     api.get<IdentityOptions>(`${endpoint.value}/options`),
@@ -188,6 +246,80 @@ async function refresh() {
     error.value = 'personal_zalo_identity_load_error'
   } finally {
     loading.value = false
+  }
+}
+
+watch([quickLink, conversationSearch, conversationRefresh], ([open, search], previous, onCleanup) => {
+  searching.value = false
+  conversationError.value = false
+  if (!open) return
+  const selected = selectedConversation.value
+  const selectedLabel = selected?.title === search
+  const refreshRequested = previous && previous[2] !== conversationRefresh.value
+  if (selected && search && !selectedLabel) conversationId.value = null
+  if (selectedLabel && !refreshRequested) return
+  if (!conversationId.value) conversations.value = []
+
+  const controller = new AbortController()
+  searching.value = true
+  const timer = setTimeout(async () => {
+    try {
+      const { data } = await api.get<DirectConversation[]>(`${endpoint.value}/direct-conversations`, {
+        params: { q: selectedLabel ? '' : search },
+        signal: controller.signal,
+      })
+      if (controller.signal.aborted) return
+      const retained = conversations.value.find((conversation) => conversation.id === conversationId.value)
+      conversations.value = retained && !data.some((conversation) => conversation.id === retained.id) ? [retained, ...data] : data
+    } catch {
+      if (!controller.signal.aborted) conversationError.value = true
+    } finally {
+      if (!controller.signal.aborted) searching.value = false
+    }
+  }, search && !selectedLabel ? 250 : 0)
+  onCleanup(() => {
+    clearTimeout(timer)
+    controller.abort()
+  })
+})
+
+watch(staffSearch, (search) => {
+  if (quickLink.value && search && selectedStaff.value && selectedStaff.value.title !== search) {
+    targetId.value = null
+  }
+})
+
+async function approve() {
+  if (!props.accountBound || !quickLink.value || busy.value || !canApprove.value || !targetId.value) return
+  approving.value = true
+  error.value = ''
+  approvalNotice.value = null
+  const name = targetName('staff', targetId.value)
+  try {
+    const { data: link } = await api.post<IdentityLink>(`${endpoint.value}/approve-staff`, {
+      conversation_id: conversationId.value,
+      target_id: targetId.value,
+    })
+    links.value = [link, ...links.value.filter((existing) => existing.id !== link.id)]
+    if (issued.value?.id === link.id) issued.value = null
+    approvalNotice.value = { id: link.id, name }
+    conversationId.value = null
+    conversationSearch.value = ''
+    staffSearch.value = ''
+    targetId.value = null
+  } catch (err) {
+    const code = isAxiosError(err) ? err.response?.data?.error : ''
+    if ([
+      'personal_zalo_identity_conversation_not_found',
+      'personal_zalo_identity_target_not_found',
+      'personal_zalo_staff_approval_conflict',
+    ].includes(code)) {
+      error.value = code
+    } else {
+      error.value = 'personal_zalo_identity_approve_error'
+    }
+  } finally {
+    approving.value = false
   }
 }
 
