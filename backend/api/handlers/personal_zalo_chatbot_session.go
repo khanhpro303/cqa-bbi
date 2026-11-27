@@ -119,10 +119,16 @@ func personalZaloCallsBot(text, configuredNames string) bool {
 	return false
 }
 
-func personalZaloGroupMessageAddressed(text string, session personalZaloSessionConfig) bool {
-	return personalZaloMatchesKeyword(text, session.SessionKeyword) ||
-		personalZaloMatchesKeyword(text, session.SessionEndKeyword) ||
-		personalZaloCallsBot(text, session.GroupBotNames)
+func personalZaloGroupMessageAddressed(req personalZaloChatbotRequest, session personalZaloSessionConfig) bool {
+	if req.BotMentioned || personalZaloMatchesKeyword(req.Text, session.SessionKeyword) ||
+		personalZaloMatchesKeyword(req.Text, session.SessionEndKeyword) {
+		return true
+	}
+	text := req.Text
+	if req.GroupWakeText != nil {
+		text = *req.GroupWakeText
+	}
+	return personalZaloCallsBot(text, session.GroupBotNames)
 }
 
 func personalZaloHasHandoverDestination(channel models.Channel) bool {
@@ -201,7 +207,7 @@ func personalZaloSessionFlowScope(req personalZaloChatbotRequest, sessionID stri
 
 func planPersonalZaloTurn(ctx context.Context, session personalZaloSessionConfig, req personalZaloChatbotRequest, groupAssistantReply bool) (personalZaloTurn, error) {
 	group := req.ThreadType == personalZaloThreadGroup
-	if group && !groupAssistantReply && !personalZaloGroupMessageAddressed(req.Text, session) {
+	if group && !groupAssistantReply && !personalZaloGroupMessageAddressed(req, session) {
 		return personalZaloTurn{}, nil
 	}
 	if !group && !session.Managed {
@@ -243,7 +249,11 @@ func planPersonalZaloTurn(ctx context.Context, session personalZaloSessionConfig
 			return personalZaloTurn{}, err
 		}
 	}
-	return personalZaloTurn{FlowScope: personalZaloSessionFlowScope(req, active), RunFlow: true}, nil
+	flowScope := personalZaloSessionFlowScope(req, active)
+	if group && req.BotMentioned && req.Text == "" {
+		return personalZaloTurn{FlowScope: flowScope, Reply: session.SessionWelcomeMessage}, nil
+	}
+	return personalZaloTurn{FlowScope: flowScope, RunFlow: true}, nil
 }
 
 func closePersonalZaloSession(ctx context.Context, req personalZaloChatbotRequest) {

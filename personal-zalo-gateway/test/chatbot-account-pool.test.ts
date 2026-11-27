@@ -330,6 +330,31 @@ test('a new group text is signed with sender identity and replies to the origina
   assert.notEqual(receiptPayload.request_id, payload.request_id);
 });
 
+test('a live group tag of the connected account reaches CQA without a configured name', async (t) => {
+  configureTestChatbot(t);
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 204 }));
+  const { listener } = await connectFixture(t, { ownId: '10001' });
+  const tag = '@Tài khoản hỗ trợ';
+  for (const [msgId, question] of [['41004', 'FF399 còn hàng không?'], ['41005', '']]) {
+    const message = groupMessage(msgId);
+    await listener.message({
+      ...message,
+      data: {
+        ...message.data,
+        content: `${tag} ${question}`.trim(),
+        mentions: [{ uid: '10001', pos: 0, len: tag.length, type: 0 }],
+      },
+    });
+  }
+
+  assert.equal(fetchMock.mock.callCount(), 2);
+  const payloads = fetchMock.mock.calls.map((call) => JSON.parse(String((call.arguments[1] as RequestInit).body)));
+  assert.deepEqual(payloads.map((payload) => [payload.bot_mentioned, payload.text.trim()]), [
+    [true, 'FF399 còn hàng không?'],
+    [true, ''],
+  ]);
+});
+
 test('a failed Zalo group send never acknowledges delivery', async (t) => {
   configureTestChatbot(t);
   const deliveryReceipt = '123e4567-e89b-42d3-a456-426614174000';

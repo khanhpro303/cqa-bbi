@@ -72,6 +72,7 @@ type zaloSessionStart int
 const (
 	zaloSessionStayClosed zaloSessionStart = iota
 	zaloSessionManual
+	zaloSessionAccountMention
 	zaloSessionStaffCall
 	zaloSessionAssistant
 )
@@ -79,10 +80,12 @@ const (
 // zaloSessionStartFor decides how a turn without an active session should
 // start. An exact opening keyword keeps its welcome-only behavior even if it
 // also contains a configured bot name.
-func zaloSessionStartFor(meta ChannelMetadata, text string, staffGated, groupAssistant bool) zaloSessionStart {
+func zaloSessionStartFor(meta ChannelMetadata, text string, accountMentioned, staffGated, groupAssistant bool) zaloSessionStart {
 	switch {
 	case matchesSessionKeyword(text, meta.SessionKeyword):
 		return zaloSessionManual
+	case accountMentioned:
+		return zaloSessionAccountMention
 	case groupAssistant:
 		return zaloSessionAssistant
 	case staffGated && !matchesSessionKeyword(text, meta.SessionEndKeyword) && callsGroupBot(text, groupBotNames(meta), ""):
@@ -90,6 +93,21 @@ func zaloSessionStartFor(meta ChannelMetadata, text string, staffGated, groupAss
 	default:
 		return zaloSessionStayClosed
 	}
+}
+
+// stripGroupBotAccountMention recognizes Zalo's GMF marker for the connected
+// OA itself. Matching the account ID keeps this independent of the display
+// name shown by Zalo and of the aliases configured for text calls.
+func stripGroupBotAccountMention(text, accountID string) (string, bool) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return strings.TrimSpace(text), false
+	}
+	marker := "[@" + accountID + "]"
+	if !strings.Contains(text, marker) {
+		return strings.TrimSpace(text), false
+	}
+	return strings.TrimSpace(strings.ReplaceAll(text, marker, "")), true
 }
 
 func matchesSessionKeyword(text, keywords string) bool {

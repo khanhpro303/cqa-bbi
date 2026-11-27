@@ -35,7 +35,9 @@ type personalZaloChatbotRequest struct {
 	SenderID          string    `json:"sender_id"`
 	MessageID         string    `json:"message_id" binding:"required,max=128"`
 	SentAt            time.Time `json:"sent_at" binding:"required"`
-	Text              string    `json:"text" binding:"required"`
+	Text              string    `json:"text"`
+	BotMentioned      bool      `json:"bot_mentioned,omitempty"`
+	GroupWakeText     *string   `json:"group_wake_text,omitempty"`
 	DeliveryReceipt   string    `json:"delivery_receipt" binding:"omitempty,uuid4"`
 	DeliveryToken     string    `json:"delivery_token,omitempty" binding:"omitempty,max=4096"`
 	DeliveryPart      string    `json:"delivery_part,omitempty" binding:"omitempty,oneof=text image"`
@@ -56,7 +58,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		var req personalZaloChatbotRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := c.ShouldBindJSON(&req); err != nil || (req.Text == "" && !req.BotMentioned) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 			return
 		}
@@ -67,8 +69,10 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		req.Text = strings.TrimSpace(req.Text)
 		age := time.Since(req.SentAt)
 		preflight := req.DeliveryToken != "" || req.DeliveryPart != "" || req.DeliveryDigest != ""
-		if req.Text == "" || personalZaloTextBoundary(req.Text, personalZaloTextLimit) != len(req.Text) ||
+		if (req.Text == "" && !req.BotMentioned) || personalZaloTextBoundary(req.Text, personalZaloTextLimit) != len(req.Text) ||
 			!personalZaloUIDPattern.MatchString(req.AccountExternalID) || !normalizePersonalZaloChatbotRequest(&req) ||
+			((req.BotMentioned || req.GroupWakeText != nil) && req.ThreadType != personalZaloThreadGroup) ||
+			(req.GroupWakeText != nil && personalZaloTextBoundary(*req.GroupWakeText, personalZaloTextLimit) != len(*req.GroupWakeText)) ||
 			(req.ThreadType == personalZaloThreadUser && req.SchemaVersion != personalZaloDirectProtocol) ||
 			(preflight && (req.ThreadType != personalZaloThreadUser || req.DeliveryToken == "" || req.DeliveryPart == "" || req.DeliveryDigest == "")) ||
 			(!preflight && req.DeliveryReceipt == "" && (age > 2*time.Minute || age < -30*time.Second)) ||
@@ -155,7 +159,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			}
 		}
 		guest := req.ThreadType == personalZaloThreadUser && identity.AgentType == ""
-		addressed := req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req.Text, sessionConfig)
+		addressed := req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req, sessionConfig)
 		groupTurn := preparePersonalZaloGroupTurn(ctx, channel, sessionConfig, req, addressed, workers.PersonalZaloGroupNeedsReply)
 		handover := !guest && personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
 		var turn personalZaloTurn

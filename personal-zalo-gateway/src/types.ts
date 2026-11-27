@@ -114,6 +114,7 @@ export interface IncomingGatewayMessage {
   threadId: string;
   threadType: ThreadType;
   groupName?: string;
+  mentions?: { uid: string; pos: number; len: number }[];
   attachments?: GatewayAttachment[];
   rawData?: Record<string, unknown>;
   sourceContentIsString?: boolean;
