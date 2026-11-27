@@ -400,6 +400,13 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.DELETE("/knowledge/:docId", middleware.RequireRole("owner", "admin"), handlers.PurgeKnowledgeDocument)
 
 			// Product advice attached to parent SKUs in the ERP cache.
+			tenant.GET("/product-advisory-imports/template", middleware.RequirePermission("settings", "r"), handlers.DownloadProductAdvisoryLinkTemplate)
+			tenant.POST("/product-advisory-imports", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), handlers.ImportProductAdvisoryLinks)
+			tenant.GET("/product-advisory-imports/latest", middleware.RequirePermission("settings", "r"), handlers.GetLatestProductAdvisoryImportJob)
+			tenant.GET("/product-advisory-imports/:jobId", middleware.RequirePermission("settings", "r"), handlers.GetProductAdvisoryImportJob)
+			tenant.GET("/product-advisory-imports/:jobId/images", middleware.RequirePermission("settings", "r"), handlers.GetProductAdvisoryImportImages)
+			tenant.POST("/product-advisory-imports/:jobId/images/approve", middleware.RequirePermission("settings", "w"), handlers.ApproveProductAdvisoryImportImages)
+
 			tenant.GET("/product-advisory", middleware.RequirePermission("settings", "r"), handlers.ListProductAdvisories)
 			tenant.GET("/product-advisory/:parentCode", middleware.RequirePermission("settings", "r"), handlers.GetProductAdvisory)
 			tenant.PUT("/product-advisory/:parentCode", middleware.RequirePermission("settings", "w"), handlers.SaveProductAdvisory)

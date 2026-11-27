@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"github.com/vietbui/chat-quality-agent/knowledge"
 	"log"
 
 	"github.com/vietbui/chat-quality-agent/api"
@@ -15,6 +14,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/customercases"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"github.com/vietbui/chat-quality-agent/knowledge"
 	"github.com/vietbui/chat-quality-agent/pancakelabels"
 	"github.com/vietbui/chat-quality-agent/workers"
 )
@@ -73,6 +73,10 @@ func main() {
 	// Chatbot knowledge base: finish indexing that a restart interrupted.
 	knowledge.SetEnvDefaults(cfg.ChatMemory.UnstructuredAPIURL, cfg.ChatMemory.UnstructuredAPIKey)
 	knowledge.Default().ResumePending()
+
+	importCtx, stopImports := context.WithCancel(context.Background())
+	defer stopImports()
+	go handlers.RunProductAdvisoryImportWorker(importCtx, cfg)
 
 	// Start scheduler
 	scheduler, err := engine.NewScheduler(cfg)

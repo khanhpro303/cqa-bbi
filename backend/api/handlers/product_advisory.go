@@ -281,59 +281,68 @@ func ScrapeProductAdvisory(c *gin.Context, cfg *config.Config) {
 
 func saveProductAdvisoryScrape(ctx context.Context, tenantID string, group productCatalogGroup, sourceURL string, page knowledge.ScrapedPage, summary string) error {
 	return db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		profile, err := ensureProductAdvisory(tx, tenantID, group)
-		if err != nil {
-			return err
-		}
-		sameSource := profile.SourceURL == sourceURL
-		updates := map[string]any{
-			"web_name": group.WebName, "source_url": sourceURL, "source_title": page.Title,
-			"scraped_content": page.Text, "updated_at": time.Now(),
-		}
-		if summary != "" || !sameSource || profile.SourceTitle != page.Title || profile.ScrapedContent != page.Text {
-			updates["source_summary"] = summary
-		}
-		if err := tx.Model(&profile).Updates(updates).Error; err != nil {
-			return err
-		}
-		var previous []models.ProductAdvisoryImage
-		imageFilter := "tenant_id = ? AND product_advisory_id = ?"
-		if err := tx.Select("id", "url", "source").Where(imageFilter, tenantID, profile.ID).Find(&previous).Error; err != nil {
-			return err
-		}
-		oldScraped := make(map[string]models.ProductAdvisoryImage)
-		remainingSlots := maxProductAdvisoryImages
-		for _, image := range previous {
-			if image.Source == "scraped" {
-				oldScraped[image.URL] = image
-			} else {
-				remainingSlots--
-			}
-		}
-		var keepIDs []string
-		images := make([]models.ProductAdvisoryImage, 0, len(page.Images))
-		for i, imageURL := range page.Images {
-			if len(images)+len(keepIDs) >= remainingSlots {
-				break
-			}
-			if old, exists := oldScraped[imageURL]; exists && sameSource {
-				keepIDs = append(keepIDs, old.ID)
-				continue
-			}
-			images = append(images, models.ProductAdvisoryImage{ID: pkg.NewUUID(), ProductAdvisoryID: profile.ID, TenantID: tenantID, URL: imageURL, Source: "scraped", SortOrder: i})
-		}
-		obsolete := tx.Where(imageFilter+" AND source = ?", tenantID, profile.ID, "scraped")
-		if len(keepIDs) != 0 {
-			obsolete = obsolete.Where("id NOT IN ?", keepIDs)
-		}
-		if err := obsolete.Delete(&models.ProductAdvisoryImage{}).Error; err != nil {
-			return err
-		}
-		if len(images) > 0 {
-			return tx.Create(&images).Error
-		}
-		return nil
+		_, err := persistProductAdvisoryScrape(tx, tenantID, group, sourceURL, page, summary, false)
+		return err
 	})
+}
+
+// persistProductAdvisoryScrape returns the newly created images so an import
+// can record which images belong to its review in the same transaction.
+func persistProductAdvisoryScrape(tx *gorm.DB, tenantID string, group productCatalogGroup, sourceURL string, page knowledge.ScrapedPage, summary string, forceOverwrite bool) ([]models.ProductAdvisoryImage, error) {
+	profile, err := ensureProductAdvisory(tx, tenantID, group)
+	if err != nil {
+		return nil, err
+	}
+	sameSource := !forceOverwrite && profile.SourceURL == sourceURL
+	updates := map[string]any{
+		"web_name": group.WebName, "source_url": sourceURL, "source_title": page.Title,
+		"scraped_content": page.Text, "updated_at": time.Now(),
+	}
+	if summary != "" || !sameSource || profile.SourceTitle != page.Title || profile.ScrapedContent != page.Text {
+		updates["source_summary"] = summary
+	}
+	if err := tx.Model(&profile).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	var previous []models.ProductAdvisoryImage
+	imageFilter := "tenant_id = ? AND product_advisory_id = ?"
+	if err := tx.Select("id", "url", "source").Where(imageFilter, tenantID, profile.ID).Find(&previous).Error; err != nil {
+		return nil, err
+	}
+	oldScraped := make(map[string]models.ProductAdvisoryImage)
+	remainingSlots := maxProductAdvisoryImages
+	for _, image := range previous {
+		if image.Source == "scraped" {
+			oldScraped[image.URL] = image
+		} else {
+			remainingSlots--
+		}
+	}
+	var keepIDs []string
+	images := make([]models.ProductAdvisoryImage, 0, len(page.Images))
+	for i, imageURL := range page.Images {
+		if len(images)+len(keepIDs) >= remainingSlots {
+			break
+		}
+		if old, exists := oldScraped[imageURL]; exists && sameSource {
+			keepIDs = append(keepIDs, old.ID)
+			continue
+		}
+		images = append(images, models.ProductAdvisoryImage{ID: pkg.NewUUID(), ProductAdvisoryID: profile.ID, TenantID: tenantID, URL: imageURL, Source: "scraped", SortOrder: i})
+	}
+	obsolete := tx.Where(imageFilter+" AND source = ?", tenantID, profile.ID, "scraped")
+	if len(keepIDs) != 0 {
+		obsolete = obsolete.Where("id NOT IN ?", keepIDs)
+	}
+	if err := obsolete.Delete(&models.ProductAdvisoryImage{}).Error; err != nil {
+		return nil, err
+	}
+	if len(images) > 0 {
+		if err := tx.Create(&images).Error; err != nil {
+			return nil, err
+		}
+	}
+	return images, nil
 }
 
 func UploadProductAdvisoryImages(c *gin.Context) {
