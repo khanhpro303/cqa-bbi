@@ -76,7 +76,11 @@ func TestMainWarehouseAvailableStock_EmptyWarehouseDetails(t *testing.T) {
 		{"physical stock exists", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":1,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]}]`, false},
 		{"available total nonzero", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":1,"TON_KHO_CHI_TIET":[]}]`, false},
 		{"warehouse list null", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":null}]`, false},
-		{"warehouse details exist without main warehouse", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[{"TEN_KHO":"Kho CN","SO_LUONG_TON_KHA_DUNG":0}]}]`, false},
+		{"other warehouses account for all stock", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":4,"SO_LUONG_TON_KHA_DUNG":3,"TON_KHO_CHI_TIET":[{"TEN_KHO":"Kho NG","SO_LUONG_TON":1,"SO_LUONG_TON_KHA_DUNG":1},{"TEN_KHO":"Kho MKT","SO_LUONG_TON":"3","SO_LUONG_TON_KHA_DUNG":"2"}]}]`, true},
+		{"other warehouse physical quantity missing", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[{"TEN_KHO":"Kho NG","SO_LUONG_TON_KHA_DUNG":0}]}]`, false},
+		{"physical stock remains unexplained", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":2,"SO_LUONG_TON_KHA_DUNG":1,"TON_KHO_CHI_TIET":[{"TEN_KHO":"Kho NG","SO_LUONG_TON":1,"SO_LUONG_TON_KHA_DUNG":1}]}]`, false},
+		{"available stock remains unexplained", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":3,"SO_LUONG_TON_KHA_DUNG":2,"TON_KHO_CHI_TIET":[{"TEN_KHO":"Kho NG","SO_LUONG_TON":3,"SO_LUONG_TON_KHA_DUNG":1}]}]`, false},
+		{"negative other warehouse quantities", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":1,"SO_LUONG_TON_KHA_DUNG":1,"TON_KHO_CHI_TIET":[{"TEN_KHO":"Kho NG","SO_LUONG_TON":-1,"SO_LUONG_TON_KHA_DUNG":-1},{"TEN_KHO":"Kho MKT","SO_LUONG_TON":2,"SO_LUONG_TON_KHA_DUNG":2}]}]`, false},
 		{"conflicting duplicate SKU", `[{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]},{"MA_HANG":"SP457697","SO_LUONG_TON_TONG":1,"SO_LUONG_TON_KHA_DUNG":1,"TON_KHO_CHI_TIET":[]}]`, false},
 		{"different SKU has zero", `[{"MA_HANG":"OTHER","SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]}]`, false},
 	}

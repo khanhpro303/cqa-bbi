@@ -49,13 +49,14 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *atomic.Int32) {
 		_ = pool.Close()
 	})
 
+	zeroStock := models.CachedProduct{MA: "ZERO-STOCK", MA_CHA: "SP457212_DK", LIST_TEN_NHOM_VTHH: "Mũ", NHAN_HIEU_NAME: "Bulldog"}
 	products := []models.CachedProduct{
 		{MA: "SP457996", MA_CHA: "SP457204", TEN: "Bulldog DOGO", LIST_TEN_NHOM_VTHH: "Mũ", NHAN_HIEU_NAME: "Bulldog"},
 		{MA: "SP458003", MA_CHA: "SP457204", LIST_TEN_NHOM_VTHH: "Mũ", NHAN_HIEU_NAME: "Bulldog"},
 		{MA: "SP457220_DK", MA_CHA: "SP457212_DK", LIST_TEN_NHOM_VTHH: "Mũ", NHAN_HIEU_NAME: "Bulldog"},
 		{MA: "OTHER", MA_CHA: "SP457212_DK", TEN: "Mũ DOGO", LIST_TEN_NHOM_VTHH: "Kính", NHAN_HIEU_NAME: "Bulldog"},
+		zeroStock,
 	}
-	zeroStock := models.CachedProduct{MA: "ZERO-STOCK", MA_CHA: "ZERO-LINE", LIST_TEN_NHOM_VTHH: "Mũ", NHAN_HIEU_NAME: "Bulldog"}
 	missingStock := models.CachedProduct{MA: "MISSING-STOCK", MA_CHA: "INCOMPLETE-LINE", LIST_TEN_NHOM_VTHH: "Mũ", NHAN_HIEU_NAME: "Bulldog"}
 	err = database.Callback().Query().After("gorm:query").Register("fixture:warehouse", func(q *gorm.DB) {
 		switch result := q.Statement.Dest.(type) {
@@ -142,7 +143,7 @@ func setupWarehouseFixture(t *testing.T) (*pkg.CloudifyClient, *atomic.Int32) {
 				return nil, fmt.Errorf("unrecognized warehouse request for SKU %q", sku)
 			}
 			if sku == zeroStock.MA {
-				body = fmt.Sprintf(`{"code":200,"count":1,"data":[{"MA_HANG":%q,"SO_LUONG_TON_TONG":0,"SO_LUONG_TON_KHA_DUNG":0,"TON_KHO_CHI_TIET":[]}]}`, sku)
+				body = fmt.Sprintf(`{"code":200,"count":1,"data":[{"MA_HANG":%q,"SO_LUONG_TON_TONG":2,"SO_LUONG_TON_KHA_DUNG":1,"TON_KHO_CHI_TIET":[{"TEN_KHO":"Kho MKT","SO_LUONG_TON":2,"SO_LUONG_TON_KHA_DUNG":1}]}]}`, sku)
 			} else if row, ok := warehouseRows[sku]; ok {
 				body = fmt.Sprintf(`[{"MA_HANG":%q,"SO_LUONG_TON_TONG":999,"TON_KHO_CHI_TIET":[{"TEN_KHO":"KHO-TONG",%s},{"TEN_KHO":"KHO-KHAC","SO_LUONG_TON_KHA_DUNG":500}]}]`, sku, row)
 			} else {
@@ -203,7 +204,7 @@ func TestERPMCPWarehouseAndPermission(t *testing.T) {
 		{signed("other-tenant", true), line, "forbidden_token", true, 0},
 		{signed(stockFixtureTenant, false), sku, "forbidden_scope", true, 0},
 		{signed(stockFixtureTenant, true), sku, `"ton_kho":32`, false, 1},
-		{signed(stockFixtureTenant, true), line, `"ton_kho":37`, false, 3},
+		{signed(stockFixtureTenant, true), line, `"ton_kho":37`, false, 4},
 		{signed(stockFixtureTenant, true), parent, `"ton_kho":36`, false, 2},
 		{signed(stockFixtureTenant, true), zero, `"ton_kho":0`, false, 1},
 		{signed(stockFixtureTenant, true), missing, "erp_data_unavailable", true, 1},
@@ -292,7 +293,7 @@ func TestERPMCPWarehousePublicHidesStockQuantity(t *testing.T) {
 			wantStatus: `"stock_status":"còn hàng"`,
 			wantIn:     `"in_stock":true`,
 			forbid:     []string{`"ton_kho"`, `"TON_KHO"`, `"sku_count"`, `:37`},
-			wantCalls:  3,
+			wantCalls:  4,
 		},
 		{
 			name:       "in-stock parent",
