@@ -76,7 +76,7 @@ func (g *personalZaloDirectGrant) allowComplaints(ctx context.Context, key strin
 
 func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cfg *config.Config, flow engine.LangflowConfig, req personalZaloChatbotRequest, scope string, complaints bool) (engine.LangflowResult, error) {
 	if !complaints {
-		return engine.RunGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope, req.Text)
+		return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope, req.Text, "", "")
 	}
 	p := engine.GroupPermissionContext{
 		TenantID: req.TenantID, ChannelID: req.ChannelID, ZaloUserID: req.SenderID, AgentType: "public", PersonalZalo: true,
@@ -86,7 +86,7 @@ func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cf
 	if err != nil {
 		return engine.LangflowResult{}, err
 	}
-	return engine.RunGuestKnowledgeWithComplaint(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope,
+	return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope,
 		req.Text, permission, personalZaloComplaintGuide(ctx, req, ""))
 }
 

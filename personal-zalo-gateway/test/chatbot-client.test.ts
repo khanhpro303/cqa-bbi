@@ -66,6 +66,7 @@ test('buildChatbotRequest derives endpoint, scopes identity and signs the exact 
   assert.equal(payload.sender_id, '20002');
   assert.equal(payload.message_id, '30003');
   assert.equal(payload.text, 'Xin chào');
+  assert.equal(payload.multiple_images, true);
   const expected = createHmac('sha256', account.importSecret)
     .update(request.timestamp)
     .update('.')
@@ -124,6 +125,7 @@ test('a fresh group text carries separate group and sender identities', () => {
   assert.equal(payload.thread_type, 'group');
   assert.equal(payload.thread_id, '50005');
   assert.equal(payload.sender_id, '20002');
+  assert.equal(payload.multiple_images, undefined);
 });
 
 test('group tags wake only the addressed account and do not act as configured names', () => {
@@ -248,6 +250,7 @@ test('direct delivery authorization is freshly signed and binds the exact outbou
   assert.equal(body.delivery_token, deliveryToken);
   assert.equal(body.delivery_part, 'text');
   assert.equal(body.delivery_digest, digest);
+  assert.equal(body.multiple_images, undefined);
   assert.equal((request.headers as Record<string, string>)['X-CQA-Chatbot-Signature']?.length, 64);
 });
 
@@ -263,7 +266,7 @@ test('chatbot request stays disabled without a strong deployment secret and trus
   assert.equal(fetchMock.mock.callCount(), 0);
 });
 
-test('decodes one bounded CQA image and preserves text when media is invalid', async (t) => {
+test('decodes all bounded CQA images with per-image delivery tokens and preserves text when media is invalid', async (t) => {
   t.after(() => {
     delete process.env.PERSONAL_ZALO_CHATBOT_BASE_URL;
     delete process.env.PERSONAL_ZALO_CHATBOT_SECRET;
@@ -274,10 +277,15 @@ test('decodes one bounded CQA image and preserves text when media is invalid', a
   const text = 'Xem hướng dẫn đính kèm';
   const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jHioAAAAASUVORK5CYII=';
   const image = { filename: 'kb-image.png', media_type: 'image/png', width: 1, height: 1, data_base64: base64 };
-  const mock = t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: text, delivery_token: deliveryToken, images: [image, image] }));
+  const secondToken = 'second-delivery-token-at-least-16';
+  const second = { ...image, filename: 'product-side.png', delivery_token: secondToken };
+  const mock = t.mock.method(globalThis, 'fetch', async () => Response.json({ reply: text, delivery_token: deliveryToken, images: [image, second] }));
 
   assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), {
-    reply: text, deliveryToken, images: [{ filename: image.filename, width: 1, height: 1, data: Buffer.from(base64, 'base64') }],
+    reply: text, deliveryToken, images: [
+      { filename: image.filename, width: 1, height: 1, data: Buffer.from(base64, 'base64') },
+      { filename: second.filename, width: 1, height: 1, data: Buffer.from(base64, 'base64'), deliveryToken: secondToken },
+    ],
   });
 
   const receipt = '123e4567-e89b-42d3-a456-426614174000';
@@ -296,6 +304,7 @@ test('decodes one bounded CQA image and preserves text when media is invalid', a
     { ...image, data_base64: base64.slice(0, -1) + '!' },
     { ...image, data_base64: Buffer.from('hello world').toString('base64') },
     { ...image, data_base64: oversized.toString('base64') },
+    { ...image, delivery_token: 'short' },
   ]) {
     mock.mock.mockImplementation(async () => Response.json({ reply: text, delivery_token: deliveryToken, images: [badImage] }));
     assert.deepEqual(await requestPersonalZaloChatbotReply(account, incoming), { reply: text, deliveryToken });
@@ -314,7 +323,7 @@ test('abandons a CQA response above the wire size limit', async (t) => {
   let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
     start(stream) {
-      stream.enqueue(new Uint8Array(2 << 20));
+      stream.enqueue(new Uint8Array((64 << 20) + 1));
     },
     cancel() {
       cancelled = true;

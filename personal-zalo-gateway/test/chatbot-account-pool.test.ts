@@ -565,6 +565,10 @@ const knowledgeImageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0
 const knowledgeImage = {
   filename: 'kb-image.png', media_type: 'image/png', width: 1, height: 1, data_base64: knowledgeImageBase64,
 };
+const secondImageToken = 'second-delivery-token-at-least-16';
+const secondKnowledgeImage = {
+  ...knowledgeImage, filename: 'product-side.png', delivery_token: secondImageToken,
+};
 
 function selfMessage(msgId: string, content: unknown, msgType = 'webchat') {
   const incoming = directMessage(msgId);
@@ -606,6 +610,70 @@ test('sends text then one photo and ignores both early and delayed bot echoes', 
     { msg: '', attachments: [{ filename: 'kb-image.png', data, metadata: { totalSize: data.length, width: 1, height: 1 } }] },
     'Tin tiếp theo',
   ]);
+});
+
+test('sends every selected product photo in order with its own delivery authorization', { timeout: 9000 }, async (t) => {
+  configureTestChatbot(t);
+  const messages: unknown[] = [];
+  const authorizedTokens: string[] = [];
+  const sendMessage = async (message: unknown) => {
+    messages.push(message);
+    return typeof message === 'string'
+      ? { message: { msgId: 81002 }, attachment: [] }
+      : { message: null, attachment: [{ msgId: 81003 + messages.length }] };
+  };
+  const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
+  t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) => {
+    const payload = JSON.parse(String(request.body));
+    if (payload.delivery_part) {
+      authorizedTokens.push(payload.delivery_token);
+      return Response.json({ allowed: true });
+    }
+    return directReply({ reply: 'Giày LS2 Goby Man', images: [knowledgeImage, secondKnowledgeImage] });
+  });
+
+  await listener.message(directMessage('81001'));
+
+  const data = Buffer.from(knowledgeImageBase64, 'base64');
+  assert.deepEqual(messages, [
+    'Giày LS2 Goby Man',
+    { msg: '', attachments: [{ filename: 'kb-image.png', data, metadata: { totalSize: data.length, width: 1, height: 1 } }] },
+    { msg: '', attachments: [{ filename: 'product-side.png', data, metadata: { totalSize: data.length, width: 1, height: 1 } }] },
+  ]);
+  assert.deepEqual(authorizedTokens, [deliveryToken, deliveryToken, secondImageToken]);
+});
+
+test('skips a denied product photo and still sends a later authorized photo', { timeout: 9000 }, async (t) => {
+  configureTestChatbot(t);
+  const deniedToken = 'denied-delivery-token-at-least-16';
+  const messages: unknown[] = [];
+  const authorizedTokens: string[] = [];
+  const { listener } = await connectFixture(t, { ownId: '10001', sendMessage: async (outbound: unknown) => {
+    messages.push(outbound);
+    return typeof outbound === 'string'
+      ? { message: { msgId: 82002 }, attachment: [] }
+      : { message: null, attachment: [{ msgId: 82003 + messages.length }] };
+  } });
+  t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) => {
+    const payload = JSON.parse(String(request.body));
+    if (payload.delivery_part) {
+      authorizedTokens.push(payload.delivery_token);
+      return Response.json({ allowed: payload.delivery_token !== deniedToken });
+    }
+    return directReply({ reply: 'Giày LS2 Goby Man', images: [
+      { ...knowledgeImage, delivery_token: deniedToken },
+      secondKnowledgeImage,
+    ] });
+  });
+
+  await listener.message(directMessage('82001'));
+
+  const data = Buffer.from(knowledgeImageBase64, 'base64');
+  assert.deepEqual(messages, [
+    'Giày LS2 Goby Man',
+    { msg: '', attachments: [{ filename: 'product-side.png', data, metadata: { totalSize: data.length, width: 1, height: 1 } }] },
+  ]);
+  assert.deepEqual(authorizedTokens, [deliveryToken, deniedToken, secondImageToken]);
 });
 
 test('a manual photo during bot upload wins even when both images have empty captions', { timeout: 6000 }, async (t) => {
@@ -689,7 +757,7 @@ test('a disconnect before a queued image never replays the already sent text', {
     if (typeof outbound === 'string') textSent();
     return typeof outbound === 'string' ? { message: { msgId: 94002 }, attachment: [] } : {};
   });
-  const { listener, pool } = await connectFixture(t, { ownId: '10001', sendMessage });
+  const { account: connectedAccount, listener, pool, store } = await connectFixture(t, { ownId: '10001', sendMessage });
   t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) =>
     deliveryAuthorization(request) ?? directReply({ reply: 'Một lần', images: [knowledgeImage] }));
 
@@ -700,4 +768,7 @@ test('a disconnect before a queued image never replays the already sent text', {
 
   assert.equal(sendMessage.mock.callCount(), 1);
   assert.equal((await pool.healthSnapshot()).failedChatbotTurns, 1);
+  const retained = (await store.listChatbotTurns(connectedAccount.id))[0]?.[1];
+  assert.equal(retained?.reply?.reply, 'Một lần');
+  assert.equal(retained?.reply?.images, undefined);
 });

@@ -78,6 +78,7 @@ export interface GatewayChatbotReplyImage {
   width: number;
   height: number;
   dataBase64: string;
+  deliveryToken?: string;
 }
 
 export interface GatewayChatbotReply {

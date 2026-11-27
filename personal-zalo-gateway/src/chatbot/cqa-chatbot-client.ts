@@ -9,7 +9,7 @@ const deliveryReceiptTimeoutMs = 5_000;
 const deliveryAuthorizationAttempts = 3;
 const maxImageBytes = 1 << 20;
 const maxEncodedImageLength = Math.ceil(maxImageBytes / 3) * 4;
-const maxResponseBytes = maxEncodedImageLength + (64 << 10);
+const maxResponseBytes = 64 << 20;
 const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const friendSystemEvent = /^(bạn và .* đã trở thành bạn bè|các bạn đã trở thành bạn bè|hai bạn đã trở thành bạn bè|đã chấp nhận yêu cầu kết bạn|you are now connected with|đã trở thành bạn bè trên zalo)/i;
 const zaloUID = /^\d{1,64}$/;
@@ -21,13 +21,14 @@ export interface ChatbotReplyImage {
   width: number;
   height: number;
   data: Buffer;
+  deliveryToken?: string;
 }
 
 export interface PersonalZaloChatbotReply {
   reply: string;
   deliveryToken?: string;
   deliveryReceipt?: string;
-  images?: [ChatbotReplyImage];
+  images?: ChatbotReplyImage[];
 }
 
 export type PersonalZaloChatbotResult =
@@ -151,6 +152,7 @@ export function buildChatbotRequest(
     sent_at: new Date(message.timestamp).toISOString(),
     text,
   };
+  if (message.threadType === 'user' && !deliveryRequest) payload.multiple_images = true;
   if (botMentioned) payload.bot_mentioned = true;
   if (wakeText !== undefined) payload.group_wake_text = wakeText;
   if (deliveryRequest?.kind === 'group_receipt') payload.delivery_receipt = deliveryRequest.receipt;
@@ -216,8 +218,11 @@ export async function requestPersonalZaloChatbotTurn(
       }
       reply.deliveryToken = payload.delivery_token;
       if (!Array.isArray(payload.images)) return { outcome: 'reply', reply };
-      const image = decodeReplyImage(payload.images[0]);
-      if (image) reply.images = [image];
+      const images = payload.images.flatMap((value) => {
+        const image = decodeReplyImage(value);
+        return image ? [image] : [];
+      });
+      if (images.length > 0) reply.images = images;
     }
     return { outcome: 'reply', reply };
   } catch (error) {
@@ -312,7 +317,7 @@ export async function authorizePersonalZaloChatbotDelivery(
 
 function decodeReplyImage(value: unknown): ChatbotReplyImage | null {
   if (!value || typeof value !== 'object') return null;
-  const { filename, media_type, width, height, data_base64 } = value as Record<string, unknown>;
+  const { filename, media_type, width, height, data_base64, delivery_token } = value as Record<string, unknown>;
   if (typeof filename !== 'string' || filename.trim() !== filename || !/^[a-z\d_-]{1,80}\.(?:jpe?g|png)$/i.test(filename) ||
       typeof width !== 'number' || !Number.isSafeInteger(width) || width <= 0 ||
       typeof height !== 'number' || !Number.isSafeInteger(height) || height <= 0 ||
@@ -329,7 +334,10 @@ function decodeReplyImage(value: unknown): ChatbotReplyImage | null {
   const isJPEG = /\.jpe?g$/i.test(filename) && media_type === 'image/jpeg' &&
     data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
   if (!isPNG && !isJPEG) return null;
-  return { filename: filename as ChatbotReplyImage['filename'], width, height, data };
+  if (delivery_token !== undefined &&
+      (typeof delivery_token !== 'string' || delivery_token.length < 16 || delivery_token.length > 4_096)) return null;
+  return { filename: filename as ChatbotReplyImage['filename'], width, height, data,
+    ...(typeof delivery_token === 'string' ? { deliveryToken: delivery_token } : {}) };
 }
 
 export async function acknowledgePersonalZaloChatbotDelivery(

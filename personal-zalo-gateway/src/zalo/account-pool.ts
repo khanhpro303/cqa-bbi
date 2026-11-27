@@ -568,6 +568,7 @@ export class ZaloAccountPool {
     const send = async (
       outbound: ChatbotOutboundMessage,
       expectedStatus: 'ready' | 'sending',
+      deliveryToken = reply.deliveryToken,
     ): Promise<ChatbotSendOutcome> => {
       let sent = false;
       let invoked = false;
@@ -596,12 +597,12 @@ export class ZaloAccountPool {
             return;
           }
           if (message.threadType === 'user') {
-            if (!reply.deliveryToken) {
+            if (!deliveryToken) {
               cancelled = true;
               return;
             }
             const authorization = await authorizePersonalZaloChatbotDelivery(
-              account, message, reply.deliveryToken, typeof outbound === 'string' ? 'text' : 'image',
+              account, message, deliveryToken, typeof outbound === 'string' ? 'text' : 'image',
               createHash('sha256').update(typeof outbound === 'string' ? Buffer.from(outbound, 'utf8') : outbound.attachments[0].data).digest('hex'),
             );
             if (authorization === 'denied') {
@@ -611,6 +612,7 @@ export class ZaloAccountPool {
             if (authorization === 'retryable') {
               await this.store.updateChatbotTurn(accountId, messageId, 'failed', {
                 lastError: `delivery_authorization_unavailable_${typeof outbound === 'string' ? 'text' : 'image'}`,
+                reply: storeChatbotReply(reply, false),
               });
               failed = true;
               return;
@@ -658,7 +660,9 @@ export class ZaloAccountPool {
         });
       } catch (error) {
         if (invoked) {
-          await this.store.updateChatbotTurn(accountId, messageId, 'unknown', { lastError: String(error) });
+          await this.store.updateChatbotTurn(accountId, messageId, 'unknown', {
+            lastError: String(error), reply: storeChatbotReply(reply, false),
+          });
           return 'unknown';
         }
         throw error;
@@ -669,8 +673,9 @@ export class ZaloAccountPool {
     try {
       const textOutcome = await send(reply.reply, 'ready');
       if (textOutcome !== 'sent') return textOutcome;
-      const image = message.threadType === 'user' ? reply.images?.[0] : undefined;
-      if (image && !active.cancelled) {
+      const images = message.threadType === 'user' ? reply.images ?? [] : [];
+      for (const image of images) {
+        if (active.cancelled) return 'cancelled';
         const imageOutcome = await send({
           msg: '',
           attachments: [{
@@ -678,11 +683,12 @@ export class ZaloAccountPool {
             filename: image.filename,
             metadata: { totalSize: image.data.length, width: image.width, height: image.height },
           }],
-        }, 'sending');
+        }, 'sending', image.deliveryToken ?? reply.deliveryToken);
         if (imageOutcome === 'unknown') return 'unknown';
         if (imageOutcome === 'deferred') {
           await this.store.updateChatbotTurn(accountId, messageId, 'failed', {
             lastError: 'text_sent_image_not_sent',
+            reply: storeChatbotReply(reply, false),
           });
           return 'failed';
         }
@@ -691,7 +697,9 @@ export class ZaloAccountPool {
       return 'sent';
     } catch (error) {
       logger.warn(`[zalo:${accountId}] chatbot send failed`, error);
-      await this.store.updateChatbotTurn(accountId, messageId, 'failed', { lastError: String(error) });
+      await this.store.updateChatbotTurn(accountId, messageId, 'failed', {
+        lastError: String(error), reply: storeChatbotReply(reply, false),
+      });
       return 'failed';
     }
   }
@@ -892,33 +900,33 @@ function chatbotThreadKey(threadType: IncomingGatewayMessage['threadType'], thre
   return `${threadType}:${threadId}`;
 }
 
-function storeChatbotReply(reply: PersonalZaloChatbotReply): GatewayChatbotReply {
-  const image = reply.images?.[0];
+function storeChatbotReply(reply: PersonalZaloChatbotReply, includeImages = true): GatewayChatbotReply {
   return {
     reply: reply.reply,
     deliveryToken: reply.deliveryToken,
     deliveryReceipt: reply.deliveryReceipt,
-    images: image ? [{
+    images: includeImages ? reply.images?.map((image) => ({
       filename: image.filename,
       mediaType: image.filename.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
       width: image.width,
       height: image.height,
       dataBase64: image.data.toString('base64'),
-    }] : undefined,
+      deliveryToken: image.deliveryToken,
+    })) : undefined,
   };
 }
 
 function restoreChatbotReply(reply: GatewayChatbotReply): PersonalZaloChatbotReply {
-  const image = reply.images?.[0];
   return {
     reply: reply.reply,
     deliveryToken: reply.deliveryToken,
     deliveryReceipt: reply.deliveryReceipt,
-    images: image ? [{
+    images: reply.images?.map((image) => ({
       filename: image.filename as `${string}.${string}`,
       width: image.width,
       height: image.height,
       data: Buffer.from(image.dataBase64, 'base64'),
-    }] : undefined,
+      deliveryToken: image.deliveryToken,
+    })),
   };
 }

@@ -114,12 +114,17 @@ func (g personalZaloDirectGrant) stillAuthorized(ctx context.Context, req person
 	return err == nil && g.grantHash == personalZaloPermissionsHash(current)
 }
 
-func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.LangflowClient, channel models.Channel, req personalZaloChatbotRequest) (string, []string, error) {
+type personalZaloImageSelection struct {
+	knowledgeIDs []string
+	products     []models.ProductAdvisoryImage
+}
+
+func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.LangflowClient, channel models.Channel, req personalZaloChatbotRequest) (string, personalZaloImageSelection, error) {
 	if g.flowID == "" {
-		return personalZaloERPUnavailable, nil, nil
+		return personalZaloERPUnavailable, personalZaloImageSelection{}, nil
 	}
 	if reply := g.answerPersonalZaloStockPick(ctx, req); reply != "" {
-		return reply, nil, nil
+		return reply, personalZaloImageSelection{}, nil
 	}
 	input, prompt := req.Text, g.prompt
 	if prompt != "" {
@@ -140,8 +145,10 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 	if g.agentToken != "" {
 		input, prompt = engine.AddProductAdviceInstruction(input, prompt)
 	}
+	var productCandidates []models.ProductAdvisoryImage
 	if g.advicePermissions != nil {
-		adviceContext, err := workers.PersonalZaloProductAdvice(ctx, g.advicePermissions, req.Text)
+		adviceContext, images, err := workers.PersonalZaloProductAdvice(ctx, g.advicePermissions, req.Text)
+		productCandidates = images
 		switch {
 		case err != nil:
 			log.Printf("[product-advisory] catalog lookup for personal Zalo channel %s failed: %v", channel.ID, err)
@@ -151,25 +158,29 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 			input += "\n\n" + adviceContext
 		}
 	}
-	imageLimit := 0
 	if g.showImages {
-		input, prompt = engine.AddKnowledgeImageInstruction(input, prompt)
-		imageLimit = engine.MaxKnowledgeReplyImages
+		input, prompt = engine.AddPersonalZaloKnowledgeImageInstruction(input, prompt)
 	}
 	result, err := langflow.RunFlowWithCustomerUsage(ctx, g.flowScope, g.flowScope, input, g.flow.APIURL, g.flow.APIKey, g.flowID,
 		g.customer, g.permission, g.agentToken, prompt)
 	if err != nil {
-		return "", nil, err
+		return "", personalZaloImageSelection{}, err
 	}
 	if menu := g.publishPersonalZaloStockMenu(ctx); menu != "" {
-		return menu, nil, nil
+		return menu, personalZaloImageSelection{}, nil
 	}
 	if _, text, _ := engine.TakePromptDelivery(ctx, g.turnID); text != "" {
-		return text, nil, nil
+		return text, personalZaloImageSelection{}, nil
 	}
 	if strings.Contains(result.Text, "[RICH_MESSAGE_SENT]") {
-		return personalZaloERPUnavailable, nil, nil
+		return personalZaloERPUnavailable, personalZaloImageSelection{}, nil
 	}
-	text, imageIDs := engine.ParseKnowledgeImageReply(result.Text, imageLimit)
-	return text, imageIDs, nil
+	text, productImages := workers.ParsePersonalZaloProductAdviceImages(result.Text, productCandidates)
+	images := personalZaloImageSelection{products: productImages}
+	if g.showImages {
+		text, images.knowledgeIDs = engine.ParsePersonalZaloKnowledgeImageReply(text)
+	} else {
+		text, _ = engine.ParseKnowledgeImageReply(text, 0)
+	}
+	return text, images, nil
 }

@@ -57,16 +57,17 @@ func guestKnowledgeRequiresVerification(text string) bool {
 // RunGuestKnowledge calls the tenant's public flow with an MCP credential that
 // exposes only public documents. It supplies no ERP grant or customer identity.
 func RunGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text string) (LangflowResult, error) {
-	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, "", "")
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, "", "", KnowledgeImageInstruction)
 }
 
-// RunGuestKnowledgeWithComplaint adds a turn-scoped complaint grant. Regular
-// knowledge previews keep their original tools and ERP verification checks.
-func RunGuestKnowledgeWithComplaint(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide string) (LangflowResult, error) {
-	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, guide)
+// RunPersonalZaloGuestKnowledge uses the public knowledge grant and the
+// Personal Zalo attachment policy. The optional complaint permission is
+// scoped to the current turn.
+func RunPersonalZaloGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide string) (LangflowResult, error) {
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, guide, PersonalZaloKnowledgeImageInstruction)
 }
 
-func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide string) (LangflowResult, error) {
+func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide, imageInstruction string) (LangflowResult, error) {
 	if permission == "" && guestKnowledgeRequiresVerification(text) {
 		return LangflowResult{Text: GuestKnowledgeVerificationReply}, nil
 	}
@@ -83,7 +84,7 @@ func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow Langflo
 	if permission != "" {
 		prompt += "\n\nNgoại lệ cho khiếu nại: dùng complaint_record theo hướng dẫn dưới đây, kể cả khi khiếu nại liên quan đến một đơn hàng, giá hoặc công nợ. Vẫn yêu cầu xác thực khi khách chỉ muốn tra cứu ERP.\n\n" + guide
 	}
-	input, prompt := AddKnowledgeImageInstruction(text, prompt)
+	input, prompt := addKnowledgeImageInstruction(text, prompt, imageInstruction)
 	result, err := client.RunFlowWithCustomerUsage(ctx, session, session, input,
 		flow.APIURL, flow.APIKey, flow.PublicFlowID, "", permission, token, prompt)
 	if err != nil {
