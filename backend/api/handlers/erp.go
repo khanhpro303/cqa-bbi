@@ -329,7 +329,11 @@ func ERPQuery(c *gin.Context) {
 				}
 
 				groupPayloads := make([]map[string]interface{}, 0, len(webGroups))
+				webNames := make([]string, 0, len(webGroups))
+				allExactWebNames := true
 				for _, g := range webGroups {
+					webNames = append(webNames, g.WebName)
+					allExactWebNames = allExactWebNames && !g.IsFallback
 					groupPayloads = append(groupPayloads, map[string]interface{}{
 						"web_name":     g.WebName,
 						"parent_codes": g.ParentCodes,
@@ -348,18 +352,16 @@ func ERPQuery(c *gin.Context) {
 					}(req.Search, groupPayloads)
 				}
 
-				// Persist the picks under the shared worker session key so a later
-				// bare-number reply ("1"/"2") is intercepted by the worker and routed
-				// deterministically to the exact-web stock picker — no Agent
-				// round-trip. This removes the LLM from the disambiguation pick loop,
-				// which had been dropping exact_web_name=true (→ LIKE prefix-collision
-				// re-disambiguation) and the [RICH_MESSAGE_SENT] sentinel (→ duplicate
-				// prose). Order matches groupPayloads, i.e. the numbered list shown.
-				webNames := make([]string, 0, len(webGroups))
-				for _, g := range webGroups {
-					webNames = append(webNames, g.WebName)
+				buttons := engine.BuildStockPickPendingButtons(webNames, req.Intent)
+				if permCtx.PersonalZalo {
+					if allExactWebNames && strings.EqualFold(strings.TrimSpace(req.Intent), engine.StockPickIntentStock) &&
+						strings.TrimSpace(req.Color) == "" && strings.TrimSpace(req.Size) == "" {
+						recordPersonalZaloStockMenu(c.Request.Context(), permCtx, buttons)
+					}
+				} else {
+					// Keep the order shown by the agent for the OA worker's numeric pick.
+					storePendingDisambiguationOptions(c.Request.Context(), tenantID, permCtx, buttons)
 				}
-				storePendingDisambiguationOptions(c.Request.Context(), tenantID, permCtx, engine.BuildStockPickPendingButtons(webNames, req.Intent))
 
 				writeAuditLog(tenantID, permCtx, req.Resource, scopeType, productGroups, req.Search, http.StatusOK, len(groupPayloads), c.ClientIP())
 				c.JSON(http.StatusOK, gin.H{
@@ -402,7 +404,7 @@ func ERPQuery(c *gin.Context) {
 						cachedData = append(cachedData, rows...)
 					}
 				}
-			} else {
+			} else if !hasRomanProductEdition(search) {
 				// B proved LIKE returns nothing. Resolve the product *family*
 				// (ma_cha) via embedding fuzzy first (cheaper + robust against
 				// name variations); fall back to the LLM-list matcher when
@@ -1412,6 +1414,7 @@ func searchProductWebGroupsFromCache(ctx context.Context, tenantID, search strin
 	}
 
 	filtered := withoutDKCopies(filterProductsByBrands(filterProductsByGroups(candidates, allowedGroups), allowedBrands, allBrands))
+	filtered = matchRomanProductEdition(filtered, search)
 	return engine.RankProductWebGroups(filtered), nil
 }
 

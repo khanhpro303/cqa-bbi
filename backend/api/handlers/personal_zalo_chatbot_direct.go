@@ -37,10 +37,12 @@ type personalZaloDirectGrant struct {
 
 func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req personalZaloChatbotRequest, identity personalZaloERPIdentity, flow engine.LangflowConfig, sessionScope string, settings map[string]models.AppSetting) (personalZaloDirectGrant, error) {
 	grant := personalZaloDirectGrant{flow: flow}
-	flowID, flowSource := flow.PublicFlowID, flow.PublicFlowIDSource
+	if identity.AgentType != "private" && flow.PublicFlowID == "" {
+		return grant, nil
+	}
+	flowID, flowSource := flow.FlowFor(identity.AgentType)
 	promptKey := "ai_engine_system_prompt"
 	if identity.AgentType == "private" {
-		flowID, flowSource = flow.FlowID, flow.FlowIDSource
 		promptKey = "ai_engine_system_prompt_internal"
 	}
 	if flow.APIURL == "" || flowID == "" || canonicalAIFlowID(flow.PublicFlowID) == canonicalAIFlowID(flow.FlowID) {
@@ -111,6 +113,9 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 	if g.flowID == "" {
 		return personalZaloERPUnavailable, nil, nil
 	}
+	if reply := g.answerPersonalZaloStockPick(ctx, req); reply != "" {
+		return reply, nil, nil
+	}
 	input, prompt := req.Text, g.prompt
 	if prompt != "" {
 		prompt += "\n\nKhi người dùng chỉ chào hỏi, chào ngắn gọn và hỏi họ cần hỗ trợ gì. Chỉ xác nhận kết quả tra cứu do công cụ trả về."
@@ -130,6 +135,9 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 		g.customer, g.permission, g.agentToken, prompt)
 	if err != nil {
 		return "", nil, err
+	}
+	if menu := g.publishPersonalZaloStockMenu(ctx); menu != "" {
+		return menu, nil, nil
 	}
 	if _, text, _ := engine.TakePromptDelivery(ctx, g.turnID); text != "" {
 		return text, nil, nil
