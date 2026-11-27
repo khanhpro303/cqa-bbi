@@ -142,14 +142,19 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	api.GET("/channels/zalo/callback", handlers.ZaloOAuthCallback)
 	api.GET("/channels/facebook/callback", handlers.FacebookOAuthCallbackDispatcher(facebookPageOAuth, facebookAccountOAuth, facebookLoginOAuth))
 
-	internal := r.Group("/api/internal")
-	internal.Use(middleware.InternalHMACAuth(
+	personalZaloImportAuth := middleware.InternalHMACAuth(
 		middleware.PersonalZaloImportSecretResolver(cfg.EncryptionKey, cfg.InternalImportSecret),
 		5*time.Minute,
-	))
+	)
+	internal := r.Group("/api/internal")
+	internal.Use(personalZaloImportAuth)
 	{
 		internal.POST("/imports/personal-zalo", handlers.NewPersonalZaloImportHandler(engine.NewIngestService()))
 	}
+	r.POST("/api/internal/imports/personal-zalo/settings", func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
+		c.Next()
+	}, personalZaloImportAuth, handlers.GetPersonalZaloSyncSettings)
 
 	personalZaloAuth := middleware.InternalHMACAuth(
 		middleware.PersonalZaloChatbotSecretResolver(cfg.EncryptionKey, os.Getenv("PERSONAL_ZALO_CHATBOT_SECRET")), 5*time.Minute,

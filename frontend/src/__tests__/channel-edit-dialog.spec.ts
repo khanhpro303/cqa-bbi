@@ -69,7 +69,7 @@ const stubs = {
   VSelect: {
     props: ['modelValue', 'label', 'items'],
     emits: ['update:modelValue'],
-    template: '<select :aria-label="label" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option></select>',
+    template: '<select :aria-label="label" :value="modelValue" @change="$emit(\'update:modelValue\', items[$event.target.selectedIndex].value)"><option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option></select>',
   },
   VAutocomplete: {
     props: ['modelValue', 'label', 'items', 'disabled'],
@@ -89,7 +89,7 @@ const personal = {
   is_active: true, auto_reply_enabled: true, supports_auto_reply: true,
   metadata: JSON.stringify(originalMetadata),
 } as Channel
-const oa = { id: 'oa', tenant_id: 'tenant', channel_type: 'zalo_oa', is_active: true }
+const oa = { id: 'oa', tenant_id: 'tenant', channel_type: 'zalo_oa', is_active: true, supports_auto_reply: true }
 let storedChannel: Channel
 let unmount: (() => void) | undefined
 
@@ -223,14 +223,127 @@ it('creates an Internbot channel in setup mode before connecting Zalo', async ()
   expect(dialog.findComponent(PersonalZaloBotModePicker).exists()).toBe(false)
   await dialog.get(field(en.channel_type)).setValue('personal_zalo_import')
   dialog.getComponent(PersonalZaloBotModePicker).vm.$emit('update:modelValue', 'internbot')
+  await dialog.get(field(en.sync_interval)).setValue('30')
+  expect(dialog.find(field(en.sync_files)).exists()).toBe(false)
   await dialog.get(field(en.channel_name)).setValue('Intern account')
   await dialog.findAll('button').find(button => button.text() === en.create_personal_zalo)!.trigger('click')
   await flushPromises()
 
   expect(api.post).toHaveBeenCalledExactlyOnceWith(tenant + '/channels', {
     name: 'Intern account', channel_type: 'personal_zalo_import', credentials: {},
-    metadata: JSON.stringify({ sync_scope: 'all', chatbot_mode: 'internbot' }),
+    metadata: JSON.stringify({ sync_scope: 'all', sync_interval: 30, chatbot_mode: 'internbot' }),
   })
+})
+
+it('sets or clears the personal import interval without offering file storage', async () => {
+  const { wrapper } = await mountPage(false)
+  await wrapper.get(editButton).trigger('click')
+  let dialog = wrapper.get('[role="dialog"]')
+  expect(dialog.get<HTMLSelectElement>(field(en.sync_interval)).element.value).toBe('gateway')
+  expect(dialog.find(field(en.sync_files)).exists()).toBe(false)
+  expect(dialog.text()).toContain(en.personal_zalo_sync_files_unavailable)
+  await dialog.get(field(en.sync_interval)).setValue('30')
+  await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
+  await flushPromises()
+  expect(api.put).toHaveBeenNthCalledWith(1, channelPath, { metadata: JSON.stringify({ sync_interval: 30 }) })
+
+  await wrapper.get(editButton).trigger('click')
+  dialog = wrapper.get('[role="dialog"]')
+  await dialog.get(field(en.sync_interval)).setValue('gateway')
+  await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
+  await flushPromises()
+  expect(api.put).toHaveBeenNthCalledWith(2, channelPath, { metadata: JSON.stringify({ sync_interval: null }) })
+})
+
+it('labels both Zalo card modes and uses the gateway for a personal channel sync', async () => {
+  api.post.mockReset().mockResolvedValue({ data: { state: {} } })
+  const { wrapper } = await mountPage(false, true, undefined, 'admin')
+  expect(wrapper.findAll('span').filter(label => label.text() === en.personal_zalo_bot_mode)).toHaveLength(2)
+  expect(wrapper.findAllComponents(PersonalZaloBotModePicker)).toHaveLength(1)
+
+  await wrapper.findAll('button').find(button => button.text() === en.sync_now)!.trigger('click')
+  await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === en.test_connection)!.trigger('click')
+  await flushPromises()
+  expect(api.post.mock.calls).toEqual([
+    [channelPath + '/personal-zalo-gateway/sync'],
+    [channelPath + '/test'],
+  ])
+  expect(wrapper.vm.$route.path).toBe('/tenant/channels')
+})
+
+it('switches modes from a personal Zalo card without opening the editor or enabling the bot', async () => {
+  storedChannel.metadata = JSON.stringify({ ...originalMetadata, supervisor_group_id: '101' })
+  const { wrapper, channelStore } = await mountPage(false, true, undefined, 'admin')
+  const picker = wrapper.getComponent(PersonalZaloBotModePicker)
+  expect(picker.props('compact')).toBe(true)
+  expect(picker.props('modelValue')).toBe('chatbot')
+
+  await picker.get('button[value="internbot"]').trigger('click')
+  picker.vm.$emit('update:modelValue', 'internbot')
+  await flushPromises()
+
+  expect(wrapper.vm.$route.path).toBe('/tenant/channels')
+  expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  expect(api.put).toHaveBeenNthCalledWith(1, channelPath, {
+    auto_reply_enabled: false,
+    metadata: JSON.stringify({ chatbot_mode: 'internbot', internbot_enabled: false }),
+  })
+  expect(picker.props('modelValue')).toBe('internbot')
+  expect(JSON.parse(channelStore.channels[0]!.metadata)).toMatchObject({
+    supervisor_group_id: '101', account_owners: ['keep'],
+  })
+
+  picker.vm.$emit('update:modelValue', 'chatbot')
+  await flushPromises()
+  expect(api.put).toHaveBeenNthCalledWith(2, channelPath, {
+    auto_reply_enabled: false,
+    metadata: JSON.stringify({ chatbot_mode: 'chatbot', internbot_enabled: false }),
+  })
+  expect(picker.props('modelValue')).toBe('chatbot')
+  expect(channelStore.channels[0]!.auto_reply_enabled).toBe(false)
+})
+
+it('retains the saved mode when the inline update fails', async () => {
+  api.put.mockRejectedValueOnce(new Error('update failed'))
+  const { wrapper, channelStore } = await mountPage(false, true, undefined, 'owner')
+  const picker = wrapper.getComponent(PersonalZaloBotModePicker)
+  picker.vm.$emit('update:modelValue', 'internbot')
+  await flushPromises()
+
+  expect(picker.props('modelValue')).toBe('chatbot')
+  expect(picker.props('disabled')).toBe(false)
+  expect(channelStore.channels[0]!.auto_reply_enabled).toBe(true)
+  expect(wrapper.text()).toContain(en.personal_zalo_bot_mode_update_failed)
+})
+
+it('keeps the newly saved mode when an earlier channel list response arrives late', async () => {
+  const { wrapper, channelStore } = await mountPage(false, true, undefined, 'admin')
+  const staleChannel = { ...storedChannel }
+  let finishEarlierList!: () => void
+  api.get.mockImplementationOnce(() => new Promise(resolve => {
+    finishEarlierList = () => resolve({ data: [staleChannel, oa] })
+  }))
+  const earlierList = channelStore.fetchChannels('tenant')
+
+  const picker = wrapper.getComponent(PersonalZaloBotModePicker)
+  picker.vm.$emit('update:modelValue', 'internbot')
+  await flushPromises()
+  finishEarlierList()
+  await earlierList
+  await flushPromises()
+
+  expect(picker.props('modelValue')).toBe('internbot')
+})
+
+it.each([
+  ['personal_zalo_import', 'member', true],
+  ['personal_zalo_import', 'member', false],
+  ['zalo_oa', 'admin', true],
+])('does not show the card mode picker for %s with role %s and write permission %s', async (type, role, writable) => {
+  storedChannel.channel_type = type
+  const { wrapper } = await mountPage(false, writable, undefined, role)
+  expect(wrapper.findComponent(PersonalZaloBotModePicker).exists()).toBe(false)
 })
 
 it('saves the mode change before exposing Internbot enablement', async () => {
@@ -383,7 +496,7 @@ it('keeps OA details and history when personal Zalo requests finish after naviga
   unmount = () => wrapper.unmount()
   await flushPromises()
   expect(api.get).toHaveBeenCalledWith(channelPath + '/sync-history', expect.anything())
-  const syncButton = wrapper.findAll('button').find(button => button.text() === en.personal_zalo_fetch_messages)
+  const syncButton = wrapper.findAll('button').find(button => button.text() === en.sync_now)
   expect(syncButton).toBeDefined()
   await syncButton!.trigger('click')
   expect(api.post).toHaveBeenCalledOnce()

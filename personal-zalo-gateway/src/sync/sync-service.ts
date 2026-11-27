@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { logger } from '../logger.js';
-import { CQAImportError, sendImportBatch } from './cqa-client.js';
+import { CQAImportError, fetchImportSettings, sendImportBatch } from './cqa-client.js';
 import type { GatewayStore } from '../store/file-store.js';
 
 export interface SyncHealthSnapshot {
@@ -17,8 +17,10 @@ export interface SyncHealthSnapshot {
 
 export class SyncService {
   private timer: NodeJS.Timeout | null = null;
+  private polling = false;
   private inFlight = new Set<string>();
   private failingAccounts = new Set<string>();
+  private lastAccountAttempt = new Map<string, number>();
   private running = false;
   private shuttingDown = false;
   private attempts = 0;
@@ -42,7 +44,7 @@ export class SyncService {
     void this.syncAll(); // Run immediately on startup
     this.timer = setInterval(() => {
       void this.syncAll();
-    }, this.intervalMs);
+    }, Math.max(1, Math.min(60_000, this.intervalMs)));
   }
 
   stop(): void {
@@ -71,39 +73,67 @@ export class SyncService {
     this.stop();
     this.shuttingDown = true;
     const deadline = Date.now() + timeoutMs;
-    while (this.inFlight.size > 0 && Date.now() < deadline) {
+    while ((this.polling || this.inFlight.size > 0) && Date.now() < deadline) {
       await delay(Math.min(25, Math.max(1, deadline - Date.now())));
     }
-    return this.inFlight.size === 0;
+    return !this.polling && this.inFlight.size === 0;
   }
 
   async syncAll(): Promise<void> {
-    if (this.shuttingDown) return;
-    const accounts = await this.store.listAccounts();
-    const accountIds = new Set(accounts.map((account) => account.id));
-    for (const accountId of this.failingAccounts) {
-      if (!accountIds.has(accountId)) this.failingAccounts.delete(accountId);
-    }
-    for (const account of accounts) {
-      if (!account.accountExternalId && !account.zaloUid) {
-        continue;
+    if (this.shuttingDown || this.polling) return;
+    this.polling = true;
+    try {
+      const accounts = await this.store.listAccounts();
+      const accountIds = new Set(accounts.map((account) => account.id));
+      for (const accountId of this.failingAccounts) {
+        if (!accountIds.has(accountId)) this.failingAccounts.delete(accountId);
       }
-      // CQA said this account's channel is gone; resending the same batch
-      // every interval only floods both logs with 401s.
-      if (account.syncBlockedReason) {
-        continue;
+      for (const accountId of this.lastAccountAttempt.keys()) {
+        if (!accountIds.has(accountId)) this.lastAccountAttempt.delete(accountId);
       }
-      try {
-        await this.syncAccount(account.id);
-      } catch (error) {
-        logger.error(`[sync] failed to sync account ${account.id}`, error);
+      for (const account of accounts) {
+        if (this.shuttingDown) return;
+        if ((!account.accountExternalId && !account.zaloUid) || account.syncBlockedReason || this.inFlight.has(account.id) ||
+            (account.accountExternalId && account.zaloUid && account.accountExternalId !== account.zaloUid)) {
+          continue;
+        }
+
+        let settings;
+        try {
+          settings = await fetchImportSettings(account, Math.min(5_000, this.timeoutMs));
+        } catch (error) {
+          this.recordFailure(account.id);
+          logger.error(`[sync] could not read settings for account ${account.id}`, error);
+          continue;
+        }
+        if (this.shuttingDown) return;
+        if (settings?.active === false) {
+          this.failingAccounts.delete(account.id);
+          continue;
+        }
+
+        const minutes = settings?.sync_interval_minutes;
+        const interval = minutes === undefined ? this.intervalMs : minutes * 60_000;
+        const previousAttempt = this.lastAccountAttempt.get(account.id);
+        if (previousAttempt !== undefined && Date.now() - previousAttempt < interval) continue;
+
+        try {
+          await this.syncAccount(account.id);
+        } catch (error) {
+          logger.error(`[sync] failed to sync account ${account.id}`, error);
+        }
       }
+    } catch (error) {
+      logger.error('[sync] could not schedule account imports', error);
+    } finally {
+      this.polling = false;
     }
   }
 
   async syncAccount(accountId: string): Promise<void> {
     if (this.shuttingDown || this.inFlight.has(accountId)) return;
     this.inFlight.add(accountId);
+    this.lastAccountAttempt.set(accountId, Date.now());
     this.attempts++;
     this.lastAttemptAt = new Date().toISOString();
 
@@ -125,15 +155,7 @@ export class SyncService {
         try {
           response = await sendImportBatch(batch, this.timeoutMs);
         } catch (error) {
-          if (error instanceof CQAImportError && error.targetGone) {
-            const reason = `CQA rejected imports for channel ${batch.account.channelId} (${error.code}); the channel was probably deleted. Reconnect from CQA or delete this gateway account.`;
-            await this.store.setAccountRuntime(accountId, {
-              syncBlockedReason: reason,
-              syncBlockedAt: new Date().toISOString(),
-              lastError: reason,
-            });
-            logger.warn(`[sync] account=${accountId} paused: ${reason}`);
-          }
+          await this.blockMissingChannel(accountId, batch.account.channelId, error);
           throw error;
         }
         const syncedAt = new Date().toISOString();
@@ -157,12 +179,28 @@ export class SyncService {
         }
       }
     } catch (error) {
-      this.failures++;
-      this.failingAccounts.add(accountId);
-      this.lastFailureAt = new Date().toISOString();
+      this.recordFailure(accountId);
       throw error;
     } finally {
       this.inFlight.delete(accountId);
     }
+  }
+
+  private recordFailure(accountId: string): void {
+    this.failures++;
+    this.failingAccounts.add(accountId);
+    this.lastFailureAt = new Date().toISOString();
+  }
+
+  private async blockMissingChannel(accountId: string, channelId: string, error: unknown): Promise<void> {
+    if (!(error instanceof CQAImportError) || !error.targetGone) return;
+    const reason = `CQA rejected imports for channel ${channelId} (${error.code}); the channel was probably deleted. Reconnect from CQA or delete this gateway account.`;
+    await this.store.setAccountRuntime(accountId, {
+      syncBlockedReason: reason,
+      syncBlockedAt: new Date().toISOString(),
+      lastError: reason,
+    });
+    this.lastAccountAttempt.delete(accountId);
+    logger.warn(`[sync] account=${accountId} paused: ${reason}`);
   }
 }

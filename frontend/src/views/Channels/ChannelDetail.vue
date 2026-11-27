@@ -17,7 +17,7 @@
         <v-btn v-if="channel.channel_type !== 'personal_zalo_import'" color="primary" prepend-icon="mdi-sync" size="small" :loading="syncing" :disabled="!channel.is_active" @click="doSync">
           {{ $t('sync_now') }}
         </v-btn>
-        <v-btn v-if="channel.channel_type !== 'personal_zalo_import'" variant="outlined" prepend-icon="mdi-connection" size="small" :loading="testing" :disabled="!channel.is_active" @click="doTest">
+        <v-btn variant="outlined" prepend-icon="mdi-connection" size="small" :loading="testing" :disabled="!channel.is_active" @click="doTest">
           {{ $t('test_connection') }}
         </v-btn>
         <v-btn color="warning" variant="outlined" prepend-icon="mdi-delete-sweep" size="small" @click="confirmPurge = true">
@@ -67,11 +67,11 @@
             {{ channel.conversation_count || 0 }}
           </a>
         </v-col>
-        <template v-if="channel.channel_type !== 'personal_zalo_import'">
-          <v-col cols="6" sm="3">
-            <div class="text-caption text-grey">{{ $t('sync_interval') }}</div>
-            <div>{{ formatSyncInterval(metadata.sync_interval) }}</div>
-          </v-col>
+        <v-col cols="6" sm="3">
+          <div class="text-caption text-grey">{{ $t('sync_interval') }}</div>
+          <div>{{ formatSyncInterval(metadata.sync_interval) }}</div>
+        </v-col>
+        <template v-if="!isPersonalZalo">
           <v-col cols="6" sm="3">
             <div class="text-caption text-grey">{{ $t('sync_files') }}</div>
             <v-chip size="small" :color="metadata.sync_files ? 'success' : 'grey'" variant="tonal">
@@ -211,7 +211,7 @@
                 :disabled="!channel.is_active"
                 @click="syncGateway"
               >
-                {{ $t('personal_zalo_fetch_messages') }}
+                {{ $t('sync_now') }}
               </v-btn>
               <v-btn
                 v-if="channel?.conversation_count"
@@ -437,6 +437,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { isAxiosError } from 'axios'
 import { useChannelStore } from '../../stores/channels'
 import type { ChannelSyncLog, PersonalZaloGatewayState } from '../../stores/channels'
 import { useAuthStore } from '../../stores/auth'
@@ -532,6 +533,7 @@ function formatDateTime(d: string) {
 }
 
 function formatSyncInterval(mins: number) {
+  if (isPersonalZalo.value && (!Number.isInteger(mins) || mins < 1 || mins > 1440)) return t('personal_zalo_sync_gateway_default')
   if (!mins) return t('minutes_unit', { count: 15 })
   if (mins < 60) return t('minutes_unit', { count: mins })
   if (mins < 1440) return t('hours_unit', { count: mins / 60 })
@@ -738,10 +740,12 @@ async function doSync() {
 async function doTest() {
   testing.value = true
   try {
-    const result = await channelStore.testConnection(tenantId.value, channelId.value)
-    syncResult.value = { type: 'success', message: result.message || t('connection_success') }
-  } catch (err: any) {
-    syncResult.value = { type: 'error', message: err.response?.data?.error || t('connection_failed') }
+    await channelStore.testConnection(tenantId.value, channelId.value)
+    syncResult.value = { type: 'success', message: t('connection_success') }
+  } catch (error: unknown) {
+    const response = isAxiosError<{ error?: string }>(error) ? error.response?.data : undefined
+    const needsConnection = response?.error === 'gateway_account_not_found' || response?.error === 'gateway_account_not_connected' || response?.error === 'channel_account_mismatch'
+    syncResult.value = { type: 'error', message: needsConnection ? t('personal_zalo_connection_required') : response?.error || t('connection_failed') }
   } finally {
     testing.value = false
   }

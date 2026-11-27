@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { GatewayStore } from '../src/store/file-store.js';
 import { SyncService } from '../src/sync/sync-service.js';
@@ -49,11 +49,20 @@ function successfulAcknowledgement(init?: RequestInit, overrides: Record<string,
   }, { status: 202 });
 }
 
+function isSettingsRequest(request: RequestInfo | URL) {
+  return new URL(String(request)).pathname.endsWith('/settings');
+}
+
+function mockLegacyCQA(t: TestContext, importResponse: (init?: RequestInit) => Response) {
+  return t.mock.method(globalThis, 'fetch', async (request: RequestInfo | URL, init?: RequestInit) =>
+    isSettingsRequest(request) ? new Response(null, { status: 404 }) : importResponse(init));
+}
+
 test('an account whose CQA channel is gone is paused instead of retried every interval', async (t) => {
   const { store, account } = await storeWithPendingMessage();
   let calls = 0;
   let answer = (_init?: RequestInit) => new Response('{"error":"invalid_internal_target"}', { status: 401 });
-  t.mock.method(globalThis, 'fetch', async (_request: RequestInfo | URL, init?: RequestInit) => {
+  mockLegacyCQA(t, (init) => {
     calls++;
     return answer(init);
   });
@@ -81,12 +90,15 @@ test('an account whose CQA channel is gone is paused instead of retried every in
 test('other import failures are still retried on the next interval', async (t) => {
   const { store, account } = await storeWithPendingMessage();
   let calls = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  mockLegacyCQA(t, () => {
     calls++;
     return new Response('{"error":"invalid_internal_signature"}', { status: 401 });
   });
   const service = new SyncService(store, 60_000, 10, 10, 5_000);
   await service.syncAll();
+  now += 60_000;
   await service.syncAll();
   assert.equal(calls, 2);
   assert.equal((await store.getAccount(account.id))?.syncBlockedReason, undefined);
@@ -95,7 +107,9 @@ test('other import failures are still retried on the next interval', async (t) =
 test('a mismatched acknowledgement keeps the batch pending until CQA confirms the same request', async (t) => {
   const { store, account } = await storeWithPendingMessage();
   let calls = 0;
-  t.mock.method(globalThis, 'fetch', async (_request: RequestInfo | URL, init?: RequestInit) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  mockLegacyCQA(t, (init) => {
     calls++;
     return successfulAcknowledgement(init, calls === 1 ? { request_id: 'another-request' } : {});
   });
@@ -105,6 +119,7 @@ test('a mismatched acknowledgement keeps the batch pending until CQA confirms th
   assert.ok(await store.nextSyncBatch(account.id, 10, 10), 'unacknowledged messages must remain durable');
   assert.equal(service.healthSnapshot().failures, 1);
 
+  now += 60_000;
   await service.syncAll();
   assert.equal(calls, 2);
   assert.equal(await store.nextSyncBatch(account.id, 10, 10), null);
@@ -135,7 +150,7 @@ test('an inconsistent physical and configured Zalo identity is never synchronize
 
 test('health snapshot reports sync outcomes without account identifiers', async (t) => {
   const { store, account } = await storeWithPendingMessage();
-  t.mock.method(globalThis, 'fetch', async (_request: RequestInfo | URL, init?: RequestInit) => successfulAcknowledgement(init));
+  mockLegacyCQA(t, (init) => successfulAcknowledgement(init));
   const service = new SyncService(store, 60_000, 10, 10, 5_000);
   t.after(() => service.stop());
 
@@ -192,7 +207,7 @@ test('a successful idle account does not clear another account failure', async (
     tenantId: 'tenant-2', channelId: 'idle', importEndpoint: 'http://cqa.test', importSecret: 'secret-2',
     accountExternalId: 'zalo-2',
   });
-  t.mock.method(globalThis, 'fetch', async () => new Response('{"error":"temporary"}', { status: 500 }));
+  mockLegacyCQA(t, () => new Response('{"error":"temporary"}', { status: 500 }));
   const service = new SyncService(store, 60_000, 10, 10, 5_000);
 
   await service.syncAll();
@@ -203,4 +218,80 @@ test('a successful idle account does not clear another account failure', async (
   await store.deleteAccount(account.id);
   await service.syncAll();
   assert.equal(service.healthSnapshot().failingAccounts, 0, 'deleted accounts must not keep readiness degraded');
+});
+
+test('each channel follows its own configured interval and changes take effect before the previous interval expires', async (t) => {
+  const { store, account } = await storeWithPendingMessage();
+  const other = await store.saveAccount({
+    tenantId: 'tenant-2', channelId: 'slower-channel', importEndpoint: account.importEndpoint, importSecret: 'secret-2',
+    accountExternalId: 'zalo-2',
+  });
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const minutes = new Map([[account.channelId, 1], [other.channelId, 5]]);
+  t.mock.method(globalThis, 'fetch', async (request: RequestInfo | URL, init?: RequestInit) => {
+    if (!isSettingsRequest(request)) return successfulAcknowledgement(init);
+    const channelId = JSON.parse(String(init?.body)).channel_id;
+    return Response.json({ active: true, sync_interval_minutes: minutes.get(channelId) });
+  });
+  const service = new SyncService(store, 900_000, 10, 10, 5_000);
+
+  await service.syncAll();
+  assert.equal(service.healthSnapshot().attempts, 2, 'startup should attempt each configured account');
+  now += 59_999;
+  await service.syncAll();
+  assert.equal(service.healthSnapshot().attempts, 2);
+  now += 1;
+  await service.syncAll();
+  assert.equal(service.healthSnapshot().attempts, 3, 'only the one-minute channel is due');
+  minutes.set(other.channelId, 1);
+  await service.syncAll();
+  assert.equal(service.healthSnapshot().attempts, 4, 'the new interval applies without reconnect');
+});
+
+test('a paused channel and an unavailable settings route do not flush pending messages', async (t) => {
+  const { store, account } = await storeWithPendingMessage();
+  let status = 401;
+  let active = false;
+  let uploads = 0;
+  t.mock.method(globalThis, 'fetch', async (request: RequestInfo | URL, init?: RequestInit) => {
+    if (!isSettingsRequest(request)) {
+      uploads++;
+      return successfulAcknowledgement(init);
+    }
+    if (status !== 200) return Response.json({ error: 'invalid_internal_target' }, { status });
+    return Response.json({ active });
+  });
+  const service = new SyncService(store, 900_000, 10, 10, 5_000);
+
+  await service.syncAll();
+  assert.equal(service.healthSnapshot().failingAccounts, 1);
+  assert.equal((await store.getAccount(account.id))?.syncBlockedReason, undefined);
+  status = 200;
+  await service.syncAll();
+  assert.equal(service.healthSnapshot().failingAccounts, 0, 'intentionally paused is not failing');
+  assert.equal(uploads, 0);
+  assert.ok(await store.nextSyncBatch(account.id, 10, 10));
+  active = true;
+  await service.syncAll();
+  assert.equal(uploads, 1);
+  assert.equal(await store.nextSyncBatch(account.id, 10, 10), null);
+});
+
+test('an absent interval uses the legacy default measured from the latest manual sync', async (t) => {
+  const { store, account } = await storeWithPendingMessage();
+  const deploymentInterval = 900_000;
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(globalThis, 'fetch', async (request: RequestInfo | URL, init?: RequestInit) =>
+    isSettingsRequest(request) ? Response.json({ active: true }) : successfulAcknowledgement(init));
+  const service = new SyncService(store, deploymentInterval, 10, 10, 5_000);
+
+  await service.syncAccount(account.id);
+  now += deploymentInterval - 1;
+  await service.syncAll();
+  assert.equal(service.healthSnapshot().attempts, 1);
+  now += 1;
+  await service.syncAll();
+  assert.equal(service.healthSnapshot().attempts, 2);
 });
