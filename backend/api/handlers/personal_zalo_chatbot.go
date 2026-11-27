@@ -265,7 +265,19 @@ func personalZaloChatbotChannel(ctx context.Context, req personalZaloChatbotRequ
 	scope, _ := metadata["sync_scope"].(string)
 	if req.ThreadType == personalZaloThreadGroup {
 		enabled, _ := metadata["personal_zalo_group_reply_enabled"].(bool)
-		return channel, enabled && scope != "direct", nil
+		if !enabled || scope == "direct" {
+			return channel, false, nil
+		}
+
+		// Keep the group with its linked OA even while the OA is paused or the
+		// CRM group is archived. The personal bot must not take over.
+		var groupIDs []string
+		err := db.DB.WithContext(ctx).Model(&models.CRMGroup{}).Unscoped().
+			Joins("JOIN channels AS oa ON oa.id = crm_groups.channel_id AND oa.tenant_id = crm_groups.tenant_id").
+			Where("crm_groups.tenant_id = ? AND crm_groups.zalo_group_id = ? AND oa.channel_type = ?",
+				req.TenantID, req.ThreadID, "zalo_oa").
+			Limit(1).Pluck("crm_groups.id", &groupIDs).Error
+		return channel, err == nil && len(groupIDs) == 0, err
 	}
 	return channel, scope != "group", nil
 }
