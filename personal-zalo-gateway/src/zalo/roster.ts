@@ -38,6 +38,14 @@ async function withTimeout<T>(operation: Promise<T>, milliseconds: number): Prom
   }
 }
 
+export async function hasGroupMembership(api: Pick<RosterAPI, 'getAllGroups'>, groupId: string): Promise<boolean> {
+  const groups = await withTimeout(api.getAllGroups(), 5_000);
+  if (!groups?.gridVerMap || typeof groups.gridVerMap !== 'object' || Array.isArray(groups.gridVerMap)) {
+    throw new Error('invalid_zalo_group_roster_response');
+  }
+  return Object.hasOwn(groups.gridVerMap, groupId);
+}
+
 export async function captureRoster(
   api: RosterAPI,
   account: GatewayAccountRecord,

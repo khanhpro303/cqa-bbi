@@ -31,8 +31,16 @@ export interface PersonalZaloChatbotReply {
   images?: ChatbotReplyImage[];
 }
 
+export interface PersonalZaloInternbotReply {
+  groupId: string;
+  text: string;
+  token: string;
+  images?: Array<ChatbotReplyImage & { deliveryToken: string }>;
+}
+
 export type PersonalZaloChatbotResult =
   | { outcome: 'reply'; reply: PersonalZaloChatbotReply }
+  | { outcome: 'internbot_reply'; reply: PersonalZaloInternbotReply }
   | { outcome: 'no_reply' }
   | { outcome: 'retryable'; error: string }
   | { outcome: 'unknown'; error: string };
@@ -41,7 +49,8 @@ export type PersonalZaloDeliveryAuthorization = 'allowed' | 'denied' | 'retryabl
 
 type DeliveryRequest =
   | { kind: 'group_receipt'; receipt: string }
-  | { kind: 'direct_authorization'; token: string; part: 'text' | 'image'; digest: string };
+  | { kind: 'direct_authorization'; token: string; part: 'text' | 'image'; digest: string }
+  | { kind: 'internbot_authorization'; groupId: string; token: string; part: 'text' | 'image'; digest: string };
 
 export function chatbotEndpoint(baseUrl: string): string | null {
   try {
@@ -115,6 +124,7 @@ export function buildChatbotRequest(
   deployment: PersonalZaloChatbotConfig,
   now = Date.now(),
   deliveryRequest?: DeliveryRequest,
+  internbotOnly = false,
 ): {
   url: string;
   requestId: string;
@@ -139,8 +149,12 @@ export function buildChatbotRequest(
   if (deliveryRequest?.kind === 'direct_authorization' &&
       (message.threadType !== 'user' || deliveryRequest.token.length < 16 || deliveryRequest.token.length > 4_096 ||
        !/^[a-f0-9]{64}$/.test(deliveryRequest.digest))) return null;
+  if (deliveryRequest?.kind === 'internbot_authorization' &&
+      (!validInternbotTarget(deliveryRequest.groupId, account, message) || !validDeliveryToken(deliveryRequest.token) ||
+       !/^[a-f0-9]{64}$/.test(deliveryRequest.digest))) return null;
   const payload: Record<string, unknown> = {
-    schema_version: message.threadType === 'group' ? 'personal-zalo-chatbot-v2' : 'personal-zalo-chatbot-v3',
+    schema_version: internbotOnly ? 'personal-zalo-internbot-v1' :
+      message.threadType === 'group' ? 'personal-zalo-chatbot-v2' : 'personal-zalo-chatbot-v3',
     request_id: requestId,
     tenant_id: account.tenantId,
     channel_id: account.channelId,
@@ -152,19 +166,40 @@ export function buildChatbotRequest(
     sent_at: new Date(message.timestamp).toISOString(),
     text,
   };
-  if (message.threadType === 'user' && !deliveryRequest) payload.multiple_images = true;
+  if (!deliveryRequest) {
+    payload.supports_internbot = true;
+    const senderName = chatbotDisplayName(message.senderName);
+    const sourceName = message.threadType === 'group' ? chatbotDisplayName(message.groupName) : senderName;
+    if (senderName) payload.sender_name = senderName;
+    if (sourceName) payload.source_name = sourceName;
+    if (message.threadType === 'user') payload.multiple_images = true;
+  }
   if (botMentioned) payload.bot_mentioned = true;
   if (wakeText !== undefined) payload.group_wake_text = wakeText;
   if (deliveryRequest?.kind === 'group_receipt') payload.delivery_receipt = deliveryRequest.receipt;
-  if (deliveryRequest?.kind === 'direct_authorization') {
+  if (deliveryRequest?.kind === 'direct_authorization' || deliveryRequest?.kind === 'internbot_authorization') {
     payload.delivery_token = deliveryRequest.token;
     payload.delivery_part = deliveryRequest.part;
     payload.delivery_digest = deliveryRequest.digest;
   }
+  if (deliveryRequest?.kind === 'internbot_authorization') payload.supervisor_group_id = deliveryRequest.groupId;
   const body = JSON.stringify(payload);
   const signed = signInternalRequestBody(account.importSecret, body, requestId, now);
   const chatbotSignature = signInternalRequestBody(deployment.secret, body, requestId, now).signature;
   return { url, body, ...signed, chatbotSignature };
+}
+
+function chatbotDisplayName(value: string | undefined): string {
+  return (value?.replace(/\s+/g, ' ').trim().slice(0, 128) ?? '').replace(/[\uD800-\uDBFF]$/, '');
+}
+
+function validDeliveryToken(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= 16 && value.length <= 4_096;
+}
+
+function validInternbotTarget(value: unknown, account: GatewayAccountRecord, message: IncomingGatewayMessage): value is string {
+  return typeof value === 'string' && zaloUID.test(value) && value !== (account.accountExternalId || account.zaloUid) &&
+    (message.threadType !== 'group' || value !== message.threadId);
 }
 
 export async function requestPersonalZaloChatbotReply(
@@ -178,10 +213,11 @@ export async function requestPersonalZaloChatbotReply(
 export async function requestPersonalZaloChatbotTurn(
   account: GatewayAccountRecord,
   message: IncomingGatewayMessage,
+  internbotOnly = false,
 ): Promise<PersonalZaloChatbotResult> {
   const deployment = personalZaloChatbotConfig();
   if (!deployment) return { outcome: 'no_reply' };
-  const request = buildChatbotRequest(account, message, deployment);
+  const request = buildChatbotRequest(account, message, deployment, Date.now(), undefined, internbotOnly);
   if (!request) return { outcome: 'no_reply' };
 
   const controller = new AbortController();
@@ -200,12 +236,18 @@ export async function requestPersonalZaloChatbotTurn(
       signal: controller.signal,
       redirect: 'error',
     });
-    if (response.status === 204) return { outcome: 'no_reply' };
+    if (response.status === 204 || (internbotOnly && response.status === 400)) return { outcome: 'no_reply' };
     if (!response.ok) {
       logger.warn(`[chatbot] CQA rejected personal Zalo turn with HTTP ${response.status}`);
       return { outcome: 'unknown', error: `cqa_http_${response.status}` };
     }
     const payload = await readReplyPayload(response);
+    if (payload && Object.hasOwn(payload, 'internbot_delivery')) {
+      const delivery = decodeInternbotReply(payload.internbot_delivery, account, message);
+      if (!delivery || Object.hasOwn(payload, 'reply')) return { outcome: 'unknown', error: 'invalid_cqa_internbot_reply' };
+      return { outcome: 'internbot_reply', reply: delivery };
+    }
+    if (internbotOnly) return { outcome: 'no_reply' };
     if (typeof payload?.reply !== 'string' || payload.reply.trim() === '' || payload.reply.length > 2_000) {
       return { outcome: 'unknown', error: 'invalid_cqa_reply' };
     }
@@ -246,6 +288,7 @@ async function readReplyPayload(response: Response): Promise<{
   delivery_token?: unknown;
   images?: unknown;
   delivery_receipt?: unknown;
+  internbot_delivery?: unknown;
 } | null> {
   const reader = response.body?.getReader();
   if (!reader) return null;
@@ -262,10 +305,71 @@ async function readReplyPayload(response: Response): Promise<{
       }
       chunks.push(value);
     }
-    return JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
+    const payload: unknown = JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
+    return payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : null;
   } finally {
     reader.releaseLock();
   }
+}
+
+function decodeInternbotReply(
+  value: unknown,
+  account: GatewayAccountRecord,
+  message: IncomingGatewayMessage,
+): PersonalZaloInternbotReply | null {
+  if (!value || typeof value !== 'object') return null;
+  const { group_id, text, token, images } = value as Record<string, unknown>;
+  if (!validInternbotTarget(group_id, account, message) || !validDeliveryToken(token) ||
+      typeof text !== 'string' || !text.trim() || text.length > 2_000) return null;
+  const deliveries = Array.isArray(images) ? images.flatMap((value) => {
+    const image = decodeReplyImage(value);
+    if (!image?.deliveryToken) return [];
+    return [{ ...image, deliveryToken: image.deliveryToken }];
+  }) : [];
+  return { groupId: group_id, text, token, images: deliveries };
+}
+
+export async function authorizePersonalZaloInternbotDelivery(
+  account: GatewayAccountRecord,
+  message: IncomingGatewayMessage,
+  groupId: string,
+  token: string,
+  part: 'text' | 'image',
+  digest: string,
+): Promise<PersonalZaloDeliveryAuthorization> {
+  const deployment = personalZaloChatbotConfig();
+  if (!deployment) return 'denied';
+  for (let attempt = 0; attempt < deliveryAuthorizationAttempts; attempt++) {
+    const request = buildChatbotRequest(account, message, deployment, Date.now(), {
+      kind: 'internbot_authorization', groupId, token, part, digest,
+    });
+    if (!request) return 'denied';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), deliveryReceiptTimeoutMs);
+    try {
+      const response = await fetch(`${request.url}/internbot/delivery`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CQA-Request-Id': request.requestId,
+          'X-CQA-Timestamp': request.timestamp,
+          'X-CQA-Signature': request.signature,
+          'X-CQA-Chatbot-Signature': request.chatbotSignature,
+        },
+        body: request.body,
+        signal: controller.signal,
+        redirect: 'error',
+      });
+      if (response.status === 200) return 'allowed';
+      if (response.status < 500) return 'denied';
+    } catch (error) {
+      logger.warn('[chatbot] CQA Internbot delivery authorization failed', error);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (attempt + 1 < deliveryAuthorizationAttempts) await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+  }
+  return 'retryable';
 }
 
 export async function authorizePersonalZaloChatbotDelivery(

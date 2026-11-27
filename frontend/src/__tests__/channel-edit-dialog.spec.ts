@@ -9,6 +9,7 @@ import en from '../i18n/en'
 import { useAuthStore } from '../stores/auth'
 import { useChannelStore, type Channel } from '../stores/channels'
 import App from '../App.vue'
+import PersonalZaloBotModePicker from '../components/channels/PersonalZaloBotModePicker.vue'
 import Channels from '../views/Channels.vue'
 import ChannelDetail from '../views/Channels/ChannelDetail.vue'
 
@@ -50,9 +51,16 @@ const panelStubs = {
   }),
 }
 
+const toggleStub = {
+  props: ['modelValue', 'label', 'disabled'],
+  emits: ['update:modelValue'],
+  template: '<input type="checkbox" :aria-label="label" :checked="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.checked)">',
+}
+
 const stubs = {
   ...panelStubs,
   VBtn: { template: '<button><slot /></button>' },
+  VBtnToggle: { template: '<div><slot /></div>' },
   VTextField: {
     props: ['modelValue', 'label', 'type'],
     emits: ['update:modelValue'],
@@ -63,11 +71,13 @@ const stubs = {
     emits: ['update:modelValue'],
     template: '<select :aria-label="label" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option></select>',
   },
-  VSwitch: {
-    props: ['modelValue', 'label', 'disabled'],
+  VAutocomplete: {
+    props: ['modelValue', 'label', 'items', 'disabled'],
     emits: ['update:modelValue'],
-    template: '<input type="checkbox" :aria-label="label" :checked="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.checked)">',
+    template: '<select :aria-label="label" :value="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.value)"><option value=""></option><option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option></select>',
   },
+  VSwitch: toggleStub,
+  VCheckbox: toggleStub,
   FacebookPageConnect: true,
 }
 
@@ -111,11 +121,11 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function mountPage(detail: boolean, canEdit = true, cachedChannel?: Channel) {
+async function mountPage(detail: boolean, canEdit = true, cachedChannel?: Channel, role = 'member') {
   const pinia = createPinia()
   const channelStore = useChannelStore(pinia)
   if (cachedChannel) channelStore.currentChannel = cachedChannel
-  useAuthStore(pinia).tenantPerms = { role: 'member', permissions: { channels: canEdit ? 'rw' : 'r' } }
+  useAuthStore(pinia).tenantPerms = { role, permissions: { channels: canEdit ? 'rw' : 'r' } }
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -197,11 +207,101 @@ it('shows the dedicated complaint settings tab for a Zalo OA channel', async () 
   const { wrapper } = await mountPage(true)
   await wrapper.get(editButton).trigger('click')
   const dialog = wrapper.get('[role="dialog"]')
+  expect(dialog.findComponent(PersonalZaloBotModePicker).exists()).toBe(false)
   const tabs = dialog.findAll('button[role="tab"]')
   expect(tabs.map(tab => tab.text())).toContain(en.complaint_settings_tab)
   await tabs.find(tab => tab.text() === en.complaint_settings_tab)!.trigger('click')
   await flushPromises()
   expect(dialog.get('[data-testid="complaint-cases"]').attributes('aria-label')).toBe(en.complaint_cases_switch)
+})
+
+it('creates an Internbot channel in setup mode before connecting Zalo', async () => {
+  api.post.mockReset().mockResolvedValueOnce({ data: { ...personal, id: 'new-internbot' } })
+  const { wrapper } = await mountPage(false, true, undefined, 'admin')
+  await wrapper.findAll('button').find(button => button.text() === en.connect_channel)!.trigger('click')
+  const dialog = wrapper.get('[role="dialog"]')
+  expect(dialog.findComponent(PersonalZaloBotModePicker).exists()).toBe(false)
+  await dialog.get(field(en.channel_type)).setValue('personal_zalo_import')
+  dialog.getComponent(PersonalZaloBotModePicker).vm.$emit('update:modelValue', 'internbot')
+  await dialog.get(field(en.channel_name)).setValue('Intern account')
+  await dialog.findAll('button').find(button => button.text() === en.create_personal_zalo)!.trigger('click')
+  await flushPromises()
+
+  expect(api.post).toHaveBeenCalledExactlyOnceWith(tenant + '/channels', {
+    name: 'Intern account', channel_type: 'personal_zalo_import', credentials: {},
+    metadata: JSON.stringify({ sync_scope: 'all', chatbot_mode: 'internbot' }),
+  })
+})
+
+it('saves the mode change before exposing Internbot enablement', async () => {
+  const { wrapper } = await mountPage(false, true, undefined, 'admin')
+  await wrapper.get(editButton).trigger('click')
+  const dialog = wrapper.get('[role="dialog"]')
+  dialog.getComponent(PersonalZaloBotModePicker).vm.$emit('update:modelValue', 'internbot')
+  await flushPromises()
+
+  expect(dialog.text()).toContain(en.personal_zalo_internbot_save_mode_first)
+  expect(dialog.find(field(en.personal_zalo_internbot_enable)).exists()).toBe(false)
+  await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
+  await flushPromises()
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(channelPath, { metadata: JSON.stringify({ chatbot_mode: 'internbot' }) })
+  expect(wrapper.text()).toContain('Internbot')
+  expect(wrapper.text()).toContain(en.personal_zalo_internbot_no_group_selected)
+})
+
+it('requires a current group and confirmation before enabling Internbot', async () => {
+  storedChannel.metadata = JSON.stringify({ chatbot_mode: 'internbot' })
+  const get = api.get.getMockImplementation()!
+  api.get.mockImplementation((url: string, params?: unknown) => url.endsWith('/personal-zalo/groups') ? Promise.resolve({ data: {
+    status: 'ready', captured_at: '2026-11-27T03:15:00Z', total: 2,
+    items: [{ id: '101', name: 'Supervisors' }, { id: '102', name: 'Supervisors' }],
+  } }) : get(url, params))
+  const { wrapper } = await mountPage(false, true, undefined, 'admin')
+  await wrapper.get(editButton).trigger('click')
+  await flushPromises()
+  const dialog = wrapper.get('[role="dialog"]')
+  const enableSwitch = dialog.get<HTMLInputElement>(field(en.personal_zalo_internbot_enable))
+  expect(enableSwitch.element.disabled).toBe(true)
+  const group = dialog.get(field(en.personal_zalo_internbot_group))
+  expect(group.text()).toContain('Supervisors · 101')
+  expect(group.text()).toContain('Supervisors · 102')
+  expect(api.get).toHaveBeenCalledWith(channelPath + '/personal-zalo/groups', { params: expect.objectContaining({ refresh: true }) })
+
+  await group.setValue('102')
+  expect(enableSwitch.element.disabled).toBe(true)
+  await dialog.get(field(en.personal_zalo_internbot_confirm_group)).setValue(true)
+  expect(enableSwitch.element.disabled).toBe(false)
+  await enableSwitch.setValue(true)
+  await group.setValue('101')
+  expect(enableSwitch.element.checked).toBe(false)
+  expect(enableSwitch.element.disabled).toBe(true)
+  await dialog.get(field(en.personal_zalo_internbot_confirm_group)).setValue(true)
+  await enableSwitch.setValue(true)
+  await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
+  await flushPromises()
+
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(channelPath, { metadata: expect.any(String) })
+  expect(JSON.parse(api.put.mock.calls[0]![1].metadata)).toEqual({ supervisor_group_id: '101', internbot_enabled: true })
+})
+
+it('allows pausing Internbot when the existing supervisor binding becomes unavailable', async () => {
+  storedChannel.metadata = JSON.stringify({ chatbot_mode: 'internbot', supervisor_group_id: '102', internbot_enabled: true })
+  const get = api.get.getMockImplementation()!
+  api.get.mockImplementation((url: string) => url.endsWith('/personal-zalo/groups') ? Promise.resolve({ data: {
+    status: 'ready', total: 1, items: [{ id: '102', name: 'Supervisors' }], supervisor_available: false,
+  } }) : get(url))
+  const { wrapper } = await mountPage(false, true, undefined, 'admin')
+  await wrapper.get(editButton).trigger('click')
+  await flushPromises()
+  const dialog = wrapper.get('[role="dialog"]')
+  expect(dialog.get('[role="status"]').text()).toBe(en.personal_zalo_internbot_group_unavailable)
+  const enableSwitch = dialog.get<HTMLInputElement>(field(en.personal_zalo_internbot_enable))
+  expect(enableSwitch.element.disabled).toBe(false)
+  await enableSwitch.setValue(false)
+  await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
+  await flushPromises()
+
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(channelPath, { metadata: JSON.stringify({ internbot_enabled: false }) })
 })
 
 it('keeps the edit dialog open with the original draft after a validation error', async () => {

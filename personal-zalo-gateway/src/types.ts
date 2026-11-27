@@ -70,7 +70,7 @@ export interface GatewayAccountRecord {
   chatbotTurns?: Record<string, GatewayChatbotTurnRecord>;
 }
 
-export type GatewayChatbotTurnStatus = 'captured' | 'pending' | 'processing' | 'ready' | 'sending' | 'unknown' | 'failed' | 'expired';
+export type GatewayChatbotTurnStatus = 'captured' | 'pending' | 'processing' | 'ready' | 'internbot_ready' | 'sending' | 'unknown' | 'failed' | 'expired';
 
 export interface GatewayChatbotReplyImage {
   filename: string;
@@ -88,6 +88,11 @@ export interface GatewayChatbotReply {
   deliveryReceipt?: string;
 }
 
+export interface GatewayInternbotReply {
+  groupId: string;
+  content: GatewayChatbotReply;
+}
+
 export interface GatewayChatbotTurnRecord {
   message: IncomingGatewayMessage;
   tenantId: string;
@@ -95,6 +100,8 @@ export interface GatewayChatbotTurnRecord {
   accountExternalId: string;
   status: GatewayChatbotTurnStatus;
   reply?: GatewayChatbotReply;
+  internbotReply?: GatewayInternbotReply;
+  manuallyAnswered?: boolean;
   lastError?: string;
   createdAt: string;
   updatedAt: string;

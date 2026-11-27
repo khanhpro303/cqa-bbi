@@ -64,6 +64,19 @@ export interface PersonalZaloGatewayState {
   account?: PersonalZaloGatewayAccount
 }
 
+export interface PersonalZaloGroup {
+  id: string
+  name: string
+}
+
+export interface PersonalZaloGroupsResponse {
+  items: PersonalZaloGroup[]
+  total: number
+  captured_at?: string | null
+  status: 'ready' | 'waiting' | 'unavailable'
+  supervisor_available?: boolean
+}
+
 export const useChannelStore = defineStore('channels', () => {
   const channels = ref<Channel[]>([])
   const accountOwners = ref<PersonalZaloAccountOwner[]>([])
@@ -159,6 +172,17 @@ export const useChannelStore = defineStore('channels', () => {
     return data
   }
 
+  async function fetchPersonalZaloGroups(tenantId: string, channelId: string, params: {
+    q?: string
+    offset?: number
+    limit?: number
+    group_id?: string
+    refresh?: boolean
+  }): Promise<PersonalZaloGroupsResponse> {
+    const { data } = await api.get<PersonalZaloGroupsResponse>(`/tenants/${tenantId}/channels/${channelId}/personal-zalo/groups`, { params })
+    return data
+  }
+
   async function connectPersonalZaloGateway(tenantId: string, channelId: string): Promise<PersonalZaloGatewayState> {
     const { data } = await api.post(`/tenants/${tenantId}/channels/${channelId}/personal-zalo-gateway/connect`)
     return data
@@ -190,6 +214,7 @@ export const useChannelStore = defineStore('channels', () => {
     fetchAccountOwners,
     updateAccountOwners,
     fetchPersonalZaloGatewayState,
+    fetchPersonalZaloGroups,
     connectPersonalZaloGateway,
     reconnectPersonalZaloGateway,
     syncPersonalZaloGateway,

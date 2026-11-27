@@ -160,6 +160,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}, personalZaloAuth)
 	personalZaloChatbot.POST("", handlers.NewPersonalZaloChatbotHandler(cfg))
 	personalZaloChatbot.POST("/thread-access", handlers.CheckPersonalZaloGroupThreadAccess)
+	personalZaloChatbot.POST("/internbot/delivery", handlers.NewPersonalZaloInternbotDeliveryHandler(cfg))
 	r.POST("/api/internal/imports/personal-zalo/roster", func(c *gin.Context) {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 12<<20)
 		c.Next()
@@ -226,6 +227,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			personalZaloApprovals := tenant.Group("/channels/:channelId/personal-zalo/approvals", middleware.RequireRole("owner", "admin"))
 			personalZaloApprovals.GET("", handlers.GetPersonalZaloApprovals)
 			personalZaloApprovals.PUT("/:threadType/:threadId", handlers.DecidePersonalZaloApproval)
+			tenant.GET("/channels/:channelId/personal-zalo/groups", middleware.RequireRole("owner", "admin"), handlers.GetPersonalZaloInternbotGroups)
 			personalZaloIdentity := tenant.Group("/channels/:channelId/personal-zalo/identity-links", middleware.RequireRole("owner", "admin"))
 			personalZaloIdentity.GET("", handlers.ListPersonalZaloIdentityLinks)
 			personalZaloIdentity.GET("/options", handlers.ListPersonalZaloIdentityOptions)

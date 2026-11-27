@@ -152,6 +152,32 @@ func CreateChannel(c *gin.Context) {
 	}
 
 	tenantID := middleware.GetTenantID(c)
+	if req.Metadata != "" {
+		metadata, err := decodeMetadataObject(req.Metadata)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata"})
+			return
+		}
+		patch, err := checkPersonalZaloInternbotMetadata(req.ChannelType, metadata)
+		if err != nil || (patch.Enabled != nil && *patch.Enabled) || (patch.SupervisorGroupID != nil && *patch.SupervisorGroupID != "") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_personal_zalo_internbot_settings"})
+			return
+		}
+		if patch.present() && !canManagePersonalZaloBotMode(c) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "insufficient_role"})
+			return
+		}
+		if patch.present() {
+			config, err := planPersonalZaloInternbotUpdate(personalZaloInternbotConfig{Mode: personalZaloChatbotMode}, patch, true, false)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_personal_zalo_internbot_settings"})
+				return
+			}
+			writePersonalZaloInternbotConfig(metadata, config)
+			encoded, _ := json.Marshal(metadata)
+			req.Metadata = string(encoded)
+		}
+	}
 
 	if req.ChannelType != "personal_zalo_import" && len(req.Credentials) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "credentials_required"})
@@ -312,7 +338,18 @@ func UpdateChannel(c *gin.Context) {
 	if req.IsActive != nil && !*req.IsActive {
 		updates[autoReplyColumn] = false
 	}
+	var internbotPatch personalZaloInternbotPatch
 	if req.Metadata != "" {
+		incoming, err := decodeMetadataObject(req.Metadata)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_metadata", "details": err.Error()})
+			return
+		}
+		internbotPatch, err = checkPersonalZaloInternbotMetadata(channel.ChannelType, incoming)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_personal_zalo_internbot_settings"})
+			return
+		}
 		metadata := req.Metadata
 		switch channel.ChannelType {
 		case "personal_zalo_import":
@@ -358,15 +395,23 @@ func UpdateChannel(c *gin.Context) {
 		updates["metadata"] = metadata
 	}
 
-	if _, personalToggle := updates["personal_zalo_auto_reply_enabled"]; personalToggle {
-		role := middleware.GetTenantRole(c)
-		if req.AutoReplyEnabled != nil && role != "owner" && role != "admin" {
+	if channel.ChannelType == "personal_zalo_import" {
+		if (req.AutoReplyEnabled != nil || internbotPatch.present()) && !canManagePersonalZaloBotMode(c) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "insufficient_role"})
 			return
 		}
 		ctx := c.Request.Context()
-		changed, err := updatePersonalZaloAutoReply(ctx, channel, updates)
+		changed, err := updatePersonalZaloAutoReply(ctx, channel, updates, internbotPatch)
 		switch {
+		case errors.Is(err, errInvalidPersonalZaloInternbotSettings):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_personal_zalo_internbot_settings"})
+			return
+		case errors.Is(err, errPersonalZaloInternbotEnableSeparately):
+			c.JSON(http.StatusConflict, gin.H{"error": "internbot_enable_separately"})
+			return
+		case errors.Is(err, errPersonalZaloInternbotGroupUnavailable):
+			c.JSON(http.StatusConflict, gin.H{"error": "internbot_supervisor_unavailable"})
+			return
 		case errors.Is(err, errPersonalZaloRosterConflict):
 			c.JSON(http.StatusConflict, gin.H{"error": "personal_zalo_roster_conflict"})
 			return
@@ -398,11 +443,8 @@ func UpdateChannel(c *gin.Context) {
 	// auto_reply có thể đổi trực tiếp hoặc bị ép tắt khi vô hiệu hóa kênh (xem nhánh ở trên).
 	oldAutoReply := channelAutoReplyEnabled(channel)
 	newAutoReply := oldAutoReply
-	if req.AutoReplyEnabled != nil {
-		newAutoReply = *req.AutoReplyEnabled
-	}
-	if req.IsActive != nil && !*req.IsActive {
-		newAutoReply = false
+	if enabled, ok := updates[autoReplyColumn].(bool); ok {
+		newAutoReply = enabled
 	}
 	if newAutoReply != oldAutoReply {
 		db.LogActivity(tenantID, uid, uemail, "channel.toggle_auto_reply", "channel", channelID,

@@ -57,17 +57,23 @@ func guestKnowledgeRequiresVerification(text string) bool {
 // RunGuestKnowledge calls the tenant's public flow with an MCP credential that
 // exposes only public documents. It supplies no ERP grant or customer identity.
 func RunGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text string) (LangflowResult, error) {
-	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, "", "", KnowledgeImageInstruction)
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, "", "", KnowledgeImageInstruction, "")
 }
 
 // RunPersonalZaloGuestKnowledge uses the public knowledge grant and the
 // Personal Zalo attachment policy. The optional complaint permission is
 // scoped to the current turn.
 func RunPersonalZaloGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide string) (LangflowResult, error) {
-	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, guide, PersonalZaloKnowledgeImageInstruction)
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, guide, PersonalZaloKnowledgeImageInstruction, "")
 }
 
-func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide, imageInstruction string) (LangflowResult, error) {
+// RunPersonalZaloGuestDraft uses the guest knowledge grant with the tenant's
+// public writing instructions. It cannot enable tools that change records.
+func RunPersonalZaloGuestDraft(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, publicPrompt string) (LangflowResult, error) {
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, "", "", PersonalZaloKnowledgeImageInstruction, publicPrompt)
+}
+
+func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide, imageInstruction, publicPrompt string) (LangflowResult, error) {
 	if permission == "" && guestKnowledgeRequiresVerification(text) {
 		return LangflowResult{Text: GuestKnowledgeVerificationReply}, nil
 	}
@@ -81,6 +87,9 @@ func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow Langflo
 	}
 	session := fmt.Sprintf("zalo-guest-%x", sha256.Sum256([]byte(tenantID+"\x00"+scope)))
 	prompt := guestKnowledgePrompt
+	if publicPrompt = strings.TrimSpace(publicPrompt); publicPrompt != "" {
+		prompt += "\n\nHướng dẫn của kênh, áp dụng trong phạm vi các quy tắc dành cho khách chưa xác thực ở trên:\n" + publicPrompt
+	}
 	if permission != "" {
 		prompt += "\n\nNgoại lệ cho khiếu nại: dùng complaint_record theo hướng dẫn dưới đây, kể cả khi khiếu nại liên quan đến một đơn hàng, giá hoặc công nợ. Vẫn yêu cầu xác thực khi khách chỉ muốn tra cứu ERP.\n\n" + guide
 	}

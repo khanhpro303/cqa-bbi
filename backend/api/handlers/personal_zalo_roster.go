@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -99,15 +100,16 @@ func IngestPersonalZaloRoster(c *gin.Context) {
 	ctx := c.Request.Context()
 	if req.CheckOnly {
 		var channel models.Channel
-		err := db.DB.WithContext(ctx).Select("external_id", "is_active", "personal_zalo_auto_reply_enabled").
+		err := db.DB.WithContext(ctx).Select("external_id", "is_active", "personal_zalo_auto_reply_enabled", "metadata").
 			Where("id = ? AND tenant_id = ? AND channel_type = ?", req.ChannelID, req.TenantID, "personal_zalo_import").
 			Take(&channel).Error
+		bot, configErr := decodePersonalZaloInternbotConfig(channel.Metadata)
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			c.Status(http.StatusNoContent)
-		case err != nil:
+		case err != nil || configErr != nil:
 			c.Status(http.StatusServiceUnavailable)
-		case channel.IsActive && channel.PersonalZaloAutoReplyEnabled &&
+		case channel.IsActive && (channel.PersonalZaloAutoReplyEnabled || bot.Mode == personalZaloInternbotMode) &&
 			(channel.ExternalID == "" || channel.ExternalID == req.AccountExternalID):
 			c.Status(http.StatusOK)
 		default:
@@ -119,14 +121,36 @@ func IngestPersonalZaloRoster(c *gin.Context) {
 	var changed bool
 	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		channel, err := lockPersonalZaloRosterChannel(tx, req.TenantID, req.ChannelID)
-		if err != nil || !channel.IsActive || !channel.PersonalZaloAutoReplyEnabled ||
+		if err != nil || !channel.IsActive ||
 			(channel.ExternalID != "" && channel.ExternalID != req.AccountExternalID) {
+			return err
+		}
+		bot, err := decodePersonalZaloInternbotConfig(channel.Metadata)
+		if err != nil || (!channel.PersonalZaloAutoReplyEnabled && bot.Mode != personalZaloInternbotMode) {
 			return err
 		}
 		if channel.ExternalID == "" {
 			if err := tx.Model(&channel).UpdateColumn("external_id", req.AccountExternalID).Error; err != nil {
 				return err
 			}
+			channel.ExternalID = req.AccountExternalID
+		}
+		if bot.Mode == personalZaloInternbotMode {
+			snapshot, err := savePersonalZaloInternbotRoster(tx, channel, internbotGroupsFromRoster(req.personalZaloRosterSnapshot))
+			if err != nil || !bot.Enabled || (bot.SupervisorAccountID == channel.ExternalID && snapshot.contains(bot.SupervisorGroupID)) {
+				return err
+			}
+			metadata, err := decodeMetadataObject(channel.Metadata)
+			if err != nil {
+				return err
+			}
+			bot, err = planPersonalZaloInternbotUpdate(bot, personalZaloInternbotPatch{}, false, false)
+			if err != nil {
+				return err
+			}
+			writePersonalZaloInternbotConfig(metadata, bot)
+			encoded, _ := json.Marshal(metadata)
+			return tx.Model(&channel).Update("metadata", string(encoded)).Error
 		}
 		changed, err = reconcilePersonalZaloRoster(tx, channel.ID, req.personalZaloRosterSnapshot, false)
 		return err
@@ -167,7 +191,7 @@ func loadFreshPersonalZaloRoster(ctx context.Context, channel models.Channel) (p
 	}
 	account := findPersonalZaloGatewayAccount(accounts, channel.TenantID, channel.ID)
 	if account == nil || account.ID == "" || account.Status != "connected" {
-		return snapshot, errors.New("personal Zalo gateway account is disconnected")
+		return snapshot, errPersonalZaloGatewayDisconnected
 	}
 
 	path := "/api/v1/accounts/" + url.PathEscape(account.ID) + "/roster"
@@ -175,6 +199,7 @@ func loadFreshPersonalZaloRoster(ctx context.Context, channel models.Channel) (p
 		return snapshot, err
 	}
 	if !snapshot.validate(time.Now()) || snapshot.AccountExternalID != account.ZaloUID ||
+		(account.AccountExternalID != "" && snapshot.AccountExternalID != account.AccountExternalID) ||
 		(channel.ExternalID != "" && snapshot.AccountExternalID != channel.ExternalID) {
 		return snapshot, errors.New("invalid personal Zalo gateway roster")
 	}
@@ -253,31 +278,74 @@ func personalZaloRosterChanges(channelID string, snapshot personalZaloRosterSnap
 	return changes
 }
 
-func updatePersonalZaloAutoReply(ctx context.Context, previous models.Channel, updates map[string]interface{}) (bool, error) {
+func updatePersonalZaloAutoReply(ctx context.Context, previous models.Channel, updates map[string]interface{}, patch personalZaloInternbotPatch) (bool, error) {
 	enable, _ := updates["personal_zalo_auto_reply_enabled"].(bool)
+	active := previous.IsActive
+	if nextActive, exists := updates["is_active"].(bool); exists {
+		active = nextActive
+	}
+	current, err := decodePersonalZaloInternbotConfig(previous.Metadata)
+	if err != nil {
+		return false, err
+	}
+	next, err := planPersonalZaloInternbotUpdate(current, patch, active, enable)
+	if err != nil {
+		return false, err
+	}
+	if next.Mode != current.Mode || next.Mode == personalZaloInternbotMode {
+		updates["personal_zalo_auto_reply_enabled"] = false
+	}
+	verifyInternbot := next.SupervisorGroupID != "" &&
+		(next.SupervisorGroupID != current.SupervisorGroupID || (next.Enabled && next.Version != current.Version))
 	var baseline personalZaloRosterSnapshot
-	if enable && !previous.PersonalZaloAutoReplyEnabled {
-		var err error
+	if (enable && !previous.PersonalZaloAutoReplyEnabled) || verifyInternbot {
 		baseline, err = loadFreshPersonalZaloRoster(ctx, previous)
 		if err != nil {
 			return false, err
 		}
 	}
 	var changed bool
-	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		channel, err := lockPersonalZaloRosterChannel(tx, previous.TenantID, previous.ID)
 		if err != nil {
 			return err
 		}
-		if channel.PersonalZaloAutoReplyEnabled != previous.PersonalZaloAutoReplyEnabled {
+		if channel.PersonalZaloAutoReplyEnabled != previous.PersonalZaloAutoReplyEnabled || channel.ExternalID != previous.ExternalID ||
+			channel.Metadata != previous.Metadata || channel.IsActive != previous.IsActive {
 			return errPersonalZaloRosterConflict
-		}
-		active := channel.IsActive
-		if nextActive, exists := updates["is_active"].(bool); exists {
-			active = nextActive
 		}
 		if enable && !active {
 			return errPersonalZaloRosterConflict
+		}
+		if verifyInternbot {
+			if channel.ExternalID == "" {
+				channel.ExternalID = baseline.AccountExternalID
+				updates["external_id"] = channel.ExternalID
+			}
+			groups, err := savePersonalZaloInternbotRoster(tx, channel, internbotGroupsFromRoster(baseline))
+			if err != nil {
+				return err
+			}
+			if !groups.fresh(time.Now()) || !groups.contains(next.SupervisorGroupID) {
+				return errPersonalZaloInternbotGroupUnavailable
+			}
+			if next.Enabled {
+				next.ActivatedAt = time.Now().UTC()
+				next.SupervisorAccountID = channel.ExternalID
+			}
+		}
+		if patch.present() || next.Version != current.Version {
+			raw := channel.Metadata
+			if merged, ok := updates["metadata"].(string); ok {
+				raw = merged
+			}
+			metadata, err := decodeMetadataObject(raw)
+			if err != nil {
+				return err
+			}
+			writePersonalZaloInternbotConfig(metadata, next)
+			encoded, _ := json.Marshal(metadata)
+			updates["metadata"] = string(encoded)
 		}
 		if enable && !channel.PersonalZaloAutoReplyEnabled {
 			if channel.ExternalID != "" && channel.ExternalID != baseline.AccountExternalID {
