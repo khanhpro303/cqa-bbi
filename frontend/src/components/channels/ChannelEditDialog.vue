@@ -15,6 +15,7 @@
           <v-tab :id="dialogId + '-general-tab'" value="general" :aria-controls="dialogId + '-general'">{{ $t('general_settings') }}</v-tab>
           <v-tab v-if="isZaloChatbotChannel" :id="dialogId + '-chatbot-tab'" value="chatbot" :aria-controls="dialogId + '-chatbot'">{{ $t('chatbot_session') }}</v-tab>
           <v-tab v-if="isZaloChatbotChannel" :id="dialogId + '-groups-tab'" value="groups" :aria-controls="dialogId + '-groups'">{{ $t('zalo_group_settings_tab') }}</v-tab>
+          <v-tab v-if="isZaloChatbotChannel" :id="dialogId + '-complaints-tab'" value="complaints" :aria-controls="dialogId + '-complaints'">{{ $t('complaint_settings_tab') }}</v-tab>
         </v-tabs>
 
         <div style="max-height: 60vh; overflow-y: auto;" class="px-1">
@@ -99,6 +100,16 @@
                 :tenant-id="tenantId"
               />
             </v-window-item>
+            <v-window-item v-if="isZaloChatbotChannel" :id="dialogId + '-complaints'" value="complaints" role="tabpanel" :aria-labelledby="dialogId + '-complaints-tab'" class="pt-3">
+              <ComplaintCaseSettings
+                v-if="open && initialChannel && (initialChannel.channel_type === 'zalo_oa' || initialChannel.channel_type === 'personal_zalo_import')"
+                :key="editChannelId"
+                v-model="editComplaintSettings"
+                :tenant-id="tenantId"
+                :channel-id="initialChannel.id"
+                :channel-type="initialChannel.channel_type"
+              />
+            </v-window-item>
           </v-window>
         </div>
       </v-card-text>
@@ -122,6 +133,7 @@ import { isAxiosError } from 'axios'
 import { computed, reactive, ref, shallowRef, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChannelStore, type Channel } from '../../stores/channels'
+import ComplaintCaseSettings from './ComplaintCaseSettings.vue'
 import PersonalZaloGroupSettings from './PersonalZaloGroupSettings.vue'
 import ZaloGroupSettings from './ZaloGroupSettings.vue'
 import { personalZaloGroupSettingsPatch, readPersonalZaloGroupSettings } from './personalZaloGroupSettings'
@@ -165,6 +177,13 @@ const editForm = reactive({
 })
 const editGroupSettings = ref(readZaloGroupSettings())
 const editPersonalGroupSettings = ref(readPersonalZaloGroupSettings())
+const editComplaintSettings = computed({
+  get: () => editChannelType.value === 'zalo_oa' ? editGroupSettings.value : editPersonalGroupSettings.value,
+  set: (settings) => {
+    if (editChannelType.value === 'zalo_oa') editGroupSettings.value = settings as typeof editGroupSettings.value
+    else editPersonalGroupSettings.value = settings as typeof editPersonalGroupSettings.value
+  },
+})
 let editOriginalMeta: Record<string, unknown> = {}
 let initialSettings: Record<string, unknown> = {}
 const hasLegacyLangflowOverride = ref(false)

@@ -123,6 +123,7 @@ func AutoMigrate() error {
 		&models.OrderCart{},
 		&models.CustomerCase{},
 		&models.CustomerCaseEvent{},
+		&models.CustomerCaseAlert{},
 		&models.CustomerImageFile{},
 		&models.CustomerCaseImageLink{},
 	)

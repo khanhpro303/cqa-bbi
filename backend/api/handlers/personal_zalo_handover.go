@@ -87,36 +87,56 @@ func resolvePersonalZaloHandoverDestination(ctx context.Context, tenantID, group
 	return target, nil
 }
 
-func sendPersonalZaloHandover(ctx context.Context, cfg *config.Config, channel models.Channel, req personalZaloChatbotRequest) string {
+func sendPersonalZaloHandover(ctx context.Context, cfg *config.Config, channel models.Channel, req personalZaloChatbotRequest, observers ...engine.HandoverDeliveryObserver) string {
 	var metadata struct {
 		GroupID string `json:"handover_alert_group_id"`
 		StaffID string `json:"personal_zalo_handover_staff_id"`
 	}
+	groupID, kind, zaloGroupID := "", "fallback", ""
+	trace := func(status, errorCode string) {
+		for _, observe := range observers {
+			if observe != nil {
+				observe(groupID, zaloGroupID, kind, status, errorCode)
+			}
+		}
+	}
 	if err := json.Unmarshal([]byte(channel.Metadata), &metadata); err != nil {
+		trace("failed", "destination_unavailable")
 		return personalZaloHandoverUnavailable
 	}
 	groupID, staffID := strings.TrimSpace(metadata.GroupID), strings.TrimSpace(metadata.StaffID)
+	if staffID != "" && groupID == "" {
+		kind = "fallback_staff"
+	}
 	if groupID == "" && staffID == "" {
+		trace("failed", "alert_group_not_configured")
 		return personalZaloHandoverUnavailable
 	}
 	target, err := resolvePersonalZaloHandoverDestination(ctx, channel.TenantID, groupID, staffID)
 	if err != nil {
 		log.Printf("[personal-zalo-handover] channel %s cannot resolve recipient: %v", channel.ID, err)
+		trace("failed", "destination_unavailable")
 		return personalZaloHandoverUnavailable
+	}
+	if target.isGroup {
+		zaloGroupID = target.id
 	}
 	if (target.isGroup && req.ThreadType == "group" && target.id == req.ThreadID) ||
 		(!target.isGroup && (target.id == req.SenderID || target.id == req.AccountExternalID)) {
+		trace("failed", "alert_group_is_source_chat")
 		return personalZaloHandoverUnavailable
 	}
 
 	raw, err := pkg.Decrypt(target.channel.CredentialsEncrypted, cfg.EncryptionKey)
 	if err != nil {
 		log.Printf("[personal-zalo-handover] cannot decrypt OA channel %s", target.channel.ID)
+		trace("failed", "sender_unavailable")
 		return personalZaloHandoverUnavailable
 	}
 	var credentials channels.ZaloOACredentials
 	if err := json.Unmarshal(raw, &credentials); err != nil {
 		log.Printf("[personal-zalo-handover] invalid credentials for OA channel %s", target.channel.ID)
+		trace("failed", "sender_unavailable")
 		return personalZaloHandoverUnavailable
 	}
 	adapter := zalotoken.NewAdapter(target.channel.ID, credentials, cfg.EncryptionKey)
@@ -129,7 +149,14 @@ func sendPersonalZaloHandover(ctx context.Context, cfg *config.Config, channel m
 		alert.ChatGroup = req.ThreadID
 	}
 	turnHash := sha256.Sum256([]byte(strings.Join([]string{req.AccountExternalID, req.ThreadType, req.ThreadID, req.MessageID}, "\x00")))
-	if engine.NotifyPersonalZaloHandover(ctx, adapter, alert, target.id, target.isGroup, hex.EncodeToString(turnHash[:])) {
+	onAttempt := func(err error) {
+		if err != nil {
+			trace("failed", "delivery_unconfirmed")
+		} else {
+			trace("sent", "")
+		}
+	}
+	if engine.NotifyPersonalZaloHandover(ctx, adapter, alert, target.id, target.isGroup, hex.EncodeToString(turnHash[:]), onAttempt) {
 		return "Dạ, em đã chuyển tin này cho nhân viên phụ trách hỗ trợ anh/chị ạ."
 	}
 	return personalZaloHandoverUnavailable

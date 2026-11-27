@@ -130,6 +130,26 @@ export interface CustomerCase {
   resolved_at: string | null
   created_at: string
   updated_at: string
+  channel_name?: string
+  source_group_name?: string
+  conversation_id?: string
+  stream_name?: string
+}
+
+export interface CaseChannel {
+  id: string
+  name: string
+  channel_type: string
+}
+
+export interface CaseAlert {
+  group_name?: string
+  group_id?: string
+  zalo_group_id?: string
+  status: string
+  error?: string
+  kind: string
+  created_at: string
 }
 
 export interface CaseEvent {
@@ -237,6 +257,7 @@ export function waitingHours(createdAt: string, now = Date.now()): number {
 export interface CaseStream {
   key: string
   name: string
+  channel_id?: string
 }
 
 // streamName shows a case's stream; a stream removed from the settings

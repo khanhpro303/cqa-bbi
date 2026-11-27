@@ -34,7 +34,7 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	database := facebookOAuthTestDatabase(t)
 	if err := database.AutoMigrate(&models.AppSetting{}, &models.CRMGroup{}, &models.ZaloCustomer{},
 		&models.ZaloWhitelist{}, &models.PersonalZaloIdentityLink{}, &models.Conversation{}, &models.CustomerCase{},
-		&models.CustomerCaseEvent{}, &models.ERPAuditLog{}, &models.NotificationLog{}, &models.CRMGroupCustomerCode{},
+		&models.CustomerCaseEvent{}, &models.CustomerCaseAlert{}, &models.ERPAuditLog{}, &models.NotificationLog{}, &models.CRMGroupCustomerCode{},
 		&models.CRMGroupCustomer{}); err != nil {
 		t.Fatal(err)
 	}
@@ -238,5 +238,9 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	}
 	if alerts != 4 {
 		t.Fatalf("expected one staff alert per complaint despite retries, got %d", alerts)
+	}
+	var history int64
+	if err := database.Model(&models.CustomerCaseAlert{}).Where("tenant_id = ? AND group_id = ? AND group_name = ? AND status = ?", tenant, staff.ID, staff.Name, "sent").Count(&history).Error; err != nil || history != 4 {
+		t.Fatalf("expected four linked alert outcomes, got %d (%v)", history, err)
 	}
 }

@@ -1182,7 +1182,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					return
 				}
 				log.Printf("[cases] complaint turn from %s reached no staff (recorded=%t); sending the handover alert", payload.Sender.ID, recorded)
-				engine.NotifyHandover(bg, adapter, alert)
+				engine.NotifyHandover(bg, adapter, alert, engine.HandoverTracking{
+					SourceGroupID: matchedGroup.ZaloGroupID,
+					Observe:       customercases.CaseFallbackObserver(bg, matchedChannel.TenantID, turnID),
+				})
 			}()
 		}
 

@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -20,7 +22,8 @@ import (
 // in_progress, resolved, cancelled, all), type, severity, stream ("none" for
 // cases without one), q (title, customer
 // name or code), subject_type + subject_id (one chat), customer_code,
-// channel_id. The response also counts cases per status for the tabs.
+// channel_id (required with a stream filter). The response also counts cases
+// per status for the tabs.
 func ListCustomerCases(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	page, perPage := pageParams(c)
@@ -29,6 +32,17 @@ func ListCustomerCases(c *gin.Context) {
 	q := strings.TrimSpace(c.Query("q"))
 	subjectType, subjectID := c.Query("subject_type"), c.Query("subject_id")
 	customerCode, channelID := strings.TrimSpace(c.Query("customer_code")), c.Query("channel_id")
+	if stream != "" && channelID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "stream_requires_channel"})
+		return
+	}
+	ctx := c.Request.Context()
+	conn := db.DB.WithContext(ctx)
+	channels, err := listComplaintChannels(conn, tenantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
+		return
+	}
 
 	base := func(tx *gorm.DB) *gorm.DB {
 		tx = tx.Where("tenant_id = ?", tenantID)
@@ -75,44 +89,91 @@ func ListCustomerCases(c *gin.Context) {
 	}
 
 	var total int64
-	withStatus(base(db.DB.Model(&models.CustomerCase{}))).Count(&total)
+	if err := withStatus(base(conn.Model(&models.CustomerCase{}))).Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
+		return
+	}
 	var rows []models.CustomerCase
 	order := "updated_at DESC"
 	if status == "active" {
 		// Most urgent first: high severity, then the longest waiting.
 		order = "FIELD(severity, 'high', 'medium', 'low'), created_at ASC"
 	}
-	withStatus(base(db.DB.Model(&models.CustomerCase{}))).Order(order).
-		Offset((page - 1) * perPage).Limit(perPage).Find(&rows)
+	if err := withStatus(base(conn.Model(&models.CustomerCase{}))).Order(order).
+		Offset((page - 1) * perPage).Limit(perPage).Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
+		return
+	}
 
 	var counts []struct {
 		Status string
 		N      int64
 	}
-	base(db.DB.Model(&models.CustomerCase{})).Select("status, COUNT(*) AS n").Group("status").Scan(&counts)
+	if err := base(conn.Model(&models.CustomerCase{})).Select("status, COUNT(*) AS n").Group("status").Scan(&counts).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
+		return
+	}
 	byStatus := map[string]int64{}
 	for _, row := range counts {
 		byStatus[row.Status] = row.N
 	}
-	c.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "per_page": perPage, "counts": byStatus,
-		"streams": customercases.TenantStreams(c.Request.Context(), tenantID)})
+	cases, err := buildCustomerCaseViews(conn, tenantID, rows, channels)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
+		return
+	}
+	streams, err := listComplaintStreamFilters(conn, tenantID, channelID, channels)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": cases, "total": total, "page": page, "per_page": perPage, "counts": byStatus,
+		"channels": channels, "streams": streams})
 }
 
 // GetCustomerCase returns a case with its history, newest last.
 func GetCustomerCase(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
+	ctx := c.Request.Context()
+	conn := db.DB.WithContext(ctx)
 	var cc models.CustomerCase
-	if err := db.DB.Where("tenant_id = ? AND id = ?", tenantID, c.Param("caseId")).First(&cc).Error; err != nil {
+	if err := conn.Where("tenant_id = ? AND id = ?", tenantID, c.Param("caseId")).First(&cc).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
+		return
+	}
+	var channel complaintChannel
+	if cc.ChannelID != "" {
+		err := conn.Model(&models.Channel{}).Select("id, name, channel_type, metadata").Where("tenant_id = ? AND id = ?", tenantID, cc.ChannelID).First(&channel).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
+			return
+		}
+	}
+	cases, err := buildCustomerCaseViews(conn, tenantID, []models.CustomerCase{cc}, []complaintChannel{channel})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
 		return
 	}
 	// The newest 500 events, shown oldest first.
 	var events []models.CustomerCaseEvent
-	db.DB.Where("tenant_id = ? AND case_id = ?", tenantID, cc.ID).Order("created_at DESC").Limit(500).Find(&events)
+	if err := conn.Where("tenant_id = ? AND case_id = ?", tenantID, cc.ID).Order("created_at DESC, id DESC").Limit(500).Find(&events).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_cases_failed"})
+		return
+	}
 	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
 		events[i], events[j] = events[j], events[i]
 	}
-	c.JSON(http.StatusOK, gin.H{"case": cc, "events": events})
+	response := gin.H{"case": cases[0], "events": events, "streams": complaintStreamOptions(channel)}
+	if alerts, err := customercases.CaseAlerts(ctx, tenantID, cc.ID); err == nil {
+		response["alerts"] = alerts
+	} else {
+		log.Printf("[cases] alert history for case %s: %v", cc.ID, err)
+		response["alerts_unavailable"] = true
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 type caseUpdateRequest struct {

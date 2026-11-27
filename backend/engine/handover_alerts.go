@@ -94,10 +94,18 @@ func BuildHandoverAlertMessage(a HandoverAlert, at time.Time) string {
 // an alert for the same customer was already sent within the dedup window.
 // It never returns an error: the customer reply must not depend on alerting.
 // Every attempt is recorded in NotificationLog (source "handover").
-func NotifyHandover(ctx context.Context, sender HandoverGroupSender, a HandoverAlert) bool {
+func NotifyHandover(ctx context.Context, sender HandoverGroupSender, a HandoverAlert, tracking ...HandoverTracking) bool {
 	groupID := ParseHandoverAlertGroupID(a.Channel.Metadata)
+	trace := func(zaloGroupID, status, errorCode string) {
+		for _, item := range tracking {
+			if item.Observe != nil {
+				item.Observe(groupID, zaloGroupID, "fallback", status, errorCode)
+			}
+		}
+	}
 	if groupID == "" {
 		log.Printf("[handover-alert] channel %s has no alert group configured; staff not notified (user %s)", a.Channel.ID, a.ZaloUserID)
+		trace("", "failed", "alert_group_not_configured")
 		return false
 	}
 
@@ -105,7 +113,14 @@ func NotifyHandover(ctx context.Context, sender HandoverGroupSender, a HandoverA
 	if err := db.DB.Where("id = ? AND tenant_id = ?", groupID, a.TenantID).First(&group).Error; err != nil || strings.TrimSpace(group.ZaloGroupID) == "" {
 		log.Printf("[handover-alert] channel %s alert group %s misconfigured: %v", a.Channel.ID, groupID, err)
 		recordHandoverAlertLog(a, groupID, "", "failed", "alert_group_misconfigured")
+		trace("", "failed", "alert_group_misconfigured")
 		return false
+	}
+	for _, item := range tracking {
+		if source := strings.TrimSpace(item.SourceGroupID); source != "" && source == strings.TrimSpace(group.ZaloGroupID) {
+			trace(group.ZaloGroupID, "failed", "alert_group_is_source_chat")
+			return false
+		}
 	}
 
 	dedupKey := fmt.Sprintf("handover_alert:%s:%s:%s", a.TenantID, a.Channel.ID, a.ZaloUserID)
@@ -133,10 +148,19 @@ func NotifyHandover(ctx context.Context, sender HandoverGroupSender, a HandoverA
 			db.RedisClient.Del(ctx, dedupKey)
 		}
 		recordHandoverAlertLog(a, groupID, msg, "failed", err.Error())
+		trace(group.ZaloGroupID, "failed", "delivery_failed")
 		return false
 	}
 	recordHandoverAlertLog(a, groupID, msg, "sent", "")
+	trace(group.ZaloGroupID, "sent", "")
 	return true
+}
+
+type HandoverDeliveryObserver func(groupID, zaloGroupID, kind, status, errorCode string)
+
+type HandoverTracking struct {
+	SourceGroupID string
+	Observe       HandoverDeliveryObserver
 }
 
 func recordHandoverAlertLog(a HandoverAlert, recipient, body, status, errMsg string) {
@@ -283,6 +307,7 @@ func truncateRunes(s string, n int) string {
 // still not fixed.
 type CaseAlert struct {
 	TenantID      string
+	CaseID        string
 	Channel       models.Channel
 	Kind          string // created | followup | reopened
 	ZaloUserID    string
@@ -392,6 +417,7 @@ func NotifyCase(ctx context.Context, sender HandoverGroupSender, a CaseAlert) bo
 	}
 	if groupID == "" {
 		log.Printf("[case-alert] channel %s has no alert group configured; case not alerted", a.Channel.ID)
+		RecordCaseAlertAttempt(a, "", "", "failed", "alert_group_not_configured")
 		return false
 	}
 	logAlert := func(body, status, errMsg string) {
@@ -410,6 +436,7 @@ func NotifyCase(ctx context.Context, sender HandoverGroupSender, a CaseAlert) bo
 	if err != nil || strings.TrimSpace(group.ZaloGroupID) == "" {
 		log.Printf("[case-alert] channel %s alert group %s misconfigured: %v", a.Channel.ID, groupID, err)
 		logAlert("", "failed", "alert_group_misconfigured")
+		RecordCaseAlertAttempt(a, groupID, strings.TrimSpace(group.ZaloGroupID), "failed", "alert_group_misconfigured")
 		return false
 	}
 	return NotifyCaseToGroup(ctx, sender, a, groupID, group.ZaloGroupID)
@@ -427,11 +454,13 @@ func NotifyCaseToGroup(ctx context.Context, sender HandoverGroupSender, a CaseAl
 	if groupID == "" || zaloGroupID == "" {
 		log.Printf("[case-alert] exact alert destination is missing")
 		logAlert("", "failed", "alert_group_misconfigured")
+		RecordCaseAlertAttempt(a, groupID, zaloGroupID, "failed", "alert_group_misconfigured")
 		return false
 	}
 	if source := strings.TrimSpace(a.SourceGroupID); source != "" && source == zaloGroupID {
 		log.Printf("[case-alert] refusing to send case alert back to source group %s", source)
 		logAlert("", "failed", "alert_group_is_source_chat")
+		RecordCaseAlertAttempt(a, groupID, zaloGroupID, "failed", "alert_group_is_source_chat")
 		return false
 	}
 	loc, err := time.LoadLocation(tenantTimezone(a.TenantID))
@@ -442,8 +471,46 @@ func NotifyCaseToGroup(ctx context.Context, sender HandoverGroupSender, a CaseAl
 	if err := sender.SendGroupMessage(ctx, zaloGroupID, msg); err != nil {
 		log.Printf("[case-alert] send to group %s failed: %v", zaloGroupID, err)
 		logAlert(msg, "failed", err.Error())
+		// The staff-facing case API exposes this row. Keep provider errors in
+		// server logs and the restricted notification log because they can
+		// contain URLs or credential-bearing transport details.
+		RecordCaseAlertAttempt(a, groupID, zaloGroupID, "failed", "delivery_failed")
 		return false
 	}
 	logAlert(msg, "sent", "")
+	RecordCaseAlertAttempt(a, groupID, zaloGroupID, "sent", "")
 	return true
+}
+
+// RecordCaseAlertAttempt persists the delivery result independently from the
+// general notification log. Callers may also use it when delivery fails before
+// an OA sender can be constructed.
+func RecordCaseAlertAttempt(a CaseAlert, groupID, zaloGroupID, status, errMsg string) {
+	if db.DB == nil || strings.TrimSpace(a.CaseID) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn := db.DB.WithContext(ctx)
+	groupID = strings.TrimSpace(groupID)
+	zaloGroupID = strings.TrimSpace(zaloGroupID)
+	groupName := ""
+	if groupID != "" {
+		var group models.CRMGroup
+		if err := conn.Unscoped().Select("name, zalo_group_id").Where("id = ? AND tenant_id = ?", groupID, a.TenantID).First(&group).Error; err == nil {
+			groupName = strings.TrimSpace(group.Name)
+			if zaloGroupID == "" {
+				zaloGroupID = strings.TrimSpace(group.ZaloGroupID)
+			}
+		}
+	}
+	now := time.Now()
+	row := models.CustomerCaseAlert{
+		ID: uuid.New().String(), TenantID: a.TenantID, CaseID: a.CaseID, Kind: a.Kind,
+		Status: status, GroupID: groupID, GroupName: groupName, ZaloGroupID: zaloGroupID,
+		Error: errMsg, CreatedAt: now,
+	}
+	if err := conn.Create(&row).Error; err != nil {
+		log.Printf("[case-alert] failed to write case alert result: %v", err)
+	}
 }

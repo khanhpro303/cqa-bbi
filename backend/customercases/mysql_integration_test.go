@@ -41,6 +41,16 @@ type fakeModel struct {
 	inputs  []string
 }
 
+type caseAlertSender struct {
+	groups []string
+	err    error
+}
+
+func (s *caseAlertSender) SendGroupMessage(_ context.Context, groupID, _ string) error {
+	s.groups = append(s.groups, groupID)
+	return s.err
+}
+
 func (f *fakeModel) call(_ context.Context, _, _, _ string, input string) (string, error) {
 	f.inputs = append(f.inputs, input)
 	if f.err != nil {
@@ -256,6 +266,84 @@ func TestPersonalZaloCaseAlertUsesRecipientOA(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("personal stream missing from tenant streams: %+v", streams)
+	}
+}
+
+func TestCaseAlertHistoryRecordsResolvedDestinationAndFailureMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	tenantID, channelID := setupTenant(t)
+	now := time.Now()
+	group := models.CRMGroup{
+		ID: pkg.NewUUID(), TenantID: tenantID, ChannelID: channelID,
+		ZaloGroupID: "staff-zalo-group", Name: "Nhóm bảo hành",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.DB.Create(&group).Error; err != nil {
+		t.Fatal(err)
+	}
+	metadata := fmt.Sprintf(`{"complaint_cases":true,"handover_alert_group_id":%q}`, group.ID)
+	if err := db.DB.Model(&models.Channel{}).Where("id = ?", channelID).Updates(map[string]interface{}{"metadata": metadata, "is_active": true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var channel models.Channel
+	if err := db.DB.Where("id = ?", channelID).First(&channel).Error; err != nil {
+		t.Fatal(err)
+	}
+	caseID := pkg.NewUUID()
+	cc := models.CustomerCase{
+		ID: caseID, TenantID: tenantID, ChannelID: channelID, SubjectType: "user", SubjectID: "zu-alert",
+		Type: "complaint", Severity: "medium", Title: "Cần hỗ trợ", Images: "[]", Status: StatusOpen,
+		Source: SourceBot, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.DB.Create(&cc).Error; err != nil {
+		t.Fatal(err)
+	}
+	sender := &caseAlertSender{}
+	a := engine.CaseAlert{TenantID: tenantID, CaseID: caseID, Channel: channel, Kind: ActionCreated, Title: cc.Title}
+	if !engine.NotifyCase(t.Context(), sender, a) {
+		t.Fatal("expected case alert to be delivered")
+	}
+	rows, err := CaseAlerts(t.Context(), tenantID, caseID)
+	if err != nil || len(rows) != 1 || rows[0].Status != "sent" || rows[0].GroupID != group.ID ||
+		rows[0].GroupName != group.Name || rows[0].ZaloGroupID != group.ZaloGroupID {
+		t.Fatalf("sent alert history = %+v", rows)
+	}
+
+	sender.err = errors.New("fixture Zalo send failed")
+	a.Kind = ActionFollowup
+	if engine.NotifyCase(t.Context(), sender, a) {
+		t.Fatal("expected case alert to fail")
+	}
+	rows, err = CaseAlerts(t.Context(), tenantID, caseID)
+	if err != nil || len(rows) != 2 || rows[0].Status != "failed" || rows[0].GroupName != group.Name ||
+		rows[0].Error != "delivery_failed" {
+		t.Fatalf("failed alert history = %+v", rows)
+	}
+	if other, err := CaseAlerts(t.Context(), "another-tenant", caseID); err != nil || len(other) != 0 {
+		t.Fatalf("cross-tenant alert history = %+v", other)
+	}
+	turnID := pkg.NewUUID()
+	event := models.CustomerCaseEvent{ID: pkg.NewUUID(), TenantID: tenantID, CaseID: caseID, Kind: "followup", Actor: SourceBot, TurnID: turnID, Images: "[]"}
+	if err := db.DB.Create(&event).Error; err != nil {
+		t.Fatal(err)
+	}
+	sender.err = nil
+	fallback := engine.HandoverAlert{TenantID: tenantID, Channel: channel, ZaloUserID: "zu-alert"}
+	trace := engine.HandoverTracking{Observe: CaseFallbackObserver(t.Context(), tenantID, turnID)}
+	if !engine.NotifyHandover(t.Context(), sender, fallback, trace) {
+		t.Fatal("expected fallback handover to be delivered")
+	}
+	rows, err = CaseAlerts(t.Context(), tenantID, caseID)
+	if err != nil || len(rows) != 3 || rows[0].Kind != "fallback" || rows[0].Status != "sent" || rows[0].GroupID != group.ID {
+		t.Fatalf("fallback alert history = %+v (%v)", rows, err)
+	}
+	trace.SourceGroupID = group.ZaloGroupID
+	if engine.NotifyHandover(t.Context(), sender, fallback, trace) {
+		t.Fatal("fallback alert must never return to the source group")
+	}
+	rows, err = CaseAlerts(t.Context(), tenantID, caseID)
+	if err != nil || len(rows) != 4 || rows[0].Error != "alert_group_is_source_chat" {
+		t.Fatalf("blocked fallback alert history = %+v (%v)", rows, err)
 	}
 }
 

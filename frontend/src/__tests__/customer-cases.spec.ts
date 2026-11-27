@@ -69,7 +69,12 @@ describe('Complaint cases panel', () => {
   it('moves a case to another stream and filters by stream', async () => {
     mocks.patch.mockResolvedValue({ data: { case: { ...sampleCase, stream: 'marketing' } } })
     const streams = [{ key: 'bao_hanh', name: 'Bảo hành' }, { key: 'marketing', name: 'Marketing' }]
-    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1', streams }, global: { mocks: { $t: (k: string) => k } } })
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/customer-cases/c1')) return { data: { case: sampleCase, events: [], streams, alerts: [] } }
+      if (url.endsWith('/users')) return { data: [] }
+      return { data: {} }
+    })
+    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1' }, global: { mocks: { $t: (k: string) => k } } })
     await flushPromises()
     const vm = wrapper.vm as any
     expect(vm.form.stream).toBe('')
@@ -78,16 +83,55 @@ describe('Complaint cases panel', () => {
     expect(mocks.patch).toHaveBeenCalledWith('/tenants/t1/customer-cases/c1', { stream: 'marketing' })
 
     mocks.get.mockImplementation(async (url: string) => {
-      if (url.endsWith('/customer-cases')) return { data: { data: [sampleCase], total: 1, counts: {}, streams } }
+      if (url.endsWith('/customer-cases')) return {
+        data: {
+          data: [sampleCase], total: 1, counts: {}, streams,
+          channels: [{ id: 'oa-1', name: 'OA chính', channel_type: 'zalo_oa' }],
+        },
+      }
       return { data: {} }
     })
     const panel = shallowMount(CasesPanel, { props: { tenantId: 't1' }, global: { mocks: { $t: (k: string) => k } } })
     await flushPromises()
     const pvm = panel.vm as any
-    expect(pvm.streamOptions.map((o: any) => o.value)).toEqual(['', 'bao_hanh', 'marketing', 'none'])
+    expect(pvm.channelOptions.map((o: any) => o.value)).toEqual(['', 'oa-1'])
+    pvm.channel = 'oa-1'
+    await pvm.selectChannel()
+    expect(mocks.get).toHaveBeenLastCalledWith('/tenants/t1/customer-cases', { params: expect.objectContaining({ channel_id: 'oa-1', stream: undefined }) })
     pvm.stream = 'bao_hanh'
     await pvm.load(1)
-    expect(mocks.get).toHaveBeenLastCalledWith('/tenants/t1/customer-cases', { params: expect.objectContaining({ stream: 'bao_hanh' }) })
+    expect(mocks.get).toHaveBeenLastCalledWith('/tenants/t1/customer-cases', { params: expect.objectContaining({ channel_id: 'oa-1', stream: 'bao_hanh' }) })
+  })
+
+  it('loads source metadata and exact alert delivery history for a case', async () => {
+    const enriched = {
+      ...sampleCase,
+      channel_name: 'Zalo cá nhân Hậu', source_group_name: 'BBI x Shop A', zalo_group_id: 'zg-1', conversation_id: 'conv-1',
+    }
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/customer-cases/c1')) return {
+        data: {
+          case: enriched,
+          events: [],
+          streams: [{ key: 'bao_hanh', name: 'Bảo hành' }],
+          alerts: [
+            { group_name: 'Nhóm bảo hành', group_id: 'g-bh', status: 'sent', kind: 'created', created_at: '2026-11-27T10:00:00Z' },
+            { group_name: 'Nhóm CSKH', group_id: 'g-cs', status: 'failed', error: 'zalo_timeout', kind: 'moved', created_at: '2026-11-27T11:00:00Z' },
+          ],
+        },
+      }
+      if (url.endsWith('/users')) return { data: [] }
+      return { data: {} }
+    })
+    const wrapper = shallowMount(CaseDialog, { props: { modelValue: true, tenantId: 't1', caseId: 'c1' }, global: { mocks: { $t: (k: string) => k } } })
+    await flushPromises()
+    const vm = wrapper.vm as any
+    expect(vm.item.source_group_name).toBe('BBI x Shop A')
+    expect(vm.streams).toEqual([{ key: 'bao_hanh', name: 'Bảo hành' }])
+    expect(vm.alerts.map((a: any) => [a.group_name, a.status, a.error])).toEqual([
+      ['Nhóm bảo hành', 'sent', undefined],
+      ['Nhóm CSKH', 'failed', 'zalo_timeout'],
+    ])
   })
 
   it('saves only the note when only the note changed', async () => {
