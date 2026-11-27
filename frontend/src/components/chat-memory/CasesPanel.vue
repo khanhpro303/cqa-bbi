@@ -8,7 +8,7 @@
       </v-chip-group>
     </div>
     <v-row v-if="!compact" dense class="mb-2">
-      <v-col cols="12" :md="streams.length ? 4 : 6">
+      <v-col cols="12" md="4">
         <v-text-field
           v-model="query"
           :label="$t('cc_search')"
@@ -19,13 +19,16 @@
           @update:model-value="debouncedLoad"
         />
       </v-col>
-      <v-col v-if="streams.length" cols="12" md="2">
+      <v-col cols="12" md="2">
+        <v-select v-model="channel" :items="channelOptions" :label="$t('cc_channel')" density="compact" hide-details data-testid="case-channel-filter" @update:model-value="selectChannel" />
+      </v-col>
+      <v-col v-if="channel && streams.length" cols="12" md="2">
         <v-select v-model="stream" :items="streamOptions" :label="$t('cc_stream')" density="compact" hide-details data-testid="case-stream-filter" @update:model-value="load(1)" />
       </v-col>
-      <v-col cols="6" :md="streams.length ? 3 : 3">
+      <v-col cols="6" :md="channel && streams.length ? 2 : 3">
         <v-select v-model="type" :items="typeOptions" :label="$t('cc_type')" density="compact" hide-details @update:model-value="load(1)" />
       </v-col>
-      <v-col cols="6" md="3">
+      <v-col cols="6" :md="channel && streams.length ? 2 : 3">
         <v-select v-model="severity" :items="severityOptions" :label="$t('cc_severity')" density="compact" hide-details @update:model-value="load(1)" />
       </v-col>
     </v-row>
@@ -60,7 +63,7 @@
             <div class="font-weight-medium text-truncate">{{ c.title }}</div>
             <div class="text-caption text-medium-emphasis">
               {{ $t(issueTypeLabelKey(c.type)) }}
-              <span v-if="c.stream"> · <v-icon size="x-small">mdi-source-fork</v-icon> {{ streamName(streams, c.stream) }}</span>
+              <span v-if="c.stream"> · <v-icon size="x-small">mdi-source-fork</v-icon> {{ c.stream_name || streamName(streams, c.stream) }}</span>
               <v-icon v-if="parseCaseImages(c.images).length" size="x-small" class="ml-1">mdi-image-outline</v-icon>
               <span v-if="parseCaseImages(c.images).length">{{ parseCaseImages(c.images).length }}</span>
             </div>
@@ -68,7 +71,13 @@
           <td v-if="!compact" class="customer-cell">
             <div>{{ c.customer_name || c.reporter_name || c.subject_id }}</div>
             <div class="text-caption text-medium-emphasis">
-              <span v-if="c.customer_code">{{ c.customer_code }} · </span>{{ c.subject_type === 'group' ? $t('cm_group_chat') : $t('cm_direct_chat') }}
+              <span v-if="c.customer_code">{{ c.customer_code }} · </span>{{ caseSourceType(c) }}
+            </div>
+            <div v-if="c.source_group_name || c.zalo_group_id" class="text-caption text-medium-emphasis">
+              {{ $t('cc_source_group') }}: {{ c.source_group_name || c.zalo_group_id }}
+            </div>
+            <div v-if="c.channel_name" class="text-caption text-medium-emphasis">
+              {{ $t('cc_channel') }}: {{ c.channel_name }}
             </div>
           </td>
           <td class="text-no-wrap">
@@ -84,7 +93,10 @@
           <td><v-chip size="small" variant="tonal" :color="caseStatusColor(c.status)">{{ $t(`cc_status_${c.status}`) }}</v-chip></td>
           <td v-if="!compact">{{ c.assignee_name || '—' }}</td>
         </tr>
-        <tr v-if="!loading && cases.length === 0">
+        <tr v-if="loadFailed">
+          <td :colspan="compact ? 5 : 7" class="text-center text-error py-6" role="alert">{{ $t('cm_load_failed') }}</td>
+        </tr>
+        <tr v-else-if="!loading && cases.length === 0">
           <td :colspan="compact ? 5 : 7" class="text-center text-medium-emphasis py-6">{{ $t('cc_no_cases') }}</td>
         </tr>
       </tbody>
@@ -93,7 +105,14 @@
       <v-pagination v-if="total > perPage" v-model="page" :length="Math.ceil(total / perPage)" density="compact" @update:model-value="load" />
     </div>
 
-    <CaseDialog v-model="dialog" :tenant-id="tenantId" :case-id="selectedId" :streams="streams" @saved="load()" @open-session="id => $emit('open-session', id)" />
+    <CaseDialog
+      v-model="dialog"
+      :tenant-id="tenantId"
+      :case-id="selectedId"
+      @saved="load()"
+      @open-session="id => emit('open-session', id)"
+      @open-conversation="c => emit('open-conversation', c)"
+    />
   </div>
 </template>
 
@@ -103,7 +122,7 @@ import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import CaseDialog from './CaseDialog.vue'
 import {
-  type CaseStream, type CustomerCase, caseTypes, caseStatusColor, issueTypeLabelKey, parseCaseImages, severityColor, streamName, waitingHours,
+  type CaseChannel, type CaseStream, type CustomerCase, caseTypes, caseStatusColor, issueTypeLabelKey, parseCaseImages, severityColor, streamName, waitingHours,
 } from './labels'
 
 const props = defineProps<{
@@ -113,7 +132,10 @@ const props = defineProps<{
   subjectId?: string
   customerCode?: string
 }>()
-defineEmits<{ (e: 'open-session', id: string): void }>()
+const emit = defineEmits<{
+  (e: 'open-session', id: string): void
+  (e: 'open-conversation', c: CustomerCase): void
+}>()
 
 const { t } = useI18n()
 const perPage = 20
@@ -122,12 +144,15 @@ const total = ref(0)
 const page = ref(1)
 const counts = ref<Record<string, number>>({})
 const loading = ref(false)
+const loadFailed = ref(false)
 const status = ref(props.compact ? 'all' : 'active')
 const query = ref('')
 const type = ref('')
 const severity = ref('')
 const stream = ref('')
 const streams = ref<CaseStream[]>([])
+const channel = ref('')
+const channels = ref<CaseChannel[]>([])
 const dialog = ref(false)
 const selectedId = ref('')
 
@@ -153,6 +178,10 @@ const streamOptions = computed(() => [
   ...streams.value.map(s => ({ title: s.name, value: s.key })),
   { title: t('cc_stream_none'), value: 'none' },
 ])
+const channelOptions = computed(() => [
+  { title: t('all'), value: '' },
+  ...channels.value.map(c => ({ title: c.name, value: c.id })),
+])
 const severityOptions = computed(() => [
   { title: t('all'), value: '' },
   ...['high', 'medium', 'low'].map(v => ({ title: t(`cm_severity_${v}`), value: v })),
@@ -165,13 +194,14 @@ let requestSeq = 0
 async function load(p = page.value) {
   page.value = p
   loading.value = true
+  loadFailed.value = false
   const seq = ++requestSeq
   try {
     const { data } = await api.get(`/tenants/${props.tenantId}/customer-cases`, {
       params: {
         page: p, per_page: perPage, status: status.value,
         q: query.value || undefined, type: type.value || undefined, severity: severity.value || undefined,
-        stream: stream.value || undefined,
+        channel_id: channel.value || undefined, stream: channel.value ? (stream.value || undefined) : undefined,
         subject_type: props.subjectType || undefined, subject_id: props.subjectId || undefined,
         customer_code: props.customerCode || undefined,
       },
@@ -181,8 +211,14 @@ async function load(p = page.value) {
     total.value = data?.total || 0
     counts.value = data?.counts || {}
     streams.value = Array.isArray(data?.streams) ? data.streams : []
+    channels.value = Array.isArray(data?.channels) ? data.channels : []
   } catch {
-    if (seq === requestSeq) cases.value = []
+    if (seq === requestSeq) {
+      cases.value = []
+      total.value = 0
+      counts.value = {}
+      loadFailed.value = true
+    }
   } finally {
     if (seq === requestSeq) loading.value = false
   }
@@ -197,6 +233,16 @@ function debouncedLoad() {
 function open(c: CustomerCase) {
   selectedId.value = c.id
   dialog.value = true
+}
+
+function selectChannel() {
+  stream.value = ''
+  streams.value = []
+  load(1)
+}
+
+function caseSourceType(c: CustomerCase) {
+  return c.zalo_group_id || c.subject_type === 'group' ? t('cm_group_chat') : t('cm_direct_chat')
 }
 
 function isActive(s: string) { return s === 'open' || s === 'in_progress' }
@@ -215,7 +261,7 @@ function formatDateTime(v?: string | null) {
 watch(() => [props.subjectId, props.customerCode], () => load(1))
 onMounted(() => load(1))
 
-defineExpose({ load, cases, status, stream, streamOptions })
+defineExpose({ load, cases, status, channel, channelOptions, stream, streamOptions, selectChannel })
 </script>
 
 <style scoped>

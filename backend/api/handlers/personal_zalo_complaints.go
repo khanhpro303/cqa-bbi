@@ -106,7 +106,11 @@ func finishPersonalZaloComplaint(ctx context.Context, cfg *config.Config, channe
 	log.Printf("[cases] personal Zalo turn channel=%s recorded=%t; sending fallback handover", channel.ID, recorded)
 	alertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	handoverReply := sendPersonalZaloHandover(alertCtx, cfg, channel, req)
+	var observe engine.HandoverDeliveryObserver
+	if recorded {
+		observe = customercases.CaseFallbackObserver(alertCtx, req.TenantID, turnID)
+	}
+	handoverReply := sendPersonalZaloHandover(alertCtx, cfg, channel, req, observe)
 	if recorded {
 		if handoverReply != personalZaloHandoverUnavailable {
 			return personalZaloCaseRecorded + " Em đã chuyển thông tin cho nhân viên phụ trách ạ.", true

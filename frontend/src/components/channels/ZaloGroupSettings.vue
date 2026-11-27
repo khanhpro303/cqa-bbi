@@ -90,32 +90,6 @@
       color="primary"
       data-testid="chat-memory-profile-in-prompt"
     />
-    <v-switch
-      v-model="settings.complaint_cases"
-      :label="$t('complaint_cases_switch')"
-      :hint="$t('complaint_cases_switch_hint')"
-      persistent-hint
-      density="compact"
-      color="primary"
-      class="mt-2"
-      data-testid="complaint-cases"
-    />
-    <template v-if="settings.complaint_cases">
-      <v-text-field
-        v-model.number="settings.complaint_resolved_days"
-        type="number"
-        min="1"
-        :max="MAX_COMPLAINT_RESOLVED_DAYS"
-        :label="$t('complaint_resolved_days')"
-        :hint="$t('complaint_resolved_days_hint')"
-        persistent-hint
-        density="compact"
-        class="mt-3"
-        style="max-width: 320px"
-        data-testid="complaint-resolved-days"
-      />
-      <ComplaintStreams v-model="settings.complaint_streams" :group-options="alertGroupOptions" />
-    </template>
   </div>
 </template>
 
@@ -123,8 +97,7 @@
 import { onMounted, ref } from 'vue'
 import api from '../../api'
 import CampaignAlertOutputs from './CampaignAlertOutputs.vue'
-import ComplaintStreams from './ComplaintStreams.vue'
-import { MAX_COMPLAINT_RESOLVED_DAYS, type ZaloGroupSettings } from './zaloGroupSettings'
+import type { ZaloGroupSettings } from './zaloGroupSettings'
 
 const props = defineProps<{ tenantId: string; channelId: string }>()
 const settings = defineModel<ZaloGroupSettings>({ required: true })

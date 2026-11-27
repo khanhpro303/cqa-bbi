@@ -135,14 +135,14 @@ const editButton = 'button[aria-label="' + en.edit_channel + '"]'
 const field = (label: string) => '[aria-label="' + label + '"]'
 
 describe.each([false, true])('channel editor on detail page = %s', (detail) => {
-  it('opens the same three tabs and saves sync, session, and handover settings', async () => {
+  it('opens the same four tabs and saves sync, session, handover, and complaint settings', async () => {
     const { wrapper, channelStore } = await mountPage(detail)
     if (detail) expect(channelStore.channels).toEqual([])
 
     await wrapper.get(editButton).trigger('click')
     const dialog = wrapper.get('[role="dialog"]')
     const tabs = dialog.findAll('button[role="tab"]')
-    expect(tabs.map(tab => tab.text())).toEqual([en.general_settings, en.chatbot_session, en.zalo_group_settings_tab])
+    expect(tabs.map(tab => tab.text())).toEqual([en.general_settings, en.chatbot_session, en.zalo_group_settings_tab, en.complaint_settings_tab])
     expect((dialog.get(field(en.sync_scope)).element as HTMLSelectElement).value).toBe('direct')
     await dialog.get(field(en.sync_scope)).setValue('all')
 
@@ -159,6 +159,10 @@ describe.each([false, true])('channel editor on detail page = %s', (detail) => {
     expect(staffSelect.text()).toContain('An · 123')
     await staffSelect.setValue('staff')
 
+    await tabs[3]!.trigger('click')
+    await flushPromises()
+    await dialog.get('[data-testid="personal-zalo-complaint-cases"]').setValue(true)
+
     await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
     await flushPromises()
 
@@ -166,6 +170,7 @@ describe.each([false, true])('channel editor on detail page = %s', (detail) => {
     expect(JSON.parse(api.put.mock.calls[0]![1].metadata)).toEqual({
       sync_scope: 'all', session_keyword: 'Call Bull', session_timeout_minutes: 60,
       personal_zalo_group_reply_enabled: true, personal_zalo_handover_staff_id: 'staff', handover_alert_group_id: '',
+      complaint_cases: true,
     })
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     const refreshed = detail ? channelStore.currentChannel : channelStore.channels[0]
@@ -180,6 +185,23 @@ describe.each([false, true])('channel editor on detail page = %s', (detail) => {
     const { wrapper } = await mountPage(detail, false)
     expect(wrapper.find(editButton).exists()).toBe(false)
   })
+})
+
+it('shows the dedicated complaint settings tab for a Zalo OA channel', async () => {
+  storedChannel = {
+    ...personal,
+    channel_type: 'zalo_oa',
+    name: 'Zalo OA',
+    metadata: JSON.stringify({ complaint_cases: false }),
+  }
+  const { wrapper } = await mountPage(true)
+  await wrapper.get(editButton).trigger('click')
+  const dialog = wrapper.get('[role="dialog"]')
+  const tabs = dialog.findAll('button[role="tab"]')
+  expect(tabs.map(tab => tab.text())).toContain(en.complaint_settings_tab)
+  await tabs.find(tab => tab.text() === en.complaint_settings_tab)!.trigger('click')
+  await flushPromises()
+  expect(dialog.get('[data-testid="complaint-cases"]').attributes('aria-label')).toBe(en.complaint_cases_switch)
 })
 
 it('keeps the edit dialog open with the original draft after a validation error', async () => {
