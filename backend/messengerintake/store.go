@@ -160,13 +160,16 @@ func BindConversation(database *gorm.DB, tenantID, channelID, psid, conversation
 		return nil
 	}
 	return database.Transaction(func(tx *gorm.DB) error {
+		var channel models.Channel
+		if err := tx.Select("channel_type", "external_id").Where("id = ? AND tenant_id = ?", channelID, tenantID).First(&channel).Error; err != nil {
+			return err
+		}
+		if channel.ChannelType != "facebook" {
+			return nil
+		}
 		if err := tx.Model(&models.MessengerIntakeAttribution{}).
 			Where("tenant_id = ? AND channel_id = ? AND psid = ? AND conversation_id IS NULL", tenantID, channelID, psid).
 			Updates(map[string]interface{}{"conversation_id": conversationID, "updated_at": time.Now()}).Error; err != nil {
-			return err
-		}
-		var channel models.Channel
-		if err := tx.Select("external_id").Where("id = ? AND tenant_id = ?", channelID, tenantID).First(&channel).Error; err != nil {
 			return err
 		}
 		return messengerjourney.BindConversation(context.Background(), tx, tenantID, channelID, channel.ExternalID, psid, conversationID)

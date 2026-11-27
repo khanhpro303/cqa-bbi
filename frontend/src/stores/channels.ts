@@ -25,6 +25,14 @@ export interface Channel {
   created_at: string
 }
 
+export interface ChannelSyncLog {
+  id: string
+  created_at: string
+  action: string
+  detail: string
+  error_message: string
+}
+
 export interface PersonalZaloAccountOwner {
   account_external_id: string
   user_id: string
@@ -108,21 +116,20 @@ export const useChannelStore = defineStore('channels', () => {
   }
 
   const currentChannel = ref<Channel | null>(null)
-  const syncHistory = ref<any[]>([])
-  const syncHistoryTotal = ref(0)
+  let channelRequest = 0
 
   async function fetchChannel(tenantId: string, channelId: string) {
-    const { data } = await api.get(`/tenants/${tenantId}/channels/${channelId}`)
-    currentChannel.value = data
+    const request = ++channelRequest
+    const { data } = await api.get<Channel>(`/tenants/${tenantId}/channels/${channelId}`)
+    if (request === channelRequest) currentChannel.value = data
     return data
   }
 
   async function fetchSyncHistory(tenantId: string, channelId: string, page = 1, status = '') {
-    const params: Record<string, any> = { page, per_page: 10 }
-    if (status) params.status = status
-    const { data } = await api.get(`/tenants/${tenantId}/channels/${channelId}/sync-history`, { params })
-    syncHistory.value = data.data || []
-    syncHistoryTotal.value = data.total || 0
+    const params = { page, per_page: 10, ...(status && { status }) }
+    const { data } = await api.get<{ data: ChannelSyncLog[] | null; total: number }>(
+      `/tenants/${tenantId}/channels/${channelId}/sync-history`, { params },
+    )
     return data
   }
 
@@ -140,8 +147,9 @@ export const useChannelStore = defineStore('channels', () => {
   async function updateAccountOwners(tenantId: string, channelId: string, owners: PersonalZaloAccountOwner[]) {
     const { data } = await api.put(`/tenants/${tenantId}/channels/${channelId}/account-owners`, { account_owners: owners })
     accountOwners.value = data.account_owners || []
-    if (currentChannel.value) {
-      currentChannel.value.account_owners = accountOwners.value
+    const channel = currentChannel.value
+    if (channel?.id === channelId && channel.tenant_id === tenantId) {
+      channel.account_owners = accountOwners.value
     }
     return accountOwners.value
   }
@@ -169,8 +177,6 @@ export const useChannelStore = defineStore('channels', () => {
   return {
     channels,
     currentChannel,
-    syncHistory,
-    syncHistoryTotal,
     accountOwners,
     fetchChannels,
     fetchChannel,
