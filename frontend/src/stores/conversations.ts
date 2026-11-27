@@ -32,7 +32,7 @@ export const useConversationStore = defineStore('conversations', () => {
   const conversations = ref<Conversation[]>([])
   const messages = ref<Message[]>([])
   const total = ref(0)
-  const currentConversation = ref<{ id: string; customer_name: string; message_count: number } | null>(null)
+  const currentConversation = ref<{ id: string; channel_id?: string; customer_name: string; message_count: number } | null>(null)
 
   async function fetchConversations(tenantId: string, params: Record<string, string | number> = {}) {
     const { data } = await api.get(`/tenants/${tenantId}/conversations`, { params })

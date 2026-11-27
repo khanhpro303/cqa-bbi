@@ -11,29 +11,15 @@
       <v-col v-for="ch in channelStore.channels" :key="ch.id" cols="12" sm="6" md="4">
         <v-card class="pa-4 h-100 d-flex flex-column" style="cursor: pointer" @click="router.push(`/${tenantId}/channels/${ch.id}`)">
           <div class="d-flex align-center mb-3">
-            <v-avatar
-              v-if="canRenderPersonalZaloAvatar(ch)"
+            <ChannelAvatar
+              :channel-type="ch.channel_type"
+              :channel-id="ch.id"
+              :avatar-url="ch.avatar_url"
+              :name="ch.name"
               size="32"
+              variant="bare"
               class="mr-3 flex-shrink-0"
-            >
-              <v-img
-                :key="avatarUrlFor(ch)"
-                :src="avatarUrlFor(ch)"
-                :alt="ch.name"
-                cover
-                eager
-                @error="markAvatarFailed(ch)"
-              >
-                <template #placeholder>
-                  <v-icon :color="channelColor(ch.channel_type)" size="32">
-                    {{ channelIcon(ch.channel_type) }}
-                  </v-icon>
-                </template>
-              </v-img>
-            </v-avatar>
-            <v-icon v-else :color="channelColor(ch.channel_type)" size="32" class="mr-3">
-              {{ channelIcon(ch.channel_type) }}
-            </v-icon>
+            />
             <div class="flex-grow-1">
               <div class="text-subtitle-1 font-weight-bold">{{ ch.name }}</div>
               <v-chip size="x-small" :color="channelColor(ch.channel_type)" variant="tonal">
@@ -310,6 +296,7 @@ import { useAuthStore } from '../stores/auth'
 import api from '../api'
 import FacebookPageConnect from '../components/channels/FacebookPageConnect.vue'
 import ChannelEditDialog from '../components/channels/ChannelEditDialog.vue'
+import ChannelAvatar from '../components/channels/ChannelAvatar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -563,39 +550,6 @@ function showSnack(text: string, color: string) {
   snackText.value = text
   snackColor.value = color
   snackbar.value = true
-}
-
-const failedAvatarKeys = ref<Record<string, boolean>>({})
-
-function avatarUrlFor(ch: Pick<Channel, 'avatar_url'>): string {
-  return (ch.avatar_url || '').trim()
-}
-
-function isSupportedAvatarUrl(url: string): boolean {
-  return /^(https?:\/\/|data:image\/|blob:|\/(?!\/))/i.test(url)
-}
-
-function avatarFailureKey(ch: Pick<Channel, 'id' | 'avatar_url'>): string {
-  return `${ch.id}:${avatarUrlFor(ch)}`
-}
-
-function canRenderPersonalZaloAvatar(ch: Pick<Channel, 'id' | 'channel_type' | 'avatar_url'>): boolean {
-  if (ch.channel_type !== 'personal_zalo_import') return false
-  const url = avatarUrlFor(ch)
-  if (!url || !isSupportedAvatarUrl(url)) return false
-  return !failedAvatarKeys.value[avatarFailureKey(ch)]
-}
-
-function markAvatarFailed(ch: Pick<Channel, 'id' | 'avatar_url'>) {
-  const url = avatarUrlFor(ch)
-  if (!url) return
-  failedAvatarKeys.value[avatarFailureKey(ch)] = true
-}
-
-function channelIcon(channelType: string) {
-  if (channelType === 'zalo_oa') return 'mdi-message-text'
-  if (channelType === 'facebook') return 'mdi-facebook-messenger'
-  return 'mdi-cellphone-link'
 }
 
 function channelColor(channelType: string) {

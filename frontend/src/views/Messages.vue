@@ -147,11 +147,15 @@
                 @click="selectConversation(conv.id)"
               >
                 <template #prepend>
-                  <v-avatar :color="channelTypeColor(conv.channel_type)" size="32" class="mr-3">
-                    <v-icon color="white" size="16">
-                      {{ channelTypeIcon(conv.channel_type) }}
-                    </v-icon>
-                  </v-avatar>
+                  <ChannelAvatar
+                    :channel-type="conv.channel_type"
+                    :channel-id="conv.channel_id"
+                    :avatar-url="channelAvatarUrlFor(conv.channel_id, conv.channel_type)"
+                    :name="conv.channel_name || conv.customer_name"
+                    size="32"
+                    variant="badge"
+                    class="mr-3"
+                  />
                 </template>
 
                 <v-list-item-title class="text-body-2 font-weight-medium">
@@ -196,11 +200,15 @@
           <!-- Header -->
           <v-card-title class="d-flex align-center pa-3 pa-sm-4" style="min-width: 0;">
             <v-btn icon="mdi-arrow-left" variant="text" size="small" class="d-md-none mr-2 flex-shrink-0" :title="$t('back')" @click="closeConversation" />
-            <v-avatar :color="channelTypeColor(selectedConvChannelType)" size="36" class="mr-3 flex-shrink-0">
-              <v-icon color="white" size="18">
-                {{ channelTypeIcon(selectedConvChannelType) }}
-              </v-icon>
-            </v-avatar>
+            <ChannelAvatar
+              :channel-type="selectedConvChannelType"
+              :channel-id="selectedConvChannelId"
+              :avatar-url="selectedConvAvatarUrl"
+              :name="selectedConvChannelName || conversationStore.currentConversation?.customer_name"
+              size="36"
+              variant="badge"
+              class="mr-3 flex-shrink-0"
+            />
             <div class="flex-grow-1 text-truncate" style="min-width: 0;">
               <div class="text-subtitle-1 font-weight-medium text-truncate">
                 {{ conversationStore.currentConversation?.customer_name || $t('msg_unknown_customer') }}
@@ -529,7 +537,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useDisplay } from 'vuetify'
 import { useConversationStore, type Message } from '../stores/conversations'
-import { useChannelStore } from '../stores/channels'
+import { useChannelStore, type Channel } from '../stores/channels'
 import { useAuthStore } from '../stores/auth'
 import {
   parseImageMessagePayload,
@@ -541,9 +549,10 @@ import {
   type ThirdPartyLinkMessageView,
 } from '../utils/message-render'
 import api from '../api'
-import { channelTypeColor, channelTypeIcon, channelTypeLabel } from '../utils/channel'
+import { channelTypeColor, channelTypeLabel } from '../utils/channel'
 import { buildQcTimeline, type QcSnapshot } from '../utils/qc-evaluation'
 import MessengerJourneyPanel from '../components/MessengerJourneyPanel.vue'
+import ChannelAvatar from '../components/channels/ChannelAvatar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -558,10 +567,28 @@ const tenantId = computed(() => route.params.tenantId as string)
 const loading = ref(false)
 const loadingMessages = ref(false)
 const selectedConvId = ref<string | null>(null)
+const selectedConvChannelId = ref('')
 const selectedConvChannelType = ref('')
 const selectedConvChannelName = ref('')
 const currentPage = ref(1)
 const detailTab = ref('messages')
+
+const channelById = computed(() => {
+  const map: Record<string, Channel> = {}
+  for (const ch of channelStore.channels) {
+    map[ch.id] = ch
+  }
+  return map
+})
+
+function channelAvatarUrlFor(channelId?: string, channelType?: string): string {
+  if (channelType !== 'personal_zalo_import' || !channelId) return ''
+  return channelById.value[channelId]?.avatar_url || ''
+}
+
+const selectedConvAvatarUrl = computed(() =>
+  channelAvatarUrlFor(selectedConvChannelId.value, selectedConvChannelType.value),
+)
 
 // Evaluation state
 const loadingEvaluation = ref(false)
@@ -834,13 +861,26 @@ async function selectConversation(convId: string, tab?: string) {
   detailTab.value = tab === 'evaluation' ? 'qc' : tab === 'classification' ? 'classification' : 'messages'
   const conv = conversationStore.conversations.find(c => c.id === convId)
   if (conv) {
+    selectedConvChannelId.value = conv.channel_id || ''
     selectedConvChannelType.value = conv.channel_type
     selectedConvChannelName.value = conv.channel_name || ''
+  } else {
+    selectedConvChannelId.value = ''
+    selectedConvChannelType.value = ''
+    selectedConvChannelName.value = ''
   }
 
   loadingMessages.value = true
   try {
     await conversationStore.fetchMessages(tenantId.value, convId)
+    if (!selectedConvChannelId.value && conversationStore.currentConversation?.channel_id) {
+      const ch = channelById.value[conversationStore.currentConversation.channel_id]
+      selectedConvChannelId.value = conversationStore.currentConversation.channel_id
+      if (ch) {
+        selectedConvChannelType.value = ch.channel_type
+        selectedConvChannelName.value = ch.name
+      }
+    }
     await nextTick()
     scrollToBottom()
   } finally {

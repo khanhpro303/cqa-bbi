@@ -198,6 +198,7 @@ func GetConversationMessages(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"conversation": gin.H{
 			"id":                  conv.ID,
+			"channel_id":          conv.ChannelID,
 			"customer_name":       conv.CustomerName,
 			"message_count":       conv.MessageCount,
 			"thread_type":         parseConversationMetadata(conv.Metadata).ThreadType,

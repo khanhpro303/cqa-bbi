@@ -200,7 +200,6 @@ describe('Channels personal Zalo avatar rendering', () => {
   it.each([
     { label: 'missing avatar_url', channel: makeChannel({ avatar_url: undefined }), icon: 'mdi-cellphone-link', color: 'teal' },
     { label: 'unsafe avatar_url scheme', channel: makeChannel({ avatar_url: 'javascript:alert(1)' }), icon: 'mdi-cellphone-link', color: 'teal' },
-    { label: 'zalo_oa channel even with avatar_url', channel: makeChannel({ id: 'ch-oa', channel_type: 'zalo_oa', avatar_url: 'https://cdn.example.com/oa.jpg' }), icon: 'mdi-message-text', color: 'blue' },
     { label: 'facebook channel', channel: makeChannel({ id: 'ch-fb', channel_type: 'facebook', avatar_url: 'https://cdn.example.com/fb.jpg' }), icon: 'mdi-facebook-messenger', color: 'indigo' },
   ])('renders fallback icon for $label', async ({ channel, icon, color }) => {
     const wrapper = mountChannels([channel])
@@ -211,6 +210,23 @@ describe('Channels personal Zalo avatar rendering', () => {
     const renderedIcon = card.getComponent(VIconStub)
     expect(renderedIcon.text().trim()).toBe(icon)
     expect(renderedIcon.props('color')).toBe(color)
+
+    wrapper.unmount()
+  })
+
+  it('renders official Zalo logo for zalo_oa channels even when avatar_url is set', async () => {
+    const wrapper = mountChannels([
+      makeChannel({ id: 'ch-oa', channel_type: 'zalo_oa', name: 'BBI Official', avatar_url: 'https://cdn.example.com/oa.jpg' }),
+    ])
+    await flushPromises()
+
+    const card = wrapper.get('article.v-card-stub')
+    const avatar = card.getComponent(VAvatarStub)
+    expect(avatar.props('size')).toBe('32')
+    const img = avatar.getComponent(VImgStub)
+    expect(img.props('src')).toBe('/assets/brand/zalo-logo.svg')
+    expect(img.props('alt')).toBe('BBI Official')
+    expect(card.findAll('.v-icon-stub')).toHaveLength(0)
 
     wrapper.unmount()
   })
