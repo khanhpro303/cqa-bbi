@@ -333,7 +333,7 @@
           @update:model-value="onSyncFilterChange"
         />
       </div>
-      <v-table density="compact" v-if="channelStore.syncHistory.length > 0">
+      <v-table density="compact" v-if="syncHistory.length > 0">
         <thead>
           <tr>
             <th>{{ $t('time') }}</th>
@@ -343,7 +343,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="log in channelStore.syncHistory" :key="log.id">
+          <tr v-for="log in syncHistory" :key="log.id">
             <td>{{ formatDateTime(log.created_at) }}</td>
             <td>
               <v-chip size="x-small" :color="(log.action === 'sync.completed' || log.action === 'import.personal_zalo') ? 'success' : 'error'" variant="tonal">
@@ -413,7 +413,7 @@ import { ref, computed, onMounted, onBeforeUnmount, shallowRef, watch } from 'vu
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChannelStore } from '../../stores/channels'
-import type { PersonalZaloGatewayState } from '../../stores/channels'
+import type { ChannelSyncLog, PersonalZaloGatewayState } from '../../stores/channels'
 import { useAuthStore } from '../../stores/auth'
 import { useUserStore } from '../../stores/users'
 import ChannelEditDialog from '../../components/channels/ChannelEditDialog.vue'
@@ -425,9 +425,12 @@ const channelStore = useChannelStore()
 const authStore = useAuthStore()
 const userStore = useUserStore()
 
-const tenantId = computed(() => route.params.tenantId as string)
-const channelId = computed(() => route.params.channelId as string)
-const channel = computed(() => channelStore.currentChannel)
+const tenantId = ref(route.params.tenantId as string)
+const channelId = ref(route.params.channelId as string)
+const channel = computed(() => {
+  const current = channelStore.currentChannel
+  return current?.id === channelId.value && current.tenant_id === tenantId.value ? current : null
+})
 const tenantUserOptions = computed(() => userStore.users.map((user) => ({
   title: user.name ? `${user.name} (${user.email})` : user.email,
   value: user.user_id,
@@ -448,6 +451,24 @@ const confirmPurge = ref(false)
 const syncResult = ref<{ type: 'success' | 'warning' | 'error' | 'info'; message: string } | null>(null)
 const syncPage = ref(1)
 const syncStatusFilter = ref('')
+const syncHistory = ref<ChannelSyncLog[]>([])
+const syncTotalPages = ref(0)
+let syncHistoryRequest = 0
+let unmounted = false
+
+function refreshChannel(id = channelId.value) {
+  if (unmounted) return
+  return channelStore.fetchChannel(tenantId.value, id)
+}
+
+async function loadSyncHistory() {
+  if (unmounted) return
+  const request = ++syncHistoryRequest
+  const result = await channelStore.fetchSyncHistory(tenantId.value, channelId.value, syncPage.value, syncStatusFilter.value)
+  if (unmounted || request !== syncHistoryRequest) return
+  syncHistory.value = result.data ?? []
+  syncTotalPages.value = Math.ceil(result.total / 10)
+}
 const syncFilterOptions = computed(() => [
   { title: t('all'), value: '' },
   { title: t('filter_only_error'), value: 'error' },
@@ -456,9 +477,7 @@ const syncFilterOptions = computed(() => [
 
 function onSyncFilterChange() {
   syncPage.value = 1
-  channelStore.fetchSyncHistory(tenantId.value, channelId.value, 1, syncStatusFilter.value)
 }
-const syncTotalPages = computed(() => Math.ceil(channelStore.syncHistoryTotal / 10))
 const accountOwnerDrafts = ref<Array<{ account_external_id: string; user_id: string }>>([])
 const savingAccountOwners = ref(false)
 const gatewayState = ref<PersonalZaloGatewayState>({
@@ -583,7 +602,7 @@ function clearGatewayPolling() {
 
 function updateGatewayPolling() {
   clearGatewayPolling()
-  if (!isPersonalZalo.value) return
+  if (unmounted || !isPersonalZalo.value) return
   if (!gatewayState.value.gateway_reachable || !gatewayState.value.gateway_configured) return
   if (!gatewayAccount.value || !['qr_pending', 'connecting'].includes(gatewayAccount.value.status)) return
   gatewayPollTimer = window.setInterval(() => {
@@ -615,7 +634,7 @@ async function startGatewayConnect() {
   try {
     gatewayState.value = await channelStore.connectPersonalZaloGateway(tenantId.value, channelId.value)
     syncResult.value = { type: 'success', message: gatewayState.value.account?.status === 'connected' ? t('personal_zalo_connected') : t('personal_zalo_qr_created') }
-    await channelStore.fetchChannel(tenantId.value, channelId.value)
+    await refreshChannel()
   } catch (err: any) {
     syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.message || err.response?.data?.error || t('personal_zalo_connect_failed') }
   } finally {
@@ -641,8 +660,8 @@ async function syncGateway() {
   gatewayActionLoading.value = 'sync'
   try {
     gatewayState.value = await channelStore.syncPersonalZaloGateway(tenantId.value, channelId.value)
-    await channelStore.fetchChannel(tenantId.value, channelId.value)
-    await channelStore.fetchSyncHistory(tenantId.value, channelId.value, syncPage.value, syncStatusFilter.value)
+    await refreshChannel()
+    await loadSyncHistory()
     syncResult.value = { type: 'success', message: t('personal_zalo_sync_started') }
   } catch (err: any) {
     syncResult.value = { type: 'error', message: err.response?.data?.details || err.response?.data?.message || err.response?.data?.error || t('personal_zalo_sync_failed') }
@@ -661,8 +680,9 @@ async function doSync() {
     const maxPollAttempts = 60
     while (pollAttempts < maxPollAttempts) {
       await new Promise(r => setTimeout(r, 3000))
-      const ch = await channelStore.fetchChannel(tenantId.value, channelId.value)
-      if (ch.last_sync_status !== 'syncing') break
+      const ch = await refreshChannel()
+      if (unmounted) return
+      if (ch?.last_sync_status !== 'syncing') break
       pollAttempts++
     }
     if (pollAttempts >= maxPollAttempts) {
@@ -670,7 +690,7 @@ async function doSync() {
       syncing.value = false
       return
     }
-    await channelStore.fetchSyncHistory(tenantId.value, channelId.value, syncPage.value, syncStatusFilter.value)
+    await loadSyncHistory()
     const ch = channelStore.currentChannel
     if (ch?.last_sync_status === 'success') {
       syncResult.value = { type: 'success', message: t('sync_success') }
@@ -703,7 +723,7 @@ function openChannelEditor(event: MouseEvent) {
 
 async function refreshEditedChannel(id: string) {
   try {
-    await channelStore.fetchChannel(tenantId.value, id)
+    await refreshChannel(id)
   } catch {
     syncResult.value = { type: 'warning', message: t('error') }
   }
@@ -753,7 +773,7 @@ async function doPurge() {
       message: t('purge_success', { conversations: result.conversations_deleted, messages: result.messages_deleted })
     }
     // Refresh channel data to reflect reset sync state
-    await channelStore.fetchChannel(tenantId.value, channelId.value)
+    await refreshChannel()
   } catch {
     syncResult.value = { type: 'error', message: t('purge_failed') }
   } finally {
@@ -765,15 +785,13 @@ async function doDelete() {
   deleting.value = true
   try {
     await channelStore.deleteChannel(tenantId.value, channelId.value)
-    router.push(`/${tenantId.value}/channels`)
+    if (!unmounted) router.push(`/${tenantId.value}/channels`)
   } finally {
     deleting.value = false
   }
 }
 
-watch(syncPage, (p) => {
-  channelStore.fetchSyncHistory(tenantId.value, channelId.value, p, syncStatusFilter.value)
-})
+watch([syncPage, syncStatusFilter], loadSyncHistory, { immediate: true })
 
 watch(() => gatewayAccount.value?.status, () => {
   updateGatewayPolling()
@@ -790,16 +808,18 @@ onMounted(async () => {
     window.history.replaceState({}, '', window.location.pathname)
   }
 
-  await channelStore.fetchChannel(tenantId.value, channelId.value)
-  await channelStore.fetchSyncHistory(tenantId.value, channelId.value, 1, syncStatusFilter.value)
-  if (channelStore.currentChannel?.channel_type === 'personal_zalo_import') {
+  await refreshChannel()
+  if (!unmounted && isPersonalZalo.value) {
     await userStore.fetchUsers(tenantId.value)
+    if (unmounted) return
     await loadAccountOwners()
+    if (unmounted) return
     await loadGatewayState()
   }
 })
 
 onBeforeUnmount(() => {
+  unmounted = true
   clearGatewayPolling()
 })
 </script>

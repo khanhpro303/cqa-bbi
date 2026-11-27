@@ -4,7 +4,7 @@
       <router-view />
     </AuthLayout>
     <DefaultLayout v-else>
-      <router-view :key="(route.params.tenantId as string) || 'home'" />
+      <router-view :key="(route.params.channelId ? route.path : route.params.tenantId as string) || 'home'" />
     </DefaultLayout>
   </v-app>
 </template>

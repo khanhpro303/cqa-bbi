@@ -8,10 +8,11 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import en from '../i18n/en'
 import { useAuthStore } from '../stores/auth'
 import { useChannelStore, type Channel } from '../stores/channels'
+import App from '../App.vue'
 import Channels from '../views/Channels.vue'
 import ChannelDetail from '../views/Channels/ChannelDetail.vue'
 
-const api = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }))
+const api = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn() }))
 vi.mock('../api', () => ({ default: api }))
 
 const activePanel = Symbol('active panel')
@@ -218,4 +219,61 @@ it('only exposes the edit button for the channel loaded for the current URL', as
   respond({ data: personal })
   await flushPromises()
   expect(wrapper.find(editButton).exists()).toBe(true)
+})
+
+it('keeps OA details and history when personal Zalo requests finish after navigation', async () => {
+  const get = api.get.getMockImplementation()!
+  const personalHistory = { data: { data: [{
+    id: 'personal-log', created_at: '2026-11-26T15:19:00Z', action: 'import.personal_zalo.error',
+    detail: 'Personal Zalo import', error_message: 'invalid Messenger journey input',
+  }], total: 1 } }
+  const oaHistory = { data: { data: [{
+    id: 'oa-log', created_at: '2026-11-26T15:20:00Z', action: 'sync.completed', detail: 'OA sync',
+  }], total: 1 } }
+  let finishPersonalHistory!: (response: typeof personalHistory) => void
+  const latePersonalHistory = new Promise<typeof personalHistory>((resolve) => { finishPersonalHistory = resolve })
+  const gateway = { data: { gateway_configured: true, gateway_reachable: true, account_exists: true, account: { id: 'personal-account', status: 'connected' } } }
+  let finishPersonalSync!: (response: typeof gateway) => void
+  api.post.mockReset().mockReturnValue(new Promise<typeof gateway>((resolve) => { finishPersonalSync = resolve }))
+  const oaPath = tenant + '/channels/oa'
+  api.get.mockImplementation((url: string) => {
+    if (url === channelPath + '/sync-history') return latePersonalHistory
+    if (url === channelPath + '/personal-zalo-gateway') return Promise.resolve(gateway)
+    if (url === oaPath) return Promise.resolve({ data: { ...personal, ...oa, name: 'Zalo OA' } })
+    if (url === oaPath + '/sync-history') return Promise.resolve(oaHistory)
+    return get(url)
+  })
+
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/:tenantId/channels/:channelId', component: ChannelDetail }],
+  })
+  await router.push('/tenant/channels/personal')
+  const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
+  const pinia = createPinia()
+  useAuthStore(pinia).tenantPerms = { role: 'member', permissions: { channels: 'rw' } }
+  const wrapper = mount(App, {
+    global: {
+      plugins: [pinia, router, i18n],
+      stubs: { ...stubs, DefaultLayout: { template: '<main><slot /></main>' } },
+    },
+  })
+  unmount = () => wrapper.unmount()
+  await flushPromises()
+  expect(api.get).toHaveBeenCalledWith(channelPath + '/sync-history', expect.anything())
+  const syncButton = wrapper.findAll('button').find(button => button.text() === en.personal_zalo_fetch_messages)
+  expect(syncButton).toBeDefined()
+  await syncButton!.trigger('click')
+  expect(api.post).toHaveBeenCalledOnce()
+  await router.push('/tenant/channels/oa')
+  await flushPromises()
+  expect(wrapper.get('h1').text()).toBe('Zalo OA')
+  expect(wrapper.text()).toContain('OA sync')
+
+  finishPersonalHistory(personalHistory)
+  finishPersonalSync(gateway)
+  await flushPromises()
+  expect(wrapper.get('h1').text()).toBe('Zalo OA')
+  expect(wrapper.text()).toContain('OA sync')
+  expect(wrapper.text()).not.toContain('invalid Messenger journey input')
 })
