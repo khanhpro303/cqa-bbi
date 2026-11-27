@@ -72,18 +72,23 @@ export const useChannelStore = defineStore('channels', () => {
 
   async function updateChannel(tenantId: string, channelId: string, payload: Record<string, unknown>) {
     await api.put(`/tenants/${tenantId}/channels/${channelId}`, payload)
-    const channel = channels.value.find((c) => c.id === channelId)
-    if (!channel) return
+    const listedChannel = channels.value.find((channel) => channel.id === channelId)
+    const detailedChannel = currentChannel.value?.id === channelId ? currentChannel.value : null
 
-    const changes = { ...payload }
-    if (channel.channel_type === 'zalo_oa' && typeof payload.metadata === 'string' && payload.metadata) {
-      try {
-        changes.metadata = JSON.stringify({ ...JSON.parse(channel.metadata || '{}'), ...JSON.parse(payload.metadata) })
-      } catch {
-        // The next fetch will refresh metadata if the cached value was malformed.
+    for (const channel of new Set([listedChannel, detailedChannel])) {
+      if (!channel) continue
+      const changes = { ...payload }
+      const mergesMetadata = channel.channel_type === 'zalo_oa' || channel.channel_type === 'personal_zalo_import'
+      if (mergesMetadata && typeof payload.metadata === 'string' && payload.metadata) {
+        try {
+          changes.metadata = JSON.stringify({ ...JSON.parse(channel.metadata || '{}'), ...JSON.parse(payload.metadata) })
+        } catch {
+          delete changes.metadata
+        }
       }
+      if (payload.is_active === false) changes.auto_reply_enabled = false
+      Object.assign(channel, changes)
     }
-    Object.assign(channel, changes)
   }
 
   async function deleteChannel(tenantId: string, channelId: string) {

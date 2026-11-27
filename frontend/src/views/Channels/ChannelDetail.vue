@@ -6,7 +6,14 @@
       <h1 class="text-h5 font-weight-bold">{{ channel.name }}</h1>
       <v-spacer />
       <template v-if="authStore.canEdit('channels')">
-        <v-btn variant="outlined" prepend-icon="mdi-pencil" size="small" @click="editDialog = true">{{ $t('edit') }}</v-btn>
+        <v-btn
+          v-if="channel.id === channelId"
+          variant="outlined"
+          prepend-icon="mdi-pencil"
+          size="small"
+          :aria-label="$t('edit_channel')"
+          @click="openChannelEditor"
+        >{{ $t('edit') }}</v-btn>
         <v-btn v-if="channel.channel_type !== 'personal_zalo_import'" color="primary" prepend-icon="mdi-sync" size="small" :loading="syncing" :disabled="!channel.is_active" @click="doSync">
           {{ $t('sync_now') }}
         </v-btn>
@@ -359,46 +366,14 @@
       />
     </v-card>
 
-    <!-- Edit Dialog -->
-    <v-dialog v-model="editDialog" max-width="500">
-      <v-card>
-        <v-card-title>{{ $t('edit_channel') }}</v-card-title>
-        <v-card-text class="pt-3">
-          <v-text-field v-model="editForm.name" :label="$t('channel_name')" density="compact" class="mb-2" />
-          <v-switch v-model="editForm.is_active" :label="$t('active')" density="compact" color="primary" class="mb-2" />
-          <template v-if="channel.channel_type !== 'personal_zalo_import'">
-            <v-select v-model="editForm.sync_interval" :items="syncIntervalOptions" :label="$t('sync_interval')" density="compact" class="mb-2" />
-            <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" density="compact" color="primary" />
-          </template>
-          <template v-if="channel.channel_type === 'zalo_oa'">
-            <v-divider class="my-3" />
-            <ZaloGroupSettings
-              v-if="editDialog"
-              :key="channelId"
-              v-model="editGroupSettings"
-              :tenant-id="tenantId"
-              :channel-id="channelId"
-            />
-          </template>
-          <template v-else>
-            <v-select
-              v-model="editForm.sync_scope"
-              :items="syncScopeOptions"
-              :label="$t('sync_scope')"
-              density="compact"
-              class="mb-2"
-              :hint="$t('sync_scope_hint')"
-              persistent-hint
-            />
-          </template>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn @click="editDialog = false">{{ $t('cancel') }}</v-btn>
-          <v-btn color="primary" :loading="saving" @click="saveEdit">{{ $t('save') }}</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+    <ChannelEditDialog
+      v-if="channel.id === channelId"
+      v-model="editDialog"
+      :tenant-id="tenantId"
+      :channel="channel"
+      :activator="editActivator"
+      @saved="refreshEditedChannel"
+    />
 
     <!-- Purge Conversations Confirm -->
     <v-dialog v-model="confirmPurge" max-width="440">
@@ -434,15 +409,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChannelStore } from '../../stores/channels'
 import type { PersonalZaloGatewayState } from '../../stores/channels'
 import { useAuthStore } from '../../stores/auth'
 import { useUserStore } from '../../stores/users'
-import ZaloGroupSettings from '../../components/channels/ZaloGroupSettings.vue'
-import { readZaloGroupSettings, zaloGroupSettingsPatch } from '../../components/channels/zaloGroupSettings'
+import ChannelEditDialog from '../../components/channels/ChannelEditDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -465,10 +439,10 @@ const metadata = computed(() => {
 
 const syncing = ref(false)
 const testing = ref(false)
-const saving = ref(false)
 const deleting = ref(false)
 const purging = ref(false)
 const editDialog = ref(false)
+const editActivator = shallowRef<HTMLElement>()
 const confirmDelete = ref(false)
 const confirmPurge = ref(false)
 const syncResult = ref<{ type: 'success' | 'warning' | 'error' | 'info'; message: string } | null>(null)
@@ -498,27 +472,6 @@ const gatewayLoading = ref(false)
 const gatewayActionLoading = ref<'connect' | 'reconnect' | 'sync' | ''>('')
 let gatewayPollTimer: number | null = null
 
-const editForm = ref({ name: '', is_active: true, sync_interval: 5, sync_files: false, sync_scope: 'all' })
-const editGroupSettings = ref(readZaloGroupSettings())
-const editGroupMetadata = ref<Record<string, unknown>>({})
-
-const syncIntervalOptions = computed(() => [
-  { title: t('sync_1m'), value: 1 },
-  { title: t('sync_5m'), value: 5 },
-  { title: t('sync_10m'), value: 10 },
-  { title: t('sync_15m'), value: 15 },
-  { title: t('sync_30m'), value: 30 },
-  { title: t('sync_1h'), value: 60 },
-  { title: t('sync_6h'), value: 360 },
-  { title: t('sync_1d'), value: 1440 },
-])
-
-const syncScopeOptions = computed(() => [
-  { title: t('sync_scope_all'), value: 'all' },
-  { title: t('sync_scope_direct'), value: 'direct' },
-  { title: t('sync_scope_group'), value: 'group' },
-])
-
 function formatDateTime(d: string) {
   const dt = new Date(d)
   const dd = String(dt.getDate()).padStart(2, '0')
@@ -529,7 +482,7 @@ function formatDateTime(d: string) {
 }
 
 function formatSyncInterval(mins: number) {
-  if (!mins) return t('minutes_unit', { count: 5 })
+  if (!mins) return t('minutes_unit', { count: 15 })
   if (mins < 60) return t('minutes_unit', { count: mins })
   if (mins < 1440) return t('hours_unit', { count: mins / 60 })
   return t('days_unit', { count: mins / 1440 })
@@ -743,29 +696,16 @@ async function doTest() {
   }
 }
 
-async function saveEdit() {
-  saving.value = true
+function openChannelEditor(event: MouseEvent) {
+  editActivator.value = event.currentTarget as HTMLElement
+  editDialog.value = true
+}
+
+async function refreshEditedChannel(id: string) {
   try {
-    const payload: Record<string, unknown> = {
-      name: editForm.value.name,
-      is_active: editForm.value.is_active,
-    }
-    if (channel.value?.channel_type === 'personal_zalo_import') {
-      payload.metadata = JSON.stringify({ sync_scope: editForm.value.sync_scope })
-    } else if (channel.value?.channel_type === 'zalo_oa') {
-      payload.metadata = JSON.stringify({
-        sync_interval: editForm.value.sync_interval,
-        sync_files: editForm.value.sync_files,
-        ...zaloGroupSettingsPatch(editGroupSettings.value, editGroupMetadata.value),
-      })
-    } else {
-      payload.metadata = JSON.stringify({ sync_interval: editForm.value.sync_interval, sync_files: editForm.value.sync_files })
-    }
-    await channelStore.updateChannel(tenantId.value, channelId.value, payload)
-    editDialog.value = false
-    await channelStore.fetchChannel(tenantId.value, channelId.value)
-  } finally {
-    saving.value = false
+    await channelStore.fetchChannel(tenantId.value, id)
+  } catch {
+    syncResult.value = { type: 'warning', message: t('error') }
   }
 }
 
@@ -830,22 +770,6 @@ async function doDelete() {
     deleting.value = false
   }
 }
-
-watch(editDialog, (v) => {
-  if (v && channel.value) {
-    editForm.value = {
-      name: channel.value.name,
-      is_active: channel.value.is_active,
-      sync_interval: metadata.value.sync_interval || 5,
-      sync_files: metadata.value.sync_files || false,
-      sync_scope: metadata.value.sync_scope || 'all',
-    }
-    if (channel.value.channel_type === 'zalo_oa') {
-      editGroupMetadata.value = metadata.value
-      editGroupSettings.value = readZaloGroupSettings(editGroupMetadata.value)
-    }
-  }
-})
 
 watch(syncPage, (p) => {
   channelStore.fetchSyncHistory(tenantId.value, channelId.value, p, syncStatusFilter.value)
