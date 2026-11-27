@@ -10,9 +10,14 @@ import (
 )
 
 func TestDeletePersonalZaloGatewayAccountsRemovesOnlyTheChannelsAccounts(t *testing.T) {
+	setPersonalZaloGatewayAdminSecret(t)
 	var mu sync.Mutex
 	var deleted []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+testPersonalZaloGatewayAdminSecret {
+			t.Errorf("authorization = %q", got)
+			return
+		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accounts":
 			_ = json.NewEncoder(w).Encode(personalZaloGatewayListResponse{Accounts: []personalZaloGatewayAccountRecord{

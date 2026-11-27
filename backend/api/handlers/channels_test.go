@@ -98,9 +98,14 @@ func TestChannelToResponseExposesAutoReplyCapability(t *testing.T) {
 }
 
 func TestEnrichPersonalZaloAvatarsPopulatesLatestMatch(t *testing.T) {
+	setPersonalZaloGatewayAdminSecret(t)
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		if got := r.Header.Get("Authorization"); got != "Bearer "+testPersonalZaloGatewayAdminSecret {
+			t.Errorf("authorization = %q", got)
+			return
+		}
 		if r.URL.Path != "/api/v1/accounts" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -176,6 +181,7 @@ func TestEnrichPersonalZaloAvatarsSkipsWithoutPersonalZalo(t *testing.T) {
 }
 
 func TestEnrichPersonalZaloAvatarsDegradesGracefullyOnFailure(t *testing.T) {
+	setPersonalZaloGatewayAdminSecret(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))

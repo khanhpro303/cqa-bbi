@@ -28,6 +28,12 @@ export interface PersonalZaloChatbotReply {
   images?: [ChatbotReplyImage];
 }
 
+export type PersonalZaloChatbotResult =
+  | { outcome: 'reply'; reply: PersonalZaloChatbotReply }
+  | { outcome: 'no_reply' }
+  | { outcome: 'retryable'; error: string }
+  | { outcome: 'unknown'; error: string };
+
 export function chatbotEndpoint(baseUrl: string): string | null {
   try {
     const url = new URL(baseUrl);
@@ -112,10 +118,18 @@ export async function requestPersonalZaloChatbotReply(
   account: GatewayAccountRecord,
   message: IncomingGatewayMessage,
 ): Promise<PersonalZaloChatbotReply | null> {
+  const result = await requestPersonalZaloChatbotTurn(account, message);
+  return result.outcome === 'reply' ? result.reply : null;
+}
+
+export async function requestPersonalZaloChatbotTurn(
+  account: GatewayAccountRecord,
+  message: IncomingGatewayMessage,
+): Promise<PersonalZaloChatbotResult> {
   const deployment = personalZaloChatbotConfig();
-  if (!deployment) return null;
+  if (!deployment) return { outcome: 'no_reply' };
   const request = buildChatbotRequest(account, message, deployment);
-  if (!request) return null;
+  if (!request) return { outcome: 'no_reply' };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), chatbotTimeoutMs);
@@ -133,14 +147,14 @@ export async function requestPersonalZaloChatbotReply(
       signal: controller.signal,
       redirect: 'error',
     });
-    if (response.status === 204) return null;
+    if (response.status === 204) return { outcome: 'no_reply' };
     if (!response.ok) {
       logger.warn(`[chatbot] CQA rejected personal Zalo turn with HTTP ${response.status}`);
-      return null;
+      return { outcome: 'unknown', error: `cqa_http_${response.status}` };
     }
     const payload = await readReplyPayload(response);
     if (typeof payload?.reply !== 'string' || payload.reply.trim() === '' || payload.reply.length > 2_000) {
-      return null;
+      return { outcome: 'unknown', error: 'invalid_cqa_reply' };
     }
     const reply: PersonalZaloChatbotReply = { reply: payload.reply };
     if (message.threadType === 'group' && typeof payload.delivery_receipt === 'string' && receiptUUID.test(payload.delivery_receipt)) {
@@ -149,13 +163,21 @@ export async function requestPersonalZaloChatbotReply(
       const image = decodeReplyImage(payload.images[0]);
       if (image) reply.images = [image];
     }
-    return reply;
+    return { outcome: 'reply', reply };
   } catch (error) {
     logger.warn('[chatbot] CQA personal Zalo request failed', error);
-    return null;
+    if (isDefinitelyUnsentTransportError(error)) {
+      return { outcome: 'retryable', error: String(error) };
+    }
+    return { outcome: 'unknown', error: String(error) };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isDefinitelyUnsentTransportError(error: unknown): boolean {
+  const code = (error as { cause?: { code?: unknown } })?.cause?.code;
+  return code === 'ECONNREFUSED' || code === 'ENETUNREACH' || code === 'EHOSTUNREACH' || code === 'EAI_AGAIN';
 }
 
 async function readReplyPayload(response: Response): Promise<{ reply?: unknown; images?: unknown; delivery_receipt?: unknown } | null> {

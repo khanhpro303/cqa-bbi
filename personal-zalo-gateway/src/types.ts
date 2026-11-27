@@ -66,6 +66,35 @@ export interface GatewayAccountRecord {
   createdAt: string;
   updatedAt: string;
   threads: Record<string, GatewayConversationRecord>;
+  chatbotTurns?: Record<string, GatewayChatbotTurnRecord>;
+}
+
+export type GatewayChatbotTurnStatus = 'captured' | 'pending' | 'processing' | 'ready' | 'sending' | 'unknown' | 'failed' | 'expired';
+
+export interface GatewayChatbotReplyImage {
+  filename: string;
+  mediaType: 'image/png' | 'image/jpeg';
+  width: number;
+  height: number;
+  dataBase64: string;
+}
+
+export interface GatewayChatbotReply {
+  reply: string;
+  images?: GatewayChatbotReplyImage[];
+  deliveryReceipt?: string;
+}
+
+export interface GatewayChatbotTurnRecord {
+  message: IncomingGatewayMessage;
+  tenantId: string;
+  channelId: string;
+  accountExternalId: string;
+  status: GatewayChatbotTurnStatus;
+  reply?: GatewayChatbotReply;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface GatewayStoreShape {

@@ -1,5 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+import { config } from '../config.js';
+import { logger } from '../logger.js';
+import { registerDeliveryAttentionRoutes } from './delivery-attention.js';
 import type { GatewayStore } from '../store/file-store.js';
 import type { SyncService } from '../sync/sync-service.js';
 import type { ZaloAccountPool } from '../zalo/account-pool.js';
@@ -11,9 +14,28 @@ interface AccountRouteDeps {
 }
 
 export async function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDeps): Promise<void> {
+  await app.register(async (accounts) => {
+    accounts.addHook('onRequest', async (request, reply) => {
+      if (config.adminSecret.length < 32) {
+        return reply.status(503).send({ error: 'gateway_admin_auth_unavailable' });
+      }
+      const authorization = request.headers.authorization || '';
+      const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+      const expected = createHash('sha256').update(config.adminSecret).digest();
+      const actual = createHash('sha256').update(token).digest();
+      if (!token || !timingSafeEqual(actual, expected)) {
+        return reply.status(401).send({ error: 'invalid_gateway_admin_token' });
+      }
+    });
+    registerAuthorizedAccountRoutes(accounts, deps);
+    registerDeliveryAttentionRoutes(accounts, deps.store);
+  });
+}
+
+function registerAuthorizedAccountRoutes(app: FastifyInstance, deps: AccountRouteDeps): void {
   app.get('/api/v1/accounts', async () => {
     return {
-      accounts: await deps.store.listAccounts(),
+      accounts: (await deps.store.listAccounts()).map(sanitizeAccount),
     };
   });
 
@@ -23,7 +45,7 @@ export async function registerAccountRoutes(app: FastifyInstance, deps: AccountR
     if (!account) {
       return reply.status(404).send({ error: 'account_not_found' });
     }
-    return account;
+    return sanitizeAccount(account);
   });
 
   app.post('/api/v1/accounts', async (request, reply) => {
@@ -54,7 +76,7 @@ export async function registerAccountRoutes(app: FastifyInstance, deps: AccountR
       randomUUID(),
     );
 
-    return reply.status(201).send(account);
+    return reply.status(201).send(sanitizeAccount(account));
   });
 
   app.put('/api/v1/accounts/:accountId', async (request, reply) => {
@@ -85,7 +107,7 @@ export async function registerAccountRoutes(app: FastifyInstance, deps: AccountR
       accountId,
     );
 
-    return account;
+    return sanitizeAccount(account);
   });
 
   // Called by CQA when it deletes the channel an account imports into, so the
@@ -107,12 +129,7 @@ export async function registerAccountRoutes(app: FastifyInstance, deps: AccountR
     if (!account) {
       return reply.status(404).send({ error: 'account_not_found' });
     }
-    void deps.pool.loginQR(accountId).catch(async (error) => {
-      await deps.store.setAccountRuntime(accountId, {
-        status: 'disconnected',
-        lastError: String(error),
-      });
-    });
+    void deps.pool.loginQR(accountId).catch((error) => logger.warn('Gateway QR login failed', error));
     return reply.status(202).send({ status: 'qr_pending' });
   });
 
@@ -122,7 +139,7 @@ export async function registerAccountRoutes(app: FastifyInstance, deps: AccountR
     if (!account?.sessionData?.imei) {
       return reply.status(400).send({ error: 'session_not_found' });
     }
-    void deps.pool.reconnect(accountId, account.sessionData);
+    void deps.pool.reconnect(accountId, account.sessionData).catch((error) => logger.warn('Gateway reconnect failed', error));
     return { status: 'connecting' };
   });
 
@@ -135,4 +152,27 @@ export async function registerAccountRoutes(app: FastifyInstance, deps: AccountR
       return reply.status(500).send({ error: String(error) });
     }
   });
+}
+
+function sanitizeAccount(account: Awaited<ReturnType<GatewayStore['getAccount']>> & object) {
+  if (!account) return account;
+  return {
+    id: account.id,
+    tenantId: account.tenantId,
+    channelId: account.channelId,
+    accountExternalId: account.accountExternalId,
+    status: account.status,
+    displayName: account.displayName,
+    avatarUrl: account.avatarUrl,
+    zaloUid: account.zaloUid,
+    qrImage: account.qrImage,
+    qrGeneratedAt: account.qrGeneratedAt,
+    hasSession: Boolean(account.sessionData?.imei),
+    lastError: account.lastError,
+    lastImportedAt: account.lastImportedAt,
+    syncBlockedReason: account.syncBlockedReason,
+    syncBlockedAt: account.syncBlockedAt,
+    createdAt: account.createdAt,
+    updatedAt: account.updatedAt,
+  };
 }

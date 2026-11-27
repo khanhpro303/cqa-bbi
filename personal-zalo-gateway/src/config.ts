@@ -15,7 +15,9 @@ export const config = {
   maxBatchConversations: readInt('PERSONAL_ZALO_GATEWAY_MAX_BATCH_CONVERSATIONS', 20),
   maxMessagesPerConversation: readInt('PERSONAL_ZALO_GATEWAY_MAX_MESSAGES_PER_CONVERSATION', 200),
   requestTimeoutMs: readInt('PERSONAL_ZALO_GATEWAY_REQUEST_TIMEOUT_MS', 20000),
+  shutdownTimeoutMs: readInt('PERSONAL_ZALO_GATEWAY_SHUTDOWN_TIMEOUT_MS', 60000),
   appUrl: process.env.PERSONAL_ZALO_GATEWAY_APP_URL || '',
+  adminSecret: (process.env.PERSONAL_ZALO_GATEWAY_ADMIN_SECRET || '').trim(),
   nodeEnv: process.env.NODE_ENV || 'development',
 };
 

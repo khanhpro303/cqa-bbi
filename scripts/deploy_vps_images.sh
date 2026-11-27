@@ -172,6 +172,54 @@ except BaseException:
 PYTHON
 }
 
+# Provision a separate bearer token for CQA's management calls to the gateway.
+# Both services read the same VPS .env, while the gateway never returns it.
+provision_personal_zalo_gateway_admin_secret() {
+  python3 - <<'PYTHON'
+import os
+import re
+import secrets
+import tempfile
+from pathlib import Path
+
+path = Path(".env").resolve(strict=True)
+env = path.read_bytes()
+pattern = rb"(?m)^[ \t]*(?:export[ \t]+)?PERSONAL_ZALO_GATEWAY_ADMIN_SECRET[ \t]*=[ \t]*([^\r\n]*)"
+matches = list(re.finditer(pattern, env))
+def value(match):
+    result = match.group(1).strip().split(b"#", 1)[0].strip()
+    if len(result) >= 2 and result[:1] == result[-1:] and result[:1] in (b"'", b'"'):
+        result = result[1:-1]
+    return result
+
+configured = [value(match) for match in matches if value(match)]
+if configured:
+    if len(configured) != 1 or len(configured[0]) < 32:
+        raise SystemExit("PERSONAL_ZALO_GATEWAY_ADMIN_SECRET must contain one value of at least 32 characters")
+    chatbot_pattern = rb"(?m)^[ \t]*(?:export[ \t]+)?PERSONAL_ZALO_CHATBOT_SECRET[ \t]*=[ \t]*([^\r\n]*)"
+    chatbot = [value(match) for match in re.finditer(chatbot_pattern, env) if value(match)]
+    if configured[0] in chatbot:
+        raise SystemExit("PERSONAL_ZALO_GATEWAY_ADMIN_SECRET must differ from PERSONAL_ZALO_CHATBOT_SECRET")
+    raise SystemExit(0)
+
+env = re.sub(pattern + rb"(?:\r?\n|$)", b"", env)
+line = b"PERSONAL_ZALO_GATEWAY_ADMIN_SECRET=" + secrets.token_hex(32).encode("ascii") + b"\n"
+fd, tmp = tempfile.mkstemp(prefix=".env.zalo-gateway-admin.", dir=path.parent)
+try:
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(env)
+        if env and not env.endswith(b"\n"):
+            stream.write(b"\n")
+        stream.write(line)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise
+PYTHON
+}
+
 exec 9>"$backup_root/.deploy.lock"
 flock -n 9
 
@@ -212,6 +260,7 @@ for service in "${services[@]}"; do
 done
 
 provision_personal_zalo_chatbot_secret
+provision_personal_zalo_gateway_admin_secret
 
 git switch --detach "$revision"
 checkout_changed=1
@@ -276,9 +325,42 @@ test "$table_count" = 12
 docker exec cqa-app sh -c 'test -n "$(find /app/static/assets -name "ServiceQuality-*.js" -print -quit)"'
 docker exec cqa-nginx nginx -t
 docker exec cqa-personal-zalo-gateway wget -q -T 5 -O /dev/null http://127.0.0.1:3100/health
+docker exec cqa-personal-zalo-gateway node --input-type=module -e '
+  const response = await fetch("http://127.0.0.1:3100/ready", { signal: AbortSignal.timeout(10000) });
+  const { ready, accounts, pool, sync } = await response.json();
+  if (response.status !== (ready ? 200 : 503) || !accounts || !pool || !sync) {
+    throw new Error("Gateway readiness probe unavailable");
+  }
+  console.log("Gateway readiness:", JSON.stringify({ready, accounts, pool, sync}));
+'
 if [[ -f docker-compose.override.yml ]]; then
   test "$(docker inspect -f '{{len .HostConfig.PortBindings}}' cqa-personal-zalo-gateway)" = 0
 fi
+docker exec cqa-app node --input-type=module -e '
+  const secret = process.env.PERSONAL_ZALO_GATEWAY_ADMIN_SECRET?.trim();
+  if (!secret || secret.length < 32) throw new Error("Gateway admin secret unavailable");
+  const response = await fetch("http://personal-zalo-gateway:3100/api/v1/accounts", {
+    headers: { Authorization: `Bearer ${secret}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error(`Gateway management probe failed: ${response.status}`);
+  const payload = await response.json();
+  const allowed = new Set([
+    "id", "tenantId", "channelId", "accountExternalId", "status", "displayName",
+    "avatarUrl", "zaloUid", "qrImage", "qrGeneratedAt", "hasSession", "lastError",
+    "lastImportedAt", "syncBlockedReason", "syncBlockedAt", "createdAt", "updatedAt",
+  ]);
+  if (!Array.isArray(payload.accounts)) throw new Error("Gateway account response is invalid");
+  for (const account of payload.accounts) {
+    if (!account || typeof account !== "object" || Array.isArray(account) ||
+        Object.keys(account).some((key) => !allowed.has(key)) || typeof account.hasSession !== "boolean") {
+      throw new Error("Gateway account response exposes an invalid field set");
+    }
+  }
+  const sessions = payload.accounts.filter((account) => account.hasSession).length;
+  console.log(`Personal Zalo gateway management API verified: accounts=${payload.accounts.length}, reusable_sessions=${sessions}`);
+'
 if ! public_health; then
   reload_nginx
   for attempt in $(seq 1 5); do

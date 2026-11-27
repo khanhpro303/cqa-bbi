@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ type personalZaloGatewayAccountRecord struct {
 	ZaloUID           string                 `json:"zaloUid,omitempty"`
 	QRImage           string                 `json:"qrImage,omitempty"`
 	QRGeneratedAt     string                 `json:"qrGeneratedAt,omitempty"`
+	HasSession        bool                   `json:"hasSession,omitempty"`
 	SessionData       map[string]interface{} `json:"sessionData,omitempty"`
 	LastError         string                 `json:"lastError,omitempty"`
 	LastImportedAt    string                 `json:"lastImportedAt,omitempty"`
@@ -386,8 +388,17 @@ func personalZaloGatewayJSONContext(ctx context.Context, baseURL, method, path s
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	adminSecret := strings.TrimSpace(os.Getenv("PERSONAL_ZALO_GATEWAY_ADMIN_SECRET"))
+	if len(adminSecret) < 32 {
+		return errors.New("personal Zalo gateway admin authentication is not configured")
+	}
+	req.Header.Set("Authorization", "Bearer "+adminSecret)
 
-	resp, err := httpClientWithTimeout.Do(req)
+	client := *httpClientWithTimeout
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -397,7 +408,7 @@ func personalZaloGatewayJSONContext(ctx context.Context, baseURL, method, path s
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("gateway %s %s failed: %s", method, path, strings.TrimSpace(string(raw)))
 	}
 	if out == nil || len(raw) == 0 {
@@ -482,7 +493,7 @@ func determinePersonalZaloGatewayNextAction(account *personalZaloGatewayAccountR
 	case "qr_pending":
 		return "scan_qr"
 	case "disconnected":
-		if len(account.SessionData) > 0 && account.LastError != "session_unstable_qr_required" {
+		if (account.HasSession || len(account.SessionData) > 0) && account.LastError != "session_unstable_qr_required" {
 			return "reconnect"
 		}
 		return "scan_qr"
