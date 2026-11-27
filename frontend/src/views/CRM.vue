@@ -14,7 +14,7 @@
           {{ $t('campaign_create') }}
         </v-btn>
       </template>
-      <v-btn v-else-if="currentTab === 'groups'" color="primary" prepend-icon="mdi-plus-box" @click="openCreateGroupDialog">
+      <v-btn v-else-if="currentTab === 'groups'" color="primary" prepend-icon="mdi-plus-box" @click="openCreateGroupDialog()">
         Thêm nhóm mới
       </v-btn>
       <v-btn v-else-if="currentTab !== 'order_tracking'" color="teal" prepend-icon="mdi-account-plus" @click="openInviteDialog">
@@ -58,6 +58,40 @@
       
       <!-- TAB 1: CRM GROUPS (GMF) -->
       <v-window-item value="groups" class="pt-2">
+        <v-card v-if="showPersonalRoster" :loading="loadingPersonalRoster" class="mb-4">
+          <v-card-title class="text-subtitle-1">Nhóm Zalo cá nhân chưa gắn mã khách</v-card-title>
+          <v-card-text>
+            <v-text-field
+              v-model="personalRosterSearch"
+              label="Tìm theo tên hoặc ID nhóm"
+              density="compact"
+              clearable
+              hide-details
+              maxlength="128"
+            />
+            <p v-if="personalRosterError" class="mt-3 text-error" role="alert">Không thể tải danh sách nhóm Zalo cá nhân.</p>
+            <p v-else-if="!loadingPersonalRoster && personalRosterGroups.length === 0" class="mt-3 text-medium-emphasis">
+              {{ personalRosterSearch ? 'Không tìm thấy nhóm phù hợp.' : 'Chưa có nhóm Zalo cá nhân cần gắn mã khách.' }}
+            </p>
+            <v-list v-else-if="personalRosterGroups.length" density="compact">
+              <v-list-item
+                v-for="group in personalRosterGroups"
+                :key="group.zalo_group_id"
+                :title="group.name"
+                :subtitle="group.channel_name"
+              >
+                <template #append>
+                  <v-btn variant="text" color="primary" :aria-label="`Gắn mã khách cho ${group.name}`" @click="openCreateGroupDialog(group)">
+                    Gắn mã khách
+                  </v-btn>
+                </template>
+              </v-list-item>
+            </v-list>
+            <p v-if="personalRosterGroups.length === 50" class="text-caption text-medium-emphasis">
+              Hiển thị tối đa 50 nhóm. Tìm theo tên hoặc ID để xem nhóm khác.
+            </p>
+          </v-card-text>
+        </v-card>
         <v-card :loading="loadingGroups">
           <div class="d-flex align-center flex-wrap ga-3 px-3 pt-3">
             <div class="d-flex flex-wrap ga-2" role="group" aria-label="Trạng thái nhóm CRM">
@@ -501,12 +535,12 @@
     <v-dialog v-model="groupDialog" max-width="500">
       <v-card>
         <v-card-title class="px-6 pt-6 pb-2 font-weight-bold">
-          {{ isEditGroup ? 'Cập nhật nhóm CRM' : 'Tạo nhóm CRM mới' }}
+          {{ isEditGroup ? 'Cập nhật nhóm CRM' : selectedRosterGroup ? 'Gắn mã khách cho nhóm Zalo cá nhân' : 'Tạo nhóm CRM mới' }}
         </v-card-title>
         <v-card-text class="px-6 py-2">
           <v-form ref="groupFormRef">
             <v-select
-              v-if="!isEditGroup"
+              v-if="!isEditGroup && !selectedRosterGroup"
               v-model="groupSource"
               :items="groupSourceOptions"
               label="Nguồn nhóm Zalo"
@@ -515,7 +549,7 @@
             />
 
             <v-autocomplete
-              v-if="!isEditGroup && groupSource === 'personal'"
+              v-if="!isEditGroup && groupSource === 'personal' && !selectedRosterGroup"
               v-model="personalConversationID"
               v-model:search="personalGroupSearch"
               :items="personalGroupItems"
@@ -1377,6 +1411,13 @@ const savingGroup = ref(false)
 const isEditGroup = ref(false)
 const groupForm = ref({ id: '', name: '', description: '', asset_id: '', channel_id: '', customer_codes: [] as string[] })
 type SyncedPersonalGroup = { id: string; name: string; channel_id: string; channel_name: string }
+type PersonalRosterGroup = Omit<SyncedPersonalGroup, 'id'> & { zalo_group_id: string }
+const selectedRosterGroup = ref<PersonalRosterGroup | null>(null)
+const personalRosterGroups = ref<PersonalRosterGroup[]>([])
+const personalRosterSearch = ref('')
+const personalRosterError = ref(false)
+const loadingPersonalRoster = ref(false)
+const personalRosterRevision = ref(0)
 const groupSource = ref<'oa' | 'personal'>('oa')
 const personalConversationID = ref<string | null>(null)
 const selectedPersonalGroup = ref<SyncedPersonalGroup | null>(null)
@@ -1398,7 +1439,7 @@ const personalGroupItems = computed(() => {
 })
 
 watch([groupDialog, isEditGroup, groupSource, personalGroupSearch, tenantId], ([open, editing, source, search, tenant], _, onCleanup) => {
-  if (!open || editing || source !== 'personal') {
+  if (!open || editing || source !== 'personal' || selectedRosterGroup.value) {
     loadingPersonalGroups.value = false
     return
   }
@@ -1522,6 +1563,7 @@ const zaloOAChannels = computed(() => {
   return channelStore.channels.filter((c: any) => c.channel_type === 'zalo_oa' && c.is_active)
 })
 const hasPersonalZaloChannel = computed(() => channelStore.channels.some(channel => channel.channel_type === 'personal_zalo_import' && channel.is_active))
+const showPersonalRoster = computed(() => isOwnerOrAdmin.value && hasPersonalZaloChannel.value && groupView.value === 'active')
 
 const approvedCustomers = computed(() => {
   return customers.value.filter(c => c.status === 'approved')
@@ -1631,6 +1673,10 @@ useTenantEventRefresh(() => tenantId.value, 'crm_group_members_updated', async (
     requests.push(fetchLiveMembers(group.id, true), fetchPendingInvites(group.id, true))
   }
   await Promise.all(requests)
+})
+
+useTenantEventRefresh(() => tenantId.value, 'crm_personal_zalo_groups_updated', async () => {
+  personalRosterRevision.value++
 })
 
 // Load Groups from Backend
@@ -1797,17 +1843,18 @@ async function inviteCustomerToZaloGroup(customerId: string) {
 }
 
 // Group Actions
-function openCreateGroupDialog() {
+function openCreateGroupDialog(rosterGroup: PersonalRosterGroup | null = null) {
   isEditGroup.value = false
+  selectedRosterGroup.value = rosterGroup
   const firstOA = zaloOAChannels.value[0]
   const defaultChannelId = firstOA ? firstOA.id : ''
-  groupSource.value = !firstOA && hasPersonalZaloChannel.value ? 'personal' : 'oa'
+  groupSource.value = rosterGroup || (!firstOA && hasPersonalZaloChannel.value) ? 'personal' : 'oa'
   personalConversationID.value = null
   selectedPersonalGroup.value = null
   personalGroupSearch.value = ''
   personalGroups.value = []
-  groupForm.value = { id: '', name: '', description: '', asset_id: '', channel_id: defaultChannelId, customer_codes: [] }
-  if (defaultChannelId) {
+  groupForm.value = { id: '', name: rosterGroup?.name || '', description: '', asset_id: '', channel_id: defaultChannelId, customer_codes: [] }
+  if (defaultChannelId && groupSource.value === 'oa') {
     fetchGmfPackages(defaultChannelId)
   } else {
     gmfPackages.value = []
@@ -1826,6 +1873,7 @@ function onChannelSelected(channelId: string) {
 
 function openEditGroupDialog(g: any) {
   isEditGroup.value = true
+  selectedRosterGroup.value = null
   groupForm.value = { id: g.id, name: g.name, description: g.description, asset_id: g.zalo_asset_id || '', channel_id: g.channel_id || '', customer_codes: groupCodes(g) }
   groupDialog.value = true
 }
@@ -1848,8 +1896,12 @@ async function saveGroup() {
         name: groupForm.value.name,
         description: groupForm.value.description,
         customer_codes: groupForm.value.customer_codes,
-        personal_conversation_id: personalConversationID.value,
+        ...(selectedRosterGroup.value ? {
+          personal_zalo_group_id: selectedRosterGroup.value.zalo_group_id,
+          channel_id: selectedRosterGroup.value.channel_id,
+        } : { personal_conversation_id: personalConversationID.value }),
       })
+      personalRosterRevision.value++
       showSnack('Đã liên kết nhóm Zalo cá nhân', 'success')
     } else {
       await api.post(`/tenants/${tenantId.value}/crm/groups`, {
@@ -1882,6 +1934,33 @@ const purgeTarget = ref<any>(null)
 const purgeDissolveZalo = ref(false)
 
 watch(groupView, () => fetchGroups())
+
+watch([showPersonalRoster, currentTab, tenantId, personalRosterSearch, personalRosterRevision],
+  ([show, tab, tenant, search], previous, onCleanup) => {
+    if (!show || tenant !== previous?.[2]) personalRosterGroups.value = []
+    if (!show || tab !== 'groups' || !tenant) return
+    const controller = new AbortController()
+    const query = search?.trim()
+    loadingPersonalRoster.value = true
+    personalRosterError.value = false
+    const timer = setTimeout(async () => {
+      try {
+        const { data } = await api.get<PersonalRosterGroup[]>(`/tenants/${tenant}/crm/groups/personal-zalo-conversations`, {
+          params: { roster: 1, search: query || undefined },
+          signal: controller.signal,
+        })
+        if (!controller.signal.aborted) personalRosterGroups.value = data
+      } catch {
+        if (!controller.signal.aborted) personalRosterError.value = true
+      } finally {
+        if (!controller.signal.aborted) loadingPersonalRoster.value = false
+      }
+    }, query ? 250 : 0)
+    onCleanup(() => {
+      clearTimeout(timer)
+      controller.abort()
+    })
+  }, { immediate: true })
 
 function groupErrorText(err: any, fallback: string) {
   return err?.response?.data?.details || err?.response?.data?.error || fallback

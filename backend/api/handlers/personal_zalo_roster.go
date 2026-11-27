@@ -29,6 +29,14 @@ const (
 
 var errPersonalZaloRosterConflict = errors.New("personal Zalo roster changed concurrently")
 
+func personalZaloDiscoversCRMGroups(raw string) bool {
+	var metadata struct {
+		SyncScope string `json:"sync_scope"`
+	}
+	return (strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &metadata) == nil) &&
+		metadata.SyncScope != "direct"
+}
+
 type personalZaloRosterEntry struct {
 	ThreadType  string `json:"thread_type"`
 	ThreadID    string `json:"thread_id"`
@@ -109,7 +117,7 @@ func IngestPersonalZaloRoster(c *gin.Context) {
 			c.Status(http.StatusNoContent)
 		case err != nil || configErr != nil:
 			c.Status(http.StatusServiceUnavailable)
-		case channel.IsActive && (channel.PersonalZaloAutoReplyEnabled || bot.Mode == personalZaloInternbotMode) &&
+		case channel.IsActive && (channel.PersonalZaloAutoReplyEnabled || bot.Mode == personalZaloInternbotMode || personalZaloDiscoversCRMGroups(channel.Metadata)) &&
 			(channel.ExternalID == "" || channel.ExternalID == req.AccountExternalID):
 			c.Status(http.StatusOK)
 		default:
@@ -118,7 +126,7 @@ func IngestPersonalZaloRoster(c *gin.Context) {
 		return
 	}
 
-	var changed bool
+	var changed, crmRosterUpdated bool
 	err := db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		channel, err := lockPersonalZaloRosterChannel(tx, req.TenantID, req.ChannelID)
 		if err != nil || !channel.IsActive ||
@@ -126,7 +134,8 @@ func IngestPersonalZaloRoster(c *gin.Context) {
 			return err
 		}
 		bot, err := decodePersonalZaloInternbotConfig(channel.Metadata)
-		if err != nil || (!channel.PersonalZaloAutoReplyEnabled && bot.Mode != personalZaloInternbotMode) {
+		discoverCRMGroups := personalZaloDiscoversCRMGroups(channel.Metadata)
+		if err != nil || (!channel.PersonalZaloAutoReplyEnabled && bot.Mode != personalZaloInternbotMode && !discoverCRMGroups) {
 			return err
 		}
 		if channel.ExternalID == "" {
@@ -135,10 +144,17 @@ func IngestPersonalZaloRoster(c *gin.Context) {
 			}
 			channel.ExternalID = req.AccountExternalID
 		}
-		if bot.Mode == personalZaloInternbotMode {
-			snapshot, err := savePersonalZaloInternbotRoster(tx, channel, internbotGroupsFromRoster(req.personalZaloRosterSnapshot))
-			if err != nil || !bot.Enabled || (bot.SupervisorAccountID == channel.ExternalID && snapshot.contains(bot.SupervisorGroupID)) {
+		var groups personalZaloInternbotGroupSnapshot
+		if discoverCRMGroups || bot.Mode == personalZaloInternbotMode {
+			groups, err = savePersonalZaloInternbotRoster(tx, channel, internbotGroupsFromRoster(req.personalZaloRosterSnapshot))
+			if err != nil {
 				return err
+			}
+			crmRosterUpdated = discoverCRMGroups && groups.CapturedAt.Equal(req.CapturedAt)
+		}
+		if bot.Mode == personalZaloInternbotMode {
+			if !bot.Enabled || (bot.SupervisorAccountID == channel.ExternalID && groups.contains(bot.SupervisorGroupID)) {
+				return nil
 			}
 			metadata, err := decodeMetadataObject(channel.Metadata)
 			if err != nil {
@@ -152,8 +168,11 @@ func IngestPersonalZaloRoster(c *gin.Context) {
 			encoded, _ := json.Marshal(metadata)
 			return tx.Model(&channel).Update("metadata", string(encoded)).Error
 		}
-		changed, err = reconcilePersonalZaloRoster(tx, channel.ID, req.personalZaloRosterSnapshot, false)
-		return err
+		if channel.PersonalZaloAutoReplyEnabled {
+			changed, err = reconcilePersonalZaloRoster(tx, channel.ID, req.personalZaloRosterSnapshot, false)
+			return err
+		}
+		return nil
 	})
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) && !errors.Is(err, errPersonalZaloRosterConflict) {
 		log.Printf("[personal-zalo] failed to reconcile roster for channel %s: %v", req.ChannelID, err)
@@ -162,6 +181,9 @@ func IngestPersonalZaloRoster(c *gin.Context) {
 	}
 	if err == nil && changed {
 		realtime.Publish(ctx, req.TenantID, realtime.EventPersonalZaloApprovalsUpdated)
+	}
+	if err == nil && crmRosterUpdated {
+		realtime.Publish(ctx, req.TenantID, realtime.EventCRMPersonalZaloGroupsUpdated)
 	}
 	c.Status(http.StatusNoContent)
 }
