@@ -5,10 +5,56 @@
         <h2 id="product-advisory-heading" class="text-h6 font-weight-bold">{{ $t('product_advisory_title') }}</h2>
         <p class="text-body-2 text-medium-emphasis mb-0">{{ $t('product_advisory_desc') }}</p>
       </div>
-      <v-chip color="primary" variant="tonal" prepend-icon="mdi-package-variant-closed">
-        {{ $t('product_advisory_groups', { count: total }) }}
-      </v-chip>
+      <div class="d-flex flex-wrap align-center ga-2">
+        <v-btn
+          v-if="canEdit"
+          color="primary"
+          variant="outlined"
+          prepend-icon="mdi-file-import-outline"
+          data-testid="product-import-open"
+          @click="openImportDialog"
+        >
+          {{ $t('product_advisory_import_open') }}
+        </v-btn>
+        <v-chip color="primary" variant="tonal" prepend-icon="mdi-package-variant-closed">
+          {{ $t('product_advisory_groups', { count: total }) }}
+        </v-chip>
+      </div>
     </div>
+
+    <v-alert
+      v-if="latestImportJob?.status === 'running'"
+      type="info"
+      variant="tonal"
+      density="compact"
+      class="mb-4"
+      data-testid="product-import-running"
+    >
+      <div class="d-flex flex-wrap align-center ga-2">
+        <div class="flex-grow-1">
+          {{ $t('product_advisory_import_running_banner', { processed: importProcessedCount, total: latestImportJob.total_rows }) }}
+          <v-progress-linear :model-value="importProgress" height="5" rounded color="primary" class="mt-2" />
+        </div>
+        <v-btn variant="text" size="small" @click="openImportDialog">{{ $t('product_advisory_import_view_progress') }}</v-btn>
+      </div>
+    </v-alert>
+    <v-alert
+      v-else-if="canEdit && latestImportJob && latestImportJob.image_count > 0"
+      :type="latestImportJob.pending_image_count > 0 ? 'warning' : 'success'"
+      variant="tonal"
+      density="compact"
+      class="mb-4"
+      data-testid="product-import-review-banner"
+    >
+      <div class="d-flex flex-wrap align-center ga-2">
+        <span class="flex-grow-1">
+          {{ $t(latestImportJob.pending_image_count > 0 ? 'product_advisory_import_review_pending_banner' : 'product_advisory_import_review_done_banner', { count: latestImportJob.pending_image_count || latestImportJob.image_count }) }}
+        </span>
+        <v-btn variant="text" size="small" @click="openImportReview">
+          {{ $t(latestImportJob.pending_image_count > 0 ? 'product_advisory_import_review_images' : 'product_advisory_import_review_again') }}
+        </v-btn>
+      </div>
+    </v-alert>
 
     <div class="d-flex flex-column flex-sm-row ga-3 mb-4">
       <v-text-field
@@ -238,6 +284,24 @@
       </v-card>
     </v-dialog>
 
+    <ProductAdvisoryLinkImportModal
+      v-model="importDialog"
+      :tenant-id="tenantId"
+      :firecrawl-enabled="firecrawlEnabled"
+      :job="latestImportJob"
+      :items="importItems"
+      @started="handleImportStarted"
+      @conflict="reloadLatestImport"
+      @review="openImportReview"
+    />
+    <ProductAdvisoryImportImageReviewModal
+      v-model="reviewDialog"
+      :tenant-id="tenantId"
+      :job-id="latestImportJob?.id || ''"
+      :groups="reviewGroups"
+      @updated="handleImportReviewUpdated"
+    />
+
     <v-snackbar v-model="snack" :color="snackColor" timeout="4000">{{ snackText }}</v-snackbar>
   </section>
 </template>
@@ -246,6 +310,14 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
+import ProductAdvisoryImportImageReviewModal from './ProductAdvisoryImportImageReviewModal.vue'
+import ProductAdvisoryLinkImportModal from './ProductAdvisoryLinkImportModal.vue'
+import {
+  importReviewGroups,
+  type ProductAdvisoryImportItem,
+  type ProductAdvisoryImportJob,
+  type ProductAdvisoryImportResponse,
+} from './productAdvisoryImport'
 
 type ProductGroup = {
   parent_code: string
@@ -296,6 +368,125 @@ const loading = ref(false)
 const loadError = ref(false)
 let listRequest = 0
 let searchTimer: ReturnType<typeof setTimeout> | undefined
+
+const importDialog = ref(false)
+const reviewDialog = ref(false)
+const firecrawlEnabled = ref<boolean | null>(null)
+const latestImportJob = ref<ProductAdvisoryImportJob | null>(null)
+const importItems = ref<ProductAdvisoryImportItem[]>([])
+const importBase = computed(() => `/tenants/${props.tenantId}/product-advisory-imports`)
+const importProcessedCount = computed(() => latestImportJob.value
+  ? latestImportJob.value.succeeded_count + latestImportJob.value.failed_count + latestImportJob.value.unmatched_count + latestImportJob.value.skipped_count
+  : 0)
+const importProgress = computed(() => latestImportJob.value?.total_rows
+  ? (importProcessedCount.value / latestImportJob.value.total_rows) * 100
+  : 0)
+const reviewGroups = computed(() => importReviewGroups(importItems.value))
+let importRequest = 0
+let importPollTimer: ReturnType<typeof setTimeout> | undefined
+
+function stopImportPolling() {
+  clearTimeout(importPollTimer)
+  importPollTimer = undefined
+}
+
+function scheduleImportPoll() {
+  stopImportPolling()
+  if (latestImportJob.value?.status === 'running') {
+    importPollTimer = setTimeout(() => { void pollImportJob() }, 2000)
+  }
+}
+
+function setImportResponse(response: ProductAdvisoryImportResponse) {
+  latestImportJob.value = response.job
+  importItems.value = response.items || []
+  scheduleImportPoll()
+}
+
+async function reloadLatestImport() {
+  if (!props.canEdit) return
+  const request = importRequest
+  try {
+    const { data } = await api.get<ProductAdvisoryImportResponse>(`${importBase.value}/latest`, { params: { review_queue: 1 } })
+    if (request === importRequest) setImportResponse({ job: data?.job || null, items: data?.items || [] })
+  } catch {
+    if (request === importRequest) scheduleImportPoll()
+  }
+}
+
+async function openImportDialog() {
+  importDialog.value = true
+  const request = importRequest
+  try {
+    const { data } = await api.get<{ enabled: boolean }>(`/tenants/${props.tenantId}/knowledge/firecrawl`)
+    if (request === importRequest) firecrawlEnabled.value = !!data?.enabled
+  } catch {
+    if (request === importRequest) firecrawlEnabled.value = null
+  }
+}
+
+async function pollImportJob() {
+  const active = latestImportJob.value
+  if (!active || active.status !== 'running') return
+  const request = importRequest
+  const baseURL = importBase.value
+  const summaryOnly = !importDialog.value
+  try {
+    const { data } = await api.get<ProductAdvisoryImportResponse>(`${baseURL}/${encodeURIComponent(active.id)}`, {
+      params: summaryOnly ? { summary: 1 } : undefined,
+    })
+    if (request !== importRequest || baseURL !== importBase.value || latestImportJob.value?.id !== active.id) return
+    const summaryJob = data?.job
+    if (!summaryJob) {
+      scheduleImportPoll()
+      return
+    }
+    if (summaryJob.status === 'running') {
+      setImportResponse({ job: summaryJob, items: summaryOnly ? importItems.value : data.items })
+      return
+    }
+    const completed = summaryOnly
+      ? (await api.get<ProductAdvisoryImportResponse>(`${baseURL}/${encodeURIComponent(active.id)}`)).data
+      : data
+    if (request !== importRequest || baseURL !== importBase.value || latestImportJob.value?.id !== active.id) return
+    setImportResponse({ job: completed?.job || summaryJob, items: completed?.items || [] })
+    void loadProducts(page.value)
+    if (!dialog.value && latestImportJob.value?.pending_image_count) openImportReview()
+  } catch {
+    if (request === importRequest && baseURL === importBase.value) scheduleImportPoll()
+  }
+}
+
+function handleImportStarted(response: ProductAdvisoryImportResponse) {
+  ++importRequest
+  setImportResponse(response)
+  if (response.job?.status !== 'running') {
+    void loadProducts(page.value)
+    if (response.job?.pending_image_count) openImportReview()
+  }
+}
+
+function openImportReview() {
+  if (!props.canEdit || !latestImportJob.value?.id || reviewGroups.value.length === 0) return
+  importDialog.value = false
+  reviewDialog.value = true
+}
+
+async function handleImportReviewUpdated() {
+  const jobID = latestImportJob.value?.id
+  const baseURL = importBase.value
+  if (!jobID) return
+  const request = importRequest
+  try {
+    const { data } = await api.get<ProductAdvisoryImportResponse>(`${baseURL}/${encodeURIComponent(jobID)}`)
+    if (request !== importRequest || baseURL !== importBase.value || latestImportJob.value?.id !== jobID) return
+    setImportResponse({ job: data?.job || latestImportJob.value, items: data?.items || [] })
+    if (!reviewDialog.value && latestImportJob.value?.pending_image_count === 0) void reloadLatestImport()
+  } catch {
+    // The review modal keeps its own error state. The banner refreshes on the next page load.
+  }
+  if (request === importRequest) void loadProducts(page.value)
+}
 
 function safeURL(raw?: string) {
   const value = raw?.trim()
@@ -581,9 +772,23 @@ watch(() => props.tenantId, () => {
   void loadProducts(1)
 })
 onMounted(() => loadProducts(1))
+watch(() => [props.tenantId, props.canEdit] as const, () => {
+  ++importRequest
+  stopImportPolling()
+  importDialog.value = false
+  reviewDialog.value = false
+  firecrawlEnabled.value = null
+  setImportResponse({ job: null, items: [] })
+  void reloadLatestImport()
+}, { immediate: true })
+watch(reviewDialog, (open) => {
+  if (!open && latestImportJob.value?.pending_image_count === 0) void reloadLatestImport()
+})
 onBeforeUnmount(() => {
   ++listRequest
   ++detailRequest
+  ++importRequest
+  stopImportPolling()
   clearTimeout(searchTimer)
   releaseProtectedImages()
 })

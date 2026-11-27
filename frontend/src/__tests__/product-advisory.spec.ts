@@ -2,15 +2,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import ProductAdvisory from '../components/ProductAdvisory.vue'
+import ProductAdvisoryLinkImportModal from '../components/ProductAdvisoryLinkImportModal.vue'
+import ProductAdvisoryImportImageReviewModal from '../components/ProductAdvisoryImportImageReviewModal.vue'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
+  importGet: vi.fn(),
   put: vi.fn(),
   post: vi.fn(),
   patch: vi.fn(),
   delete: vi.fn(),
 }))
-vi.mock('../api', () => ({ default: mocks }))
+vi.mock('../api', () => ({
+  default: {
+    ...mocks,
+    get: (url: string, ...args: unknown[]) => (
+      url.includes('/product-advisory-imports/') || url.endsWith('/knowledge/firecrawl')
+        ? mocks.importGet(url, ...args)
+        : mocks.get(url, ...args)
+    ),
+  },
+}))
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 const product = {
@@ -34,10 +46,53 @@ describe('ProductAdvisory', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset())
     mocks.get.mockResolvedValue({ data: { items: [product], total: 1 } })
+    mocks.importGet.mockResolvedValue({ data: { job: null, items: [] } })
     mocks.put.mockResolvedValue({ data: detail })
     mocks.post.mockResolvedValue({ data: detail })
     mocks.patch.mockResolvedValue({ data: {} })
     mocks.delete.mockResolvedValue({ data: {} })
+  })
+
+  it('reopens the import, polls to completion, and shows review for the imported product group', async () => {
+    vi.useFakeTimers()
+    const job = {
+      id: 'job-1', file_name: 'links.csv', status: 'running', total_rows: 1, matched_count: 1,
+      skipped_count: 0, unmatched_count: 0, failed_count: 0, image_count: 0, pending_image_count: 0,
+      succeeded_count: 0, created_at: '',
+    }
+    const completed = { ...job, status: 'completed', succeeded_count: 1, image_count: 2, pending_image_count: 2 }
+    const item = {
+      id: 'item-1', status: 'succeeded', parent_code: product.parent_code, web_name: product.web_name,
+      image_count: 2, pending_image_count: 2,
+    }
+    mocks.importGet.mockImplementation(async (url: string) => {
+      if (url.endsWith('/knowledge/firecrawl')) return { data: { enabled: true } }
+      if (url.endsWith('/latest')) return { data: { job, items: [] } }
+      return { data: { job: completed, items: [item] } }
+    })
+    const wrapper = shallowMount(ProductAdvisory, {
+      props: { tenantId: 'tenant-1', canEdit: true },
+      global: { mocks: { $t: (key: string) => key }, renderStubDefaultSlot: true },
+    })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(wrapper.find('[data-testid="product-import-running"]').exists()).toBe(true)
+      await wrapper.get('[data-testid="product-import-open"]').trigger('click')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(wrapper.getComponent(ProductAdvisoryLinkImportModal).props('firecrawlEnabled')).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(2000)
+      const review = wrapper.getComponent(ProductAdvisoryImportImageReviewModal)
+      expect(review.props('modelValue')).toBe(true)
+      expect(review.props('jobId')).toBe(job.id)
+      expect(review.props('groups')).toEqual([{
+        id: item.id, parent_code: product.parent_code, web_name: product.web_name, image_count: 2, pending_image_count: 2,
+      }])
+      expect(mocks.get).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
   })
 
   it('loads parent product groups from the tenant API', async () => {
