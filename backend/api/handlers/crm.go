@@ -84,12 +84,13 @@ func CreateCRMGroup(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
 	var req struct {
-		Name          string   `json:"name" binding:"required"`
-		Description   string   `json:"description"`
-		AssetID       string   `json:"asset_id"`
-		ChannelID     string   `json:"channel_id"`
-		CustomerCode  string   `json:"customer_code"`
-		CustomerCodes []string `json:"customer_codes"`
+		Name                   string   `json:"name" binding:"required"`
+		Description            string   `json:"description"`
+		AssetID                string   `json:"asset_id"`
+		ChannelID              string   `json:"channel_id"`
+		CustomerCode           string   `json:"customer_code"`
+		CustomerCodes          []string `json:"customer_codes"`
+		PersonalConversationID string   `json:"personal_conversation_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -98,6 +99,11 @@ func CreateCRMGroup(c *gin.Context) {
 	codes := mergeRequestCustomerCodes(req.CustomerCode, req.CustomerCodes)
 	if len(codes) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": "customer_code or customer_codes is required"})
+		return
+	}
+
+	if conversationID := strings.TrimSpace(req.PersonalConversationID); conversationID != "" {
+		linkPersonalZaloCRMGroup(c, tenantID, conversationID, req.Name, req.Description, codes)
 		return
 	}
 

@@ -106,10 +106,10 @@
                       <span class="font-weight-bold text-primary crm-group-name">{{ g.name }}</span>
                       <v-chip v-if="g.zalo_group_id" size="x-small" color="success" class="font-weight-bold crm-group-badge" variant="flat">
                         <v-icon start size="10">mdi-message-text-outline</v-icon>
-                        Đã liên kết Zalo GMF
+                        {{ isPersonalZaloGroup(g) ? 'Đã liên kết Zalo cá nhân' : 'Đã liên kết Zalo GMF' }}
                       </v-chip>
                       <v-chip v-if="g.channel" size="x-small" color="blue-grey" class="font-weight-bold crm-group-badge" variant="outlined">
-                        OA: {{ g.channel.name }}
+                        {{ isPersonalZaloGroup(g) ? g.channel.name : `OA: ${g.channel.name}` }}
                       </v-chip>
                       <v-chip v-for="code in groupCodes(g)" :key="code" size="x-small" color="indigo" class="font-weight-bold crm-group-badge" variant="flat">
                         Mã KH: {{ code }}
@@ -158,11 +158,11 @@
                       <v-btn v-if="isOwner" icon="mdi-delete-forever" size="small" density="comfortable" variant="text" color="error" @click="openPurgeDialog(g)" title="Xoá vĩnh viễn" />
                     </div>
                     <div v-else class="crm-group-actions d-flex align-center justify-end flex-nowrap ga-1">
-                      <v-btn v-if="g.zalo_group_link" icon="mdi-qrcode" size="small" density="comfortable" variant="text" color="success" @click="showGroupQR(g)" title="QR / Link nhóm Zalo" />
-                      <v-btn icon="mdi-account-cog" size="small" density="comfortable" variant="text" color="teal" @click="openManageMembersDialog(g)" title="Quản lý thành viên" />
-                      <v-btn icon="mdi-shield-lock-outline" size="small" density="comfortable" variant="text" color="indigo" @click="openGroupPermissionsDialog(g)" title="Phân quyền Endpoint & Sơ đồ live" />
+                      <v-btn v-if="!isPersonalZaloGroup(g) && g.zalo_group_link" icon="mdi-qrcode" size="small" density="comfortable" variant="text" color="success" @click="showGroupQR(g)" title="QR / Link nhóm Zalo" />
+                      <v-btn v-if="!isPersonalZaloGroup(g)" icon="mdi-account-cog" size="small" density="comfortable" variant="text" color="teal" @click="openManageMembersDialog(g)" title="Quản lý thành viên" />
+                      <v-btn v-if="!isPersonalZaloGroup(g)" icon="mdi-shield-lock-outline" size="small" density="comfortable" variant="text" color="indigo" @click="openGroupPermissionsDialog(g)" title="Phân quyền Endpoint & Sơ đồ live" />
                       <v-btn icon="mdi-pencil" size="small" density="comfortable" variant="text" color="blue" @click="openEditGroupDialog(g)" title="Sửa nhóm" />
-                      <v-btn v-if="isOwner && g.zalo_group_id" icon="mdi-broom" size="small" density="comfortable" variant="text" color="orange-darken-2" :loading="clearingSessionId === g.id" @click="clearGroupSession(g)" title="Xoá sạch cache phiên chat của nhóm GMF" />
+                      <v-btn v-if="isOwner && g.zalo_group_id && !isPersonalZaloGroup(g)" icon="mdi-broom" size="small" density="comfortable" variant="text" color="orange-darken-2" :loading="clearingSessionId === g.id" @click="clearGroupSession(g)" title="Xoá sạch cache phiên chat của nhóm GMF" />
                       <v-btn icon="mdi-archive-arrow-down-outline" size="small" density="comfortable" variant="text" color="error" :loading="groupBusyId === g.id" @click="archiveGroup(g)" title="Lưu trữ nhóm (thay cho xoá)" />
                     </div>
                   </td>
@@ -482,7 +482,7 @@
           <p class="mb-2">Thao tác này xoá hẳn nhóm cùng liên kết thành viên, danh sách mã KH, phân quyền ERP và các lượt gửi chiến dịch của nhóm. Không khôi phục được.</p>
           <p class="mb-2">Lịch sử chat, tóm tắt, hồ sơ khách và đơn hàng vẫn được giữ theo mã KH.</p>
           <v-checkbox
-            v-if="purgeTarget.zalo_group_id"
+            v-if="purgeTarget.zalo_group_id && !isPersonalZaloGroup(purgeTarget)"
             v-model="purgeDissolveZalo"
             color="error"
             density="compact"
@@ -505,6 +505,31 @@
         </v-card-title>
         <v-card-text class="px-6 py-2">
           <v-form ref="groupFormRef">
+            <v-select
+              v-if="!isEditGroup"
+              v-model="groupSource"
+              :items="groupSourceOptions"
+              label="Nguồn nhóm Zalo"
+              class="mb-3"
+              data-testid="crm-group-source"
+            />
+
+            <v-autocomplete
+              v-if="!isEditGroup && groupSource === 'personal'"
+              v-model="personalConversationID"
+              v-model:search="personalGroupSearch"
+              :items="personalGroupItems"
+              :rules="[v => !!v || 'Vui lòng chọn nhóm đã đồng bộ']"
+              :loading="loadingPersonalGroups"
+              :error-messages="personalGroupLoadError"
+              label="Nhóm Zalo cá nhân đã đồng bộ *"
+              no-data-text="Không tìm thấy nhóm chưa liên kết"
+              no-filter
+              class="mb-3"
+              data-testid="crm-personal-group-conversation"
+              @update:model-value="selectPersonalGroup"
+            />
+
             <v-text-field v-model="groupForm.name" label="Tên nhóm *" :rules="[v => !!v || 'Tên nhóm là bắt buộc']" class="mb-3" />
             <v-textarea v-model="groupForm.description" label="Mô tả nhóm" class="mb-3" rows="3" />
 
@@ -524,11 +549,12 @@
               chips
               closable-chips
               no-data-text="Không tìm thấy mã khách hàng nào"
+              data-testid="crm-group-customer-codes"
             />
             
             <!-- Zalo OA Account Selector (only for creating new group) -->
             <v-select
-              v-if="!isEditGroup"
+              v-if="!isEditGroup && groupSource === 'oa'"
               v-model="groupForm.channel_id"
               :items="zaloOAChannels"
               item-title="name"
@@ -541,7 +567,7 @@
 
             <!-- GMF Package Selector (only for creating new group) -->
             <v-select
-              v-if="!isEditGroup"
+              v-if="!isEditGroup && groupSource === 'oa'"
               v-model="groupForm.asset_id"
               :items="gmfPackages"
               item-title="displayName"
@@ -1350,6 +1376,74 @@ const groupDialog = ref(false)
 const savingGroup = ref(false)
 const isEditGroup = ref(false)
 const groupForm = ref({ id: '', name: '', description: '', asset_id: '', channel_id: '', customer_codes: [] as string[] })
+type SyncedPersonalGroup = { id: string; name: string; channel_id: string; channel_name: string }
+const groupSource = ref<'oa' | 'personal'>('oa')
+const personalConversationID = ref<string | null>(null)
+const selectedPersonalGroup = ref<SyncedPersonalGroup | null>(null)
+const personalGroupSearch = ref('')
+const personalGroups = ref<SyncedPersonalGroup[]>([])
+const loadingPersonalGroups = ref(false)
+const personalGroupLoadError = ref('')
+const groupSourceOptions = computed(() => [
+  { title: 'Tạo nhóm mới bằng Zalo OA', value: 'oa' },
+  ...(hasPersonalZaloChannel.value ? [{ title: 'Liên kết nhóm Zalo cá nhân đã đồng bộ', value: 'personal' }] : []),
+])
+
+const personalGroupItems = computed(() => {
+  const selected = selectedPersonalGroup.value
+  const groups = selected && !personalGroups.value.some(group => group.id === selected.id)
+    ? [selected, ...personalGroups.value]
+    : personalGroups.value
+  return groups.map(group => ({ value: group.id, title: `${group.name} · ${group.channel_name}` }))
+})
+
+watch([groupDialog, isEditGroup, groupSource, personalGroupSearch, tenantId], ([open, editing, source, search, tenant], _, onCleanup) => {
+  if (!open || editing || source !== 'personal') {
+    loadingPersonalGroups.value = false
+    return
+  }
+  const controller = new AbortController()
+  const selectedTitle = personalGroupItems.value.find(item => item.value === personalConversationID.value)?.title
+  const query = search?.trim() === selectedTitle ? '' : search?.trim()
+  loadingPersonalGroups.value = true
+  personalGroupLoadError.value = ''
+  const timer = setTimeout(async () => {
+    try {
+      const { data } = await api.get<SyncedPersonalGroup[]>(`/tenants/${tenant}/crm/groups/personal-zalo-conversations`, {
+        params: { search: query || undefined },
+        signal: controller.signal,
+      })
+      if (!controller.signal.aborted) personalGroups.value = data
+    } catch {
+      if (!controller.signal.aborted) {
+        personalGroups.value = []
+        personalGroupLoadError.value = 'Không thể tải nhóm Zalo cá nhân đã đồng bộ'
+      }
+    } finally {
+      if (!controller.signal.aborted) loadingPersonalGroups.value = false
+    }
+  }, query ? 250 : 0)
+  onCleanup(() => {
+    clearTimeout(timer)
+    controller.abort()
+  })
+})
+
+function selectPersonalGroup(id: string | null) {
+  const group = personalGroups.value.find(candidate => candidate.id === id)
+  if (!group) {
+    if (!id) selectedPersonalGroup.value = null
+    return
+  }
+  if (!groupForm.value.name || groupForm.value.name === selectedPersonalGroup.value?.name) {
+    groupForm.value.name = group.name
+  }
+  selectedPersonalGroup.value = group
+}
+
+function isPersonalZaloGroup(group: { channel?: { channel_type?: string } }) {
+  return group.channel?.channel_type === 'personal_zalo_import'
+}
 
 // groupCodes / customerCodesOf read the multi-code arrays returned by the API,
 // falling back to the legacy single customer_code field for older rows.
@@ -1427,6 +1521,7 @@ const activeZaloOA = computed(() => {
 const zaloOAChannels = computed(() => {
   return channelStore.channels.filter((c: any) => c.channel_type === 'zalo_oa' && c.is_active)
 })
+const hasPersonalZaloChannel = computed(() => channelStore.channels.some(channel => channel.channel_type === 'personal_zalo_import' && channel.is_active))
 
 const approvedCustomers = computed(() => {
   return customers.value.filter(c => c.status === 'approved')
@@ -1706,6 +1801,11 @@ function openCreateGroupDialog() {
   isEditGroup.value = false
   const firstOA = zaloOAChannels.value[0]
   const defaultChannelId = firstOA ? firstOA.id : ''
+  groupSource.value = !firstOA && hasPersonalZaloChannel.value ? 'personal' : 'oa'
+  personalConversationID.value = null
+  selectedPersonalGroup.value = null
+  personalGroupSearch.value = ''
+  personalGroups.value = []
   groupForm.value = { id: '', name: '', description: '', asset_id: '', channel_id: defaultChannelId, customer_codes: [] }
   if (defaultChannelId) {
     fetchGmfPackages(defaultChannelId)
@@ -1743,6 +1843,14 @@ async function saveGroup() {
         customer_codes: groupForm.value.customer_codes
       })
       showSnack('Đã cập nhật nhóm thành công', 'success')
+    } else if (groupSource.value === 'personal') {
+      await api.post(`/tenants/${tenantId.value}/crm/groups`, {
+        name: groupForm.value.name,
+        description: groupForm.value.description,
+        customer_codes: groupForm.value.customer_codes,
+        personal_conversation_id: personalConversationID.value,
+      })
+      showSnack('Đã liên kết nhóm Zalo cá nhân', 'success')
     } else {
       await api.post(`/tenants/${tenantId.value}/crm/groups`, {
         name: groupForm.value.name,

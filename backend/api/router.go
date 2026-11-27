@@ -319,6 +319,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.GET("/crm/order-tracking/:id/evidence", middleware.RequirePermission("settings", "r"), handlers.GetCRMOrderConfirmationEvidence)
 			tenant.POST("/crm/order-tracking/:id/evidence", middleware.RequirePermission("settings", "w"), handlers.UploadCRMOrderConfirmationEvidence)
 			tenant.GET("/crm/groups", handlers.ListCRMGroups)
+			tenant.GET("/crm/groups/personal-zalo-conversations", middleware.RequireRole("owner", "admin"), handlers.ListUnlinkedPersonalZaloCRMConversations)
 			tenant.POST("/crm/groups", middleware.RequireRole("owner", "admin"), handlers.CreateCRMGroup)
 			tenant.PUT("/crm/groups/:id", middleware.RequireRole("owner", "admin"), handlers.UpdateCRMGroup)
 			tenant.POST("/crm/groups/:id/archive", middleware.RequireRole("owner", "admin"), handlers.ArchiveCRMGroup)

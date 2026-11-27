@@ -6,7 +6,7 @@ import { defineComponent, h } from 'vue'
 import api from '../api'
 import CRM from '../views/CRM.vue'
 
-vi.mock('../api', () => ({ default: { get: vi.fn() } }))
+vi.mock('../api', () => ({ default: { get: vi.fn(), post: vi.fn() } }))
 vi.mock('vue-router', async (original) => ({
   ...await original(),
   useRoute: () => ({ params: { tenantId: 'tenant' }, query: {} }),
@@ -81,4 +81,49 @@ it('refreshes the group count and open member dialog after an addition and after
   expect(wrapper.text()).toContain('Khách mới')
   expect(wrapper.text()).toContain('Zalo ID: zalo-user')
   expect(wrapper.text()).not.toContain('Đã thêm vào CRM')
+})
+
+it('links a synced personal Zalo group with the existing CRM customer code selector', async () => {
+  const source = { id: 'conversation', name: 'Nhóm khách S084', channel_id: 'personal', channel_name: 'Zalo cá nhân' }
+  const personalChannel = { id: source.channel_id, channel_type: 'personal_zalo_import', name: source.channel_name, is_active: true }
+  vi.mocked(api.get).mockImplementation(async (url) => {
+    if (url.endsWith('/channels')) return { data: [personalChannel] }
+    if (url.endsWith('/crm/groups/personal-zalo-conversations')) return { data: [source] }
+    if (url.endsWith('/crm/customer-profiles')) return { data: ['S084'] }
+    return { data: [] }
+  })
+  vi.mocked(api.post).mockResolvedValue({ data: {} })
+  vi.stubGlobal('localStorage', { getItem: () => null })
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401 })))
+  const form = defineComponent({
+    setup(_, { expose, slots }) {
+      expose({ validate: async () => ({ valid: true }) })
+      return () => h('div', slots.default?.())
+    },
+  })
+  const autocomplete = defineComponent({
+    props: ['modelValue', 'items'],
+    emits: ['update:modelValue', 'update:search'],
+    setup: props => () => h('div', { 'data-model': String(props.modelValue ?? '') }),
+  })
+  wrapper = mount(CRM, {
+    global: {
+      plugins: [createPinia()], mocks: { $t: (key: string) => key },
+      stubs: { ...stubs, VForm: form, VAutocomplete: autocomplete }, renderStubDefaultSlot: true,
+    },
+  })
+  await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === 'Thêm nhóm mới')!.trigger('click')
+  await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/tenants/tenant/crm/groups/personal-zalo-conversations', expect.any(Object)))
+  await flushPromises()
+  const pickGroup = wrapper.findAllComponents(autocomplete).find(control => control.attributes('data-testid') === 'crm-personal-group-conversation')!
+  expect(pickGroup.props('items')).toEqual([{ value: source.id, title: `${source.name} · ${source.channel_name}` }])
+  pickGroup.vm.$emit('update:modelValue', source.id)
+  const pickCustomer = wrapper.findAllComponents(autocomplete).find(control => control.attributes('data-testid') === 'crm-group-customer-codes')!
+  pickCustomer.vm.$emit('update:modelValue', ['S084'])
+  await wrapper.findAll('button').find(button => button.text() === 'Lưu lại')!.trigger('click')
+  await flushPromises()
+  expect(api.post).toHaveBeenCalledWith('/tenants/tenant/crm/groups', {
+    name: source.name, description: '', customer_codes: ['S084'], personal_conversation_id: source.id,
+  })
 })

@@ -100,8 +100,9 @@ func handleComplaintTool(ctx context.Context, tenantID, agentType, permissionTok
 	auditComplaint(tenantID, permissions, 200, 1)
 	log.Printf("[cases] %s case %s for %s/%s (staff_notified=%t, %s)", out.Action, out.Case.ID, report.SubjectType, report.SubjectID, out.StaffNotified, out.Reason)
 	body := gin.H{"status": "success", "action": out.Action, "staff_notified": out.StaffNotified}
-	if permissions.GroupGuest {
-		// A guest's reply goes to the whole group: nothing about their case
+	groupReply := permissions.GroupGuest || (permissions.PersonalZalo && permissions.ZaloGroupID != "")
+	if groupReply {
+		// The reply goes to the whole group: nothing about the case
 		// (whether it is new or old, title, status, staff updates) is
 		// returned, only that it was recorded.
 		body["action"] = "recorded"
@@ -109,7 +110,7 @@ func handleComplaintTool(ctx context.Context, tenantID, agentType, permissionTok
 	} else {
 		body["case"] = customercases.ViewForBot(out.Case)
 	}
-	if !out.StaffNotified && !permissions.GroupGuest {
+	if !out.StaffNotified && !groupReply {
 		body["note"] = "Đã lưu vấn đề nhưng chưa báo trực tiếp được nhân viên. Chỉ nói với khách là em đã ghi nhận; không hứa nhân viên sẽ liên hệ ngay."
 	}
 	return result(body, false)
@@ -136,6 +137,7 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 		Source: customercases.SourceBot, TurnID: p.TurnID, SubjectOnly: p.GroupGuest, Retry: p.Retry, Type: args.Type, Severity: args.Severity,
 		Title: args.Title, Detail: args.Detail, Evidence: args.Evidence,
 	}
+	personalGroupStaff := p.PersonalZalo && p.ZaloGroupID != "" && !p.GroupGuest
 	if p.PersonalZalo {
 		if p.ComplaintTurnID == "" {
 			return customercases.Report{}, "Không xác định được tin nhắn để ghi nhận."
@@ -150,7 +152,7 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 	}
 	if db.DB != nil {
 		var ch models.Channel
-		if err := db.DB.WithContext(ctx).Select("id, metadata, channel_type, is_active, personal_zalo_auto_reply_enabled").Where("id = ? AND tenant_id = ?", p.ChannelID, p.TenantID).First(&ch).Error; err != nil || !customercases.EnabledFor(ch.Metadata) {
+		if err := db.DB.WithContext(ctx).Select("id, tenant_id, external_id, metadata, channel_type, is_active, personal_zalo_auto_reply_enabled").Where("id = ? AND tenant_id = ?", p.ChannelID, p.TenantID).First(&ch).Error; err != nil || !customercases.EnabledFor(ch.Metadata) {
 			return customercases.Report{}, complaintsOffMessage
 		}
 		if p.PersonalZalo {
@@ -166,9 +168,15 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 				return customercases.Report{}, complaintsOffMessage
 			}
 		}
-		r.ReporterName = zaloPersonName(p.TenantID, p.ZaloUserID)
-		r.CustomerName = r.ReporterName
-		if p.ZaloGroupID != "" {
+		if personalGroupStaff {
+			if refusal := applyPersonalZaloStaffComplaintSource(ctx, ch, &r); refusal != "" {
+				return customercases.Report{}, refusal
+			}
+		} else {
+			r.ReporterName = zaloPersonName(p.TenantID, p.ZaloUserID)
+			r.CustomerName = r.ReporterName
+		}
+		if p.ZaloGroupID != "" && !personalGroupStaff {
 			var g models.CRMGroup
 			if err := db.DB.Select("name, customer_code").Where("tenant_id = ? AND zalo_group_id = ?", p.TenantID, p.ZaloGroupID).First(&g).Error; err == nil {
 				r.ChatGroup = g.Name
