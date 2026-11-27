@@ -11,7 +11,12 @@
         <v-card class="mb-4" variant="outlined">
           <v-card-text class="pa-3">
             <v-row dense>
-              <v-col cols="6" sm="3">
+              <v-col
+                :cols="selectedConvId ? 6 : 12"
+                :sm="selectedConvId ? 6 : 6"
+                :md="selectedConvId ? 6 : 3"
+                style="min-width: 0;"
+              >
                 <v-select
                   v-model="filterChannelType"
                   :items="channelTypes"
@@ -22,7 +27,12 @@
                   hide-details
                 />
               </v-col>
-              <v-col cols="6" sm="3">
+              <v-col
+                :cols="selectedConvId ? 6 : 12"
+                :sm="selectedConvId ? 6 : 6"
+                :md="selectedConvId ? 6 : 3"
+                style="min-width: 0;"
+              >
                 <v-select
                   v-model="filterChannelId"
                   :items="channelOptions"
@@ -33,7 +43,12 @@
                   hide-details
                 />
               </v-col>
-              <v-col cols="6" sm="3">
+              <v-col
+                cols="12"
+                :sm="selectedConvId ? 12 : 6"
+                :md="selectedConvId ? 12 : 3"
+                style="min-width: 0;"
+              >
                 <v-text-field
                   v-model="searchQuery"
                   :label="$t('search')"
@@ -45,7 +60,13 @@
                   @update:model-value="debouncedSearch"
                 />
               </v-col>
-              <v-col cols="6" sm="3" class="d-flex ga-2 align-center">
+              <v-col
+                cols="12"
+                :sm="selectedConvId ? 12 : 6"
+                :md="selectedConvId ? 12 : 3"
+                class="d-flex ga-2 align-center"
+                style="min-width: 0;"
+              >
                 <v-select
                   v-model="filterEvaluation"
                   :items="evaluationFilterOptions"
@@ -55,8 +76,18 @@
                   variant="outlined"
                   hide-details
                   class="flex-grow-1"
+                  style="min-width: 0;"
                 />
-                <v-btn v-if="authStore.canEdit('messages')" size="small" variant="tonal" color="primary" icon="mdi-export" @click="showExportDialog = true" />
+                <v-btn
+                  v-if="authStore.canEdit('messages')"
+                  size="small"
+                  variant="tonal"
+                  color="primary"
+                  icon="mdi-export"
+                  class="flex-shrink-0"
+                  :title="'Export tin nhắn'"
+                  @click="showExportDialog = true"
+                />
               </v-col>
             </v-row>
           </v-card-text>
@@ -154,7 +185,7 @@
           <!-- Pagination -->
           <v-divider v-if="totalPages > 1" />
           <v-card-actions v-if="totalPages > 1" class="justify-center">
-            <v-pagination v-model="currentPage" :length="totalPages" :total-visible="7" density="compact" />
+            <v-pagination v-model="currentPage" :length="totalPages" :total-visible="selectedConvId ? 5 : 7" density="compact" />
           </v-card-actions>
         </v-card>
       </v-col>
