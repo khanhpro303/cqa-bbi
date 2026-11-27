@@ -191,8 +191,8 @@
       </v-col>
 
       <!-- Message Detail -->
-      <v-col v-if="selectedConvId" cols="12" md="7" lg="8">
-        <v-card variant="outlined" class="d-flex flex-column messages-detail-card">
+      <v-col v-if="selectedConvId" cols="12" md="7" lg="8" class="d-flex flex-column">
+        <v-card variant="outlined" class="d-flex flex-column messages-detail-card flex-grow-1">
           <!-- Header -->
           <v-card-title class="d-flex align-center pa-3 pa-sm-4" style="min-width: 0;">
             <v-btn icon="mdi-arrow-left" variant="text" size="small" class="d-md-none mr-2 flex-shrink-0" :title="$t('back')" @click="closeConversation" />
@@ -246,7 +246,7 @@
           <v-divider />
 
           <!-- Messages tab -->
-          <div v-show="detailTab === 'messages'" ref="messagesContainer" class="flex-grow-1 overflow-y-auto pa-4" style="background: rgba(0,0,0,0.02)">
+          <div v-show="detailTab === 'messages'" ref="messagesContainer" class="flex-grow-1 overflow-y-auto pa-4 messages-tab-content" style="background: rgba(0,0,0,0.02)">
             <div v-if="loadingMessages" class="text-center py-8">
               <v-progress-circular indeterminate />
             </div>
@@ -375,7 +375,7 @@
           </div>
 
           <!-- QC Evaluation tab -->
-          <div v-show="detailTab === 'qc'" class="flex-grow-1 overflow-y-auto pa-4">
+          <div v-show="detailTab === 'qc'" class="flex-grow-1 overflow-y-auto pa-4 messages-tab-content">
             <div v-if="loadingEvaluation" class="text-center py-8">
               <v-progress-circular indeterminate />
             </div>
@@ -481,7 +481,7 @@
           </div>
 
           <!-- Classification tab -->
-          <div v-show="detailTab === 'classification'" class="flex-grow-1 overflow-y-auto pa-4">
+          <div v-show="detailTab === 'classification'" class="flex-grow-1 overflow-y-auto pa-4 messages-tab-content">
             <div v-if="loadingEvaluation" class="text-center py-8">
               <v-progress-circular indeterminate />
             </div>
@@ -1061,8 +1061,10 @@ onMounted(async () => {
 
 <style scoped>
 .messages-detail-card {
-  height: calc(100vh - 140px);
-  height: calc(100dvh - 140px);
+  height: 100%;
+}
+.messages-tab-content {
+  min-height: 0;
 }
 @media (max-width: 959px) {
   .messages-detail-card {
