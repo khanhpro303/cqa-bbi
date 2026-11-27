@@ -103,7 +103,7 @@ func TestPersonalZaloFirstDirectTurnBeforeSync(t *testing.T) {
 	}
 	req := personalZaloChatbotRequest{SchemaVersion: personalZaloDirectProtocol, RequestID: "request", TenantID: channel.TenantID,
 		ChannelID: channel.ID, AccountExternalID: "101", ThreadID: "345", ThreadType: "user", SenderID: "345", MessageID: "msg",
-		SentAt: time.Now().UTC(), Text: "hello"}
+		SentAt: time.Now().UTC(), Text: "Tra công nợ"}
 	router := gin.New()
 	router.POST("/chat", func(c *gin.Context) { c.Set("internal_request_id", req.RequestID) }, NewPersonalZaloChatbotHandler(&config.Config{EncryptionKey: "fixture-key"}))
 	check := func(turn personalZaloChatbotRequest, wantStatus int, wantAccount string) string {
@@ -141,8 +141,8 @@ func TestPersonalZaloFirstDirectTurnBeforeSync(t *testing.T) {
 	if err := database.Model(&channel).Update("metadata", "{}").Error; err != nil {
 		t.Fatal(err)
 	}
-	if reply := check(req, http.StatusOK, "101"); !strings.Contains(reply, personalZaloVerificationRequiredReply) {
-		t.Fatal("a first-time unknown sender should receive verification guidance before the first sync")
+	if reply := check(req, http.StatusOK, "101"); !strings.Contains(reply, "cần xác thực tài khoản Zalo") {
+		t.Fatal("a first-time unknown sender asking for ERP data should receive verification guidance before the first sync")
 	}
 	req.AccountExternalID = "202"
 	check(req, http.StatusNoContent, "101")

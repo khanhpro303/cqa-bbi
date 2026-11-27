@@ -20,7 +20,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/engine"
 )
 
-const knowledgePreviewTokenPrefix = "kb-preview:"
+const knowledgePreviewTokenPrefix = engine.KnowledgePreviewTokenPrefix
 
 func NewKnowledgeChatPreview(cfg *config.Config) gin.HandlerFunc {
 	client := engine.NewLangflowPreviewClient(cfg)
@@ -138,17 +138,7 @@ func validKnowledgePreviewAgent(agentType string) bool {
 }
 
 func signKnowledgePreviewToken(key, tenantID, agentType string) (string, error) {
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Issuer:    "cqa-knowledge-preview",
-		Subject:   agentType,
-		Audience:  jwt.ClaimStrings{tenantID},
-		ID:        uuid.NewString(),
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(2 * time.Minute)),
-	}).SignedString([]byte(key))
-	if err != nil {
-		return "", err
-	}
-	return knowledgePreviewTokenPrefix + token, nil
+	return engine.SignKnowledgePreviewToken(key, tenantID, agentType)
 }
 
 func resolveKnowledgePreviewAgent(key, tenantID, token string) string {
