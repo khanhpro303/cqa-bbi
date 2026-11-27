@@ -90,9 +90,9 @@ func TestPersonalZaloImportBindsAccountBeforeIngestion(t *testing.T) {
 	}
 }
 
-func TestPersonalZaloFirstDirectTurnBeforeSync(t *testing.T) {
+func TestPersonalZaloFirstDirectTurnRequiresRosterBeforeSync(t *testing.T) {
 	database := facebookOAuthTestDatabase(t)
-	if err := database.AutoMigrate(&models.AppSetting{}, &models.ZaloWhitelist{}, &models.PersonalZaloIdentityLink{}); err != nil {
+	if err := database.AutoMigrate(&models.AppSetting{}, &models.ZaloWhitelist{}, &models.PersonalZaloIdentityLink{}, &models.PersonalZaloThreadApproval{}); err != nil {
 		t.Fatal(err)
 	}
 	createFacebookOAuthTenant(t, database, "tenant")
@@ -139,6 +139,17 @@ func TestPersonalZaloFirstDirectTurnBeforeSync(t *testing.T) {
 	}
 	check(req, http.StatusNoContent, "")
 	if err := database.Model(&channel).Update("metadata", "{}").Error; err != nil {
+		t.Fatal(err)
+	}
+	check(req, http.StatusNoContent, "")
+	if err := database.Model(&channel).Update("external_id", "101").Error; err != nil {
+		t.Fatal(err)
+	}
+	check(req, http.StatusNoContent, "101")
+	if err := database.Create(&models.PersonalZaloThreadApproval{
+		ChannelID: channel.ID, AccountExternalID: "101", ThreadType: "user", ThreadID: "345",
+		Present: true, Status: personalZaloApproved, FirstSeenAt: req.SentAt.Add(-time.Second),
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if reply := check(req, http.StatusOK, "101"); !strings.Contains(reply, "cần xác thực tài khoản Zalo") {

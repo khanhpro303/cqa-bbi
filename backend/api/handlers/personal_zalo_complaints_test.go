@@ -33,7 +33,7 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	}
 	database := facebookOAuthTestDatabase(t)
 	if err := database.AutoMigrate(&models.AppSetting{}, &models.CRMGroup{}, &models.ZaloCustomer{},
-		&models.ZaloWhitelist{}, &models.PersonalZaloIdentityLink{}, &models.Conversation{}, &models.CustomerCase{},
+		&models.ZaloWhitelist{}, &models.PersonalZaloIdentityLink{}, &models.PersonalZaloThreadApproval{}, &models.Conversation{}, &models.CustomerCase{},
 		&models.CustomerCaseEvent{}, &models.CustomerCaseAlert{}, &models.ERPAuditLog{}, &models.NotificationLog{}, &models.CRMGroupCustomerCode{},
 		&models.CRMGroupCustomer{}); err != nil {
 		t.Fatal(err)
@@ -74,6 +74,19 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 		Name: "Personal", CredentialsEncrypted: credentials, IsActive: true, PersonalZaloAutoReplyEnabled: true,
 		Metadata: fmt.Sprintf(`{"complaint_cases":true,"personal_zalo_group_reply_enabled":true,"group_assistant_mode":true,"handover_alert_group_id":%q}`, staff.ID)}
 	if err := database.Create(&ch).Error; err != nil {
+		t.Fatal(err)
+	}
+	approvals := []models.PersonalZaloThreadApproval{
+		{ThreadType: personalZaloThreadUser, ThreadID: "456"},
+		{ThreadType: personalZaloThreadUser, ThreadID: "457"},
+		{ThreadType: personalZaloThreadGroup, ThreadID: "987"},
+	}
+	for i := range approvals {
+		approvals[i].ChannelID, approvals[i].AccountExternalID = ch.ID, ch.ExternalID
+		approvals[i].Present, approvals[i].Status = true, personalZaloApproved
+		approvals[i].FirstSeenAt = time.Now().Add(-time.Minute)
+	}
+	if err := database.Create(&approvals).Error; err != nil {
 		t.Fatal(err)
 	}
 	verifiedID, verifiedAt := "457", time.Now()

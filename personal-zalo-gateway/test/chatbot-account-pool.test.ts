@@ -305,7 +305,8 @@ test('a new group text is signed with sender identity and replies to the origina
   const sendMessage = async (text: string, threadId: string, type: number) => {
     sent = { text, threadId, type };
   };
-  const fetchMock = t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (url: string, request: RequestInit) => {
+    if (url.endsWith('/thread-access')) return new Response(null, { status: 200 });
     const payload = JSON.parse(String(request.body));
     return payload.delivery_receipt
       ? new Response(null, { status: 204 })
@@ -316,14 +317,18 @@ test('a new group text is signed with sender identity and replies to the origina
   await listener.message(groupMessage('41001'));
 
   assert.deepEqual(sent, { text: 'Chào cả nhóm', threadId: '50005', type: 1 });
-  assert.equal(fetchMock.mock.callCount(), 2);
+  assert.equal(fetchMock.mock.callCount(), 3);
   const request = fetchMock.mock.calls[0]?.arguments[1] as RequestInit;
-  const receiptRequest = fetchMock.mock.calls[1]?.arguments[1] as RequestInit;
+  const accessRequest = fetchMock.mock.calls[1]?.arguments[1] as RequestInit;
+  const receiptRequest = fetchMock.mock.calls[2]?.arguments[1] as RequestInit;
   const payload = JSON.parse(String(request.body));
+  const accessPayload = JSON.parse(String(accessRequest.body));
   const receiptPayload = JSON.parse(String(receiptRequest.body));
   assert.equal(payload.thread_type, 'group');
   assert.equal(payload.thread_id, '50005');
   assert.equal(payload.sender_id, '20002');
+  assert.equal(accessPayload.thread_id, payload.thread_id);
+  assert.equal(accessPayload.sent_at, payload.sent_at);
   assert.equal(receiptPayload.delivery_receipt, deliveryReceipt);
   assert.equal(receiptPayload.text, payload.text);
   assert.equal(receiptPayload.sent_at, payload.sent_at);
@@ -359,14 +364,30 @@ test('a failed Zalo group send never acknowledges delivery', async (t) => {
   configureTestChatbot(t);
   const deliveryReceipt = '123e4567-e89b-42d3-a456-426614174000';
   const sendMessage = t.mock.fn(async () => { throw new Error('SDK send failed'); });
-  const fetchMock = t.mock.method(globalThis, 'fetch', async () =>
-    Response.json({ reply: 'Không gửi được', delivery_receipt: deliveryReceipt }));
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (url: string) =>
+    url.endsWith('/thread-access')
+      ? new Response(null, { status: 200 })
+      : Response.json({ reply: 'Không gửi được', delivery_receipt: deliveryReceipt }));
   const { listener } = await connectFixture(t, { ownId: '10001', sendMessage });
 
   await listener.message(groupMessage('41002'));
 
   assert.equal(sendMessage.mock.callCount(), 1);
-  assert.equal(fetchMock.mock.callCount(), 1);
+  assert.equal(fetchMock.mock.callCount(), 2);
+});
+
+test('revoking a group after reply generation prevents sending and acknowledging it', async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async () => ({}));
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (url: string) =>
+    url.endsWith('/thread-access')
+      ? new Response(null, { status: 204 })
+      : Response.json({ reply: 'Đã tạo phản hồi', delivery_receipt: '123e4567-e89b-42d3-a456-426614174000' }));
+  const { listener, store, account } = await connectFixture(t, { ownId: '10001', sendMessage });
+  await listener.message(groupMessage('41003'));
+  assert.equal(sendMessage.mock.callCount(), 0);
+  assert.equal(fetchMock.mock.callCount(), 2);
+  assert.equal((await store.getAccount(account.id))?.chatbotTurns?.['41003'], undefined);
 });
 
 test('a manual group reply cancels pending bot replies for every sender in that group', { timeout: 2000 }, async (t) => {

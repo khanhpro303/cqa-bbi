@@ -59,6 +59,8 @@ func AutoMigrate() error {
 		&models.Tenant{},
 		&models.UserTenant{},
 		&models.Channel{},
+		&models.PersonalZaloThreadApproval{},
+		&models.PersonalZaloRosterState{},
 		&models.Conversation{},
 		&models.Message{},
 		&models.ChatSession{},

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -31,6 +32,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/messengerjourney"
 	"github.com/vietbui/chat-quality-agent/messengerlabels"
 	"github.com/vietbui/chat-quality-agent/pkg"
+	"github.com/vietbui/chat-quality-agent/realtime"
 	"gorm.io/gorm"
 )
 
@@ -356,10 +358,35 @@ func UpdateChannel(c *gin.Context) {
 		updates["metadata"] = metadata
 	}
 
-	result := db.DB.Model(&models.Channel{}).Where("id = ? AND tenant_id = ?", channelID, tenantID).Updates(updates)
-	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "channel_not_found"})
-		return
+	if _, personalToggle := updates["personal_zalo_auto_reply_enabled"]; personalToggle {
+		role := middleware.GetTenantRole(c)
+		if req.AutoReplyEnabled != nil && role != "owner" && role != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "insufficient_role"})
+			return
+		}
+		ctx := c.Request.Context()
+		changed, err := updatePersonalZaloAutoReply(ctx, channel, updates)
+		switch {
+		case errors.Is(err, errPersonalZaloRosterConflict):
+			c.JSON(http.StatusConflict, gin.H{"error": "personal_zalo_roster_conflict"})
+			return
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "channel_not_found"})
+			return
+		case err != nil:
+			log.Printf("[personal-zalo] auto-reply update for channel %s failed: %v", channelID, err)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "personal_zalo_roster_unavailable"})
+			return
+		}
+		if changed {
+			realtime.Publish(ctx, tenantID, realtime.EventPersonalZaloApprovalsUpdated)
+		}
+	} else {
+		result := db.DB.Model(&models.Channel{}).Where("id = ? AND tenant_id = ?", channelID, tenantID).Updates(updates)
+		if result.RowsAffected == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "channel_not_found"})
+			return
+		}
 	}
 
 	// Audit: ghi lại thay đổi toggle (cũ→mới). `channel` vẫn giữ giá trị cũ vì Updates dùng map.

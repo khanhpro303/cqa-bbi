@@ -43,6 +43,7 @@ export interface ListenerContext {
   isCurrent?: () => boolean;
   onLiveMessage?: (message: IncomingGatewayMessage) => Promise<void>;
   onSelfMessage?: (threadId: string, threadType: ThreadType, message: ChatbotSelfMessage) => void | Promise<void>;
+  onRosterEvent?: () => void | Promise<void>;
 }
 
 export interface ChatbotSelfMessage {
@@ -125,7 +126,7 @@ function parseExplicitZaloTimestamp(value: unknown): number | null {
 }
 
 export function attachZaloListener(ctx: ListenerContext): void {
-  const { accountId, api, store, onConnected, onDisconnected, onLiveMessage, onSelfMessage } = ctx;
+  const { accountId, api, store, onConnected, onDisconnected, onLiveMessage, onSelfMessage, onRosterEvent } = ctx;
   const listener = api.listener;
   const isCurrent = ctx.isCurrent ?? (() => true);
 
@@ -166,6 +167,11 @@ export function attachZaloListener(ctx: ListenerContext): void {
       logger.error(`[zalo:${accountId}] message listener failed`, error);
     }
   });
+
+  // zca-js emits these as hints. The authoritative membership is always a
+  // fresh getAllFriends/getAllGroups snapshot, never the event payload.
+  listener.on('friend_event', () => { void onRosterEvent?.(); });
+  listener.on('group_event', () => { void onRosterEvent?.(); });
 
   listener.on('old_messages', async (messages: any[]) => {
     try {
