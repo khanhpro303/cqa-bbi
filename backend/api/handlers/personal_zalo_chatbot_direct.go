@@ -1,0 +1,139 @@
+package handlers
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
+
+	"github.com/google/uuid"
+	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
+)
+
+const personalZaloERPUnavailable = "Dạ em chưa thể thực hiện tra cứu này trên kênh Zalo này. Anh/chị vui lòng thử lại hoặc liên hệ nhân viên phụ trách ạ."
+
+func personalZaloDirectGreeting(agentType string) string {
+	if agentType == "private" {
+		return "Chào anh/chị, em là trợ lý nội bộ. Anh/chị cần em hỗ trợ tra cứu gì ạ?"
+	}
+	return "Dạ em chào anh/chị. Anh/chị cần em hỗ trợ thông tin gì ạ?"
+}
+
+type personalZaloDirectGrant struct {
+	flow       engine.LangflowConfig
+	flowID     string
+	flowScope  string
+	permission string
+	customer   string
+	agentToken string
+	grantHash  string
+	turnID     string
+	prompt     string
+	showImages bool
+}
+
+func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req personalZaloChatbotRequest, identity personalZaloERPIdentity, flow engine.LangflowConfig, sessionScope string, settings map[string]models.AppSetting) (personalZaloDirectGrant, error) {
+	grant := personalZaloDirectGrant{flow: flow}
+	flowID, flowSource := flow.PublicFlowID, flow.PublicFlowIDSource
+	promptKey := "ai_engine_system_prompt"
+	if identity.AgentType == "private" {
+		flowID, flowSource = flow.FlowID, flow.FlowIDSource
+		promptKey = "ai_engine_system_prompt_internal"
+	}
+	if flow.APIURL == "" || flowID == "" || canonicalAIFlowID(flow.PublicFlowID) == canonicalAIFlowID(flow.FlowID) {
+		return grant, nil
+	}
+	grant.flowID = flowID
+	grant.prompt = strings.TrimSpace(settings[promptKey].ValuePlain)
+	agentToken := strings.TrimSpace(settings["ai_agent_erp_token_"+identity.AgentType].ValuePlain)
+	if identity.AgentType == "private" && agentToken == "" {
+		agentToken = strings.TrimSpace(settings["ai_agent_erp_token"].ValuePlain)
+	}
+	var permissions engine.GroupPermissionContext
+	if agentToken != "" {
+		var err error
+		permissions, err = engine.ResolvePersonalZaloERPPermissions(ctx, req.TenantID, req.ChannelID, req.SenderID, identity.AgentType, identity.Customer)
+		if err != nil {
+			return grant, err
+		}
+		grant.grantHash = personalZaloPermissionsHash(permissions)
+	}
+	digest := sha256.Sum256([]byte(strings.Join([]string{sessionScope, identity.ID, identity.AgentType, flowID, grant.grantHash}, "\x00")))
+	grant.flowScope = "personal-zalo-" + hex.EncodeToString(digest[:])
+	if len(permissions.Groups) > 0 {
+		grant.turnID = "personal-zalo-erp:" + uuid.NewString()
+		permissions.TurnID = grant.turnID
+		permissions.PersonalZaloSessionID = grant.flowScope
+		var err error
+		grant.permission, err = engine.SignPermissionToken(permissions, cfg.EncryptionKey)
+		if err != nil {
+			return grant, err
+		}
+		grant.agentToken = agentToken
+		grant.customer = permissions.CustomerCode
+	}
+	if cfg.EncryptionKey != "" && flowSource == engine.LangflowSourceTenant && flow.APIKeySource == engine.LangflowSourceTenant {
+		if grant.agentToken == "" {
+			token, err := signKnowledgePreviewToken(cfg.EncryptionKey, req.TenantID, identity.AgentType)
+			if err != nil {
+				return grant, err
+			}
+			grant.agentToken = token
+		}
+		grant.showImages = true
+	}
+	return grant, nil
+}
+
+func personalZaloPermissionsHash(permissions engine.GroupPermissionContext) string {
+	// The DTO holds only serializable fields. Hash the resolved grants without
+	// the one-use turn identifier so conversation history follows the same scope.
+	data, _ := json.Marshal(permissions)
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
+}
+
+func (g personalZaloDirectGrant) stillAuthorized(ctx context.Context, req personalZaloChatbotRequest, identity personalZaloERPIdentity) bool {
+	if g.grantHash == "" {
+		return true
+	}
+	current, err := engine.ResolvePersonalZaloERPPermissions(ctx, req.TenantID, req.ChannelID, req.SenderID, identity.AgentType, identity.Customer)
+	return err == nil && g.grantHash == personalZaloPermissionsHash(current)
+}
+
+func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.LangflowClient, channel models.Channel, req personalZaloChatbotRequest) (string, []string, error) {
+	if g.flowID == "" {
+		return personalZaloERPUnavailable, nil, nil
+	}
+	input, prompt := req.Text, g.prompt
+	if prompt != "" {
+		prompt += "\n\nKhi người dùng chỉ chào hỏi, chào ngắn gọn và hỏi họ cần hỗ trợ gì. Chỉ xác nhận kết quả tra cứu do công cụ trả về."
+		if g.permission == "" {
+			prompt += " Phiên này chưa có quyền ERP. Chỉ tư vấn dựa trên tài liệu được phép dùng."
+		}
+		if handover := personalZaloHandoverPrompt(channel); handover != "" {
+			prompt += "\n\n" + handover
+		}
+	}
+	imageLimit := 0
+	if g.showImages {
+		input, prompt = engine.AddKnowledgeImageInstruction(input, prompt)
+		imageLimit = engine.MaxKnowledgeReplyImages
+	}
+	result, err := langflow.RunFlowWithCustomerUsage(ctx, g.flowScope, g.flowScope, input, g.flow.APIURL, g.flow.APIKey, g.flowID,
+		g.customer, g.permission, g.agentToken, prompt)
+	if err != nil {
+		return "", nil, err
+	}
+	if _, text, _ := engine.TakePromptDelivery(ctx, g.turnID); text != "" {
+		return text, nil, nil
+	}
+	if strings.Contains(result.Text, "[RICH_MESSAGE_SENT]") {
+		return personalZaloERPUnavailable, nil, nil
+	}
+	text, imageIDs := engine.ParseKnowledgeImageReply(result.Text, imageLimit)
+	return text, imageIDs, nil
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/pkg"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -65,6 +66,11 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	var pauseDuringFlow atomic.Bool
 	var tenantCredentials atomic.Bool
 	var requestHandover atomic.Bool
+	var staffVerified atomic.Bool
+	var customerVerified atomic.Bool
+	var customerERP atomic.Bool
+	var revokeOnNextTurn atomic.Bool
+	customerVerified.Store(true)
 	imagePrivate := false
 	imageReads := 0
 	if err := database.Callback().Query().After("gorm:query").Register("test:personal_zalo_chatbot", func(q *gorm.DB) {
@@ -93,6 +99,43 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			if requestHandover.Load() {
 				*row = append(*row, models.AppSetting{SettingKey: "ai_engine_system_prompt", ValuePlain: "Hỗ trợ khách hàng."})
 			}
+			if staffVerified.Load() {
+				*row = append(*row,
+					models.AppSetting{SettingKey: "ai_agent_erp_token_private", ValuePlain: "fixture-private-erp"},
+					models.AppSetting{SettingKey: "ai_engine_system_prompt_internal", ValuePlain: "Hỗ trợ nhân viên."},
+				)
+			}
+			if customerERP.Load() {
+				*row = append(*row,
+					models.AppSetting{SettingKey: "ai_agent_erp_token_public", ValuePlain: "fixture-public-erp"},
+					models.AppSetting{SettingKey: "ai_engine_system_prompt", ValuePlain: "Hỗ trợ khách hàng."},
+				)
+			}
+		case *models.ZaloWhitelist:
+			if !slices.Contains(q.Statement.Vars, any(channel.ID)) {
+				t.Error("staff lookup must pin the personal channel")
+			}
+			if !staffVerified.Load() {
+				q.AddError(gorm.ErrRecordNotFound)
+				return
+			}
+			*row = models.ZaloWhitelist{ID: "staff", TenantID: channel.TenantID, ChannelID: channel.ID, ZaloUserID: "456", Status: "active"}
+		case *[]models.PersonalZaloIdentityLink:
+			if !customerVerified.Load() {
+				return
+			}
+			sender, now := "456", time.Now()
+			*row = []models.PersonalZaloIdentityLink{{ID: "link", Kind: "customer", TargetID: "customer", SenderID: &sender, VerifiedAt: &now}}
+		case *models.ZaloCustomer:
+			*row = models.ZaloCustomer{ID: "customer", TenantID: channel.TenantID, Status: "approved", CustomerCode: "S001"}
+		case *[]models.CRMGroup:
+			*row = []models.CRMGroup{{ID: "customer-group", Name: "Test customers"}}
+		case *[]models.ERPEndpoint:
+			ep := models.ERPEndpoint{Resource: "orders", ScopeType: "all", IsEnabled: true, GroupID: "customer-group"}
+			if staffVerified.Load() {
+				ep.GroupID = "private_bot"
+			}
+			*row = []models.ERPEndpoint{ep}
 		case *models.CRMGroup:
 			q.AddError(gorm.ErrRecordNotFound)
 		case *[]models.KnowledgeDocumentImage:
@@ -115,41 +158,74 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	var pauseOnNextTurn atomic.Bool
 	flow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			http.NotFound(w, r)
+			_, _ = fmt.Fprint(w, `{"data":{"nodes":[{"id":"Agent-fixture","data":{"node":{"template":{"system_prompt":{}}}}}]}}`)
 			return
 		}
 		flowCalls.Add(1)
 		if pauseOnNextTurn.Swap(false) {
 			pauseDuringFlow.Store(true)
 		}
+		staff := staffVerified.Load()
+		if revokeOnNextTurn.Swap(false) {
+			staffVerified.Store(false)
+			customerVerified.Store(false)
+		}
 		var input struct {
 			Text      string         `json:"input_value"`
 			SessionID string         `json:"session_id"`
 			Tweaks    map[string]any `json:"tweaks"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil ||
-			r.URL.Path != "/api/v1/run/public-flow" ||
-			!strings.HasPrefix(input.SessionID, "personal-zalo-") ||
-			input.Tweaks["permission_token"] != nil || input.Tweaks["customer_code"] != nil ||
-			r.Header.Get("X-LANGFLOW-GLOBAL-VAR-ERP_AGENT_TOKEN") != "" ||
-			r.Header.Get("X-LANGFLOW-GLOBAL-VAR-ERP_PERMISSION_TOKEN") != "" {
-			t.Errorf("unexpected public Langflow request: %s %+v (%v)", r.URL.Path, input, err)
+		wantFlow := "/api/v1/run/public-flow"
+		if staff {
+			wantFlow = "/api/v1/run/private-flow"
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil || r.URL.Path != wantFlow ||
+			!strings.HasPrefix(input.SessionID, "personal-zalo-") || input.Tweaks["zalo_user_id"] != input.SessionID {
+			t.Errorf("unexpected Langflow request: %s (want %s, decode err=%v)", r.URL.Path, wantFlow, err)
 		}
 		if r.Header.Get("X-API-Key") != "fixture-langflow-key" {
 			t.Error("Langflow credentials were not passed")
 		}
 		reply := "Chào bạn!"
-		if token := r.Header.Get("X-LANGFLOW-GLOBAL-VAR-CQA_ERP_AGENT_TOKEN"); tenantCredentials.Load() {
+		token := r.Header.Get("X-LANGFLOW-GLOBAL-VAR-CQA_ERP_AGENT_TOKEN")
+		if staff || customerERP.Load() {
+			signed, _ := input.Tweaks["permission_token"].(string)
+			permissions, err := engine.VerifyPermissionToken(signed, key)
+			wantAgent, wantScope := "public", "own"
+			if staff {
+				wantAgent, wantScope = "private", "all"
+			}
+			tweak, _ := input.Tweaks["Agent-fixture"].(map[string]any)
+			prompt, _ := tweak["system_prompt"].(string)
+			wantPrompt := "Hỗ trợ khách hàng."
+			if staff {
+				wantPrompt = "Hỗ trợ nhân viên."
+			}
+			if !strings.HasPrefix(prompt, wantPrompt) || !strings.Contains(prompt, "chào ngắn gọn") {
+				t.Errorf("%s flow received the wrong prompt", wantAgent)
+			}
+			if err != nil || permissions == nil || !permissions.PersonalZalo || permissions.AgentType != wantAgent ||
+				permissions.TenantID != channel.TenantID || permissions.ChannelID != channel.ID || permissions.ZaloUserID != "456" ||
+				permissions.PersonalZaloSessionID != input.SessionID ||
+				!strings.HasPrefix(permissions.TurnID, "personal-zalo-erp:") || token != "fixture-"+wantAgent+"-erp" {
+				t.Errorf("Langflow did not receive the signed %s personal ERP grant (err=%v)", wantAgent, err)
+			} else if allowed, scope, _ := permissions.IsResourceAllowed("orders"); !allowed || scope != wantScope ||
+				(!staff && !slices.Equal(permissions.CustomerCodes, []string{"S001"})) {
+				t.Errorf("orders permission has scope %q (allowed=%t), want %q", scope, allowed, wantScope)
+			}
+		} else if input.Tweaks["permission_token"] != nil || input.Tweaks["customer_code"] != nil {
+			t.Error("knowledge-only turn must have no ERP permission or customer code")
+		} else if tenantCredentials.Load() {
 			if resolveKnowledgePreviewAgent(key, channel.TenantID, token) != "public" {
 				t.Error("Langflow did not receive a public knowledge-only token")
 			}
 			if requestHandover.Load() {
 				reply = personalZaloAIHandoverMarker
-			} else if !strings.HasPrefix(input.Text, "Xin chào\n\n") || !strings.Contains(input.Text, "search_knowledge") {
+			} else if !strings.HasPrefix(input.Text, "Tra giúp sản phẩm\n\n") || !strings.Contains(input.Text, "search_knowledge") {
 				t.Error("Langflow did not receive the knowledge-image instructions")
 			}
 			reply += "\n[KB_IMAGE:" + imageID + "]"
-		} else if token != "" || input.Text != "Xin chào" {
+		} else if token != "" || input.Text != "Tra giúp sản phẩm" {
 			t.Error("legacy Langflow turn unexpectedly changed")
 		}
 		_, _ = fmt.Fprintf(w, `{"outputs":[{"outputs":[{"results":{"message":{"text":%q}}}]}]}`, reply)
@@ -163,7 +239,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 
 	fresh := personalZaloChatbotRequest{
 		SchemaVersion: "personal-zalo-chatbot-v1", TenantID: channel.TenantID, ChannelID: channel.ID,
-		AccountExternalID: "123", ThreadID: "456", MessageID: "msg-1", Text: " Xin chào ", SentAt: time.Now(),
+		AccountExternalID: "123", ThreadID: "456", MessageID: "msg-1", Text: " Tra giúp sản phẩm ", SentAt: time.Now(),
 	}
 	submit := func(req personalZaloChatbotRequest, signingSecret, serviceSecret string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -229,7 +305,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			masterEnabled = false
 			return func() { masterEnabled = true }
 		}},
-		{name: "missing public flow", signingSecret: secret, want: http.StatusNoContent, setup: func(_ *personalZaloChatbotRequest) func() {
+		{name: "missing public flow", signingSecret: secret, want: http.StatusOK, setup: func(_ *personalZaloChatbotRequest) func() {
 			publicFlow = ""
 			return func() { publicFlow = "public-flow" }
 		}},
@@ -250,6 +326,19 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	if calls := flowCalls.Load(); calls != 0 {
 		t.Fatalf("ineligible requests called Langflow %d times", calls)
 	}
+	customerVerified.Store(false)
+	fresh.RequestID = "unknown-sender"
+	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), personalZaloVerificationRequiredReply) || flowCalls.Load() != 0 {
+		t.Fatalf("unverified sender must not call Langflow (status=%d, calls=%d)", response.Code, flowCalls.Load())
+	}
+	customerVerified.Store(true)
+	fresh.RequestID, fresh.Text = "public-greeting", "Hello"
+	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), personalZaloDirectGreeting("public")) || flowCalls.Load() != 0 {
+		t.Fatalf("a greeting must receive the public welcome without calling Langflow (status=%d, calls=%d)", response.Code, flowCalls.Load())
+	}
+	fresh.Text = "Tra giúp sản phẩm"
 	fresh.RequestID = "valid-turn"
 	if response := submit(fresh, secret, ""); response.Code != http.StatusUnauthorized {
 		t.Fatalf("channel import secret alone returned %d", response.Code)
@@ -300,6 +389,24 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 		!strings.Contains(response.Body.String(), personalZaloHandoverUnavailable) || strings.Contains(response.Body.String(), imageID) ||
 		imageReads != readsBeforeHandover {
 		t.Fatalf("handover must suppress image. status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	requestHandover.Store(false)
+	customerERP.Store(true)
+	fresh.RequestID = "verified-customer-erp"
+	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK {
+		t.Fatalf("verified customer turn should use public ERP: %s", response.Body.String())
+	}
+	customerERP.Store(false)
+	staffVerified.Store(true)
+	fresh.RequestID = "verified-staff-erp"
+	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusOK {
+		t.Fatalf("verified staff turn should use private ERP: %s", response.Body.String())
+	}
+	revokeOnNextTurn.Store(true)
+	fresh.RequestID = "revoked-staff-erp"
+	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusNoContent {
+		t.Fatalf("an in-flight turn may not deliver after the sender loses access: %s", response.Body.String())
 	}
 }
 

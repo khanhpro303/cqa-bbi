@@ -184,7 +184,7 @@ func toSyncedMessages(messages []contracts.ImportMessage) []channels.SyncedMessa
 			ExternalID:  msg.ExternalID,
 			SenderType:  msg.SenderType,
 			SenderName:  msg.SenderName,
-			Content:     msg.Content,
+			Content:     redactPersonalZaloPairingCodes(msg.Content),
 			ContentType: msg.ContentType,
 			Attachments: toAttachments(msg.Attachments),
 			SentAt:      msg.SentAt,

@@ -103,6 +103,7 @@ func AutoMigrate() error {
 		&models.OAuthToken{},
 		&models.ActivityLog{},
 		&models.ZaloWhitelist{},
+		&models.PersonalZaloIdentityLink{},
 		&models.ERPEndpoint{},
 		&models.ZaloCustomer{},
 		&models.ZaloCustomerCode{},

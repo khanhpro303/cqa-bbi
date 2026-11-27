@@ -44,7 +44,10 @@ type personalZaloChatbotRequest struct {
 func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 	langflow := engine.NewLangflowClient(cfg)
 	scopedLangflow := engine.NewLangflowPreviewClient(cfg)
-	settingKeys := append([]string{"chatbot_active", "ai_engine_system_prompt"}, engine.LangflowSettingKeys...)
+	settingKeys := append([]string{
+		"chatbot_active", "ai_engine_system_prompt", "ai_engine_system_prompt_internal",
+		"ai_agent_erp_token_public", "ai_agent_erp_token_private", "ai_agent_erp_token",
+	}, engine.LangflowSettingKeys...)
 
 	return func(c *gin.Context) {
 		var req personalZaloChatbotRequest
@@ -97,6 +100,39 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			c.Status(http.StatusNoContent)
 			return
 		}
+		verificationReply, handled, err := handlePersonalZaloIdentityVerification(ctx, channel, req)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_verification_unavailable"})
+			return
+		}
+		if handled {
+			if verificationReply == "" {
+				c.Status(http.StatusNoContent)
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"reply": verificationReply})
+			return
+		}
+		req.Text = redactPersonalZaloPairingCodes(req.Text)
+		var identity personalZaloERPIdentity
+		if req.ThreadType == personalZaloThreadUser {
+			if channel.ExternalID != req.AccountExternalID {
+				c.Status(http.StatusNoContent)
+				return
+			}
+			identity, err = resolvePersonalZaloERPIdentity(ctx, channel, req)
+			if err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_verification_unavailable"})
+				return
+			}
+			if identity.AgentType == "" {
+				c.JSON(http.StatusOK, gin.H{"reply": personalZaloVerificationRequiredReply})
+				return
+			}
+			if sessionConfig.SessionWelcomeMessage == cfg.ChatbotSessionWelcomeMessage {
+				sessionConfig.SessionWelcomeMessage = personalZaloDirectGreeting(identity.AgentType)
+			}
+		}
 		addressed := req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req.Text, sessionConfig)
 		groupTurn := preparePersonalZaloGroupTurn(ctx, channel, sessionConfig, req, addressed, workers.PersonalZaloGroupNeedsReply)
 		handover := personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
@@ -110,49 +146,43 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 		reply := turn.Reply
 		var imageIDs []string
+		var directGrant personalZaloDirectGrant
 		if turn.RunFlow {
 			flow := engine.ResolveTenantLangflowConfig(settings, cfg)
-			if flow.APIURL == "" || flow.PublicFlowID == "" {
-				c.Status(http.StatusNoContent)
-				return
-			}
-			systemPrompt := strings.TrimSpace(settings["ai_engine_system_prompt"].ValuePlain)
-			instruction := ""
-			if systemPrompt != "" {
-				instruction = personalZaloHandoverPrompt(channel)
-			}
-			if instruction != "" {
-				systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instruction)
-			}
-			// Direct turns can use public knowledge with tenant-owned Langflow
-			// credentials. Personal turns carry no OA whitelist or ERP grants.
-			imageLimit := 0
-			if req.ThreadType == personalZaloThreadUser && cfg.EncryptionKey != "" &&
-				flow.PublicFlowIDSource == engine.LangflowSourceTenant && flow.APIKeySource == engine.LangflowSourceTenant {
-				token, tokenErr := signKnowledgePreviewToken(cfg.EncryptionKey, req.TenantID, "public")
-				if tokenErr != nil {
-					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_settings_unavailable"})
+			if identity.AgentType != "" {
+				if personalZaloMatchesKeyword(req.Text, "hello;hi;xin chào;chào;alo") {
+					reply = personalZaloDirectGreeting(identity.AgentType)
+				} else {
+					directGrant, err = preparePersonalZaloDirectGrant(ctx, cfg, req, identity, flow, turn.FlowScope, settings)
+					if err != nil {
+						c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_settings_unavailable"})
+						return
+					}
+					reply, imageIDs, err = directGrant.run(ctx, scopedLangflow, channel, req)
+				}
+				handover = personalZaloHasHandoverDestination(channel) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
+			} else {
+				if flow.APIURL == "" || flow.PublicFlowID == "" || strings.EqualFold(flow.PublicFlowID, flow.FlowID) {
+					c.Status(http.StatusNoContent)
 					return
 				}
-				input, prompt := engine.AddKnowledgeImageInstruction(req.Text, systemPrompt)
-				result, flowErr := scopedLangflow.RunFlowWithCustomerUsage(ctx, turn.FlowScope, turn.FlowScope,
-					input, flow.APIURL, flow.APIKey, flow.PublicFlowID, "", "", token, prompt)
-				reply, err = result.Text, flowErr
-				imageLimit = engine.MaxKnowledgeReplyImages
-			} else {
+				systemPrompt := strings.TrimSpace(settings["ai_engine_system_prompt"].ValuePlain)
+				instruction := ""
+				if systemPrompt != "" {
+					instruction = personalZaloHandoverPrompt(channel)
+					if instruction != "" {
+						systemPrompt += "\n\n" + instruction
+					}
+				}
 				reply, err = langflow.RunFlowWithOverrides(ctx, turn.FlowScope, turn.FlowScope,
 					req.Text, flow.APIURL, flow.APIKey, flow.PublicFlowID, systemPrompt)
+				reply, _ = engine.ParseKnowledgeImageReply(reply, 0)
+				handover = instruction != "" && (addressed || !groupTurn.Staff) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
 			}
 			if err != nil {
 				c.JSON(http.StatusBadGateway, gin.H{"error": "chatbot_reply_failed"})
 				return
 			}
-			reply, imageIDs = engine.ParseKnowledgeImageReply(reply, imageLimit)
-			if req.ThreadType == personalZaloThreadUser && strings.Contains(reply, "[RICH_MESSAGE_SENT]") {
-				c.Status(http.StatusNoContent)
-				return
-			}
-			handover = instruction != "" && (addressed || !groupTurn.Staff) && strings.TrimSpace(reply) == personalZaloAIHandoverMarker
 			reply = personalZaloStripHandoverMarker(reply)
 		}
 		reply = strings.TrimSpace(reply)
@@ -180,6 +210,14 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			c.Status(http.StatusNoContent)
 			return
 		}
+		if identity.AgentType != "" {
+			latestIdentity, err := resolvePersonalZaloERPIdentity(ctx, latestChannel, req)
+			if err != nil || latestIdentity.AgentType != identity.AgentType || latestIdentity.ID != identity.ID ||
+				!directGrant.stillAuthorized(ctx, req, latestIdentity) {
+				c.Status(http.StatusNoContent)
+				return
+			}
+		}
 		if groupTurn.Speaker != "" {
 			latestSession, err := parsePersonalZaloSessionConfig(latestChannel, cfg)
 			if err != nil || (groupTurn.Inferred && !latestSession.GroupAssistantMode) ||
@@ -200,7 +238,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 		response := gin.H{"reply": reply}
 		if !handover && len(imageIDs) > 0 {
-			if images := personalZaloKnowledgeReplyImages(ctx, req.TenantID, imageIDs); len(images) > 0 {
+			if images := personalZaloKnowledgeReplyImages(ctx, req.TenantID, identity.AgentType, imageIDs); len(images) > 0 {
 				response["images"] = images
 			}
 		}
@@ -218,8 +256,8 @@ type personalZaloKnowledgeImage struct {
 	channels.ZaloImage
 }
 
-func personalZaloKnowledgeReplyImages(ctx context.Context, tenantID string, imageIDs []string) []personalZaloKnowledgeImage {
-	rows, err := engine.LoadDeliverableKnowledgeImages(ctx, tenantID, "public", imageIDs)
+func personalZaloKnowledgeReplyImages(ctx context.Context, tenantID, audience string, imageIDs []string) []personalZaloKnowledgeImage {
+	rows, err := engine.LoadDeliverableKnowledgeImages(ctx, tenantID, audience, imageIDs)
 	if err != nil {
 		log.Printf("[personal-zalo] failed to load knowledge image tenant=%s: %v", tenantID, err)
 		return nil
@@ -231,7 +269,7 @@ func personalZaloKnowledgeReplyImages(ctx context.Context, tenantID string, imag
 			log.Printf("[personal-zalo] failed to prepare knowledge image %s: %v", row.ID, err)
 			continue
 		}
-		current, err := engine.LoadDeliverableKnowledgeReplyImageMetadata(ctx, tenantID, "public", row.ID)
+		current, err := engine.LoadDeliverableKnowledgeReplyImageMetadata(ctx, tenantID, audience, row.ID)
 		if err != nil {
 			log.Printf("[personal-zalo] failed to recheck knowledge image %s: %v", row.ID, err)
 		}
