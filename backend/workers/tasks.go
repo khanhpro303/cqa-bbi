@@ -17,6 +17,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/channels/zalotoken"
@@ -200,6 +201,22 @@ type ChannelMetadata struct {
 	AstraDBToken       string `json:"astradb_token"`
 	AstraDBKeyspace    string `json:"astradb_keyspace"`
 	AstraDBCollection  string `json:"astradb_collection"`
+}
+
+// agentTurnFlow returns the Langflow flow for a turn: the answering agent's
+// own flow when it has one, else the flow of the tier. A customer turn never
+// runs on the staff flow, even if an agent was set up with it.
+func agentTurnFlow(plan agents.Plan, lf engine.LangflowConfig, tier string) (flowID, source string) {
+	flowID, source = lf.FlowFor(tier)
+	id, own := plan.Flow(flowID)
+	if !own {
+		return flowID, source
+	}
+	if staffFlow, _ := lf.FlowFor(agents.TierPrivate); tier != agents.TierPrivate && strings.EqualFold(strings.TrimSpace(id), strings.TrimSpace(staffFlow)) {
+		log.Printf("[agents] agent %s is set to the staff flow; this customer turn uses the AI Engine flow", plan.Selection.Agent.Key)
+		return flowID, source
+	}
+	return id, "agent"
 }
 
 // selectSystemPrompt returns the flow-appropriate system prompt. The private
@@ -1061,6 +1078,25 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return err
 		}
 
+		// Specialist agents: when the tenant has turned them on, the channel's
+		// team ("Bộ điều phối") picks the agent that answers, and the agent's
+		// prompt, flow and tools replace the AI Engine prompt for this turn.
+		// The tier (and with it the data scope) still comes from the sender.
+		turnTier := agents.TierPublic
+		if isWhitelisted && matchedGroup.ZaloGroupID == "" {
+			turnTier = agents.TierPrivate
+		}
+		agentPlan, planErr := agents.PlanTurn(ctx, matchedChannel.TenantID, matchedChannel.ID, turnTier)
+		if planErr != nil {
+			log.Printf("[agents] channel %s: %v; answering with the AI Engine prompt", matchedChannel.ID, planErr)
+		}
+		if agentPlan.Mode == agents.ModeSilent {
+			// The message is already in chat memory for staff to pick up.
+			log.Printf("[agents] channel %s sender %s: no agent serves this sender here; staying silent (%s)",
+				matchedChannel.ID, payload.Sender.ID, agentPlan.LogFields())
+			return nil
+		}
+
 		// Real-time intent classification for active sessions. Skip it when the
 		// previous turn was a backend-pushed prompt awaiting this reply: the
 		// answer ("tháng này", "quý 2", "3 ngày", a tapped option) is ordinary
@@ -1089,7 +1125,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		publicChat := !isWhitelisted || matchedGroup.ZaloGroupID != ""
 		orderPeriodKey := "current_order_period:" + matchedChannel.ID + ":" + activeSessionID + ":" + payload.Sender.ID
 		orderDays := orderFollowupDays(input)
-		orderPeriod := lookupOrderDelivery != nil && meta.UnansweredHandoverEnabled && payload.SignatureVerified &&
+		// The order delivery shortcut answers for the bot, so it runs only
+		// when the answering agent may look orders up.
+		orderLookup := lookupOrderDelivery != nil && agentPlan.Allows(agents.ToolLookupOrder)
+		orderPeriod := orderLookup && meta.UnansweredHandoverEnabled && payload.SignatureVerified &&
 			publicChat && orderDays > 0 && hasOrderPeriodChoice(ctx, orderPeriodKey)
 		awaiting := engine.TakeAwaitingFollowup(ctx, workKey)
 		if (awaiting && !meta.UnansweredHandoverEnabled) ||
@@ -1128,18 +1167,18 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
+		// The prompt this turn starts from: the answering agent's, or the AI
+		// Engine prompt for the tier when agents are off.
+		basePrompt := agentPlan.BasePrompt(selectSystemPrompt(turnTier, meta.SystemPrompt, meta.SystemPromptInternal))
+
 		// Complaint cases: a complaint goes to the bot, which records it as a
 		// case (complaint_record) and answers the customer itself. The guide
-		// rides on the AI Engine system prompt, so without one the legacy
-		// handover path stays.
-		caseAgentType := "public"
-		if isWhitelisted && matchedGroup.ZaloGroupID == "" {
-			caseAgentType = "private"
-		}
+		// rides on the system prompt, so without one the legacy handover path
+		// stays; an agent without complaint_record leaves complaints to it too.
 		// Only a webhook with a verified Zalo signature may write cases:
 		// otherwise anyone who knows the URL could file them as any customer.
 		complaintCases := customercases.EnabledFor(matchedChannel.Metadata) && payload.SignatureVerified &&
-			strings.TrimSpace(selectSystemPrompt(caseAgentType, meta.SystemPrompt, meta.SystemPromptInternal)) != ""
+			strings.TrimSpace(basePrompt) != "" && agentPlan.Allows(agents.ToolComplaintRecord)
 		// A sender in a group chat who is not a CRM member of it (a customer
 		// in someone else's group) has their own cases, not the group's.
 		groupGuest := matchedGroup.ZaloGroupID != "" && !groupMember && !isWhitelisted
@@ -1190,7 +1229,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		unansweredEnabled := meta.UnansweredHandoverEnabled && payload.SignatureVerified && !complaintHandover && publicChat
-		directOrder := lookupOrderDelivery != nil && unansweredEnabled && intent == "IN_SCOPE" &&
+		directOrder := orderLookup && unansweredEnabled && intent == "IN_SCOPE" &&
 			(orderPeriod || isCurrentOrderDeliveryTurn(input, history))
 		if groupAssistant {
 			// Every message joins the group log the classifier reads. Messages
@@ -1348,9 +1387,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if isWhitelisted && matchedGroup.ZaloGroupID == "" {
 			flowAgentType = "private"
 		}
-		flowIDToUse, flowSource := lfCfg.FlowFor(flowAgentType)
-		log.Printf("[worker] routing sender=%s agent=%s code=%s flow=%s (flow_source=%s key_source=%s)",
-			payload.Sender.ID, flowAgentType, customerCode, flowIDToUse, flowSource, lfCfg.APIKeySource)
+		flowIDToUse, flowSource := agentTurnFlow(agentPlan, lfCfg, flowAgentType)
+		log.Printf("[worker] routing sender=%s agent=%s code=%s flow=%s (flow_source=%s key_source=%s) %s",
+			payload.Sender.ID, flowAgentType, customerCode, flowIDToUse, flowSource, lfCfg.APIKeySource, agentPlan.LogFields())
 
 		// Resolve permission context and sign JWT token
 		agentType := "public"
@@ -1360,9 +1399,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// Each flow gets its own system prompt: the internal/ALL-scope prompt for
-		// the private staff flow, the public/OWN-scope prompt otherwise. Empty maps
-		// to the flow's own SYSTEM_PROMPT global (see selectSystemPrompt).
-		systemPromptToUse := selectSystemPrompt(agentType, meta.SystemPrompt, meta.SystemPromptInternal)
+		// the private staff flow, the public/OWN-scope prompt otherwise, or the
+		// answering agent's prompt. Empty maps to the flow's own SYSTEM_PROMPT
+		// global (see selectSystemPrompt).
+		systemPromptToUse := basePrompt
 		systemPromptToUse = appendChatMemoryContext(ctx, cfg, matchedChannel.Metadata, systemPromptToUse, memTurn)
 		if groupAssistant {
 			systemPromptToUse = appendGroupAssistantContext(matchedChannel.TenantID, systemPromptToUse)
@@ -1393,7 +1433,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if n, ok := asynq.GetRetryCount(ctx); ok && n > 0 {
 			permCtx.Retry = true
 		}
-		systemPromptToUse = appendOrderCartContext(ctx, matchedChannel.TenantID, workKey, &permCtx, systemPromptToUse)
+		if agentPlan.TakesOrders() {
+			systemPromptToUse = appendOrderCartContext(ctx, matchedChannel.TenantID, workKey, &permCtx, systemPromptToUse)
+		}
+		// The token names the answering agent: the ERP MCP server then lists
+		// and serves only its tools.
+		agentPlan.Sign(&permCtx)
 		if complaintCases {
 			// A guest's reply goes to the whole group: their own cases (and
 			// staff updates on them) stay out of the prompt.
@@ -1401,10 +1446,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		if systemPromptToUse != "" {
 			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
-			if agentType != "private" {
+			if agentType != "private" && agentPlan.AllowsGroup(agents.ToolGroupProducts) {
 				systemPromptToUse += "\n\n" + publicStockStatusInstruction
 			}
-			if meta.UnansweredHandoverEnabled && agentType == "public" {
+			if meta.UnansweredHandoverEnabled && agentType == "public" && agentPlan.Allows(agents.ToolLookupOrder) {
 				systemPromptToUse += "\n\n" + publicOrderLookupInstruction
 			}
 			if permCtx.UnansweredLookupID != "" {
@@ -2040,7 +2085,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		var adviceImages []models.ProductAdvisoryImage
-		if intent == "IN_SCOPE" && !complaintHandover && !strings.HasPrefix(userText, "#") {
+		if intent == "IN_SCOPE" && !complaintHandover && !strings.HasPrefix(userText, "#") && agentPlan.AllowsGroup(agents.ToolGroupProducts) {
 			langflowInput, systemPromptToUse = engine.AddProductAdviceInstruction(langflowInput, systemPromptToUse)
 			advice, adviceErr := productAdviceForTurn(ctx, &permCtx, input, func() []chatmemory.RecentTurn {
 				if matchedGroup.ZaloGroupID != "" {
@@ -2071,7 +2116,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// key / deleted flow) must not take the whole bot down while the AI
 		// Engine settings are fine. Retry once with the tenant config.
 		if err != nil && engine.IsLangflowConfigError(err) && lfCfg.UsesChannelOverride() && !lfCfg.Equivalent(lfTenantCfg, flowAgentType) {
-			fallbackFlow, fallbackSource := lfTenantCfg.FlowFor(flowAgentType)
+			fallbackFlow, fallbackSource := agentTurnFlow(agentPlan, lfTenantCfg, flowAgentType)
 			log.Printf("[worker] WARNING channel %s Langflow override rejected (%v); falling back to AI Engine config flow=%s (source=%s). Clear the Langflow fields on this channel to silence this.",
 				matchedChannel.ID, err, fallbackFlow, fallbackSource)
 			if fallbackFlow != "" && lfTenantCfg.APIURL != "" {

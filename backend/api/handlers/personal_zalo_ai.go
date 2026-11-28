@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/customercases"
 	"github.com/vietbui/chat-quality-agent/db"
@@ -39,6 +41,23 @@ type personalZaloAIOptions struct {
 	staffGroupComplaint bool
 	canHandover         bool
 	draft               bool
+	// plan is who answers (see personalZaloAgentPlan); zero means decide here.
+	plan agents.Plan
+}
+
+// personalZaloAgentPlan decides who answers a personal Zalo turn. Staff in a
+// 1:1 chat are the private tier; everyone else (customers, guests, groups) is
+// the public tier, as on the OA.
+func personalZaloAgentPlan(ctx context.Context, req personalZaloChatbotRequest, identity personalZaloERPIdentity) agents.Plan {
+	tier := agents.TierPublic
+	if identity.AgentType == "private" && req.ThreadType == personalZaloThreadUser {
+		tier = agents.TierPrivate
+	}
+	plan, err := agents.PlanTurn(ctx, req.TenantID, req.ChannelID, tier)
+	if err != nil {
+		log.Printf("[agents] personal Zalo channel %s: %v; answering with the AI Engine prompt", req.ChannelID, err)
+	}
+	return plan
 }
 
 type personalZaloAIResult struct {
@@ -58,13 +77,21 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 	settings map[string]models.AppSetting, options personalZaloAIOptions) (personalZaloAIResult, error) {
 	result := personalZaloAIResult{complaint: options.complaint}
 	flow := engine.ResolveTenantLangflowConfig(settings, ai.cfg)
+	plan := options.plan
+	if plan.Mode == "" {
+		plan = personalZaloAgentPlan(ctx, req, options.identity)
+	}
+	if plan.Mode == agents.ModeSilent {
+		// No agent of this channel's team serves the sender: people answer.
+		return personalZaloAIResult{}, nil
+	}
 
 	switch {
 	case options.guest:
 		var response engine.LangflowResult
 		var err error
 		if options.draft {
-			prompt := strings.TrimSpace(settings["ai_engine_system_prompt"].ValuePlain + "\n\n" + personalZaloInternbotDraftGuide)
+			prompt := strings.TrimSpace(plan.BasePrompt(settings["ai_engine_system_prompt"].ValuePlain) + "\n\n" + personalZaloInternbotDraftGuide)
 			response, err = engine.RunPersonalZaloGuestDraft(flowCtx, ai.scoped, flow, ai.cfg.EncryptionKey,
 				req.TenantID, options.scope, req.Text, prompt)
 		} else {
@@ -98,7 +125,7 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 				return personalZaloAIResult{handover: true}, nil
 			}
 		}
-		grant, err := preparePersonalZaloDirectGrant(ctx, ai.cfg, req, options.identity, flow, options.scope, settings)
+		grant, err := preparePersonalZaloDirectGrant(ctx, ai.cfg, req, options.identity, flow, options.scope, settings, plan)
 		if err == nil && options.complaint && !options.draft {
 			err = grant.allowComplaints(ctx, ai.cfg.EncryptionKey, req, options.identity, target)
 		}
@@ -154,10 +181,12 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 		result.reply, _ = engine.ParseKnowledgeImageReply(response.Text, 0)
 		return result, err
 	default:
-		if flow.APIURL == "" || flow.PublicFlowID == "" || strings.EqualFold(flow.PublicFlowID, flow.FlowID) {
+		flowID, _ := plan.Flow(flow.PublicFlowID)
+		if flow.APIURL == "" || flow.PublicFlowID == "" || strings.EqualFold(flow.PublicFlowID, flow.FlowID) ||
+			strings.EqualFold(flowID, flow.FlowID) {
 			return result, nil
 		}
-		prompt := strings.TrimSpace(settings["ai_engine_system_prompt"].ValuePlain)
+		prompt := strings.TrimSpace(plan.BasePrompt(settings["ai_engine_system_prompt"].ValuePlain))
 		instruction := ""
 		if prompt != "" {
 			instruction = personalZaloHandoverPrompt(channel)
@@ -167,7 +196,7 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 		}
 		input, prompt := engine.AddProductAdviceInstruction(req.Text, prompt)
 		reply, err := ai.langflow.RunFlowWithOverrides(flowCtx, options.scope, options.scope,
-			input, flow.APIURL, flow.APIKey, flow.PublicFlowID, prompt)
+			input, flow.APIURL, flow.APIKey, flowID, prompt)
 		result.reply, _ = engine.ParseKnowledgeImageReply(reply, 0)
 		result.handover = instruction != "" && options.canHandover && strings.TrimSpace(result.reply) == personalZaloAIHandoverMarker
 		return result, err

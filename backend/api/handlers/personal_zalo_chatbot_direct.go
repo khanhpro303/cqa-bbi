@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
@@ -40,21 +41,25 @@ type personalZaloDirectGrant struct {
 	advicePermissions *engine.GroupPermissionContext
 }
 
-func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req personalZaloChatbotRequest, identity personalZaloERPIdentity, flow engine.LangflowConfig, sessionScope string, settings map[string]models.AppSetting) (personalZaloDirectGrant, error) {
+// preparePersonalZaloDirectGrant builds a verified 1:1 turn. plan says who
+// answers it: an agent's prompt, flow and tools, or the AI Engine prompt.
+func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req personalZaloChatbotRequest, identity personalZaloERPIdentity, flow engine.LangflowConfig, sessionScope string, settings map[string]models.AppSetting, plan agents.Plan) (personalZaloDirectGrant, error) {
 	grant := personalZaloDirectGrant{flow: flow}
 	if identity.AgentType != "private" && flow.PublicFlowID == "" {
 		return grant, nil
 	}
 	flowID, flowSource := flow.FlowFor(identity.AgentType)
+	flowID, _ = plan.Flow(flowID)
 	promptKey := "ai_engine_system_prompt"
 	if identity.AgentType == "private" {
 		promptKey = "ai_engine_system_prompt_internal"
 	}
-	if flow.APIURL == "" || flowID == "" || canonicalAIFlowID(flow.PublicFlowID) == canonicalAIFlowID(flow.FlowID) {
+	if flow.APIURL == "" || flowID == "" || canonicalAIFlowID(flow.PublicFlowID) == canonicalAIFlowID(flow.FlowID) ||
+		(identity.AgentType != "private" && canonicalAIFlowID(flowID) == canonicalAIFlowID(flow.FlowID)) {
 		return grant, nil
 	}
 	grant.flowID = flowID
-	grant.prompt = strings.TrimSpace(settings[promptKey].ValuePlain)
+	grant.prompt = strings.TrimSpace(plan.BasePrompt(settings[promptKey].ValuePlain))
 	agentToken := strings.TrimSpace(settings["ai_agent_erp_token_"+identity.AgentType].ValuePlain)
 	if identity.AgentType == "private" && agentToken == "" {
 		agentToken = strings.TrimSpace(settings["ai_agent_erp_token"].ValuePlain)
@@ -74,6 +79,9 @@ func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req
 		grant.turnID = "personal-zalo-erp:" + uuid.NewString()
 		permissions.TurnID = grant.turnID
 		permissions.PersonalZaloSessionID = grant.flowScope
+		// After grantHash: stillAuthorized compares it with freshly resolved
+		// permissions, which carry no agent.
+		plan.Sign(&permissions)
 		var err error
 		grant.permission, err = engine.SignPermissionToken(permissions, cfg.EncryptionKey)
 		if err != nil {
@@ -81,7 +89,9 @@ func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req
 		}
 		grant.agentToken = agentToken
 		grant.customer = permissions.CustomerCode
-		grant.advicePermissions = &permissions
+		if plan.AllowsGroup(agents.ToolGroupProducts) {
+			grant.advicePermissions = &permissions
+		}
 	}
 	if cfg.EncryptionKey != "" && flowSource == engine.LangflowSourceTenant && flow.APIKeySource == engine.LangflowSourceTenant {
 		if grant.agentToken == "" {

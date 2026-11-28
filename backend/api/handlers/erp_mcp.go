@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/engine"
 )
@@ -129,6 +130,9 @@ func ERPMCP(c *gin.Context) {
 	reply := func(result any) {
 		c.JSON(http.StatusOK, gin.H{"jsonrpc": "2.0", "id": req.ID, "result": result})
 	}
+	// A turn that runs as a specialist agent carries the agent's tool list
+	// in its signed permission token: list and serve only those tools.
+	turn := verifiedMCPTurn(tenantID, agentType, permissionToken)
 	switch req.Method {
 	case "initialize":
 		var params struct {
@@ -150,12 +154,12 @@ func ERPMCP(c *gin.Context) {
 			if personalComplaint {
 				tools = append(tools, complaintMCPTool())
 			}
-			reply(gin.H{"tools": tools})
+			reply(gin.H{"tools": turn.filter(tools)})
 			return
 		}
 		tools := append(erpMCPToolsForAgent(agentType), listedOrderTools()...)
 		tools = append(tools, knowledgeMCPTool(tenantID), complaintMCPTool())
-		reply(gin.H{"tools": tools})
+		reply(gin.H{"tools": turn.filter(tools)})
 	case "tools/call":
 		var params struct {
 			Name      string                     `json:"name"`
@@ -163,6 +167,10 @@ func ERPMCP(c *gin.Context) {
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			fail(-32602, "Invalid tool parameters")
+			return
+		}
+		if refusal := turn.refuse(params.Name); refusal != "" {
+			reply(erpMCPResult([]byte(refusal), true))
 			return
 		}
 		if params.Name == knowledgeMCPToolName {
@@ -324,3 +332,53 @@ func erpMCPQuery(tool erpMCPTool, args map[string]json.RawMessage) ([]byte, erro
 type erpMCPArgumentError struct{ field string }
 
 func (e *erpMCPArgumentError) Error() string { return "Invalid or missing argument: " + e.field }
+
+// mcpTurn is what a verified permission token says about the tools of the
+// current chat turn. The zero value (no or invalid token) restricts nothing:
+// every tool still checks the token itself for data access.
+type mcpTurn struct {
+	permissions *engine.GroupPermissionContext
+}
+
+func verifiedMCPTurn(tenantID, agentType, permissionToken string) mcpTurn {
+	if permissionToken == "" {
+		return mcpTurn{}
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return mcpTurn{}
+	}
+	p, err := engine.VerifyPermissionToken(permissionToken, cfg.EncryptionKey)
+	if err != nil || p.TenantID != tenantID || p.AgentType != agentType {
+		return mcpTurn{}
+	}
+	return mcpTurn{permissions: p}
+}
+
+// filter keeps the tools the turn's agent may call.
+func (t mcpTurn) filter(tools []erpMCPTool) []erpMCPTool {
+	if t.permissions == nil {
+		return tools
+	}
+	out := make([]erpMCPTool, 0, len(tools))
+	for _, tool := range tools {
+		if t.permissions.ToolAllowed(tool.Name) && !(t.permissions.DryRun && agents.ToolWrites(tool.Name)) {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
+
+// refuse returns the tool result for a call the turn may not make, or "".
+func (t mcpTurn) refuse(name string) string {
+	if t.permissions == nil {
+		return ""
+	}
+	if !t.permissions.ToolAllowed(name) {
+		return `{"error":"tool_not_allowed","message":"Công cụ này không thuộc phạm vi của trợ lý đang trả lời."}`
+	}
+	if t.permissions.DryRun && agents.ToolWrites(name) {
+		return `{"error":"dry_run","message":"Đang chạy thử: công cụ ghi dữ liệu không được gọi."}`
+	}
+	return ""
+}

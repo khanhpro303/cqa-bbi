@@ -27,6 +27,11 @@ type Channel struct {
 	// already have auto_reply_enabled=true from the Zalo OA default.
 	PersonalZaloAutoReplyEnabled bool `gorm:"not null;default:false" json:"-"`
 
+	// AITeamID is the agent team ("Bộ điều phối") that answers through this
+	// channel when the tenant runs agents. NULL uses the tenant's default
+	// team. See backend/agents.
+	AITeamID *string `gorm:"type:char(36);index" json:"ai_team_id"`
+
 	Tenant Tenant `gorm:"foreignKey:TenantID" json:"tenant,omitempty"`
 }
 

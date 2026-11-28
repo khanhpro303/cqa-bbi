@@ -63,8 +63,34 @@ type GroupPermissionContext struct {
 	Complaints bool `json:"complaints,omitempty"`
 	// Retry: the worker is processing this message again (an earlier attempt
 	// failed after the bot may have recorded complaints).
-	Retry  bool              `json:"retry,omitempty"`
+	Retry bool `json:"retry,omitempty"`
+	// AgentKey names the specialist agent this turn runs as (backend/agents).
+	// When it is set, AgentTools is the complete list of MCP tools the turn
+	// may call: the ERP MCP server lists and serves no others. Empty keeps
+	// the single-bot behaviour where the tier's tools are all available.
+	AgentKey   string   `json:"agent_key,omitempty"`
+	AgentTools []string `json:"agent_tools,omitempty"`
+	// KnowledgeTags limits search_knowledge to documents with one of these
+	// tags. Empty searches every document the tier may read.
+	KnowledgeTags []string `json:"knowledge_tags,omitempty"`
+	// DryRun marks a test-console turn: no tool that writes data or
+	// messages the customer may run.
+	DryRun bool              `json:"dry_run,omitempty"`
 	Groups []GroupPermission `json:"groups"`
+}
+
+// ToolAllowed reports whether the turn's agent may call the MCP tool name.
+// Turns that run as no agent (the AI Engine path) may call every tool.
+func (p GroupPermissionContext) ToolAllowed(name string) bool {
+	if p.AgentKey == "" {
+		return true
+	}
+	for _, t := range p.AgentTools {
+		if t == name {
+			return true
+		}
+	}
+	return false
 }
 
 // GroupPermission holds the permissions for a single CRM group.
