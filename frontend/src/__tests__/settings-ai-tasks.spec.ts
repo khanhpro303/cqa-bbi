@@ -178,4 +178,37 @@ describe('AI task model settings', () => {
     expect(flowReads).toBe(2)
     wrapper.unmount()
   })
+
+  it('lists live 9router routes for defaults and tasks and filters vision suggestions', async () => {
+    const catalog = [
+      { id: 'ag/gemini-4-neon', vision: true },
+      { id: 'cx/gpt-5.6-luna', vision: true },
+      { id: 'ag/claude-sonnet-5-5' },
+    ]
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/settings/ai/9router-models')) return { data: { models: catalog } }
+      if (url.endsWith('/settings/ai/tasks')) return { data: structuredClone(taskResponse) }
+      return { data: { settings: {
+        ai_provider: '9router',
+        ai_model: 'custom-combo',
+        ai_api_key_9router: '••••••••',
+        ai_base_url_9router: 'https://router.example.com/v1',
+      } } }
+    })
+    const wrapper = await mountSettings()
+    const vm = wrapper.vm as any
+    expect(wrapper.find('[data-testid="nine-router-default-model"]').exists()).toBe(true)
+    expect(vm.aiSettings.model).toBe('custom-combo')
+    expect(vm.nineRouterModelOptions.map((option: any) => option.title)).toEqual([
+      'Codex', 'cx/gpt-5.6-luna', 'Gemini', 'ag/gemini-4-neon', 'Claude', 'ag/claude-sonnet-5-5',
+    ])
+    vm.selectTaskProvider(vm.taskAISettings[1], '9router')
+    expect(vm.taskModelOptions(vm.taskAISettings[1]).map((option: any) => option.title)).toEqual([
+      'Codex', 'cx/gpt-5.6-luna', 'Gemini', 'ag/gemini-4-neon',
+    ])
+    await wrapper.get('[data-testid="nine-router-refresh-models"]').trigger('click')
+    await flushPromises()
+    expect(mocks.get.mock.calls.filter(([url]) => url.endsWith('/settings/ai/9router-models'))).toHaveLength(2)
+    wrapper.unmount()
+  })
 })

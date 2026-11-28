@@ -476,6 +476,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.PUT("/settings/analysis", middleware.RequirePermission("settings", "w"), handlers.SaveAnalysisSettings)
 			tenant.POST("/settings/ai/test", middleware.RequirePermission("settings", "w"), handlers.TestAIKey)
 			tenant.GET("/settings/ai/openrouter-models", middleware.RequirePermission("settings", "r"), handlers.ListOpenRouterFreeModels)
+			tenant.GET("/settings/ai/9router-models", middleware.RequirePermission("settings", "w"), handlers.ListNineRouterModels)
 			tenant.PUT("/settings/general", middleware.RequirePermission("settings", "w"), handlers.SaveGeneralSettings)
 			tenant.PUT("/settings/password", handlers.ChangePassword)
 
