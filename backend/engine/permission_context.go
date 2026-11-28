@@ -51,6 +51,10 @@ type GroupPermissionContext struct {
 	// ComplaintTurnID is the stable gateway message ID for cases. Personal
 	// Zalo ERP prompts use a separate, unique TurnID for each execution.
 	ComplaintTurnID string `json:"complaint_turn_id,omitempty"`
+	// Staff reporting in personal Zalo 1:1 uses a verified customer target
+	// independent of the code and permissions used for ERP lookups.
+	ComplaintCustomerCode string `json:"complaint_customer_code,omitempty"`
+	ComplaintStaffID      string `json:"complaint_staff_id,omitempty"`
 	// UnansweredLookupID is unique to the current signed chatbot attempt.
 	UnansweredLookupID string `json:"unanswered_lookup_id,omitempty"`
 	// Complaints: complaint handling is on for this turn (channel switch and

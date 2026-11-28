@@ -299,7 +299,11 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 				return
 			}
 			var discardImages bool
-			reply, discardImages = finishPersonalZaloComplaint(ctx, cfg, latestChannel, req, reply,
+			caseReq := req
+			if generation.caseText != "" {
+				caseReq.Text = generation.caseText
+			}
+			reply, discardImages = finishPersonalZaloComplaint(ctx, cfg, latestChannel, caseReq, generation.caseTurnID, reply,
 				inferredComplaint || requestedHandover || handover || reply == personalZaloAIHandoverMarker, staffGroupComplaint)
 			handover = false
 			if discardImages {

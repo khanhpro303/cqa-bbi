@@ -48,7 +48,7 @@ func personalZaloComplaintGuide(ctx context.Context, req personalZaloChatbotRequ
 	return guide
 }
 
-func (g *personalZaloDirectGrant) allowComplaints(ctx context.Context, key string, req personalZaloChatbotRequest, identity personalZaloERPIdentity) error {
+func (g *personalZaloDirectGrant) allowComplaints(ctx context.Context, key string, req personalZaloChatbotRequest, identity personalZaloERPIdentity, target personalZaloComplaintTarget) error {
 	_, source := g.flow.FlowFor(identity.AgentType)
 	if g.flowID == "" || key == "" || source != engine.LangflowSourceTenant || g.flow.APIKeySource != engine.LangflowSourceTenant {
 		return nil
@@ -65,12 +65,31 @@ func (g *personalZaloDirectGrant) allowComplaints(ctx context.Context, key strin
 		p = *current
 	}
 	attachPersonalZaloComplaintGrant(&p, req)
+	if identity.AgentType == "private" && req.ThreadType == personalZaloThreadUser {
+		p.ComplaintStaffID = identity.ID
+		p.ComplaintCustomerCode = target.code
+		if target.raw != "" {
+			p.ComplaintTurnID = target.pending.TurnID
+		}
+	}
 	permission, err := engine.SignPermissionToken(p, key)
 	if err != nil {
 		return err
 	}
 	g.permission = permission
-	g.complaintGuide = personalZaloComplaintGuide(ctx, req, p.CustomerCode)
+	if p.ComplaintStaffID != "" {
+		// A staff chat covers multiple customers. Omit the sender's case history.
+		guideReq := req
+		guideReq.SenderID = ""
+		g.complaintGuide = personalZaloComplaintGuide(ctx, guideReq, "")
+		if target.code == "" {
+			g.complaintGuide += "\nNếu tin nhắn là yêu cầu ghi nhận khiếu nại, chưa có mã khách xác thực. Không gọi complaint_record. Chỉ trả " + personalZaloComplaintCodeMarker + "."
+		} else {
+			g.complaintGuide += "\nNhân viên đang báo thay khách. Nếu tin nhắn yêu cầu ghi nhận khiếu nại, hệ thống đã xác thực mã khách " + target.code + ". Gọi complaint_record với mã này."
+		}
+	} else {
+		g.complaintGuide = personalZaloComplaintGuide(ctx, req, p.CustomerCode)
+	}
 	return nil
 }
 
@@ -95,8 +114,10 @@ func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cf
 		req.Text, permission, guide)
 }
 
-func finishPersonalZaloComplaint(ctx context.Context, cfg *config.Config, channel models.Channel, req personalZaloChatbotRequest, reply string, forceHandover, staffGroup bool) (string, bool) {
-	turnID := personalZaloComplaintTurnID(req)
+func finishPersonalZaloComplaint(ctx context.Context, cfg *config.Config, channel models.Channel, req personalZaloChatbotRequest, turnID, reply string, forceHandover, staffGroup bool) (string, bool) {
+	if turnID == "" {
+		turnID = personalZaloComplaintTurnID(req)
+	}
 	recorded, notified := customercases.TurnCaseState(ctx, req.TenantID, turnID)
 	cleaned := customercases.StripRefs(personalZaloStripHandoverMarker(reply))
 	if notified {

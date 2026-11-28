@@ -6,8 +6,11 @@ import (
 	"strings"
 
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/customercases"
+	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"github.com/vietbui/chat-quality-agent/workers"
 )
 
 type personalZaloAI struct {
@@ -45,6 +48,8 @@ type personalZaloAIResult struct {
 	handover      bool
 	complaint     bool
 	settingsError bool
+	caseTurnID    string
+	caseText      string
 }
 
 const personalZaloInternbotDraftGuide = "Đây là bản nháp cho nhân viên. Chỉ dùng công cụ tra cứu được phép. Không tiết lộ mã xác thực, mật khẩu, token hoặc thông tin không cần thiết. Không tuyên bố đã xác thực, chuyển tiếp, tạo phiếu hay thực hiện thao tác thay đổi dữ liệu. Nếu cần nhân viên xử lý, chỉ trả " + personalZaloAIHandoverMarker + "."
@@ -78,9 +83,24 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 			return result, nil
 		}
 
+		var target personalZaloComplaintTarget
+		staffComplaint := options.complaint && !options.draft && options.identity.AgentType == "private" && req.ThreadType == personalZaloThreadUser
+		if staffComplaint {
+			target = resolvePersonalZaloComplaintTarget(flowCtx, req, options.identity.ID, options.scope)
+			if target.recorded {
+				return personalZaloAIResult{reply: personalZaloCaseRecorded}, nil
+			}
+			if target.reply != "" && target.raw != "" {
+				return personalZaloAIResult{reply: target.ask(ctx)}, nil
+			}
+			if target.raw == "" && target.reply == personalZaloComplaintNeedCode && personalZaloHandoverRequested(req.Text) &&
+				!explicitComplaintProblem.MatchString(foldDebtSearch(req.Text)) {
+				return personalZaloAIResult{handover: true}, nil
+			}
+		}
 		grant, err := preparePersonalZaloDirectGrant(ctx, ai.cfg, req, options.identity, flow, options.scope, settings)
 		if err == nil && options.complaint && !options.draft {
-			err = grant.allowComplaints(ctx, ai.cfg.EncryptionKey, req, options.identity)
+			err = grant.allowComplaints(ctx, ai.cfg.EncryptionKey, req, options.identity, target)
 		}
 		if err != nil {
 			result.settingsError = true
@@ -89,8 +109,43 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 		if options.draft {
 			grant.draftGuide = personalZaloInternbotDraftGuide
 		}
+		if target.raw != "" {
+			result.caseTurnID = target.pending.TurnID
+			result.caseText = target.pending.Text
+			grant.complaintGuide += "\nNhân viên đã trả lời xác nhận mã cho nội dung khiếu nại sau. Hãy ghi nhận ngay bằng complaint_record."
+			req.Text = target.pending.Text + "\n\nMã khách đã xác nhận: " + target.code
+		}
 		result.grant = grant
 		result.reply, result.images, err = grant.run(flowCtx, ai.scoped, channel, req)
+		if staffComplaint {
+			turnID := personalZaloComplaintTurnID(req)
+			if result.caseTurnID != "" {
+				turnID = result.caseTurnID
+			}
+			var refusal string
+			if db.RedisClient != nil {
+				refusal, _ = db.RedisClient.GetDel(ctx, personalZaloComplaintRefusalKey(turnID)).Result()
+			}
+			if target.reply != "" {
+				if refusal != "" || strings.Contains(result.reply, personalZaloComplaintCodeMarker) ||
+					workers.PersonalZaloComplaintNeedsHandover(flowCtx, req.TenantID, req.Text) {
+					return personalZaloAIResult{reply: target.ask(ctx)}, nil
+				}
+				result.complaint = false
+			} else if refusal != "" {
+				if recorded, _ := customercases.TurnCaseState(ctx, req.TenantID, turnID); !recorded {
+					return personalZaloAIResult{reply: refusal}, nil
+				}
+			}
+		}
+		if target.raw != "" {
+			if recorded, _ := customercases.TurnCaseState(ctx, req.TenantID, result.caseTurnID); recorded {
+				_ = completePersonalZaloComplaintConfirmation.Run(ctx, db.RedisClient, []string{target.key, target.receiptKey},
+					target.raw, target.code, personalZaloComplaintConfirmTTL.Milliseconds()).Err()
+			} else {
+				return personalZaloAIResult{reply: "Dạ, em chưa ghi nhận được khiếu nại. Anh/chị thử nhắn lại mã khách đã xác nhận giúp em ạ."}, nil
+			}
+		}
 		result.handover = (options.draft || personalZaloHasHandoverDestination(channel)) &&
 			strings.TrimSpace(result.reply) == personalZaloAIHandoverMarker
 		return result, err
