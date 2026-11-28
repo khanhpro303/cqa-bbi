@@ -1,34 +1,50 @@
 <template>
   <v-dialog :model-value="modelValue" max-width="980" scrollable persistent @update:model-value="v => !v && requestClose()">
     <v-card data-testid="team-editor">
-      <v-card-title class="d-flex align-center pa-4">
-        <v-icon start color="primary">mdi-account-group-outline</v-icon>
-        <span class="text-truncate">{{ isNew ? $t('ag_new_team') : (draft.name || $t('ag_team')) }}</span>
-        <v-chip v-if="team?.is_default" size="x-small" color="primary" variant="tonal" class="ml-2">{{ $t('ag_team_default_badge') }}</v-chip>
-        <v-spacer />
-        <v-btn icon="mdi-close" variant="text" size="small" :aria-label="$t('cancel')" @click="requestClose" />
+      <v-card-title class="editor-header d-flex align-center">
+        <div class="header-icon mr-3">
+          <v-icon color="primary" size="20">mdi-account-group-outline</v-icon>
+        </div>
+        <div class="d-flex align-center flex-wrap ga-2 min-w-0 flex-grow-1">
+          <span class="editor-title text-truncate">{{ isNew ? $t('ag_new_team') : (draft.name || $t('ag_team')) }}</span>
+          <v-chip v-if="team?.is_default" size="x-small" color="primary" variant="tonal">{{ $t('ag_team_default_badge') }}</v-chip>
+        </div>
+        <v-btn icon="mdi-close" variant="text" size="small" density="comfortable" class="ml-2 flex-shrink-0" :aria-label="$t('cancel')" @click="requestClose" />
       </v-card-title>
       <v-divider />
 
-      <v-card-text class="pa-4">
+      <v-card-text class="editor-body">
         <v-alert v-if="readonly" type="info" variant="tonal" density="compact" class="mb-4">{{ $t('ag_readonly_hint') }}</v-alert>
 
-        <v-row dense>
-          <v-col cols="12" md="8">
-            <v-text-field v-model="draft.name" :label="$t('ag_team_name')" :error-messages="errors.name" :readonly="readonly" counter="120" data-testid="team-name" />
-          </v-col>
-          <v-col cols="12" md="4" class="d-flex align-center">
-            <v-switch
-              v-model="draft.is_active"
-              :label="draft.is_active ? $t('ag_active') : $t('ag_inactive')"
-              :disabled="readonly || !!team?.is_default"
-              :hint="team?.is_default ? $t('ag_team_default_always_on') : ''"
-              :persistent-hint="!!team?.is_default"
-              :error-messages="errors.is_active"
-              color="primary"
+        <div class="team-top-row mb-3">
+          <div class="team-name-col">
+            <v-text-field
+              v-model="draft.name"
+              :label="$t('ag_team_name')"
+              :error-messages="errors.name"
+              :readonly="readonly"
+              counter="120"
+              density="comfortable"
+              variant="outlined"
+              data-testid="team-name"
             />
-          </v-col>
-        </v-row>
+          </div>
+          <div class="team-status-col">
+            <div class="status-pill" :class="{ 'status-pill--active': draft.is_active }">
+              <v-switch
+                v-model="draft.is_active"
+                :label="draft.is_active ? $t('ag_active') : $t('ag_inactive')"
+                :disabled="readonly || !!team?.is_default"
+                density="compact"
+                hide-details
+                inset
+                color="primary"
+              />
+            </div>
+            <div v-if="team?.is_default" class="field-hint mt-1">{{ $t('ag_team_default_always_on') }}</div>
+            <div v-if="errors.is_active" class="text-caption text-error mt-1">{{ errors.is_active }}</div>
+          </div>
+        </div>
 
         <v-textarea
           v-model="draft.persona_prompt"
@@ -194,7 +210,7 @@
       </v-card-text>
 
       <v-divider />
-      <v-card-actions class="pa-4 ga-2">
+      <v-card-actions class="editor-footer ga-3 flex-wrap">
         <v-tooltip v-if="!isNew && !readonly" :disabled="!deleteBlockedReason" location="top">
           <template #activator="{ props: tip }">
             <span v-bind="tip">
@@ -204,8 +220,8 @@
           {{ deleteBlockedReason }}
         </v-tooltip>
         <v-spacer />
-        <v-btn variant="outlined" @click="requestClose">{{ readonly ? $t('ag_close') : $t('cancel') }}</v-btn>
-        <v-btn v-if="!readonly" color="primary" variant="flat" :loading="saving" data-testid="team-save" @click="save">{{ $t('save') }}</v-btn>
+        <v-btn variant="outlined" class="footer-btn" @click="requestClose">{{ readonly ? $t('ag_close') : $t('cancel') }}</v-btn>
+        <v-btn v-if="!readonly" color="primary" variant="flat" class="footer-btn" :loading="saving" data-testid="team-save" @click="save">{{ $t('save') }}</v-btn>
       </v-card-actions>
     </v-card>
 
@@ -426,22 +442,97 @@ defineExpose({ draft, members, errors, silent, picks, save, move, addMember, rem
 </script>
 
 <style scoped>
+.editor-header {
+  padding: 16px 24px;
+}
+.header-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(var(--v-theme-primary), 0.1);
+  flex-shrink: 0;
+}
+.editor-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+.editor-body {
+  padding: 20px 24px 24px;
+}
+.editor-body :deep(.v-field__input) {
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.editor-body :deep(.v-label) {
+  font-size: 0.875rem;
+}
+.editor-body :deep(.v-input__details) {
+  padding-top: 5px;
+}
+.editor-body :deep(.v-messages__message) {
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+.field-hint {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: rgba(var(--v-theme-on-surface), 0.62);
+}
+.team-top-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.team-name-col {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.team-status-col {
+  flex: 0 0 auto;
+  min-width: 170px;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 10px;
+  background: rgba(var(--v-theme-on-surface), 0.025);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.status-pill--active {
+  border-color: rgba(var(--v-theme-primary), 0.28);
+  background: rgba(var(--v-theme-primary), 0.04);
+}
+.status-pill :deep(.v-label) {
+  font-size: 0.875rem;
+  font-weight: 500;
+  opacity: 1;
+}
 .section-title {
   display: flex;
   align-items: center;
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: 0.9375rem;
+  line-height: 1.4;
   margin-bottom: 4px;
 }
 .prompt-field :deep(textarea) {
-  font-size: 0.9rem;
-  line-height: 1.55;
+  font-size: 0.875rem;
+  line-height: 1.6;
 }
 .member-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 6px 12px;
+  padding: 8px 12px;
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 .member-row:last-child {
@@ -463,12 +554,31 @@ defineExpose({ draft, members, errors, silent, picks, save, move, addMember, rem
 .member-actions {
   display: flex;
   align-items: center;
+  gap: 4px;
   flex-shrink: 0;
+}
+.editor-footer {
+  padding: 14px 24px;
+}
+.footer-btn {
+  min-width: 92px;
 }
 .tabular {
   font-variant-numeric: tabular-nums;
 }
 @media (max-width: 600px) {
+  .editor-header {
+    padding: 14px 16px;
+  }
+  .editor-body {
+    padding: 16px;
+  }
+  .editor-footer {
+    padding: 12px 16px;
+  }
+  .team-status-col {
+    width: 100%;
+  }
   .member-row {
     flex-wrap: wrap;
   }

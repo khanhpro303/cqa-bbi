@@ -42,10 +42,10 @@
     <v-progress-linear v-if="loading" indeterminate color="primary" class="mb-2" />
 
     <!-- Agents -->
-    <v-card v-if="tab === 'agents'" class="pa-4" data-testid="panel-agents">
-      <div class="d-flex align-center flex-wrap ga-2 mb-3">
+    <v-card v-if="tab === 'agents'" class="pa-4 pa-sm-5" data-testid="panel-agents">
+      <div class="d-flex align-center flex-wrap ga-3 mb-4">
         <div class="text-body-2 text-medium-emphasis flex-grow-1" style="min-width: 240px">{{ $t('ag_agents_intro') }}</div>
-        <v-btn v-if="canEdit" color="primary" prepend-icon="mdi-plus" data-testid="agent-create" @click="openAgent('')">{{ $t('ag_create_agent') }}</v-btn>
+        <v-btn v-if="canEdit" color="primary" variant="flat" prepend-icon="mdi-plus" data-testid="agent-create" @click="openAgent('')">{{ $t('ag_create_agent') }}</v-btn>
       </div>
       <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
         <v-table density="comfortable" hover style="min-width: 760px;">
@@ -61,12 +61,12 @@
           </thead>
           <tbody>
             <tr v-for="a in agents" :key="a.id" class="cursor-pointer" :data-testid="`agent-row-${a.key}`" @click="openAgent(a.id)">
-              <td class="py-2">
-                <div class="font-weight-medium">{{ a.name }}</div>
-                <div class="text-caption text-medium-emphasis"><code>{{ a.key }}</code></div>
-                <div v-if="a.description" class="text-caption text-medium-emphasis desc-cell">{{ a.description }}</div>
+              <td class="py-3">
+                <div class="text-body-2 font-weight-semibold">{{ a.name }}</div>
+                <div class="mt-1"><code class="agent-key-code">{{ a.key }}</code></div>
+                <div v-if="a.description" class="text-caption text-medium-emphasis desc-cell mt-1">{{ a.description }}</div>
               </td>
-              <td><v-chip size="small" variant="tonal" :color="audienceColor(a.audience)">{{ $t(`ag_audience_${a.audience}`) }}</v-chip></td>
+              <td class="text-no-wrap"><v-chip size="small" variant="tonal" :color="audienceColor(a.audience)">{{ $t(`ag_audience_${a.audience}`) }}</v-chip></td>
               <td class="text-right tabular">
                 <span v-if="a.tools.length">{{ a.tools.length }}</span>
                 <span v-else class="text-medium-emphasis">{{ $t('ag_no_tools') }}</span>
@@ -81,7 +81,7 @@
                   <span v-if="teamsOfAgent(a.id).length === 0" class="text-caption text-warning">{{ $t('ag_not_in_team') }}</span>
                 </div>
               </td>
-              <td>
+              <td class="text-no-wrap">
                 <v-chip size="small" :color="a.is_active ? 'success' : 'grey'" variant="tonal">{{ a.is_active ? $t('ag_active') : $t('ag_inactive') }}</v-chip>
               </td>
             </tr>
@@ -455,6 +455,13 @@ defineExpose({ settings, agents, teams, channelRows, teamItems, setChannelTeam, 
 }
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+.agent-key-code {
+  font-size: 0.75rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  color: rgba(var(--v-theme-on-surface), 0.72);
 }
 .desc-cell {
   max-width: 420px;
