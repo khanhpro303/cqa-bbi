@@ -63,6 +63,19 @@ describe('service quality utilities', () => {
     }
   })
 
+  it('combines Messenger intent codes with their Vietnamese labels before counting', () => {
+    const result = aggregateInsights([
+      { conversation_id: 'c1', insight_at: '2026-09-10T03:00:00Z', insight: { intents: [' ASK_PRICE ', 'Hỏi giá', 'order', 'advice', 'check_stock'] } },
+      { conversation_id: 'c2', insight_at: '2026-09-10T03:00:00Z', insight: { intents: ['hỏi giá', 'Hỏi giá/khuyến mãi', 'Hỗ trợ sau mua'] } },
+    ], '2026-09-09T00:00:00Z', '2026-09-12T00:00:00Z')
+
+    expect(result.intents[0]).toEqual({ key: 'hỏi giá', label: 'Hỏi giá', count: 2, conversationIds: ['c1', 'c2'] })
+    expect(result.intents.slice(1).map(item => item.label)).toEqual(expect.arrayContaining([
+      'Đặt hàng/giao hàng', 'Tư vấn sản phẩm', 'Hỏi tồn kho', 'Hỏi giá/khuyến mãi', 'Hỗ trợ sau mua',
+    ]))
+    expect(result.intents).toHaveLength(6)
+  })
+
   it('excludes stale and out-of-window AI analyses from aggregates', () => {
     const result = aggregateInsights([
       { conversation_id: 'stale', insight_at: '2026-09-10T03:00:00Z', insight_stale: true, insight: { intents: ['Mua hàng'] } },

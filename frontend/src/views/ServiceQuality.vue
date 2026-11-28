@@ -364,8 +364,8 @@
             <p class="text-body-2">{{ selectedRow.insight.summary || t('sq_no_summary') }}</p>
             <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_intents') }}</div>
             <div class="d-flex flex-wrap ga-2 mb-4">
-              <v-chip v-for="intent in selectedRow.insight.intents || []" :key="intent" size="small" variant="tonal">{{ intent }}</v-chip>
-              <span v-if="!selectedRow.insight.intents?.length" class="text-body-2 text-medium-emphasis">{{ t('sq_unidentified') }}</span>
+              <v-chip v-for="intent in selectedRowIntents" :key="intent.key" size="small" variant="tonal">{{ intent.label }}</v-chip>
+              <span v-if="!selectedRowIntents.length" class="text-body-2 text-medium-emphasis">{{ t('sq_unidentified') }}</span>
             </div>
             <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('sq_products') }}</div>
             <v-list v-if="selectedRow.insight.products?.length" density="compact" class="mb-3">
@@ -576,6 +576,7 @@ import api from '../api'
 import { useAuthStore } from '../stores/auth'
 import {
   aggregateInsights,
+  messengerIntentEntries,
   type ConversationInsight,
   type OrderOutcome,
   type ServiceQualityStatus,
@@ -692,6 +693,7 @@ const queueTitle = computed(() => statusFilter.value === 'overdue'
   : statusFilter.value === 'waiting' ? t('sq_queue_waiting') : t('sq_conversations'))
 const detailDialog = ref(false)
 const selectedRow = ref<Row | null>(null)
+const selectedRowIntents = computed(() => messengerIntentEntries(selectedRow.value?.insight?.intents))
 const resolveDialog = ref(false)
 const resolveTarget = ref<Row | null>(null)
 const resolveNote = ref('')

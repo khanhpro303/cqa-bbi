@@ -54,7 +54,7 @@ function report(statuses: string[], staleIndexes: number[] = [], qualityIndexes:
     rows: statuses.map((status, index) => ({
       conversation_id: `c${index}`, customer_name: `Khách ${index}`, channel_id: 'page-one', channel_name: 'Fanpage A', last_message_at: null, status, turns: [],
       insight_stale: staleIndexes.includes(index), insight_job_id: staleIndexes.includes(index) ? `job-${index % 2}` : undefined,
-      insight: index === 0 ? { lead_quality: { level: 'high', reason: 'Khách có nhu cầu rõ ràng' }, order_outcomes: [{ status: 'confirmed', order_ref: 'DH-01', value_vnd: 450000, confirmation_message_id: 'msg-1', confirmation_evidence: 'Đã tạo đơn', amount_message_id: 'msg-2', amount_evidence: 'Tổng 450.000đ', confidence: 0.95 }, { status: 'review', value_vnd: null, evidence_message_ids: ['old-id'] }] } : undefined,
+      insight: index === 0 ? { intents: ['ask_price', 'Hỏi giá', 'check_stock'], lead_quality: { level: 'high', reason: 'Khách có nhu cầu rõ ràng' }, order_outcomes: [{ status: 'confirmed', order_ref: 'DH-01', value_vnd: 450000, confirmation_message_id: 'msg-1', confirmation_evidence: 'Đã tạo đơn', amount_message_id: 'msg-2', amount_evidence: 'Tổng 450.000đ', confidence: 0.95 }, { status: 'review', value_vnd: null, evidence_message_ids: ['old-id'] }] } : undefined,
       quality_analysis_stale: qualityStaleIndexes.includes(index),
       quality_analysis: qualityIndexes.includes(index) ? {
         job_run_id: 'qc-run', job_name: 'Chất lượng CSKH', evaluated_at: '2026-09-15T02:00:00Z', verdict: 'FAIL', score: 20,
@@ -111,6 +111,9 @@ describe('ServiceQuality queue banner navigation', () => {
     await wrapper.get('[data-id="c0"] button[title="Xem chi tiết"]').trigger('click')
     await nextTick()
 
+    expect(wrapper.text().match(/Hỏi giá/g)).toHaveLength(1)
+    expect(wrapper.text()).toContain('Hỏi tồn kho')
+    expect(wrapper.text()).not.toMatch(/ask_price|check_stock/)
     expect(wrapper.text()).toContain('Đơn hàng được AI nhận diện')
     expect(wrapper.text()).toContain('Đã xác nhận')
     expect(wrapper.text()).toContain('450.000 ₫')
