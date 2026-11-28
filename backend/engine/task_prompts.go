@@ -281,7 +281,7 @@ CHỈ trả về JSON, không thêm bất kỳ văn bản nào khác.`,
 		Key:         PromptOrderCart,
 		Group:       "chatbot",
 		Title:       "Lên đơn qua chatbot (giỏ hàng)",
-		Description: "Cách bot nhận một đơn nhiều sản phẩm: hỏi lại khi tên sản phẩm khớp nhiều loại, sửa đơn ngay trong lúc chat, gửi bản xác nhận cuối và chốt đơn. Chỉ nối vào system prompt của bot khi người chat có quyền tạo đơn hoặc đang có giỏ hàng dở.",
+		Description: "Cách bot nhận một đơn nhiều sản phẩm: hỏi lại khi tên sản phẩm khớp nhiều loại, sửa đơn ngay trong lúc chat, gửi bản xác nhận cuối và chốt đơn. Chỉ nối vào system prompt của bot khi người chat có quyền tạo đơn hoặc đang có giỏ hàng dở, và trợ lý đang trả lời có công cụ giỏ hàng.",
 		Instructions: `LÊN ĐƠN QUA CHAT
 Khi người dùng muốn đặt hàng, dùng giỏ hàng của cuộc chat:
 - order_cart_update: thêm sản phẩm, đổi số lượng, bỏ sản phẩm, trả lời câu hỏi chọn sản phẩm.

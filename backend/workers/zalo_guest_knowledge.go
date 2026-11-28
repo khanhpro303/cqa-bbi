@@ -34,7 +34,13 @@ func handleZaloOAGuestKnowledge(
 	if plan.Mode == agents.ModeSilent {
 		return nil
 	}
-	if plan.NeedsRouting() {
+	// A guest is answered from documents only: an agent without
+	// search_knowledge could not answer them at all.
+	canAnswer := plan.KeepGuestCandidates(false)
+	if !canAnswer {
+		log.Printf("[agents] OA guest channel %s: no agent of team %s can search documents", channel.ID, plan.Selection.Team.ID)
+	}
+	if canAnswer && plan.NeedsRouting() {
 		// Same coordinator as the main turn: the guest's question goes to
 		// the customer agent whose knowledge it is.
 		chatKey := engine.BuildSessionKey(channel.ID, payload.Sender.ID, "")
@@ -45,7 +51,7 @@ func handleZaloOAGuestKnowledge(
 		plan.Remember(ctx, chatKey, time.Duration(cfg.ChatbotSessionTimeout)*time.Minute)
 	}
 	var permission, prompt string
-	if plan.Mode == agents.ModeAgent {
+	if canAnswer && plan.Mode == agents.ModeAgent {
 		scope := engine.GroupPermissionContext{TenantID: channel.TenantID, ChannelID: channel.ID, AgentType: agents.TierPublic, DryRun: true}
 		plan.Sign(&scope)
 		permission, err = engine.SignPermissionToken(scope, cfg.EncryptionKey)
@@ -55,7 +61,7 @@ func handleZaloOAGuestKnowledge(
 		prompt = plan.BasePrompt("")
 	}
 	sessionScope := strings.Join([]string{"zalo-oa", channel.ID, payload.Sender.ID}, "\x00")
-	result, err := engine.RunGuestKnowledgeWithScope(ctx, langflow, flow, cfg.EncryptionKey, channel.TenantID, sessionScope, text, permission, prompt)
+	result, err := engine.RunGuestKnowledgeWithScope(ctx, langflow, flow, cfg.EncryptionKey, channel.TenantID, sessionScope, text, permission, prompt, plan.GuestKnowledgeRules())
 	if errors.Is(err, engine.ErrGuestKnowledgeNotConfigured) {
 		return adapter.SendTextMessage(ctx, payload.Sender.ID, engine.GuestKnowledgeUnavailableReply)
 	}
@@ -84,7 +90,7 @@ func handleZaloOAGuestKnowledge(
 		}
 	}
 
-	if reply != engine.GuestKnowledgeVerificationReply || result.HasUsage {
+	if canAnswer && (reply != engine.GuestKnowledgeVerificationReply || result.HasUsage) {
 		logChatbotAIUsage(channel.TenantID, channel.ID, payload.Sender.ID, "", "public", "", plan.AgentKey(), result, text, result.Text)
 	}
 	return nil

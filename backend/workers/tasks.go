@@ -1224,7 +1224,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Only a webhook with a verified Zalo signature may write cases:
 		// otherwise anyone who knows the URL could file them as any customer.
 		complaintCases := customercases.EnabledFor(matchedChannel.Metadata) && payload.SignatureVerified &&
-			strings.TrimSpace(basePrompt) != "" && agentPlan.Allows(agents.ToolComplaintRecord)
+			strings.TrimSpace(basePrompt) != "" && agentPlan.UsesRule(engine.PromptComplaintBot)
 		// A sender in a group chat who is not a CRM member of it (a customer
 		// in someone else's group) has their own cases, not the group's.
 		groupGuest := matchedGroup.ZaloGroupID != "" && !groupMember && !isWhitelisted
@@ -1479,7 +1479,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if n, ok := asynq.GetRetryCount(ctx); ok && n > 0 {
 			permCtx.Retry = true
 		}
-		if agentPlan.TakesOrders() {
+		if agentPlan.UsesRule(engine.PromptOrderCart) {
 			systemPromptToUse = appendOrderCartContext(ctx, matchedChannel.TenantID, workKey, &permCtx, systemPromptToUse)
 		}
 		// The token names the answering agent: the ERP MCP server then lists
@@ -1493,11 +1493,15 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if systemPromptToUse != "" {
 			// Turn rules, editable in AI Engine → task prompts.
 			tenantID := matchedChannel.TenantID
-			systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptMissingDataRules)
-			if agentType != "private" && agentPlan.AllowsGroup(agents.ToolGroupProducts) {
+			// A rule about a tool is added only when the answering agent
+			// has that tool (agents.Plan.UsesRule).
+			if agentPlan.UsesRule(engine.PromptMissingDataRules) {
+				systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptMissingDataRules)
+			}
+			if agentType != "private" && agentPlan.UsesRule(engine.PromptPublicStockRules) {
 				systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptPublicStockRules)
 			}
-			if meta.UnansweredHandoverEnabled && agentType == "public" && agentPlan.Allows(agents.ToolLookupOrder) {
+			if meta.UnansweredHandoverEnabled && agentType == "public" && agentPlan.UsesRule(engine.PromptPublicOrderLookup) {
 				systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptPublicOrderLookup)
 			}
 			if permCtx.UnansweredLookupID != "" {
@@ -2209,7 +2213,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		var adviceImages []models.ProductAdvisoryImage
-		if intent == "IN_SCOPE" && !complaintHandover && !strings.HasPrefix(userText, "#") && agentPlan.AllowsGroup(agents.ToolGroupProducts) {
+		if intent == "IN_SCOPE" && !complaintHandover && !strings.HasPrefix(userText, "#") && agentPlan.UsesRule(engine.PromptProductAdvice) {
 			langflowInput, systemPromptToUse = engine.AddProductAdviceInstruction(matchedChannel.TenantID, langflowInput, systemPromptToUse)
 			advice, adviceErr := productAdviceForTurn(ctx, &permCtx, input, func() []chatmemory.RecentTurn {
 				if matchedGroup.ZaloGroupID != "" {
@@ -2231,7 +2235,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
-		if payload.SignatureVerified {
+		knowledgeImages := payload.SignatureVerified && agentPlan.UsesRule(engine.PromptKnowledgeImages)
+		if knowledgeImages {
 			langflowInput, systemPromptToUse = engine.AddKnowledgeImageInstruction(matchedChannel.TenantID, langflowInput, systemPromptToUse)
 		}
 		// 2. Answer the turn. An agent on the native runtime calls its own
@@ -2410,7 +2415,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return fmt.Errorf("failed to send reply to Zalo: %w", sendErr)
 		}
 		knowledgeImageAttempted := false
-		if payload.SignatureVerified && replyText != botEmptyAnswerMessage && len(knowledgeImageIDs) > 0 {
+		if knowledgeImages && replyText != botEmptyAnswerMessage && len(knowledgeImageIDs) > 0 {
 			var err error
 			knowledgeImageAttempted, err = sendKnowledgeImage(ctx, adapter, matchedChannel.TenantID, agentType, payload.Sender.ID, matchedGroup.ZaloGroupID, knowledgeImageIDs)
 			if err != nil {

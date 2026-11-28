@@ -52,36 +52,53 @@ func guestKnowledgeRequiresVerification(text string) bool {
 // RunGuestKnowledge calls the tenant's public flow with an MCP credential that
 // exposes only public documents. It supplies no ERP grant or customer identity.
 func RunGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text string) (LangflowResult, error) {
-	return RunGuestKnowledgeWithScope(ctx, client, flow, key, tenantID, scope, text, "", "")
+	return RunGuestKnowledgeWithScope(ctx, client, flow, key, tenantID, scope, text, "", "", GuestKnowledgeRules{Knowledge: true, ProductAdvice: true})
+}
+
+// GuestKnowledgeRules selects the guest prompts the answering agent can use.
+type GuestKnowledgeRules struct {
+	Knowledge     bool
+	ProductAdvice bool
 }
 
 // RunGuestKnowledgeWithScope adds a specialist's signed scope and prompt to a public guest turn.
-func RunGuestKnowledgeWithScope(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, prompt string) (LangflowResult, error) {
-	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, "", PromptKnowledgeImages, prompt, false)
+func RunGuestKnowledgeWithScope(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, prompt string, rules GuestKnowledgeRules) (LangflowResult, error) {
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, "", PromptKnowledgeImages, prompt, false, rules)
 }
 
 // RunPersonalZaloGuestKnowledge uses the public knowledge grant and the
 // Personal Zalo attachment policy. The optional complaint permission is
 // scoped to the current turn.
-func RunPersonalZaloGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide string, complaints bool) (LangflowResult, error) {
-	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, guide, PromptPZKnowledgeImages, "", complaints)
+func RunPersonalZaloGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide string, complaints bool, rules GuestKnowledgeRules) (LangflowResult, error) {
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, guide, PromptPZKnowledgeImages, "", complaints, rules)
 }
 
 // RunPersonalZaloGuestDraft uses the guest knowledge grant with the tenant's
 // public writing instructions. It cannot enable tools that change records.
-func RunPersonalZaloGuestDraft(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, publicPrompt string) (LangflowResult, error) {
-	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, "", PromptPZKnowledgeImages, publicPrompt, false)
+func RunPersonalZaloGuestDraft(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, publicPrompt string, rules GuestKnowledgeRules) (LangflowResult, error) {
+	return runGuestKnowledge(ctx, client, flow, key, tenantID, scope, text, permission, "", PromptPZKnowledgeImages, publicPrompt, false, rules)
 }
 
-// guestKnowledgePrompt is the unverified-guest system prompt: the tenant's
-// guest rules followed by the product advice rules (both editable).
-func guestKnowledgePrompt(tenantID string) string {
-	return TaskPromptText(tenantID, PromptGuestKnowledge) + "\n\n" + TaskPromptText(tenantID, PromptProductAdvice)
+func guestKnowledgePrompt(tenantID string, rules GuestKnowledgeRules) string {
+	if !rules.Knowledge {
+		// Only a complaint turn can reach Langflow without document access.
+		return "Bạn là trợ lý ghi nhận khiếu nại. Trả lời bằng tiếng Việt. Chỉ dùng công cụ complaint_record theo hướng dẫn dưới đây. " +
+			"Nếu khách chỉ muốn tra giá, tồn kho, đơn hàng hay công nợ, chỉ trả " + GuestVerificationMarker + " trên một dòng. " +
+			"Nếu khách cần tư vấn ngoài phạm vi khiếu nại, chỉ trả câu sau: " + GuestKnowledgeUnavailableReply
+	}
+	prompt := TaskPromptText(tenantID, PromptGuestKnowledge)
+	if rules.ProductAdvice {
+		prompt += "\n\n" + TaskPromptText(tenantID, PromptProductAdvice)
+	}
+	return prompt
 }
 
-func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide, imagePromptKey, publicPrompt string, complaints bool) (LangflowResult, error) {
+func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow LangflowConfig, key, tenantID, scope, text, permission, guide, imagePromptKey, publicPrompt string, complaints bool, rules GuestKnowledgeRules) (LangflowResult, error) {
 	if !complaints && guestKnowledgeRequiresVerification(text) {
 		return LangflowResult{Text: GuestKnowledgeVerificationReply}, nil
+	}
+	if !rules.Knowledge && !complaints {
+		return LangflowResult{Text: GuestKnowledgeUnavailableReply}, nil
 	}
 	if flow.APIURL == "" || flow.APIKey == "" || flow.PublicFlowID == "" || sameGuestFlowID(flow.FlowID, flow.PublicFlowID) ||
 		flow.PublicFlowIDSource != LangflowSourceTenant || flow.APIKeySource != LangflowSourceTenant || key == "" || tenantID == "" || scope == "" {
@@ -92,7 +109,7 @@ func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow Langflo
 		return LangflowResult{}, err
 	}
 	session := fmt.Sprintf("zalo-guest-%x", sha256.Sum256([]byte(tenantID+"\x00"+scope)))
-	prompt := guestKnowledgePrompt(tenantID)
+	prompt := guestKnowledgePrompt(tenantID, rules)
 	if publicPrompt = strings.TrimSpace(publicPrompt); publicPrompt != "" {
 		if imagePromptKey == PromptPZKnowledgeImages {
 			prompt += "\n\n" + TaskPromptText(tenantID, PromptPZGuestChannelLead) + "\n" + publicPrompt
@@ -103,7 +120,10 @@ func runGuestKnowledge(ctx context.Context, client *LangflowClient, flow Langflo
 	if complaints {
 		prompt += "\n\n" + TaskPromptText(tenantID, PromptPZGuestComplaint) + "\n\n" + guide
 	}
-	input, prompt := addKnowledgeImageInstruction(text, prompt, TaskPromptText(tenantID, imagePromptKey))
+	input := text
+	if rules.Knowledge {
+		input, prompt = addKnowledgeImageInstruction(input, prompt, TaskPromptText(tenantID, imagePromptKey))
+	}
 	result, err := client.RunFlowWithCustomerUsage(ctx, session, session, input,
 		flow.APIURL, flow.APIKey, flow.PublicFlowID, "", permission, token, prompt)
 	if err != nil {

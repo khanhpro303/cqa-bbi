@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestOpenRouterUsesChatCompletionsOnly(t *testing.T) {
@@ -86,5 +88,38 @@ func TestParseOpenRouterFreeModels(t *testing.T) {
 	}
 	if !got[0].Vision || got[0].JSONMode || got[1].Vision || !got[1].JSONMode || got[1].ContextLength != 131072 {
 		t.Errorf("flags = %+v", got)
+	}
+}
+
+func TestOpenRouterFreeModelsRefreshesWithCooldown(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = io.WriteString(w, `{"data":[{"id":"a/b:free","name":"B","pricing":{"prompt":"0","completion":"0"}}]}`)
+	}))
+	defer srv.Close()
+	oldURL := openRouterModelsURL
+	oldCache, oldAt := openRouterModelsCache, openRouterModelsAt
+	oldRefreshAt, oldRefreshErr := openRouterRefreshAt, openRouterRefreshErr
+	t.Cleanup(func() {
+		openRouterModelsURL = oldURL
+		openRouterModelsCache, openRouterModelsAt = oldCache, oldAt
+		openRouterRefreshAt, openRouterRefreshErr = oldRefreshAt, oldRefreshErr
+	})
+	openRouterModelsURL = srv.URL
+	openRouterModelsCache, openRouterModelsAt = nil, time.Time{}
+	openRouterRefreshAt, openRouterRefreshErr = time.Time{}, nil
+
+	for i, check := range []struct {
+		refresh bool
+		calls   int32
+	}{{false, 1}, {false, 1}, {true, 2}, {true, 2}, {false, 2}} {
+		models, err := OpenRouterFreeModels(context.Background(), check.refresh)
+		if err != nil || len(models) != 1 || models[0].ID != "a/b:free" {
+			t.Fatalf("request %d: models=%v err=%v", i, models, err)
+		}
+		if got := calls.Load(); got != check.calls {
+			t.Fatalf("request %d: upstream calls=%d, want %d", i, got, check.calls)
+		}
 	}
 }

@@ -68,17 +68,27 @@ func TestMySQLNineRouterSettingsKeepCredentialScope(t *testing.T) {
 	request(http.MethodPost, "/ai/test", settings("••••••••", "https://another.example.com/v1", false), http.StatusBadRequest, "9router_endpoint_changed")
 	request(http.MethodPut, "/ai", settings("••••••••", "https://another.example.com/v1", false), http.StatusBadRequest, "9router_endpoint_changed")
 	request(http.MethodPut, "/ai", settings("••••••••", baseURL, false), http.StatusOK, "saved")
+	request(http.MethodPut, "/ai", `{"provider":"9router","model":"cx/gpt-5.6-luna-next","model_only":true}`, http.StatusOK, "saved")
+	request(http.MethodPut, "/ai", `{"provider":"openai","model":" ","model_only":true}`, http.StatusBadRequest, "model_required")
+	request(http.MethodPut, "/ai", `{"provider":"gemini","model":"gemini-2.5-flash","model_only":true}`, http.StatusBadRequest, "no_api_key_configured")
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	resolved, err := engine.ResolveTenantAIProvider("tenant-router", cfg, engine.AITaskClassification)
-	if err != nil || resolved.Provider != "9router" || resolved.Client == nil {
+	if err != nil || resolved.Provider != "9router" || resolved.Model != "cx/gpt-5.6-luna-next" || resolved.Client == nil {
 		t.Fatalf("resolve inherited 9router configuration: %s, %v", resolved.Provider, err)
 	}
 	if response, err := resolved.Client.AnalyzeChat(context.Background(), "Return JSON.", "Ping"); err != nil || response.Provider != "9router" {
 		t.Fatalf("analyze using saved 9router configuration: %s, %v", response.Provider, err)
 	}
 	request(http.MethodPut, "/ai", `{"provider":"openai","api_key":"••••••••","model":"gpt-5-mini"}`, http.StatusOK, "saved")
+	request(http.MethodPut, "/ai", `{"provider":"openai","api_key":"rotated-test-key","base_url":"https://rotated.example.com/v1","credentials_only":true}`, http.StatusOK, "saved")
+	request(http.MethodPut, "/ai", `{"provider":"openai","model":"gpt-5-nano","model_only":true}`, http.StatusOK, "saved")
+	for _, key := range []string{"ai_base_url", "ai_base_url_openai"} {
+		if got := getPlainSetting("tenant-router", key); got != "https://rotated.example.com/v1" {
+			t.Fatalf("model-only save changed %s to %q", key, got)
+		}
+	}
 }

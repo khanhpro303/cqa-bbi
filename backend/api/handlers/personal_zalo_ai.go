@@ -143,15 +143,19 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 		var response engine.LangflowResult
 		var err error
 		if options.draft {
-			permission, _, scopeErr := personalZaloAgentScope(ai.cfg, req, "public", plan, true)
-			if scopeErr != nil {
-				result.settingsError = true
-				return result, scopeErr
+			var permission, prompt string
+			if plan.KeepGuestCandidates(false) {
+				var scopeErr error
+				permission, _, scopeErr = personalZaloAgentScope(ai.cfg, req, "public", plan, true)
+				if scopeErr != nil {
+					result.settingsError = true
+					return result, scopeErr
+				}
+				prompt = strings.TrimSpace(plan.BasePrompt(settings["ai_engine_system_prompt"].ValuePlain) + "\n\n" +
+					engine.TaskPromptText(req.TenantID, engine.PromptPZInternbotDraft))
 			}
-			prompt := strings.TrimSpace(plan.BasePrompt(settings["ai_engine_system_prompt"].ValuePlain) + "\n\n" +
-				engine.TaskPromptText(req.TenantID, engine.PromptPZInternbotDraft))
 			response, err = engine.RunPersonalZaloGuestDraft(flowCtx, ai.scoped, flow, ai.cfg.EncryptionKey,
-				req.TenantID, options.scope, req.Text, permission, prompt)
+				req.TenantID, options.scope, req.Text, permission, prompt, plan.GuestKnowledgeRules())
 		} else {
 			response, err = runPersonalZaloGuest(flowCtx, ai.scoped, ai.cfg, flow, req, options.scope, options.complaint, false, plan)
 		}
@@ -159,7 +163,11 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 			result.reply = engine.GuestKnowledgeUnavailableReply
 			return result, nil
 		}
-		result.reply, result.images.knowledgeIDs = engine.ParsePersonalZaloKnowledgeImageReply(response.Text)
+		if plan.UsesRule(engine.PromptPZKnowledgeImages) {
+			result.reply, result.images.knowledgeIDs = engine.ParsePersonalZaloKnowledgeImageReply(response.Text)
+		} else {
+			result.reply, _ = engine.ParseKnowledgeImageReply(response.Text, 0)
+		}
 		return result, err
 	case options.identity.AgentType != "":
 		if personalZaloMatchesKeyword(req.Text, "hello;hi;xin chào;chào;alo") {
@@ -252,7 +260,10 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 				prompt += "\n\n" + instruction
 			}
 		}
-		input, prompt := engine.AddProductAdviceInstruction(req.TenantID, req.Text, prompt)
+		input := req.Text
+		if plan.UsesRule(engine.PromptProductAdvice) {
+			input, prompt = engine.AddProductAdviceInstruction(req.TenantID, input, prompt)
+		}
 		var reply string
 		var err error
 		if plan.Mode == agents.ModeAgent {

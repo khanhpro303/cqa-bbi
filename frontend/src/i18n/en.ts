@@ -2,11 +2,13 @@ import serviceQuality from './service-quality-en'
 import qualityMeta from './quality-meta-en'
 import qualityInsight from './quality-insight-en'
 import aiAgents from './ai-agents-en'
+import taskModels from './task-models-en'
 
 export default {
   ...serviceQuality,
   ...qualityMeta,
   ...aiAgents,
+  ...taskModels,
   qualityInsight,
   // Common
   app_name: 'BBI CRM Agent',
@@ -1187,6 +1189,26 @@ export default {
   nine_router_models_empty: '9router returned no models. Check the providers in 9router.',
   nine_router_models_failed: 'Could not load models. Check the saved 9router connection and try again.',
   nine_router_other_models: 'Other models and combos',
+  ai_keys_intro: 'Save the API key for each AI provider. Pick the model for the chatbot and each task in',
+  ai_keys_models_link: 'Agents AI › Task models',
+  ai_key_saved: 'Key saved',
+  ai_token_saved: 'Token saved',
+  ai_key_missing: 'No key',
+  ai_default_provider: 'Default',
+  ai_became_default: 'Key saved. It is the first provider with a key, so it is now the default. Change it in Agents AI › Task models.',
+  ai_test_token: 'Check token',
+  ai_test_token_save_first: 'Save the 9router connection first, then check it.',
+  ai_test_token_ok: '9router token works, {count} models available.',
+  ai_catalogs_title: 'Supported model lists',
+  ai_catalogs_desc: 'These are the suggestions in the model fields of Task models. Refresh after adding models in 9router or when OpenRouter changes its free models.',
+  ai_catalog_builtin: 'Built-in list; other model IDs can still be typed.',
+  ai_catalog_nine_router_not_saved: 'No 9router connection saved.',
+  ai_catalog_loading: 'Loading...',
+  ai_catalog_not_loaded: 'Not loaded.',
+  ai_catalog_openrouter_count: '{count} free models',
+  ai_catalogs_refresh: 'Refresh model lists',
+  ai_catalogs_refreshed: 'Model lists refreshed',
+  ai_catalogs_refresh_partial: 'Some lists did not load, see each row above.',
   task_prompt_group_complaints: "Complaints (cases, same or new problem)",
   task_prompt_group_personal_zalo: "Personal Zalo (direct chats, groups, Internbot)",
   task_prompt_search: "Search prompts by name or text",

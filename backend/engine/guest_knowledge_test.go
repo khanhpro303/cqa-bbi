@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -21,6 +22,31 @@ func TestGuestKnowledgeVerificationBypassesLangflow(t *testing.T) {
 				t.Fatal("general advice should go to the public knowledge flow")
 			}
 		})
+	}
+}
+
+func TestGuestKnowledgeWithoutAnEligibleAgentBypassesLangflow(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want string
+	}{
+		{"Hướng dẫn đổi size?", GuestKnowledgeUnavailableReply},
+		{"Đơn nào sắp giao?", GuestKnowledgeVerificationReply},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			result, err := RunGuestKnowledgeWithScope(context.Background(), nil, LangflowConfig{}, "", "", "", tc.text, "", "", GuestKnowledgeRules{})
+			if err != nil || result.Text != tc.want {
+				t.Fatalf("got %q, %v, want %q", result.Text, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestGuestComplaintOnlyPromptDoesNotRequireDocumentSearch(t *testing.T) {
+	prompt := guestKnowledgePrompt("", GuestKnowledgeRules{})
+	if !strings.Contains(prompt, "complaint_record") || !strings.Contains(prompt, GuestVerificationMarker) ||
+		!strings.Contains(prompt, GuestKnowledgeUnavailableReply) || strings.Contains(prompt, "search_knowledge") {
+		t.Fatalf("complaint-only prompt = %q", prompt)
 	}
 }
 
