@@ -44,6 +44,16 @@
 
     <v-progress-linear v-if="loading" indeterminate color="primary" class="mb-2" />
 
+    <!-- Task models: also used by the AI Engine bot, so it works with agents off -->
+    <TaskModelsPanel
+      v-if="tab === 'models'"
+      :tenant-id="tenantId"
+      :can-edit="canEdit"
+      :agents="agents"
+      @notify="showSnack"
+      @open-agent="openAgent"
+    />
+
     <!-- Agents -->
     <v-card v-if="tab === 'agents'" class="pa-4 pa-sm-5" data-testid="panel-agents">
       <div class="d-flex align-center flex-wrap ga-3 mb-4">
@@ -214,16 +224,6 @@
       </div>
     </v-card>
 
-    <!-- Task models: also used by the AI Engine bot, so it works with agents off -->
-    <TaskModelsPanel
-      v-if="tab === 'models'"
-      :tenant-id="tenantId"
-      :can-edit="canEdit"
-      :agents="agents"
-      @notify="showSnack"
-      @open-agent="openAgent"
-    />
-
     <AgentEditorDialog
       v-model="agentDialog"
       :tenant-id="tenantId"
@@ -263,9 +263,9 @@ import { useAuthStore } from '../stores/auth'
 import AgentSwitchCard from '../components/ai-agents/AgentSwitchCard.vue'
 import AgentEditorDialog from '../components/ai-agents/AgentEditorDialog.vue'
 import TeamEditorDialog from '../components/ai-agents/TeamEditorDialog.vue'
-import TaskModelsPanel from '../components/ai-agents/TaskModelsPanel.vue'
 import type { Agent, AgentSettings, KnowledgeTag, Team, TeamChannel, ToolInfo } from '../components/ai-agents/types'
 import { pickAgent } from '../components/ai-agents/agentRules'
+import TaskModelsPanel from '../components/ai-agents/TaskModelsPanel.vue'
 
 const route = useRoute()
 const router = useRouter()

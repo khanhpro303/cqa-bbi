@@ -2,11 +2,13 @@ import serviceQuality from './service-quality-vi'
 import qualityMeta from './quality-meta-vi'
 import qualityInsight from './quality-insight-vi'
 import aiAgents from './ai-agents-vi'
+import taskModels from './task-models-vi'
 
 export default {
   ...serviceQuality,
   ...qualityMeta,
   ...aiAgents,
+  ...taskModels,
   qualityInsight,
   // Common
   app_name: 'BBI CRM Agent',
