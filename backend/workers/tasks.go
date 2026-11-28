@@ -361,7 +361,10 @@ func erpAgentTokenFor(tenantID, agentType string) string {
 	return ""
 }
 
-// HandleZaloWebhookTask processes the webhook task
+// agentRouterAsk is the model the coordinator asks (a seam for tests).
+var agentRouterAsk = agents.TenantAsk
+
+// HandleZaloWebhookTask processes the webhook task.
 func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowClient, lookupOrderDelivery CurrentOrderDeliveryLookup) asynq.HandlerFunc {
 	guestLangflow := engine.NewLangflowPreviewClient(cfg)
 	var asynqClient *asynq.Client
@@ -1114,6 +1117,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				matchedChannel.ID, payload.Sender.ID, agentPlan.LogFields())
 			return nil
 		}
+		// The agent that answered this chat's last turn keeps it until the
+		// coordinator decides otherwise (below, once the intent is known).
+		agentPlan.Stick(ctx, workKey)
 
 		// Real-time intent classification for active sessions. Skip it when the
 		// previous turn was a backend-pushed prompt awaiting this reply: the
@@ -1123,7 +1129,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// classified keeps the classifier's own label: the open-cart override
 		// below routes small talk to the agent as IN_SCOPE, but small talk
 		// must still not consume the variant-line lock further down.
+		// continuation marks a reply to a question the backend just asked;
+		// it stays with the agent that asked.
 		var intent, classified string
+		continuation := false
 		// Read at most once and keep keyword-group history scoped to the
 		// sender. Group assistant classification uses its own shared log.
 		msgID, sessionID, input := payload.Message.MsgID, activeSessionID, userText
@@ -1153,6 +1162,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			(staffTurnKind != staffTurnNotForBot && (orderPeriod || (awaiting && isExpectedLookupFollowup(userText)))) {
 			log.Printf("[worker] awaiting-followup marker set; treating reply as IN_SCOPE (bypassing intent classifier)")
 			intent, classified = "IN_SCOPE", "IN_SCOPE"
+			continuation = true
 		} else if botAccountMentioned || staffTurnKind == staffTurnCalled {
 			// The sender explicitly called the bot: answer without asking
 			// the classifier, which could read the call as group chatter.
@@ -1184,6 +1194,24 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				intent = "IN_SCOPE"
 			}
 		}
+
+		// Bộ điều phối: with more than one agent for the sender, a model
+		// picks the one whose job the message is, leaning towards the agent
+		// already in the chat. Small talk (open cart or not) and replies to
+		// the backend's own question stay with the current agent at no AI
+		// cost.
+		// A complaint (HANDOVER) is routed only when complaint cases send it
+		// to an agent; otherwise it goes to people whoever holds the chat.
+		routeComplaint := classified == "HANDOVER" && customercases.EnabledFor(matchedChannel.Metadata) && payload.SignatureVerified
+		if agentPlan.NeedsRouting() && !continuation && (classified == "IN_SCOPE" || routeComplaint) {
+			from := agentPlan.Selection.Agent.Key
+			routeReason := agentPlan.Route(ctx, matchedChannel.TenantID, agentRouterAsk(cfg, matchedChannel.TenantID), intentClassifierInput(history(), userText))
+			log.Printf("[agents] channel %s sender %s: coordinator %s -> %s (%s) %s",
+				matchedChannel.ID, payload.Sender.ID, from, agentPlan.Selection.Agent.Key, agentPlan.Selection.Reason, routeReason)
+			orderLookup = lookupOrderDelivery != nil && agentPlan.Allows(agents.ToolLookupOrder)
+			orderPeriod = orderPeriod && orderLookup
+		}
+		agentPlan.Remember(ctx, workKey, sessionTTL)
 
 		// The prompt this turn starts from: the answering agent's, or the AI
 		// Engine prompt for the tier when agents are off.
@@ -1324,7 +1352,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					if isWhitelisted {
 						casualAgentType = "private"
 					}
-					go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, casualAgentType, "", reply.Result, reply.Prompt, reply.Text)
+					go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, casualAgentType, "", "", reply.Result, reply.Prompt, reply.Text)
 				}
 				switch {
 				case err != nil:
@@ -2274,7 +2302,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				flowProvider, flowModel = langflowClient.FlowModelForUsage(context.Background(), lfCfg.APIURL, lfCfg.APIKey, flowIDToUse)
 			}
 			res.Provider, res.Model = resolveChatbotPricing(res, flowProvider, flowModel)
-			logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, agentType, matchedGroup.ID, res, systemPromptToUse+langflowInput, res.Text)
+			logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, agentType, matchedGroup.ID, agentPlan.AgentKey(), res, systemPromptToUse+langflowInput, res.Text)
 		}(lfRes)
 
 		if strings.TrimSpace(replyText) == "" {
@@ -3099,7 +3127,7 @@ func resolveChatbotPricing(res engine.LangflowResult, flowProvider, flowModel st
 // When the Langflow response carried real token usage it is used verbatim;
 // otherwise tokens are estimated from text length (a lower bound, since history
 // and RAG context injected inside Langflow are invisible to the backend).
-func logChatbotAIUsage(tenantID, channelID, senderID, senderName, agentType, groupID string, res engine.LangflowResult, promptText, replyText string) {
+func logChatbotAIUsage(tenantID, channelID, senderID, senderName, agentType, groupID, agentKey string, res engine.LangflowResult, promptText, replyText string) {
 	provider, model := res.Provider, res.Model
 	inTok, outTok := res.InputTokens, res.OutputTokens
 
@@ -3125,6 +3153,7 @@ func logChatbotAIUsage(tenantID, channelID, senderID, senderName, agentType, gro
 		SenderName:       senderName,
 		AgentType:        agentType,
 		GroupID:          groupID,
+		AgentKey:         agentKey,
 		Provider:         provider,
 		Model:            model,
 		InputTokens:      inTok,

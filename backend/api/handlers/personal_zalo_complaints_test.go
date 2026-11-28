@@ -76,14 +76,27 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	if err := database.Create(&ch).Error; err != nil {
 		t.Fatal(err)
 	}
-	const staffSender, customerGroup, missingMappingGroup = "791", "988", "989"
+	const staffSender, customerGroup, fallbackGroup, missingMappingGroup = "791", "988", "989", "990"
 	const staffName, groupCustomerCode, groupCustomerName = "Nhân viên Ánh", "S042", "Khách của nhóm"
+	const manualOverrideCode, fallbackCode, ambiguousCode = "S043", "S044", "S099"
 	staffUser := models.User{ID: uuid.NewString(), Email: "staff-complaints@example.test", Name: staffName, PasswordHash: "fixture"}
 	groupIdentity := models.CRMGroup{ID: uuid.NewString(), TenantID: tenant, ChannelID: ch.ID,
 		ZaloGroupID: customerGroup, Name: "Nhóm khách kiểm thử", CustomerCode: groupCustomerCode}
+	groupConversation := models.Conversation{ID: uuid.NewString(), TenantID: tenant, ChannelID: ch.ID,
+		ExternalConversationID: composeImportConversationID(personalZaloThreadGroup, customerGroup), CustomerName: "Nhóm CRM", Metadata: "{}"}
+	fallbackConversation := models.Conversation{ID: uuid.NewString(), TenantID: tenant, ChannelID: ch.ID,
+		ExternalConversationID: composeImportConversationID(personalZaloThreadGroup, fallbackGroup), CustomerName: "Nhóm fallback", Metadata: "{}"}
+	ambiguousConversation := models.Conversation{ID: uuid.NewString(), TenantID: tenant, ChannelID: ch.ID,
+		ExternalConversationID: composeImportConversationID(personalZaloThreadGroup, "ambiguous"), CustomerName: "Nhóm ambiguous", Metadata: "{}"}
+	foreignChannelConversation := models.Conversation{ID: uuid.NewString(), TenantID: tenant, ChannelID: oa.ID,
+		ExternalConversationID: composeImportConversationID(personalZaloThreadGroup, "foreign"), CustomerName: "Nhóm OA", Metadata: "{}"}
 	for _, row := range []any{
-		&staffUser, &groupIdentity,
+		&staffUser, &groupIdentity, &groupConversation, &fallbackConversation, &ambiguousConversation, &foreignChannelConversation,
 		&models.CachedCustomer{ID: uuid.NewString(), TenantID: tenant, MA: groupCustomerCode, HO_VA_TEN: groupCustomerName},
+		&models.CachedCustomer{ID: uuid.NewString(), TenantID: tenant, MA: manualOverrideCode, HO_VA_TEN: "Khách manual không được ưu tiên"},
+		&models.CachedCustomer{ID: uuid.NewString(), TenantID: tenant, MA: fallbackCode, HO_VA_TEN: "Khách fallback"},
+		&models.CachedCustomer{ID: uuid.NewString(), TenantID: tenant, MA: ambiguousCode, HO_VA_TEN: "Hồ sơ một", ERP_ID: 1},
+		&models.CachedCustomer{ID: uuid.NewString(), TenantID: tenant, MA: ambiguousCode, HO_VA_TEN: "Hồ sơ hai", ERP_ID: 2},
 		&models.CustomerCase{ID: uuid.NewString(), TenantID: tenant, ChannelID: ch.ID, SubjectType: "group",
 			SubjectID: customerGroup, ZaloGroupID: customerGroup, ZaloUserID: "old-reporter", CustomerCode: "OLD",
 			Status: "open", Title: "Vấn đề của khách trước đây", Images: "[]"},
@@ -100,6 +113,19 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadata[personalZaloAccountOwnersKey] = []map[string]string{{"account_external_id": staffSender, "user_id": staffUser.ID}}
+	mappingPatch := fmt.Sprintf(`{"complaint_group_customers":{%q:%q,%q:%q}}`,
+		groupConversation.ID, manualOverrideCode, fallbackConversation.ID, fallbackCode)
+	if err := validatePersonalZaloComplaintCustomers(t.Context(), ch, mappingPatch, metadata); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{
+		fmt.Sprintf(`{"complaint_group_customers":{%q:%q}}`, foreignChannelConversation.ID, fallbackCode),
+		fmt.Sprintf(`{"complaint_group_customers":{%q:%q}}`, ambiguousConversation.ID, ambiguousCode),
+	} {
+		if err := validatePersonalZaloComplaintCustomers(t.Context(), ch, invalid, map[string]interface{}{}); err == nil {
+			t.Fatalf("accepted invalid fallback mapping: %s", invalid)
+		}
+	}
 	saveMetadata := func() {
 		t.Helper()
 		raw, err := json.Marshal(metadata)
@@ -117,6 +143,7 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 		{ThreadType: personalZaloThreadUser, ThreadID: "457"},
 		{ThreadType: personalZaloThreadGroup, ThreadID: "987"},
 		{ThreadType: personalZaloThreadGroup, ThreadID: customerGroup},
+		{ThreadType: personalZaloThreadGroup, ThreadID: fallbackGroup},
 		{ThreadType: personalZaloThreadGroup, ThreadID: missingMappingGroup},
 	}
 	for i := range approvals {
@@ -251,6 +278,7 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		customerCode string
+		customerName string
 		staffGroup   bool
 		unmapped     bool
 		silent       bool
@@ -261,7 +289,8 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 		{name: "group mention", turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: "789", ThreadID: "987", BotMentioned: true}},
 		{name: "group assistant without mention", turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: "790", ThreadID: "987"}},
 		{name: "ordinary staff message without calling bot", staffGroup: true, silent: true, turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: staffSender, ThreadID: customerGroup}},
-		{name: "staff calls bot with group assistant off", customerCode: groupCustomerCode, staffGroup: true, turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: staffSender, ThreadID: customerGroup, BotMentioned: true}},
+		{name: "staff calls bot with group assistant off", customerCode: groupCustomerCode, customerName: groupCustomerName, staffGroup: true, turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: staffSender, ThreadID: customerGroup, BotMentioned: true}},
+		{name: "staff fallback mapping without CRM identity", customerCode: fallbackCode, customerName: "Khách fallback", staffGroup: true, turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: staffSender, ThreadID: fallbackGroup, BotMentioned: true}},
 		{name: "staff calls bot without a group mapping", staffGroup: true, unmapped: true, turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: staffSender, ThreadID: missingMappingGroup, BotMentioned: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -332,7 +361,7 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 				cases[0].CustomerCode != tc.customerCode {
 				t.Fatalf("wrong or duplicate cases: %+v", cases)
 			}
-			if tc.staffGroup && (cases[0].ReporterName != staffName || cases[0].CustomerName != groupCustomerName || cases[0].Private) {
+			if tc.staffGroup && (cases[0].ReporterName != staffName || cases[0].CustomerName != tc.customerName || cases[0].Private) {
 				t.Fatalf("staff complaint has wrong reporter or customer: %+v", cases[0])
 			}
 			if tc.staffGroup {
@@ -347,11 +376,11 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	if err := database.Model(&models.NotificationLog{}).Where("tenant_id = ? AND recipient = ? AND status = ?", tenant, staff.ID, "sent").Count(&alerts).Error; err != nil {
 		t.Fatal(err)
 	}
-	if alerts != 5 {
+	if alerts != 6 {
 		t.Fatalf("expected one staff alert per complaint despite retries, got %d", alerts)
 	}
 	var history int64
-	if err := database.Model(&models.CustomerCaseAlert{}).Where("tenant_id = ? AND group_id = ? AND group_name = ? AND status = ?", tenant, staff.ID, staff.Name, "sent").Count(&history).Error; err != nil || history != 5 {
-		t.Fatalf("expected five linked alert outcomes, got %d (%v)", history, err)
+	if err := database.Model(&models.CustomerCaseAlert{}).Where("tenant_id = ? AND group_id = ? AND group_name = ? AND status = ?", tenant, staff.ID, staff.Name, "sent").Count(&history).Error; err != nil || history != 6 {
+		t.Fatalf("expected six linked alert outcomes, got %d (%v)", history, err)
 	}
 }

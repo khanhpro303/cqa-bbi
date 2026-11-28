@@ -37,13 +37,18 @@ type aiCostRow struct {
 	CallCount    int64   `json:"call_count"`
 }
 
-// GetAICostAnalytics returns AI spend grouped by day, OA channel, or employee,
+// legacyAgentCostLabel names the chatbot spend of the AI Engine bot in the
+// per-agent cost chart.
+const legacyAgentCostLabel = "Bot AI Engine (chưa dùng agent)"
+
+// GetAICostAnalytics returns AI spend grouped by day, OA channel, employee or
+// answering agent,
 // with optional source (job|chatbot|all) and segment (public|private|all)
 // filters. It powers the multi-chart carousel on the dashboard home page.
 //
 // GET /tenants/:tenantId/analytics/ai-cost
 //
-//	?group_by=day|channel|employee  (default day)
+//	?group_by=day|channel|employee|agent  (default day)
 //	&source=job|chatbot|all         (default all)
 //	&segment=public|private|all     (default all)
 //	&from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -52,9 +57,9 @@ func GetAICostAnalytics(c *gin.Context) {
 
 	groupBy := c.DefaultQuery("group_by", "day")
 	switch groupBy {
-	case "day", "channel", "employee":
+	case "day", "channel", "employee", "agent":
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group_by (day|channel|employee)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group_by (day|channel|employee|agent)"})
 		return
 	}
 
@@ -120,6 +125,17 @@ func GetAICostAnalytics(c *gin.Context) {
 			Joins("LEFT JOIN channels ON channels.id = ai_usage_logs.channel_id").
 			Select("COALESCE(NULLIF(channels.name, ''), 'Hệ thống / Job') as label, " + aggCols).
 			Group("label").
+			Order("total_cost DESC").
+			Scan(&rows)
+	case "agent":
+		// Chatbot spend by the specialist agent that answered. Turns of the
+		// AI Engine bot (agents off, or logged before agents) share one bar;
+		// a deleted agent keeps its key as the label.
+		base().
+			Where("ai_usage_logs.source = ?", "chatbot").
+			Joins("LEFT JOIN ai_agents ON ai_agents.tenant_id = ai_usage_logs.tenant_id AND ai_agents.`key` = ai_usage_logs.agent_key").
+			Select("COALESCE(MAX(NULLIF(ai_agents.name, '')), NULLIF(ai_usage_logs.agent_key, ''), ?) as label, "+aggCols, legacyAgentCostLabel).
+			Group("ai_usage_logs.agent_key").
 			Order("total_cost DESC").
 			Scan(&rows)
 	case "employee":

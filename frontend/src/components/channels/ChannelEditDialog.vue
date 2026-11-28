@@ -150,6 +150,7 @@
                 :tenant-id="tenantId"
                 :channel-id="initialChannel.id"
                 :channel-type="initialChannel.channel_type"
+                @validity="complaintSettingsValid = $event"
               />
             </v-window-item>
           </v-window>
@@ -237,6 +238,7 @@ const editComplaintSettings = computed({
     else editPersonalGroupSettings.value = settings as typeof editPersonalGroupSettings.value
   },
 })
+const complaintSettingsValid = ref(true)
 let editOriginalMeta: Record<string, unknown> = {}
 let initialSettings: Record<string, unknown> = {}
 const hasLegacyLangflowOverride = ref(false)
@@ -266,6 +268,7 @@ watch(open, (isOpen) => {
   const metadata = readMetadata(channel.metadata)
   editTab.value = 'general'
   saveError.value = ''
+  complaintSettingsValid.value = true
   initialChannel.value = { ...channel }
   editOriginalMeta = metadata
   savedBotSettings.value = readPersonalZaloBotSettings(metadata)
@@ -346,6 +349,12 @@ async function saveEdit() {
   const channel = initialChannel.value
   if (!channel || saving.value) return
   saveError.value = ''
+
+  if (channel.channel_type === 'personal_zalo_import' && !complaintSettingsValid.value) {
+    editTab.value = 'complaints'
+    saveError.value = t('personal_zalo_complaint_mapping_incomplete')
+    return
+  }
 
   if (channel.channel_type === 'zalo_oa') {
     const problem = [casualWholeRule(editForm.casual_full_agent_turns), casualWholeRule(editForm.casual_quiet_after), casualQuietRule(editForm.casual_quiet_after)]

@@ -106,10 +106,10 @@ func TestZaloWebhookAnswersWithAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	usageDone := make(chan struct{}, 1)
+	usageDone := make(chan string, 1)
 	err = database.Callback().Create().After("gorm:create").Register("test:agents-usage", func(tx *gorm.DB) {
-		if _, ok := tx.Statement.Dest.(*models.AIUsageLog); ok {
-			usageDone <- struct{}{}
+		if usage, ok := tx.Statement.Dest.(*models.AIUsageLog); ok {
+			usageDone <- usage.AgentKey
 		}
 	})
 	if err != nil {
@@ -186,7 +186,10 @@ func TestZaloWebhookAnswersWithAgent(t *testing.T) {
 		t.Fatalf("agent turn: replies %v, flow calls %d, error %v", replies, flowCalls, err)
 	}
 	select {
-	case <-usageDone:
+	case agentKey := <-usageDone:
+		if agentKey != "kho" {
+			t.Errorf("usage logged for agent %q, want kho", agentKey)
+		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("chatbot usage write did not finish")
 	}
@@ -225,11 +228,53 @@ func TestZaloWebhookAnswersWithAgent(t *testing.T) {
 		t.Fatal("native turn usage write did not finish")
 	}
 
+	// Two customer agents: the coordinator reads the message with both
+	// listed and moves the turn to the debt agent, whose prompt and tools
+	// answer it and whose key the usage log carries.
+	var debt models.AIAgent
+	agents.Agent{Key: "cong-no", Name: "Bot công nợ", Description: "Công nợ, hạn thanh toán", Audience: agents.AudienceCustomer,
+		Runtime: agents.RuntimeNative, Provider: "openai", Model: "gpt-5-mini", SystemPrompt: "Bạn là bot công nợ.",
+		Tools: []string{"lookup_debt"}, IsActive: true}.ApplyTo(&debt)
+	debt.ID, debt.TenantID = "agent-cong-no", group.TenantID
+	members = []models.AIAgent{nativeStock, debt, staff}
+	var routerPrompt, routerInput string
+	previousAsk := agentRouterAsk
+	agentRouterAsk = func(*config.Config, string) agents.AskFunc {
+		return func(_ context.Context, systemPrompt, input string) (string, error) {
+			routerPrompt, routerInput = systemPrompt, input
+			return "```json\n{\"agent\": \"cong-no\", \"reason\": \"hỏi công nợ\"}\n```", nil
+		}
+	}
+	t.Cleanup(func() { agentRouterAsk = previousAsk })
+	replies, flowCalls = nil, 0
+	if err := send(); err != nil || flowCalls != 0 || len(replies) != 1 || len(runtime.inputs) != 2 {
+		t.Fatalf("routed turn: replies %v, flow calls %d, runs %d, error %v", replies, flowCalls, len(runtime.inputs), err)
+	}
+	if !strings.Contains(routerPrompt, "- kho | Bot kho (mặc định)") || !strings.Contains(routerPrompt, "- cong-no | Bot công nợ | Công nợ, hạn thanh toán") ||
+		strings.Contains(routerPrompt, "noi-bo") || !strings.Contains(routerPrompt, "đang trả lời cuộc chat này: chưa có") ||
+		!strings.Contains(routerInput, "Tin mới: "+question) {
+		t.Errorf("coordinator prompt %q, input %q", routerPrompt, routerInput)
+	}
+	if in := runtime.inputs[1]; in.Agent.Key != "cong-no" || !strings.HasPrefix(in.SystemPrompt, "Xưng em, gọi anh/chị.\n\nBạn là bot công nợ.") {
+		t.Errorf("routed run input = %+v", in)
+	} else if permissions, err := engine.VerifyPermissionToken(in.PermissionToken, key); err != nil || permissions.AgentKey != "cong-no" ||
+		!permissions.ToolAllowed("lookup_debt") || permissions.ToolAllowed("inventory_by_sku") {
+		t.Errorf("routed turn permissions = %+v, %v", permissions, err)
+	}
+	select {
+	case agentKey := <-usageDone:
+		if agentKey != "cong-no" {
+			t.Errorf("routed usage logged for agent %q, want cong-no", agentKey)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("routed turn usage write did not finish")
+	}
+
 	// Only a staff agent left: customers in the group get no bot reply.
 	members = []models.AIAgent{staff}
 	team.DefaultAgentID = staff.ID
 	replies, flowCalls = nil, 0
-	if err := send(); err != nil || flowCalls != 0 || len(replies) != 0 || len(runtime.inputs) != 1 {
+	if err := send(); err != nil || flowCalls != 0 || len(replies) != 0 || len(runtime.inputs) != 2 {
 		t.Fatalf("silent turn: replies %v, flow calls %d, error %v", replies, flowCalls, err)
 	}
 }

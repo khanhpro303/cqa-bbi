@@ -22,6 +22,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
@@ -79,6 +80,7 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	var erpPaused atomic.Bool
 	var disableERPDuringNextTurn atomic.Bool
 	var revokeOnNextTurn atomic.Bool
+	agentsEnabled := false
 	customerVerified.Store(true)
 	imagePrivate := false
 	imageReads := 0
@@ -102,6 +104,19 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			}
 			if denyApproval.Load() {
 				q.AddError(gorm.ErrRecordNotFound)
+			}
+		case *models.AppSetting:
+			if agentsEnabled && slices.Contains(q.Statement.Vars, any(agents.EnabledSettingKey)) {
+				row.ValuePlain = "true"
+			}
+		case *models.AITeam:
+			*row = models.AITeam{ID: "test-team", DefaultAgentID: "first-agent", IsActive: true}
+		case *[]models.AITeamMember:
+			*row = []models.AITeamMember{{AgentID: "first-agent"}, {AgentID: "second-agent"}}
+		case *[]models.AIAgent:
+			*row = []models.AIAgent{
+				{ID: "first-agent", Key: "first", Audience: agents.AudienceCustomer, IsActive: true},
+				{ID: "second-agent", Key: "second", Audience: agents.AudienceCustomer, IsActive: true},
 			}
 		case *[]models.AppSetting:
 			if !slices.Contains(q.Statement.Vars, any(channel.TenantID)) {
@@ -634,6 +649,29 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 		send("open-with-handover-phrase", "nói chuyện với nhân viên", http.StatusOK, "Mời anh/chị đặt câu hỏi", 0)
 		send("handover-in-open-session", handoverRequest, http.StatusOK, personalZaloHandoverUnavailable, 0)
 		send("handover-after-session-closed", handoverRequest, http.StatusNoContent, "", 0)
+
+		agentsEnabled = true
+		customerVerified.Store(false)
+		if !personalZaloAgentPlan(t.Context(), req, personalZaloERPIdentity{}).NeedsRouting() {
+			t.Fatal("fixture must enable routing with two eligible agents")
+		}
+		previousAsk := agentRouterAsk
+		t.Cleanup(func() {
+			agentsEnabled = false
+			agentRouterAsk = previousAsk
+		})
+		var routerCalls int
+		agentRouterAsk = func(*config.Config, string) agents.AskFunc {
+			return func(context.Context, string, string) (string, error) {
+				routerCalls++
+				return `{"agent":"second"}`, nil
+			}
+		}
+		send("agents-closed-session", gobyQuestion, http.StatusNoContent, "", 0)
+		send("agents-open-session", "chào bull", http.StatusOK, "Mời anh/chị đặt câu hỏi", 0)
+		if routerCalls != 0 {
+			t.Fatalf("coordinator called %d times before a flow was permitted", routerCalls)
+		}
 	})
 }
 

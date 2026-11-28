@@ -3,6 +3,7 @@ import {
   personalZaloGroupSettingsPatch,
   personalZaloHandoverGroupOptions,
   personalZaloHandoverStaffOptions,
+  readComplaintGroupCustomers,
   readPersonalZaloGroupSettings,
 } from '../components/channels/personalZaloGroupSettings'
 
@@ -18,6 +19,7 @@ describe('personal Zalo group settings', () => {
       complaint_cases: false,
       complaint_resolved_days: 14,
       complaint_streams: [],
+      complaint_group_customers: {},
     })
 
     const settings = readPersonalZaloGroupSettings({
@@ -30,6 +32,7 @@ describe('personal Zalo group settings', () => {
       complaint_cases: true,
       complaint_resolved_days: 30,
       complaint_streams: [{ key: '', name: ' Bảo hành ', description: ' Hàng lỗi ', alert_group_id: 'warranty-group' }],
+      complaint_group_customers: { ' conversation-1 ': ' KH001 ' },
     })
     expect(personalZaloGroupSettingsPatch(settings)).toEqual({
       personal_zalo_group_reply_enabled: true,
@@ -41,7 +44,10 @@ describe('personal Zalo group settings', () => {
       complaint_cases: true,
       complaint_resolved_days: 30,
       complaint_streams: [{ key: 'bao_hanh', name: 'Bảo hành', description: 'Hàng lỗi', alert_group_id: 'warranty-group' }],
+      complaint_group_customers: { 'conversation-1': 'KH001' },
     })
+
+    expect(readComplaintGroupCustomers({ ' group ': ' KH001 ', invalid: 123, ' ': 'KH002' })).toEqual({ group: 'KH001' })
   })
 
   it('preserves the staff-only preference while assistant mode is off', () => {

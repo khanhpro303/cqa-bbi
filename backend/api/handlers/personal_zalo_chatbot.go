@@ -193,10 +193,10 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			return reply
 		})
 		staffGroupComplaint := groupTurn.Staff && addressed
-		complaints := customercases.EnabledFor(channel.Metadata) && (!groupTurn.Staff || staffGroupComplaint) && req.Text != "" &&
-			agentPlan.Allows(agents.ToolComplaintRecord)
+		complaintEligible := customercases.EnabledFor(channel.Metadata) && (!groupTurn.Staff || staffGroupComplaint) && req.Text != ""
+		canRouteComplaint := complaintEligible && (agentPlan.Allows(agents.ToolComplaintRecord) || (addressed && agentPlan.NeedsRouting()))
 		requestedHandover := personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
-		handover := !complaints && !guest && requestedHandover
+		handover := !canRouteComplaint && !guest && requestedHandover
 		directSessionRequired := req.ThreadType == personalZaloThreadUser &&
 			strings.TrimSpace(strings.ReplaceAll(sessionConfig.SessionKeyword, ";", "")) != ""
 		var turn personalZaloTurn
@@ -217,9 +217,17 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			// A session keyword takes precedence if it also matches a handover phrase.
 			handover = false
 		}
-		if !guest && complaints && addressed && !turn.RunFlow && turn.Reply == "" &&
+		promoteComplaint := !guest && canRouteComplaint && addressed && !turn.RunFlow && turn.Reply == "" &&
 			!personalZaloMatchesKeyword(req.Text, sessionConfig.SessionEndKeyword) &&
-			(requestedHandover || workers.PersonalZaloComplaintNeedsHandover(ctx, req.TenantID, req.Text)) {
+			(requestedHandover || workers.PersonalZaloComplaintNeedsHandover(ctx, req.TenantID, req.Text))
+		if addressed && !handover && (turn.RunFlow || promoteComplaint) {
+			agentPlan = routePersonalZaloAgent(ctx, cfg, req, agentPlan, sessionConfig.SessionTimeoutMinutes)
+		}
+		complaints := complaintEligible && agentPlan.Allows(agents.ToolComplaintRecord)
+		if !complaints && !guest && requestedHandover && (!directSessionRequired || turn.RunFlow) {
+			handover = true
+		}
+		if complaints && promoteComplaint {
 			requestedHandover = true
 			turn = personalZaloTurn{RunFlow: true, FlowScope: personalZaloLegacyFlowScope(req)}
 		}

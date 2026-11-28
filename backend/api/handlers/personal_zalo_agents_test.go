@@ -130,3 +130,42 @@ func TestPersonalZaloAgentScopeForGroupAndGuestDraft(t *testing.T) {
 			result, sentPermission, sentAgentToken, err)
 	}
 }
+
+// On personal Zalo the coordinator reads the message addressed to the bot
+// and picks among the team's agents; a turn with no text keeps the agent.
+func TestRoutePersonalZaloAgent(t *testing.T) {
+	cfg := &config.Config{EncryptionKey: stockFixtureSigningKey}
+	req := personalZaloChatbotRequest{TenantID: "tenant", ChannelID: "channel", SenderID: "456", ThreadType: personalZaloThreadUser, Text: "còn nợ bao nhiêu?"}
+	team := agents.Team{ID: "team", DefaultAgentID: "a1", Members: []agents.Agent{
+		{ID: "a1", Key: "kho", Name: "Bot kho", Audience: agents.AudienceCustomer, IsActive: true},
+		{ID: "a2", Key: "cong-no", Name: "Bot công nợ", Audience: agents.AudienceCustomer, IsActive: true},
+	}}
+	sel, _ := team.Pick(agents.AudienceCustomer)
+	start := agents.Plan{Mode: agents.ModeAgent, Selection: sel}
+	// No database or Redis: the default coordinator prompt, nothing kept.
+	savedDB, savedRedis := db.DB, db.RedisClient
+	db.DB, db.RedisClient = nil, nil
+	t.Cleanup(func() { db.DB, db.RedisClient = savedDB, savedRedis })
+	var inputs []string
+	previous := agentRouterAsk
+	agentRouterAsk = func(*config.Config, string) agents.AskFunc {
+		return func(_ context.Context, _, input string) (string, error) {
+			inputs = append(inputs, input)
+			return `{"agent":"cong-no"}`, nil
+		}
+	}
+	t.Cleanup(func() { agentRouterAsk = previous })
+
+	if plan := routePersonalZaloAgent(context.Background(), cfg, req, start, 30); plan.Selection.Agent.Key != "cong-no" ||
+		len(inputs) != 1 || inputs[0] != agents.RouterInput(req.Text) {
+		t.Fatalf("routed plan = %+v inputs %q", plan.Selection, inputs)
+	}
+	req.Text = "  "
+	if plan := routePersonalZaloAgent(context.Background(), cfg, req, start, 30); plan.Selection.Agent.Key != "kho" || len(inputs) != 1 {
+		t.Fatalf("image-only turn was routed: %+v", plan.Selection)
+	}
+	legacy := agents.Plan{Mode: agents.ModeLegacy}
+	if plan := routePersonalZaloAgent(context.Background(), cfg, req, legacy, 30); plan.Mode != agents.ModeLegacy || len(inputs) != 1 {
+		t.Fatalf("legacy turn was routed: %+v", plan)
+	}
+}

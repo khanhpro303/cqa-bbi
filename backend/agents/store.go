@@ -133,6 +133,28 @@ func TeamForChannel(ctx context.Context, tenantID, channelID string) (Team, bool
 	return team, true, nil
 }
 
+// TeamByID returns one of the tenant's teams, active or not, with its active
+// members in order (the agents a turn could go to). The test console uses
+// it, so a team can be tried before it is switched on.
+func TeamByID(ctx context.Context, tenantID, teamID string) (Team, error) {
+	d, err := database(ctx)
+	if err != nil {
+		return Team{}, err
+	}
+	var row models.AITeam
+	if err := d.Where("id = ? AND tenant_id = ?", teamID, tenantID).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return Team{}, ErrNotFound
+		}
+		return Team{}, err
+	}
+	team := TeamFromModel(row)
+	if team.Members, err = loadMembers(d, tenantID, team.ID, true); err != nil {
+		return Team{}, err
+	}
+	return team, nil
+}
+
 // loadMembers returns a team's agents in position order. activeOnly drops
 // disabled memberships and inactive agents.
 func loadMembers(d *gorm.DB, tenantID, teamID string, activeOnly bool) ([]Agent, error) {
@@ -242,8 +264,17 @@ func SaveAgent(ctx context.Context, tenantID, actorID string, in Agent) (Agent, 
 		a.ApplyTo(&saved)
 		saved.UpdatedBy = actorID
 		saved.UpdatedAt = now
+		// On insert GORM leaves out a false is_active and the column
+		// default (true) wins; write it explicitly.
+		active := saved.IsActive
 		if err := tx.Save(&saved).Error; err != nil {
 			return err
+		}
+		if saved.IsActive != active {
+			if err := tx.Model(&saved).Update("is_active", active).Error; err != nil {
+				return err
+			}
+			saved.IsActive = active
 		}
 		return recordRevision(tx, saved, actorID, now)
 	})
@@ -395,8 +426,17 @@ func SaveTeam(ctx context.Context, tenantID, actorID string, in TeamInput) (Team
 		}
 		saved.UpdatedBy = actorID
 		saved.UpdatedAt = now
+		// On insert GORM leaves out a false is_active and the column
+		// default (true) wins; write it explicitly.
+		active := saved.IsActive
 		if err := tx.Save(&saved).Error; err != nil {
 			return err
+		}
+		if saved.IsActive != active {
+			if err := tx.Model(&saved).Update("is_active", active).Error; err != nil {
+				return err
+			}
+			saved.IsActive = active
 		}
 		if err := tx.Where("team_id = ?", saved.ID).Delete(&models.AITeamMember{}).Error; err != nil {
 			return err
@@ -513,6 +553,20 @@ func ListTeams(ctx context.Context, tenantID string) ([]TeamDetail, error) {
 	return out, nil
 }
 
+// lockTenantForTeamChange gives default-team changes and migration the same
+// lock order before any of them read or update a team.
+func lockTenantForTeamChange(tx *gorm.DB, tenantID string) error {
+	var tenant models.Tenant
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", tenantID).First(&tenant).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock tenant: %w", err)
+	}
+	return nil
+}
+
 // DeleteTeam removes a team no channel points at. The default team stays.
 func DeleteTeam(ctx context.Context, tenantID, id string) error {
 	d, err := database(ctx)
@@ -520,8 +574,11 @@ func DeleteTeam(ctx context.Context, tenantID, id string) error {
 		return err
 	}
 	return d.Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantForTeamChange(tx, tenantID); err != nil {
+			return err
+		}
 		var row models.AITeam
-		if err := tx.Where("tenant_id = ? AND id = ?", tenantID, id).First(&row).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND id = ?", tenantID, id).First(&row).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
@@ -541,6 +598,37 @@ func DeleteTeam(ctx context.Context, tenantID, id string) error {
 			return err
 		}
 		return tx.Delete(&row).Error
+	})
+}
+
+// SetDefaultTeam makes an active team the tenant's default: every channel
+// without its own team answers through it. The previous default becomes a
+// normal team that can be deleted once no channel points at it.
+func SetDefaultTeam(ctx context.Context, tenantID, id string) error {
+	d, err := database(ctx)
+	if err != nil {
+		return err
+	}
+	return d.Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantForTeamChange(tx, tenantID); err != nil {
+			return err
+		}
+		var target models.AITeam
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND id = ?", tenantID, id).First(&target).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !target.IsActive {
+			return invalid("is_active", "bật Bộ điều phối trước khi đặt làm mặc định")
+		}
+		if err := tx.Model(&models.AITeam{}).Where("tenant_id = ? AND id <> ? AND is_default = ?", tenantID, id, true).
+			Update("is_default", false).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.AITeam{}).Where("tenant_id = ? AND id = ?", tenantID, id).Update("is_default", true).Error
 	})
 }
 
@@ -586,10 +674,8 @@ func MigrateLegacy(ctx context.Context, tenantID, actorID string) (created bool,
 		return false, err
 	}
 	err = d.Transaction(func(tx *gorm.DB) error {
-		// Serialize concurrent migrations of one tenant on its tenant row.
-		var tenant models.Tenant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", tenantID).First(&tenant).Error; err != nil {
-			return fmt.Errorf("lock tenant: %w", err)
+		if err := lockTenantForTeamChange(tx, tenantID); err != nil {
+			return err
 		}
 		var count int64
 		if err := tx.Model(&models.AIAgent{}).Where("tenant_id = ?", tenantID).Count(&count).Error; err != nil {
@@ -637,22 +723,59 @@ func MigrateLegacy(ctx context.Context, tenantID, actorID string) (created bool,
 			}
 			ids[i] = row.ID
 		}
-		var defaults int64
-		if err := tx.Model(&models.AITeam{}).Where("tenant_id = ? AND is_default = ?", tenantID, true).Count(&defaults).Error; err != nil {
-			return err
-		}
-		team := models.AITeam{
-			ID: uuid.NewString(), TenantID: tenantID, Name: "Mặc định", DefaultAgentID: ids[0],
-			Options: mustJSON(TeamOptions{}), IsDefault: defaults == 0, IsActive: true,
-			UpdatedBy: actorID, CreatedAt: now, UpdatedAt: now,
-		}
-		if err := tx.Create(&team).Error; err != nil {
-			return err
-		}
-		for i, id := range ids {
-			if err := tx.Create(&models.AITeamMember{TeamID: team.ID, AgentID: id, TenantID: tenantID, Position: i, Enabled: true}).Error; err != nil {
+		// The tenant may still have its default team from an earlier
+		// migration (the agents were removed from it and deleted). Put the
+		// new agents into that team instead of creating a second one, so
+		// copying again never leaves an empty default team answering the
+		// channels next to an undeletable duplicate.
+		var team models.AITeam
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("tenant_id = ? AND is_default = ?", tenantID, true).Order("created_at").First(&team).Error
+		switch {
+		case err == nil:
+			var existing []models.AITeamMember
+			if err := tx.Where("tenant_id = ? AND team_id = ?", tenantID, team.ID).Find(&existing).Error; err != nil {
 				return err
 			}
+			next, defaultIsMember := 0, false
+			for _, m := range existing {
+				if m.Position >= next {
+					next = m.Position + 1
+				}
+				if m.AgentID == team.DefaultAgentID {
+					defaultIsMember = true
+				}
+			}
+			if team.DefaultAgentID == "" || !defaultIsMember {
+				team.DefaultAgentID = ids[0]
+			}
+			team.IsActive = true
+			team.UpdatedBy = actorID
+			team.UpdatedAt = now
+			if err := tx.Save(&team).Error; err != nil {
+				return err
+			}
+			for i, id := range ids {
+				if err := tx.Create(&models.AITeamMember{TeamID: team.ID, AgentID: id, TenantID: tenantID, Position: next + i, Enabled: true}).Error; err != nil {
+					return err
+				}
+			}
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			team = models.AITeam{
+				ID: uuid.NewString(), TenantID: tenantID, Name: "Mặc định", DefaultAgentID: ids[0],
+				Options: mustJSON(TeamOptions{}), IsDefault: true, IsActive: true,
+				UpdatedBy: actorID, CreatedAt: now, UpdatedAt: now,
+			}
+			if err := tx.Create(&team).Error; err != nil {
+				return err
+			}
+			for i, id := range ids {
+				if err := tx.Create(&models.AITeamMember{TeamID: team.ID, AgentID: id, TenantID: tenantID, Position: i, Enabled: true}).Error; err != nil {
+					return err
+				}
+			}
+		default:
+			return err
 		}
 		created = true
 		return nil

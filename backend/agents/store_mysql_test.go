@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"gorm.io/gorm"
 )
 
 // Needs MySQL 8, e.g.
@@ -170,8 +171,18 @@ func TestAgentsLifecycleMySQL(t *testing.T) {
 		t.Errorf("revisions = %+v", revs)
 	}
 
+	// The test console loads a team by id with its active members, and
+	// never another tenant's.
+	byID, err := TeamByID(ctx, tenantID, team.ID)
+	if err != nil || byID.Name != "Công nợ" || len(byID.Members) != 1 || byID.Members[0].Key != "cong-no" {
+		t.Errorf("team by id = %+v %v", byID, err)
+	}
+
 	// Tenant isolation.
 	otherTenant, _ := seedTenant(t, "", "")
+	if _, err := TeamByID(ctx, otherTenant, team.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-tenant team by id = %v", err)
+	}
 	if _, err := GetAgent(ctx, otherTenant, debt.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("cross-tenant read = %v", err)
 	}
@@ -226,4 +237,143 @@ func TestAgentsLifecycleMySQL(t *testing.T) {
 func isValidation(err error, field string) bool {
 	var verr *ValidationError
 	return errors.As(err, &verr) && verr.Field == field
+}
+
+// Copying the AI Engine prompts again after the copied agents were removed
+// and deleted refills the existing default team instead of creating a
+// second, undeletable one; another team can take over as default.
+func TestMigrateAgainReusesDefaultTeamMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channels := seedTenant(t, "Prompt khách", "Prompt nội bộ")
+	oa := channels[0]
+
+	if created, err := MigrateLegacy(ctx, tenantID, "admin"); err != nil || !created {
+		t.Fatalf("first migration = %v %v", created, err)
+	}
+	teams, err := ListTeams(ctx, tenantID)
+	must(t, err)
+	if len(teams) != 1 || !teams[0].IsDefault {
+		t.Fatalf("teams after first copy = %+v", teams)
+	}
+	first := teams[0]
+	// The user empties the default team and deletes both agents.
+	_, err = SaveTeam(ctx, tenantID, "admin", TeamInput{ID: first.ID, Name: first.Name, PersonaPrompt: "Xưng em."})
+	must(t, err)
+	for _, m := range first.Members {
+		must(t, DeleteAgent(ctx, tenantID, m.ID))
+	}
+
+	if created, err := MigrateLegacy(ctx, tenantID, "admin"); err != nil || !created {
+		t.Fatalf("second copy = %v %v", created, err)
+	}
+	teams, err = ListTeams(ctx, tenantID)
+	must(t, err)
+	if len(teams) != 1 || teams[0].ID != first.ID || !teams[0].IsDefault {
+		t.Fatalf("second copy must reuse the default team, got %+v", teams)
+	}
+	again := teams[0]
+	if again.PersonaPrompt != "Xưng em." || len(again.Members) != 2 || len(again.Silent) != 0 {
+		t.Fatalf("default team after second copy = %+v", again)
+	}
+	if again.DefaultAgentID == "" || again.Members[0].Key != LegacyCustomerAgentKey {
+		t.Errorf("default agent = %q members = %+v", again.DefaultAgentID, again.Members)
+	}
+	must(t, SetEnabled(ctx, tenantID, "admin", true))
+	plan, err := PlanTurn(ctx, tenantID, oa, TierPublic)
+	if err != nil || plan.Mode != ModeAgent || plan.Selection.Agent.Key != LegacyCustomerAgentKey {
+		t.Fatalf("plan after second copy = %+v %v", plan, err)
+	}
+
+	// Another team can become the default; the old one is then deletable.
+	other, err := SaveTeam(ctx, tenantID, "admin", TeamInput{Name: "Mới", DefaultAgentID: again.DefaultAgentID,
+		Members: []MemberInput{{AgentID: again.DefaultAgentID, Enabled: true}}})
+	must(t, err)
+	if err := DeleteTeam(ctx, tenantID, first.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("delete default = %v", err)
+	}
+	off := false
+	inactive, err := SaveTeam(ctx, tenantID, "admin", TeamInput{Name: "Tắt", IsActive: &off})
+	must(t, err)
+	if inactive.IsActive {
+		t.Fatalf("a team created switched off must stay off: %+v", inactive)
+	}
+	idle, err := SaveAgent(ctx, tenantID, "admin", Agent{Key: "nghi", Name: "Tạm nghỉ", Audience: AudienceCustomer, IsActive: false})
+	must(t, err)
+	if stored, err := GetAgent(ctx, tenantID, idle.ID); err != nil || stored.IsActive {
+		t.Fatalf("an agent created switched off must stay off: %+v %v", stored, err)
+	}
+	if err := SetDefaultTeam(ctx, tenantID, inactive.ID); !isValidation(err, "is_active") {
+		t.Errorf("inactive default = %v", err)
+	}
+	if err := SetDefaultTeam(ctx, tenantID, uuid.NewString()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown default = %v", err)
+	}
+	must(t, SetDefaultTeam(ctx, tenantID, other.ID))
+	var defaults []models.AITeam
+	must(t, db.DB.Where("tenant_id = ? AND is_default = ?", tenantID, true).Find(&defaults).Error)
+	if len(defaults) != 1 || defaults[0].ID != other.ID {
+		t.Fatalf("defaults = %+v", defaults)
+	}
+	must(t, DeleteTeam(ctx, tenantID, first.ID))
+}
+
+func TestAgentDefaultTeamSurvivesConcurrentDeleteMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	tenantID, _ := seedTenant(t, "Prompt khách", "Prompt nội bộ")
+	_, err := MigrateLegacy(ctx, tenantID, "admin")
+	must(t, err)
+	target, err := SaveTeam(ctx, tenantID, "admin", TeamInput{Name: "Khác"})
+	must(t, err)
+
+	// Hold the deletion after reading the current default flag. Promotion
+	// must wait on the same row before it can change that flag.
+	type deleteQueryKey struct{}
+	read := make(chan struct{})
+	resume := make(chan struct{})
+	const callback = "test:pause_delete_team_after_select"
+	must(t, db.DB.Callback().Query().After("gorm:query").Register(callback, func(query *gorm.DB) {
+		if query.Statement.Table == "ai_teams" && query.Statement.Context.Value(deleteQueryKey{}) == target.ID {
+			close(read)
+			<-resume
+		}
+	}))
+	t.Cleanup(func() { _ = db.DB.Callback().Query().Remove(callback) })
+
+	deleted := make(chan error, 1)
+	go func() {
+		deleted <- DeleteTeam(context.WithValue(ctx, deleteQueryKey{}, target.ID), tenantID, target.ID)
+	}()
+	select {
+	case <-read:
+	case err := <-deleted:
+		close(resume)
+		t.Fatalf("deletion finished before its first read: %v", err)
+	case <-ctx.Done():
+		close(resume)
+		<-deleted
+		t.Fatal(ctx.Err())
+	}
+
+	promoted := make(chan error, 1)
+	go func() { promoted <- SetDefaultTeam(ctx, tenantID, target.ID) }()
+	select {
+	case err := <-promoted:
+		close(resume)
+		<-deleted
+		t.Fatalf("promotion finished while deletion held the row: %v", err)
+	case <-time.After(time.Second):
+		close(resume)
+	}
+	must(t, <-deleted)
+	if err := <-promoted; !errors.Is(err, ErrNotFound) {
+		t.Fatalf("promoting deleted team = %v, want ErrNotFound", err)
+	}
+	teams, err := ListTeams(ctx, tenantID)
+	must(t, err)
+	if len(teams) != 1 || !teams[0].IsDefault {
+		t.Fatalf("original default team did not survive: %+v", teams)
+	}
 }

@@ -60,14 +60,29 @@ func applyPersonalZaloStaffComplaintSource(ctx context.Context, channel models.C
 	var groups []models.CRMGroup
 	err = db.DB.WithContext(ctx).Select("name", "customer_code").
 		Where("tenant_id = ? AND zalo_group_id = ?", channel.TenantID, report.ZaloGroupID).Limit(2).Find(&groups).Error
-	if err != nil || len(groups) != 1 || strings.TrimSpace(groups[0].CustomerCode) == "" {
+	if err != nil || len(groups) > 1 {
 		return "Chưa xác định được mã khách của nhóm trong CRM → Nhóm Zalo. Chưa ghi nhận được khiếu nại thay khách."
 	}
-	group := groups[0]
-	code := strings.TrimSpace(group.CustomerCode)
+	var customer personalZaloGroupComplaintCustomer
+	if len(groups) == 1 && strings.TrimSpace(groups[0].CustomerCode) != "" {
+		customer = personalZaloGroupComplaintCustomer{
+			Code:      strings.TrimSpace(groups[0].CustomerCode),
+			Name:      cachedCustomerName(channel.TenantID, strings.TrimSpace(groups[0].CustomerCode)),
+			GroupName: groups[0].Name,
+		}
+	} else {
+		customer, err = personalZaloComplaintCustomerFallback(ctx, channel, report.ZaloGroupID)
+		if err != nil || customer.Code == "" {
+			return "Chưa xác định được mã khách của nhóm trong CRM → Nhóm Zalo hoặc cấu hình dự phòng của kênh. Chưa ghi nhận được khiếu nại thay khách."
+		}
+		if len(groups) == 1 && strings.TrimSpace(groups[0].Name) != "" {
+			customer.GroupName = groups[0].Name
+		}
+	}
 	report.SubjectType, report.SubjectID = personalZaloThreadGroup, report.ZaloGroupID
 	report.MatchCustomerOnly = true
-	report.ReporterName, report.ChatGroup = strings.TrimSpace(reporter.Name), group.Name
-	report.CustomerCode, report.CustomerName = code, firstNonEmpty(cachedCustomerName(channel.TenantID, code), group.Name, code)
+	report.ReporterName, report.ChatGroup = strings.TrimSpace(reporter.Name), customer.GroupName
+	report.CustomerCode = customer.Code
+	report.CustomerName = firstNonEmpty(customer.Name, customer.GroupName, customer.Code)
 	return ""
 }

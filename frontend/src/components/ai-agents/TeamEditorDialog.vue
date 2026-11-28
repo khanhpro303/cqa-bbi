@@ -166,7 +166,7 @@
           <div class="text-caption text-medium-emphasis mt-1">{{ $t('ag_team_channels_hint') }}</div>
         </div>
 
-        <!-- Routing knobs used once the coordinator picks agents by content -->
+        <!-- How the coordinator picks among the team's agents -->
         <v-expansion-panels class="mt-4" variant="accordion">
           <v-expansion-panel>
             <v-expansion-panel-title>

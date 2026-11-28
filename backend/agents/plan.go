@@ -57,6 +57,15 @@ func (p Plan) Agent() (Selection, bool) {
 	return p.Selection, p.Mode == ModeAgent
 }
 
+// AgentKey is the answering agent's key, or "" when the AI Engine bot
+// answers. Usage logs carry it so AI cost can be split per agent.
+func (p Plan) AgentKey() string {
+	if p.Mode != ModeAgent {
+		return ""
+	}
+	return p.Selection.Agent.Key
+}
+
 // BasePrompt is the prompt the turn starts from before context is added:
 // the agent's (with the team voice) in agent mode, else legacyPrompt.
 func (p Plan) BasePrompt(legacyPrompt string) string {
