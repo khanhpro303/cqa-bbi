@@ -43,7 +43,7 @@ func NewOpenRouterProvider(apiKey, model, baseURL string) *OpenAIProvider {
 }
 
 // Providers lists the supported provider names.
-var Providers = []string{"claude", "gemini", "openai", "openrouter"}
+var Providers = []string{"claude", "gemini", "openai", "openrouter", "9router"}
 
 // ValidProvider reports whether name is a supported provider.
 func ValidProvider(name string) bool {
@@ -64,6 +64,8 @@ func DefaultModel(provider string) string {
 		return "gpt-5-mini"
 	case "openrouter":
 		return OpenRouterDefaultModel
+	case "9router":
+		return ""
 	}
 	return "claude-haiku-4-5"
 }
@@ -79,6 +81,8 @@ func NewProvider(provider, apiKey, model, baseURL string, maxTokens int) (AIProv
 		return NewOpenAIProvider(apiKey, model, baseURL), nil
 	case "openrouter":
 		return NewOpenRouterProvider(apiKey, model, baseURL), nil
+	case "9router":
+		return newNineRouterProvider(apiKey, model, baseURL)
 	}
 	return nil, fmt.Errorf("unsupported AI provider: %s", provider)
 }

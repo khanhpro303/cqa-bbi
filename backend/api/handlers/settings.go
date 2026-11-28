@@ -116,7 +116,7 @@ func getSettingValue(settings []models.AppSetting, key, defaultVal string) strin
 func SaveAISettings(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	var req struct {
-		Provider        string `json:"provider" binding:"required,oneof=claude gemini openai openrouter"`
+		Provider        string `json:"provider" binding:"required"`
 		APIKey          string `json:"api_key" binding:"required"`
 		Model           string `json:"model"`
 		BaseURL         string `json:"base_url"`
@@ -128,6 +128,21 @@ func SaveAISettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
 		return
 	}
+	if !ai.ValidProvider(req.Provider) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_provider"})
+		return
+	}
+	if req.Provider == "9router" {
+		if err := ai.ValidateNineRouterBaseURL(req.BaseURL); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_base_url", "details": err.Error()})
+			return
+		}
+		req.Model = strings.TrimSpace(req.Model)
+		if !req.CredentialsOnly && req.Model == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "model_required"})
+			return
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ai_configuration_unavailable"})
@@ -135,6 +150,8 @@ func SaveAISettings(c *gin.Context) {
 	}
 
 	providerKey := ai.ProviderAPIKeySettingKey(req.Provider)
+	providerBaseURLKey := ai.ProviderBaseURLSettingKey(req.Provider)
+	baseURL := strings.TrimSpace(req.BaseURL)
 	apiKeyChanged := !isMaskedSecret(req.APIKey)
 	var encrypted []byte
 	if apiKeyChanged {
@@ -146,12 +163,12 @@ func SaveAISettings(c *gin.Context) {
 	}
 
 	var oldProvider, oldModel string
-	missingKey := false
+	missingKey, nineRouterURLChanged := false, false
 	err = db.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		var existing []models.AppSetting
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("tenant_id = ? AND setting_key IN ?", tenantID,
-				[]string{"ai_provider", "ai_model", "ai_base_url", providerKey, "ai_api_key"}).
+				[]string{"ai_provider", "ai_model", "ai_base_url", providerKey, providerBaseURLKey, "ai_api_key"}).
 			Find(&existing).Error; err != nil {
 			return err
 		}
@@ -159,7 +176,7 @@ func SaveAISettings(c *gin.Context) {
 		oldModel = getSettingValue(existing, "ai_model", "")
 		hasAPIKey := apiKeyChanged
 		for _, row := range existing {
-			legacyForProvider := row.SettingKey == "ai_api_key" && oldProvider == req.Provider && req.Provider != "openrouter"
+			legacyForProvider := row.SettingKey == "ai_api_key" && oldProvider == req.Provider && len(ai.ProviderAPIKeySettingKeys(req.Provider)) > 1
 			if (row.SettingKey == providerKey || legacyForProvider) && (len(row.ValueEncrypted) > 0 || row.ValuePlain != "") {
 				hasAPIKey = true
 				break
@@ -169,6 +186,10 @@ func SaveAISettings(c *gin.Context) {
 			missingKey = true
 			return gorm.ErrRecordNotFound
 		}
+		if req.Provider == "9router" && !apiKeyChanged && !sameNineRouterBaseURL(baseURL, getSettingValue(existing, providerBaseURLKey, "")) {
+			nineRouterURLChanged = true
+			return gorm.ErrInvalidData
+		}
 		rows := []models.AppSetting{}
 		put := func(key, value string, secret []byte) {
 			rows = append(rows, models.AppSetting{ID: pkg.NewUUID(), TenantID: tenantID, SettingKey: key, ValuePlain: value, ValueEncrypted: secret})
@@ -176,8 +197,7 @@ func SaveAISettings(c *gin.Context) {
 		if apiKeyChanged {
 			put(providerKey, "", encrypted)
 		}
-		baseURL := strings.TrimSpace(req.BaseURL)
-		put(ai.ProviderBaseURLSettingKey(req.Provider), baseURL, nil)
+		put(providerBaseURLKey, baseURL, nil)
 		if !req.CredentialsOnly || oldProvider == req.Provider {
 			put("ai_base_url", baseURL, nil)
 		}
@@ -191,7 +211,7 @@ func SaveAISettings(c *gin.Context) {
 					return err
 				}
 				for _, row := range existing {
-					if oldProvider != "openrouter" && row.SettingKey == "ai_api_key" && (len(row.ValueEncrypted) > 0 || row.ValuePlain != "") {
+					if len(ai.ProviderAPIKeySettingKeys(oldProvider)) > 1 && row.SettingKey == "ai_api_key" && (len(row.ValueEncrypted) > 0 || row.ValuePlain != "") {
 						priorKey := models.AppSetting{ID: pkg.NewUUID(), TenantID: tenantID, SettingKey: ai.ProviderAPIKeySettingKey(oldProvider),
 							ValuePlain: row.ValuePlain, ValueEncrypted: row.ValueEncrypted}
 						if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&priorKey).Error; err != nil {
@@ -222,6 +242,8 @@ func SaveAISettings(c *gin.Context) {
 	if err != nil {
 		if missingKey {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key_configured"})
+		} else if nineRouterURLChanged {
+			writeNineRouterURLChanged(c)
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "save_ai_settings_failed"})
 		}
@@ -242,6 +264,14 @@ func SaveAISettings(c *gin.Context) {
 			fmt.Sprintf("API key (provider %s) đã thay đổi", req.Provider), "", ip)
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "saved"})
+}
+
+func sameNineRouterBaseURL(first, second string) bool {
+	return strings.TrimRight(strings.TrimSpace(first), "/") == strings.TrimRight(strings.TrimSpace(second), "/")
+}
+
+func writeNineRouterURLChanged(c *gin.Context) {
+	c.JSON(http.StatusBadRequest, gin.H{"error": "9router_endpoint_changed", "details": "Nhập lại API key 9router khi thay đổi Base URL."})
 }
 
 // SaveAnalysisSettings saves batch mode and batch size settings
@@ -604,17 +634,27 @@ func TestAIKey(c *gin.Context) {
 		}
 		provider = req.Provider
 	}
-
 	var apiKey []byte
 	if req.APIKey != "" && !isMaskedSecret(req.APIKey) {
 		apiKey = []byte(req.APIKey)
 	} else {
-		// Get API key by provider (fallback to legacy ai_api_key)
-		keyNames := []string{ai.ProviderAPIKeySettingKey(provider)}
-		if provider == defaultProvider {
-			keyNames = ai.ProviderAPIKeySettingKeys(provider)
+		var setting *models.AppSetting
+		var err error
+		if provider == "9router" {
+			var savedURL string
+			setting, savedURL, err = loadNineRouterTestCredentials(c.Request.Context(), tenantID)
+			if err == nil && req.BaseURL != nil && !sameNineRouterBaseURL(*req.BaseURL, savedURL) {
+				writeNineRouterURLChanged(c)
+				return
+			}
+			req.BaseURL = &savedURL
+		} else {
+			keyNames := []string{ai.ProviderAPIKeySettingKey(provider)}
+			if provider == defaultProvider {
+				keyNames = ai.ProviderAPIKeySettingKeys(provider)
+			}
+			setting, err = getFirstSettingByKeys(tenantID, keyNames)
 		}
-		setting, err := getFirstSettingByKeys(tenantID, keyNames)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key_configured"})
 			return
@@ -655,7 +695,7 @@ func TestAIKey(c *gin.Context) {
 
 	providerClient, err := ai.NewProvider(provider, string(apiKey), model, baseURL, cfg.AIMaxTokens)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_provider"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_ai_configuration", "details": err.Error()})
 		return
 	}
 
@@ -668,6 +708,21 @@ func TestAIKey(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "provider": provider, "message": "API key works"})
+}
+
+func loadNineRouterTestCredentials(ctx context.Context, tenantID string) (*models.AppSetting, string, error) {
+	key := ai.ProviderAPIKeySettingKey("9router")
+	urlKey := ai.ProviderBaseURLSettingKey("9router")
+	var settings []models.AppSetting
+	if err := db.DB.WithContext(ctx).Where("tenant_id = ? AND setting_key IN ?", tenantID, []string{key, urlKey}).Find(&settings).Error; err != nil {
+		return nil, "", err
+	}
+	for _, setting := range settings {
+		if setting.SettingKey == key && (len(setting.ValueEncrypted) > 0 || setting.ValuePlain != "") {
+			return &setting, getSettingValue(settings, urlKey, ""), nil
+		}
+	}
+	return nil, "", gorm.ErrRecordNotFound
 }
 
 // SaveGeneralSettings saves general tenant settings

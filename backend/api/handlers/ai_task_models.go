@@ -61,8 +61,11 @@ func SaveAITaskModels(c *gin.Context) {
 
 	database := db.DB.WithContext(c.Request.Context())
 	var settingRows []models.AppSetting
-	if err := database.Where("tenant_id = ? AND setting_key IN ?", tenantID,
-		[]string{"ai_provider", "ai_api_key", "ai_api_key_claude", "ai_api_key_gemini", "ai_api_key_openai", "ai_api_key_openrouter"}).
+	keys := []string{"ai_provider", "ai_api_key"}
+	for _, provider := range ai.Providers {
+		keys = append(keys, ai.ProviderAPIKeySettingKey(provider))
+	}
+	if err := database.Where("tenant_id = ? AND setting_key IN ?", tenantID, keys).
 		Find(&settingRows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "load_ai_task_models_failed"})
 		return
@@ -76,7 +79,7 @@ func SaveAITaskModels(c *gin.Context) {
 		if task.Provider == "" {
 			continue
 		}
-		canUseLegacyKey := task.Provider == defaultProvider && task.Provider != "openrouter" && hasKey["ai_api_key"]
+		canUseLegacyKey := task.Provider == defaultProvider && len(ai.ProviderAPIKeySettingKeys(task.Provider)) > 1 && hasKey["ai_api_key"]
 		if !hasKey[ai.ProviderAPIKeySettingKey(task.Provider)] && !canUseLegacyKey {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key_configured", "task": task.Key, "provider": task.Provider,
 				"details": "Hãy lưu khóa API cho nhà cung cấp đã chọn trước khi lưu tác vụ."})
