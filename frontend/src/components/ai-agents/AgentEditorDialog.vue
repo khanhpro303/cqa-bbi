@@ -104,7 +104,7 @@
           <v-textarea
             v-model="draft.system_prompt"
             :placeholder="$t('ag_field_prompt_placeholder')"
-            :hint="$t('ag_field_prompt_hint')"
+            :hint="draft.runtime === 'native' ? `${$t('ag_field_prompt_native_required')} ${$t('ag_field_prompt_hint')}` : $t('ag_field_prompt_hint')"
             persistent-hint
             :error-messages="errors.system_prompt"
             :readonly="readonly"
@@ -213,6 +213,8 @@
                 min="0"
                 max="20"
                 :label="$t('ag_field_max_tool_calls')"
+                :hint="$t('ag_field_max_tool_calls_hint')"
+                persistent-hint
                 :error-messages="errors['options.max_tool_calls']"
                 :readonly="readonly"
               />
@@ -421,7 +423,15 @@ const runtimeItems = computed(() => {
   items.push({ title: t('ag_runtime_native'), value: 'native', props: { disabled: !props.runtimes.includes('native') } })
   return items
 })
-const providerItems = ['openai', 'claude', 'gemini', 'openrouter']
+// Same vendors as the AI task model picker in Settings; the backend
+// validates the pair, so a vendor it does not know is refused there.
+const providerItems = [
+  { title: 'OpenAI', value: 'openai' },
+  { title: 'Claude', value: 'claude' },
+  { title: 'Gemini', value: 'gemini' },
+  { title: 'OpenRouter', value: 'openrouter' },
+  { title: '9router', value: '9router' },
+]
 
 const revisionDiff = computed(() => selectedRevision.value
   ? diffLines(selectedRevision.value.system_prompt || '', draft.value.system_prompt || '')
@@ -537,6 +547,7 @@ function validate(): boolean {
   if (!a.name.trim()) e.name = t('ag_err_name')
   if (isNew.value && !AGENT_KEY_PATTERN.test(a.key.trim())) e.key = t('ag_err_key')
   if (a.runtime === 'langflow' && !FLOW_ID_PATTERN.test((a.langflow_flow_id || '').trim())) e.langflow_flow_id = t('ag_err_flow')
+  if (a.runtime === 'native' && !(a.system_prompt || '').trim()) e.system_prompt = t('ag_field_prompt_native_required')
   if (promptLength.value > MAX_PROMPT_CHARS) e.system_prompt = t('ag_err_prompt_long', { n: MAX_PROMPT_CHARS.toLocaleString('vi-VN') })
   const bad = unusableTools(props.catalog, a.tools, a.audience)
   if (bad.length) e.tools = t('ag_err_tools', { tools: bad.join(', ') })

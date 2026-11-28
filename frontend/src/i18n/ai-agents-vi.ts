@@ -121,6 +121,8 @@ export default {
   ag_field_model: 'Model',
   ag_field_max_tool_calls: 'Số lần gọi công cụ tối đa',
   ag_field_temperature: 'Temperature',
+  ag_field_max_tool_calls_hint: '0: mặc định (8 lần).',
+  ag_field_prompt_native_required: 'Runtime native cần có system prompt.',
   ag_field_tags: 'Nhãn tài liệu',
   ag_field_tags_hint: 'Giới hạn tìm tài liệu theo nhãn, để trống là mọi tài liệu tầng đó được đọc. Chưa có hiệu lực: tài liệu chatbot chưa gắn nhãn được.',
   ag_field_tags_placeholder: 'Gõ nhãn rồi Enter',

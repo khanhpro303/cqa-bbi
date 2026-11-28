@@ -167,6 +167,24 @@ describe('Agent editor', () => {
     expect(wrapper.emitted('saved')).toBeUndefined()
   })
 
+  it('requires a system prompt for the native runtime', async () => {
+    const wrapper = shallowMount(AgentEditorDialog, { props: { ...base, runtimes: ['langflow', 'native'], modelValue: true, agentId: '' }, ...stubs })
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.draft.name = 'Bot native'
+    vm.draft.key = 'bot-native'
+    vm.draft.runtime = 'native'
+    vm.draft.provider = '9router'
+    vm.draft.model = 'cx/gpt-5'
+    await vm.save()
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(vm.errors.system_prompt).toBe('ag_field_prompt_native_required')
+    vm.draft.system_prompt = 'Trả lời ngắn.'
+    mocks.post.mockResolvedValue({ data: { id: 'n1', name: 'Bot native' } })
+    await vm.save()
+    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/ai-agents', expect.objectContaining({ runtime: 'native', provider: '9router', model: 'cx/gpt-5' }))
+  })
+
   it('refuses bad keys and flow ids before calling the API', async () => {
     const wrapper = shallowMount(AgentEditorDialog, { props: { ...base, modelValue: true, agentId: '' }, ...stubs })
     await flushPromises()

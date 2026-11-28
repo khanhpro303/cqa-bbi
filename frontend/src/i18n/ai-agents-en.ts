@@ -121,6 +121,8 @@ export default {
   ag_field_model: 'Model',
   ag_field_max_tool_calls: 'Max tool calls',
   ag_field_temperature: 'Temperature',
+  ag_field_max_tool_calls_hint: '0: default (8 calls).',
+  ag_field_prompt_native_required: 'The native runtime needs a system prompt.',
   ag_field_tags: 'Document tags',
   ag_field_tags_hint: 'Limits document search to these tags; empty reads every document of the tier. Not in effect yet: chatbot documents cannot be tagged.',
   ag_field_tags_placeholder: 'Type a tag and press Enter',
