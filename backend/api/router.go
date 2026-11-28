@@ -244,6 +244,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.GET("/facebook/connect/:sessionId", middleware.RequirePermission("channels", "w"), facebookPageOAuth.Pages)
 			tenant.POST("/facebook/connect/:sessionId/select", middleware.RequirePermission("channels", "w"), facebookPageOAuth.Select)
 			tenant.POST("/channels", middleware.RequirePermission("channels", "w"), handlers.CreateChannel)
+			tenant.GET("/channels/session-defaults", middleware.RequirePermission("channels", "r"), handlers.GetChannelSessionDefaults(cfg))
 			tenant.GET("/channels/:channelId", middleware.RequirePermission("channels", "r"), handlers.GetChannel)
 			tenant.PUT("/channels/:channelId", middleware.RequirePermission("channels", "w"), handlers.UpdateChannel)
 			tenant.DELETE("/channels/:channelId", middleware.RequirePermission("channels", "d"), handlers.DeleteChannel)

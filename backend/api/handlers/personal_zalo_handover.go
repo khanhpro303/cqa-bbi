@@ -166,6 +166,7 @@ func validatePersonalZaloChatbotMetadata(ctx context.Context, tenantID string, m
 	textLimits := map[string]int{
 		"session_keyword": 255, "session_end_keyword": 255, "group_bot_names": 255,
 		"session_welcome_message": personalZaloTextLimit, "session_goodbye_message": personalZaloTextLimit,
+		"session_timeout_message": personalZaloTextLimit,
 		"handover_alert_group_id": 36, "personal_zalo_handover_staff_id": 36,
 	}
 	for key, limit := range textLimits {
@@ -182,7 +183,7 @@ func validatePersonalZaloChatbotMetadata(ctx context.Context, tenantID string, m
 			return errors.New("session_timeout_minutes must be a whole number from 0 to 1440")
 		}
 	}
-	for _, key := range []string{"personal_zalo_group_reply_enabled", "group_assistant_mode", "group_staff_call_only", customercases.MetaEnabled} {
+	for _, key := range []string{"personal_zalo_group_reply_enabled", "group_assistant_mode", "group_staff_call_only", "session_timeout_notice", customercases.MetaEnabled} {
 		if value, exists := metadata[key]; exists {
 			if _, ok := value.(bool); !ok {
 				return fmt.Errorf("%s must be true or false", key)

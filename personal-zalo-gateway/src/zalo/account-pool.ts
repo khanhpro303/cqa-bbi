@@ -86,6 +86,23 @@ interface AccountChatbotGuards {
   echoShield: SelfEchoShield;
   directEchoIds: SelfEchoShield;
   floodDetector: FloodDetector;
+  // Session-close notices sent outside a turn, matched by text in 1:1 chats.
+  noticeEchoes: SelfEchoShield;
+  // When staff last typed in a chat by hand, by chatbotThreadKey(type, id).
+  manualRepliesAt: Map<string, number>;
+}
+
+export type SessionNoticeOutcome = 'sent' | 'skipped_busy' | 'skipped_manual' | 'unavailable';
+
+const manualReplyMemoryMs = 2 * 24 * 60 * 60_000;
+
+function noteManualActivity(guards: AccountChatbotGuards, threadKey: string, now = Date.now()): void {
+  if (guards.manualRepliesAt.size > 5_000) {
+    for (const [key, at] of guards.manualRepliesAt) {
+      if (now - at > manualReplyMemoryMs) guards.manualRepliesAt.delete(key);
+    }
+  }
+  guards.manualRepliesAt.set(threadKey, now);
 }
 
 type ChatbotOutboundMessage = string | {
@@ -340,6 +357,8 @@ export class ZaloAccountPool {
         echoShield: new SelfEchoShield(),
         directEchoIds: new SelfEchoShield(),
         floodDetector: new FloodDetector(),
+        noticeEchoes: new SelfEchoShield(),
+        manualRepliesAt: new Map(),
       };
       this.chatbotGuards.set(accountId, guards);
       instance.chatbot = { threads: new Map(), tasks: new Set(), waiters: new Map(), guards };
@@ -391,6 +410,7 @@ export class ZaloAccountPool {
     const threadKey = chatbotThreadKey(threadType, threadId);
     if (threadType === 'group') {
       if (chatbot.guards.echoShield.isEcho(threadKey, message.text)) return;
+      noteManualActivity(chatbot.guards, threadKey);
       for (const active of chatbot.threads.values()) {
         if (active.threadType === 'group' && active.threadId === threadId) noteManualReply(active);
       }
@@ -407,6 +427,9 @@ export class ZaloAccountPool {
       pending.candidates.add(message.id);
       return;
     }
+    // A session-close notice can echo before sendMessage returns its id.
+    if (!active && message.contentType === 'text' && chatbot.guards.noticeEchoes.isEcho(threadKey, message.text)) return;
+    noteManualActivity(chatbot.guards, threadKey);
     if (active) noteManualReply(active);
     await this.store.noteManualChatbotReply(accountId, threadType, threadId);
   }
@@ -609,6 +632,60 @@ export class ZaloAccountPool {
     if (outcome === 'sent' && 'deliveryReceipt' in reply && reply.deliveryReceipt) {
       await acknowledgePersonalZaloChatbotDelivery(account!, message, reply.deliveryReceipt);
     }
+  }
+
+  /**
+   * Posts the backend's session-close notice in a chat, outside any turn. It
+   * is skipped while a turn for the chat is running or queued (the person is
+   * talking again) and when staff typed in the chat by hand after idleSince.
+   * Uses the same rate limiter and echo guards as chatbot replies.
+   */
+  async sendSessionNotice(accountId: string, input: {
+    threadType: IncomingGatewayMessage['threadType'];
+    threadId: string;
+    text: string;
+    idleSince?: number;
+  }): Promise<SessionNoticeOutcome> {
+    const instance = this.instances.get(accountId);
+    const chatbot = instance?.chatbot;
+    if (!instance?.api || !chatbot || this.shuttingDown || !this.canSendChatbotReply(accountId, instance)) return 'unavailable';
+    const ownId = chatbot.guards.ownId;
+    if (!this.chatbotAccountMatches(await this.store.getAccount(accountId), ownId) || input.threadId === ownId) return 'unavailable';
+    const threadKey = chatbotThreadKey(input.threadType, input.threadId);
+    const busy = async () => {
+      if ([...chatbot.threads.values()].some((active) =>
+        active.threadType === input.threadType && active.threadId === input.threadId)) return true;
+      return (await this.store.listChatbotTurns(accountId)).some(([, turn]) =>
+        turn.message.threadType === input.threadType && turn.message.threadId === input.threadId &&
+        (isQueuedChatbotTurn(turn) || ['captured', 'processing', 'sending'].includes(turn.status)));
+    };
+    const manual = () => input.idleSince !== undefined &&
+      (chatbot.guards.manualRepliesAt.get(threadKey) ?? 0) >= input.idleSince;
+    if (await busy()) return 'skipped_busy';
+    if (manual()) return 'skipped_manual';
+
+    let outcome: SessionNoticeOutcome = 'unavailable';
+    await chatbot.guards.rateLimiter.schedule(async (recordAttempt) => {
+      // The limiter may have waited: check again right before sending.
+      if (!this.canSendChatbotReply(accountId, instance)) return;
+      if (await busy()) {
+        outcome = 'skipped_busy';
+        return;
+      }
+      if (manual()) {
+        outcome = 'skipped_manual';
+        return;
+      }
+      chatbot.guards.echoShield.recordSent(threadKey, input.text);
+      chatbot.guards.noticeEchoes.recordSent(threadKey, input.text);
+      recordAttempt();
+      const result: ZaloSendReceipt | undefined =
+        await instance.api.sendMessage(input.text, input.threadId, input.threadType === 'group' ? 1 : 0);
+      const id = String(result?.message?.msgId ?? '');
+      if (input.threadType === 'user' && outboundMessageId.test(id)) chatbot.guards.directEchoIds.recordSent(threadKey, id);
+      outcome = 'sent';
+    });
+    return outcome;
   }
 
   private chatbotAccountMatches(account: GatewayAccountRecord | null, ownId: string): account is GatewayAccountRecord {

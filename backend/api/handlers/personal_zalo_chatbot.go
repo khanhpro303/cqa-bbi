@@ -11,6 +11,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hibiken/asynq"
 	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
@@ -55,6 +56,13 @@ type personalZaloChatbotRequest struct {
 func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 	ai := newPersonalZaloAI(cfg)
 	activationKeys := append([]string{"chatbot_active"}, erpActivationKeys...)
+	// Schedules the idle-timeout message (personal_zalo_session_timeout.go).
+	var timeoutQueue *asynq.Client
+	if cfg.RedisURL != "" {
+		if opt, err := asynq.ParseRedisURI(cfg.RedisURL); err == nil {
+			timeoutQueue = asynq.NewClient(opt)
+		}
+	}
 
 	return func(c *gin.Context) {
 		var req personalZaloChatbotRequest
@@ -211,6 +219,9 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			if err != nil {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_session_unavailable"})
 				return
+			}
+			if personalZaloTimeoutNoticeWanted(sessionConfig, req, turn, groupTurn.Staff) {
+				schedulePersonalZaloSessionTimeout(timeoutQueue, sessionConfig, req, turn)
 			}
 		}
 		if directSessionRequired && !turn.RunFlow {

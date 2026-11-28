@@ -174,6 +174,9 @@ type ChannelMetadata struct {
 	SessionGoodbyeMessage string `json:"session_goodbye_message"`
 	SessionTimeout        int    `json:"session_timeout_minutes"`
 	SessionTimeoutMessage string `json:"session_timeout_message"`
+	// SessionTimeoutNotice turns the idle-timeout message on or off. Unset
+	// means on for Zalo OA (the long-standing behaviour).
+	SessionTimeoutNotice *bool `json:"session_timeout_notice"`
 	// GroupAssistant makes the bot a quiet member of customer groups: no
 	// trigger word, it reads the whole group and answers only when needed.
 	// See group_assistant.go.
@@ -924,7 +927,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 						ZaloUserID:     payload.Sender.ID,
 						ZaloGroupID:    matchedGroup.ZaloGroupID,
 						TimeoutMessage: meta.SessionTimeoutMessage,
-						Quiet:          groupAssistant,
+						Quiet:          groupAssistant || !oaTimeoutNoticeOn(meta),
 					})
 					if err == nil {
 						_, _ = asynqClient.Enqueue(timeoutTask, asynq.ProcessIn(time.Duration(meta.SessionTimeout)*time.Minute))
@@ -1051,7 +1054,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 				ZaloUserID:     payload.Sender.ID,
 				ZaloGroupID:    matchedGroup.ZaloGroupID,
 				TimeoutMessage: meta.SessionTimeoutMessage,
-				Quiet:          groupAssistant,
+				Quiet:          groupAssistant || !oaTimeoutNoticeOn(meta),
 			})
 			if err == nil {
 				_, _ = asynqClient.Enqueue(timeoutTask, asynq.ProcessIn(time.Duration(meta.SessionTimeout)*time.Minute))
@@ -2517,6 +2520,12 @@ func teardownSession(ctx context.Context, sessionKey, zaloGroupID string) error 
 	return err
 }
 
+// oaTimeoutNoticeOn reports whether a Zalo OA channel sends a message when a
+// session closes after the idle timeout. Unset means on.
+func oaTimeoutNoticeOn(meta ChannelMetadata) bool {
+	return meta.SessionTimeoutNotice == nil || *meta.SessionTimeoutNotice
+}
+
 // HandleSessionTimeoutTask processes the session timeout delayed task
 func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
 	return func(ctx context.Context, t *asynq.Task) error {
@@ -2586,12 +2595,23 @@ func HandleSessionTimeoutTask(cfg *config.Config) asynq.HandlerFunc {
 			return nil
 		}
 
-		adapter := zalotoken.NewAdapter(ch.ID, zaloCreds, cfg.EncryptionKey)
-
+		// Read the channel's current settings, so turning the message off or
+		// editing it applies to sessions that are already open.
+		// The payload's text is only a fallback for unreadable metadata.
 		timeoutMsg := payload.TimeoutMessage
+		var meta ChannelMetadata
+		if ch.Metadata == "" || json.Unmarshal([]byte(ch.Metadata), &meta) == nil {
+			if !oaTimeoutNoticeOn(meta) {
+				log.Printf("[worker] closed session %s after idle timeout; timeout message is off", payload.SessionID)
+				return nil
+			}
+			timeoutMsg = strings.TrimSpace(meta.SessionTimeoutMessage)
+		}
 		if timeoutMsg == "" {
 			timeoutMsg = cfg.ChatbotSessionTimeoutMessage
 		}
+
+		adapter := zalotoken.NewAdapter(ch.ID, zaloCreds, cfg.EncryptionKey)
 
 		var sendErr error
 		if payload.ZaloGroupID != "" {

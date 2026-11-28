@@ -33,16 +33,38 @@ type personalZaloSessionConfig struct {
 	SessionWelcomeMessage string `json:"session_welcome_message"`
 	SessionGoodbyeMessage string `json:"session_goodbye_message"`
 	SessionTimeoutMinutes int    `json:"session_timeout_minutes"`
-	Managed               bool   `json:"-"`
-	GroupBotNames         string `json:"group_bot_names"`
-	GroupAssistantMode    bool   `json:"group_assistant_mode"`
-	GroupStaffCallOnly    bool   `json:"group_staff_call_only"`
+	SessionTimeoutMessage string `json:"session_timeout_message"`
+	// SessionTimeoutNotice sends SessionTimeoutMessage when a session closes
+	// after the idle timeout. Unset means off on personal Zalo.
+	SessionTimeoutNotice *bool  `json:"session_timeout_notice"`
+	Managed              bool   `json:"-"`
+	GroupBotNames        string `json:"group_bot_names"`
+	GroupAssistantMode   bool   `json:"group_assistant_mode"`
+	GroupStaffCallOnly   bool   `json:"group_staff_call_only"`
 }
 
 type personalZaloTurn struct {
 	FlowScope string
 	Reply     string
 	RunFlow   bool
+	// SessionKey and SessionID name the session this turn kept open, if any.
+	SessionKey string
+	SessionID  string
+}
+
+func (session personalZaloSessionConfig) timeoutNoticeOn() bool {
+	return session.SessionTimeoutNotice != nil && *session.SessionTimeoutNotice
+}
+
+// sessionTTL is how long an idle session lives. With the timeout message on
+// it lives one minute past the timeout, so the timeout task can still find it
+// and tell an idle close from an end keyword or a handover (same as Zalo OA).
+func (session personalZaloSessionConfig) sessionTTL() time.Duration {
+	ttl := time.Duration(session.SessionTimeoutMinutes) * time.Minute
+	if session.timeoutNoticeOn() {
+		ttl += time.Minute
+	}
+	return ttl
 }
 
 func normalizePersonalZaloChatbotRequest(req *personalZaloChatbotRequest) bool {
@@ -75,8 +97,10 @@ func parsePersonalZaloSessionConfig(channel models.Channel, cfg *config.Config) 
 			return session, err
 		}
 	}
+	// A timeout message needs a session to time out, so it turns sessions on.
 	session.Managed = strings.Trim(session.SessionKeyword, "; \t\n\r") != "" ||
-		strings.Trim(session.SessionEndKeyword, "; \t\n\r") != "" || session.SessionTimeoutMinutes > 0
+		strings.Trim(session.SessionEndKeyword, "; \t\n\r") != "" || session.SessionTimeoutMinutes > 0 ||
+		session.timeoutNoticeOn()
 	if strings.TrimSpace(session.SessionEndKeyword) == "" {
 		session.SessionEndKeyword = cfg.ChatbotSessionEndKeyword
 	}
@@ -85,6 +109,9 @@ func parsePersonalZaloSessionConfig(channel models.Channel, cfg *config.Config) 
 	}
 	if strings.TrimSpace(session.SessionGoodbyeMessage) == "" {
 		session.SessionGoodbyeMessage = cfg.ChatbotSessionGoodbyeMessage
+	}
+	if strings.TrimSpace(session.SessionTimeoutMessage) == "" {
+		session.SessionTimeoutMessage = cfg.ChatbotSessionTimeoutMessage
 	}
 	if session.SessionTimeoutMinutes <= 0 {
 		session.SessionTimeoutMinutes = cfg.ChatbotSessionTimeout
@@ -221,7 +248,7 @@ func planPersonalZaloTurn(ctx context.Context, session personalZaloSessionConfig
 	}
 
 	key := personalZaloSessionKey(req)
-	ttl := time.Duration(session.SessionTimeoutMinutes) * time.Minute
+	ttl := session.sessionTTL()
 	if personalZaloMatchesKeyword(req.Text, session.SessionEndKeyword) {
 		_, err := db.RedisClient.GetDel(ctx, key).Result()
 		if errors.Is(err, redis.Nil) {
@@ -237,7 +264,8 @@ func planPersonalZaloTurn(ctx context.Context, session personalZaloSessionConfig
 		if err != nil {
 			return personalZaloTurn{}, err
 		}
-		return personalZaloTurn{FlowScope: personalZaloSessionFlowScope(req, sessionID), Reply: session.SessionWelcomeMessage}, nil
+		return personalZaloTurn{FlowScope: personalZaloSessionFlowScope(req, sessionID), Reply: session.SessionWelcomeMessage,
+			SessionKey: key, SessionID: sessionID}, nil
 	}
 	active, err := db.RedisClient.GetEx(ctx, key, ttl).Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
@@ -254,9 +282,9 @@ func planPersonalZaloTurn(ctx context.Context, session personalZaloSessionConfig
 	}
 	flowScope := personalZaloSessionFlowScope(req, active)
 	if group && req.BotMentioned && req.Text == "" {
-		return personalZaloTurn{FlowScope: flowScope, Reply: session.SessionWelcomeMessage}, nil
+		return personalZaloTurn{FlowScope: flowScope, Reply: session.SessionWelcomeMessage, SessionKey: key, SessionID: active}, nil
 	}
-	return personalZaloTurn{FlowScope: flowScope, RunFlow: true}, nil
+	return personalZaloTurn{FlowScope: flowScope, RunFlow: true, SessionKey: key, SessionID: active}, nil
 }
 
 func closePersonalZaloSession(ctx context.Context, req personalZaloChatbotRequest) {

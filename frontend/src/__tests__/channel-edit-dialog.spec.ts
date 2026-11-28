@@ -62,9 +62,9 @@ const stubs = {
   VBtn: { template: '<button><slot /></button>' },
   VBtnToggle: { template: '<div><slot /></div>' },
   VTextField: {
-    props: ['modelValue', 'label', 'type'],
+    props: ['modelValue', 'label', 'type', 'placeholder'],
     emits: ['update:modelValue'],
-    template: '<input :aria-label="label" :value="modelValue" :type="type || \'text\'" @input="$emit(\'update:modelValue\', $event.target.value)">',
+    template: '<input :aria-label="label" :value="modelValue" :placeholder="placeholder" :type="type || \'text\'" @input="$emit(\'update:modelValue\', $event.target.value)">',
   },
   VSelect: {
     props: ['modelValue', 'label', 'items'],
@@ -221,6 +221,64 @@ it('shows the dedicated complaint settings tab for a Zalo OA channel', async () 
   await tabs.find(tab => tab.text() === en.complaint_settings_tab)!.trigger('click')
   await flushPromises()
   expect(dialog.get('[data-testid="complaint-cases"]').attributes('aria-label')).toBe(en.complaint_cases_switch)
+})
+
+describe('session timeout message', () => {
+  const defaults = {
+    session_keyword: 'chào bull', session_end_keyword: 'tạm biệt', session_welcome_message: 'Chào bạn',
+    session_goodbye_message: 'Phiên hỗ trợ đã kết thúc.', session_timeout_minutes: 30, session_timeout_message: 'Nếu bạn không cần mình hỗ trợ gì thêm',
+  }
+  beforeEach(() => {
+    const get = api.get.getMockImplementation()!
+    api.get.mockImplementation((url: string) => url === tenant + '/channels/session-defaults' ? Promise.resolve({ data: defaults }) : get(url))
+  })
+
+  async function openSessionTab() {
+    const { wrapper } = await mountPage(true)
+    await wrapper.get(editButton).trigger('click')
+    await flushPromises()
+    const dialog = wrapper.get('[role="dialog"]')
+    await dialog.findAll('button[role="tab"]').find(tab => tab.text() === en.chatbot_session)!.trigger('click')
+    return dialog
+  }
+  const save = async (dialog: ReturnType<Awaited<ReturnType<typeof mountPage>>['wrapper']['get']>) => {
+    await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
+    await flushPromises()
+  }
+
+  it('is on by default for Zalo OA, shows the default text, and saves an edited message', async () => {
+    storedChannel = { ...personal, channel_type: 'zalo_oa', name: 'Zalo OA', metadata: '{}' }
+    const dialog = await openSessionTab()
+    expect(dialog.get<HTMLInputElement>('[data-testid="session-timeout-notice"]').element.checked).toBe(true)
+    const message = dialog.get<HTMLInputElement>(field(en.session_timeout_message))
+    expect(message.element.value).toBe('')
+    expect(message.attributes('placeholder')).toBe(defaults.session_timeout_message)
+    expect(dialog.get(field(en.session_goodbye)).attributes('placeholder')).toBe(defaults.session_goodbye_message)
+    await message.setValue('Em xin phép đóng phiên ạ')
+    await save(dialog)
+    expect(JSON.parse(api.put.mock.calls[0]![1].metadata)).toEqual({ session_timeout_message: 'Em xin phép đóng phiên ạ' })
+  })
+
+  it('turns the OA message off without touching other settings', async () => {
+    storedChannel = { ...personal, channel_type: 'zalo_oa', name: 'Zalo OA', metadata: '{}' }
+    const dialog = await openSessionTab()
+    await dialog.get('[data-testid="session-timeout-notice"]').setValue(false)
+    expect(dialog.find(field(en.session_timeout_message)).exists()).toBe(false)
+    await save(dialog)
+    expect(JSON.parse(api.put.mock.calls[0]![1].metadata)).toEqual({ session_timeout_notice: false })
+  })
+
+  it('is off by default for personal Zalo and hides misleading defaults', async () => {
+    const dialog = await openSessionTab()
+    const toggle = dialog.get<HTMLInputElement>('[data-testid="session-timeout-notice"]')
+    expect(toggle.element.checked).toBe(false)
+    expect(dialog.find(field(en.session_timeout_message)).exists()).toBe(false)
+    expect(dialog.get(field(en.session_keyword)).attributes('placeholder')).toBeUndefined()
+    expect(dialog.get(field(en.session_welcome)).attributes('placeholder')).toBeUndefined()
+    await toggle.setValue(true)
+    await save(dialog)
+    expect(JSON.parse(api.put.mock.calls[0]![1].metadata)).toEqual({ session_timeout_notice: true })
+  })
 })
 
 it('blocks saving an incomplete personal Zalo complaint fallback mapping', async () => {

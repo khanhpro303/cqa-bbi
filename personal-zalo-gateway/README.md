@@ -25,6 +25,7 @@ Các route `/api/v1/accounts` yêu cầu header `Authorization: Bearer <token>`.
 - `POST /api/v1/accounts/:accountId/login/qr`
 - `POST /api/v1/accounts/:accountId/reconnect`
 - `POST /api/v1/accounts/:accountId/sync`
+- `POST /api/v1/accounts/:accountId/chatbot/session-notice` gửi tin "tự đóng phiên" mà CQA backend yêu cầu khi một phiên chatbot hết thời gian chờ. Body: `{ "threadType": "user" | "group", "threadId": "...", "text": "...", "idleSince": "<ISO>" }`. Gateway trả `sent`, `skipped_busy` (khách đang nhắn lại hoặc còn lượt đang xử lý) hoặc `skipped_manual` (nhân viên đã trả lời tay sau `idleSince`); tài khoản chưa kết nối trả 409. Tin đi qua cùng bộ giới hạn tốc độ và chống echo với tin trả lời chatbot.
 
 ## Account payload
 
