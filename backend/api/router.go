@@ -420,6 +420,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.GET("/ai-agents/:agentId", middleware.RequirePermission("settings", "r"), handlers.GetAIAgent)
 			tenant.PUT("/ai-agents/:agentId", middleware.RequirePermission("settings", "w"), handlers.UpdateAIAgent)
 			tenant.DELETE("/ai-agents/:agentId", middleware.RequirePermission("settings", "w"), handlers.DeleteAIAgent)
+			tenant.POST("/ai-agents/test", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), handlers.NewAIAgentTestConsole(cfg))
 			tenant.GET("/ai-agents/:agentId/revisions", middleware.RequirePermission("settings", "r"), handlers.ListAIAgentRevisions)
 			tenant.GET("/ai-teams", middleware.RequirePermission("settings", "r"), handlers.ListAITeams)
 			tenant.POST("/ai-teams", middleware.RequirePermission("settings", "w"), handlers.CreateAITeam)

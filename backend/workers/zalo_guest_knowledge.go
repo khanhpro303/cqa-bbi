@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/vietbui/chat-quality-agent/agents"
@@ -32,6 +33,16 @@ func handleZaloOAGuestKnowledge(
 	}
 	if plan.Mode == agents.ModeSilent {
 		return nil
+	}
+	if plan.NeedsRouting() {
+		// Same coordinator as the main turn: the guest's question goes to
+		// the customer agent whose knowledge it is.
+		chatKey := engine.BuildSessionKey(channel.ID, payload.Sender.ID, "")
+		plan.Stick(ctx, chatKey)
+		from := plan.Selection.Agent.Key
+		reason := plan.Route(ctx, channel.TenantID, agentRouterAsk(cfg, channel.TenantID), agents.RouterInput(text))
+		log.Printf("[agents] OA guest channel %s: coordinator %s -> %s (%s) %s", channel.ID, from, plan.Selection.Agent.Key, plan.Selection.Reason, reason)
+		plan.Remember(ctx, chatKey, time.Duration(cfg.ChatbotSessionTimeout)*time.Minute)
 	}
 	var permission, prompt string
 	if plan.Mode == agents.ModeAgent {
@@ -74,7 +85,7 @@ func handleZaloOAGuestKnowledge(
 	}
 
 	if reply != engine.GuestKnowledgeVerificationReply || result.HasUsage {
-		logChatbotAIUsage(channel.TenantID, channel.ID, payload.Sender.ID, "", "public", "", result, text, result.Text)
+		logChatbotAIUsage(channel.TenantID, channel.ID, payload.Sender.ID, "", "public", "", plan.AgentKey(), result, text, result.Text)
 	}
 	return nil
 }
