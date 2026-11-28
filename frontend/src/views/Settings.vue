@@ -37,13 +37,54 @@
           />
 
           <v-text-field
+            v-model="aiSettings.apiKey"
+            :label="$t(isNineRouter ? 'nine_router_api_key' : 'api_key')"
+            :type="showKey ? 'text' : 'password'"
+            :append-inner-icon="showKey ? 'mdi-eye-off' : 'mdi-eye'"
+            @click:append-inner="showKey = !showKey"
+            class="mb-3"
+          />
+
+          <v-switch
+            v-if="!isNineRouter"
+            v-model="useCustomBaseUrl"
+            :label="$t('custom_api_url')"
+            color="primary"
+            density="compact"
+            hide-details
+            class="mt-1 mb-2"
+          />
+          <div v-if="!hasCustomBaseUrl" class="text-caption text-grey mb-2">{{ $t('custom_api_url_hint') }}</div>
+
+          <v-text-field
+            v-if="hasCustomBaseUrl"
+            v-model="aiSettings.baseUrl"
+            label="Base URL"
+            :placeholder="baseURLPlaceholder"
+            :hint="isNineRouter ? $t('nine_router_url_hint') : 'Để trống để dùng mặc định'"
+            persistent-hint
+            clearable
+            :rules="[
+              v => !!v || (isNineRouter ? 'Vui lòng nhập URL 9router' : 'Vui lòng nhập URL hoặc tắt tùy chỉnh'),
+              v => !v || v.startsWith('http://') || v.startsWith('https://') || 'URL phải bắt đầu bằng http:// hoặc https://',
+              v => !isNineRouter || !v || /\/v1\/*$/.test(v.trim()) || 'URL 9router phải kết thúc bằng /v1',
+            ]"
+            class="mb-3"
+          />
+
+          <v-combobox
             v-if="isNineRouter"
-            v-model="aiSettings.model"
+            :model-value="aiSettings.model"
             :label="$t('ai_model')"
-            placeholder="cx/gpt-5.6-luna"
-            hint="Nhập model ID từ 9router, gồm cả tiền tố nhà cung cấp."
+            :items="nineRouterDraftMatchesSaved ? nineRouterModelOptions : []"
+            :loading="nineRouterDraftMatchesSaved && nineRouterCatalogStatus === 'loading'"
+            :hint="$t(nineRouterDraftMatchesSaved ? 'nine_router_model_hint' : 'nine_router_save_connection_hint')"
+            :return-object="false"
+            clearable
             persistent-hint
             class="mb-3"
+            data-testid="nine-router-default-model"
+            @update:model-value="aiSettings.model = $event ?? ''"
           />
           <v-select
             v-else-if="aiSettings.provider !== 'openai' && aiSettings.provider !== 'openrouter'"
@@ -80,46 +121,24 @@
             @click="loadOpenRouterModels(true)"
           >{{ $t('openrouter_load_models') }}</v-btn>
 
-          <v-text-field
-            v-model="aiSettings.apiKey"
-            :label="$t('api_key')"
-            :type="showKey ? 'text' : 'password'"
-            :append-inner-icon="showKey ? 'mdi-eye-off' : 'mdi-eye'"
-            @click:append-inner="showKey = !showKey"
-            class="mb-3"
-          />
-
-          <v-switch
-            v-if="!isNineRouter"
-            v-model="useCustomBaseUrl"
-            :label="$t('custom_api_url')"
-            color="primary"
-            density="compact"
-            hide-details
-            class="mt-1 mb-2"
-          />
-          <div v-if="!hasCustomBaseUrl" class="text-caption text-grey mb-2">{{ $t('custom_api_url_hint') }}</div>
-
-          <v-text-field
-            v-if="hasCustomBaseUrl"
-            v-model="aiSettings.baseUrl"
-            label="Base URL"
-            :placeholder="baseURLPlaceholder"
-            :hint="isNineRouter ? 'Nhập endpoint 9router mà máy chủ CQA truy cập được. URL kết thúc bằng /v1.' : 'Để trống để dùng mặc định'"
-            persistent-hint
-            clearable
-            :rules="[
-              v => !!v || (isNineRouter ? 'Vui lòng nhập URL 9router' : 'Vui lòng nhập URL hoặc tắt tùy chỉnh'),
-              v => !v || v.startsWith('http://') || v.startsWith('https://') || 'URL phải bắt đầu bằng http:// hoặc https://',
-              v => !isNineRouter || !v || /\/v1\/*$/.test(v.trim()) || 'URL 9router phải kết thúc bằng /v1',
-            ]"
-            class="mb-3"
-          />
-
           <div class="d-flex flex-wrap ga-2">
             <v-btn color="primary" :loading="savingAI" :disabled="savingAICredentials" @click="saveAI(false)">Lưu cấu hình AI chung</v-btn>
-            <v-btn variant="tonal" :loading="savingAICredentials" :disabled="savingAI" @click="saveAI(true)">Lưu API key và Base URL</v-btn>
-            <v-btn variant="outlined" :loading="testingKey" @click="testKey">{{ $t('test_api_key') }}</v-btn>
+            <v-btn variant="tonal" :loading="savingAICredentials" :disabled="savingAI" @click="saveAI(true)">{{ $t(isNineRouter ? 'nine_router_save_connection' : 'save_ai_provider_credentials') }}</v-btn>
+            <v-btn variant="outlined" :loading="testingKey" @click="testKey">{{ $t(isNineRouter ? 'nine_router_test_model' : 'test_api_key') }}</v-btn>
+          </div>
+
+          <div v-if="hasSavedNineRouter && ((isNineRouter && nineRouterDraftMatchesSaved) || hasNineRouterTasks)" class="d-flex align-center flex-wrap ga-2 mt-3">
+            <v-btn
+              variant="text"
+              size="small"
+              prepend-icon="mdi-refresh"
+              :loading="nineRouterCatalogStatus === 'loading'"
+              data-testid="nine-router-refresh-models"
+              @click="nineRouterCatalogRevision++"
+            >{{ $t('nine_router_refresh_models') }}</v-btn>
+            <span role="status" class="text-caption text-medium-emphasis">
+              {{ nineRouterCatalogMessage }}
+            </span>
           </div>
 
           <v-divider class="my-6" />
@@ -189,6 +208,7 @@
                         item-title="title"
                         item-value="value"
                         :return-object="false"
+                        :loading="task.provider === '9router' && nineRouterCatalogStatus === 'loading'"
                         :disabled="!task.provider || savingTaskSettings"
                         :placeholder="task.provider ? 'Chọn hoặc nhập model' : taskDefaults.model"
                         :hint="taskModelHint(task)"
@@ -399,7 +419,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
@@ -461,7 +481,7 @@ type FlowAISetting = {
 const providerOptions = [
   { title: 'Claude (Anthropic)', value: 'claude' },
   { title: 'Gemini (Google)', value: 'gemini' },
-  { title: 'OpenAI (Codex)', value: 'openai' },
+  { title: 'OpenAI API', value: 'openai' },
   { title: 'OpenRouter (nhiều hãng, có model free)', value: 'openrouter' },
   { title: '9router', value: '9router' },
 ]
@@ -573,6 +593,8 @@ function taskModelOptions(task: TaskAISetting) {
         return openRouterModelOptions.value.filter(model => visionModelIDs.has(model.value))
       }
       return openRouterModelOptions.value
+    case '9router':
+      return task.capability === 'vision' ? nineRouterVisionModelOptions.value : nineRouterModelOptions.value
     default:
       return []
   }
@@ -594,6 +616,10 @@ function selectTaskProvider(task: TaskAISetting, provider: AIProvider | '') {
 
 function taskModelHint(task: TaskAISetting) {
   if (!task.provider) return `Đang dùng ${taskDefaultLabel.value || 'cấu hình chung'}`
+  if (task.provider === '9router') {
+    if (!hasSavedNineRouter.value) return t('nine_router_save_connection_hint')
+    return t(task.capability === 'vision' ? 'nine_router_vision_hint' : 'nine_router_model_hint')
+  }
   if (!providerApiKeys[task.provider]) return `Chưa lưu API key cho ${task.provider}. Hãy lưu ở cấu hình chung trước.`
   if (task.capability === 'vision') return 'Chọn model có khả năng đọc hình ảnh.'
   return 'Chọn model gợi ý hoặc nhập model tùy chỉnh.'
@@ -763,6 +789,63 @@ const appUrlRules = [
 const isNineRouter = computed(() => aiSettings.provider === '9router')
 const hasCustomBaseUrl = computed(() => isNineRouter.value || useCustomBaseUrl.value)
 
+type NineRouterModel = { id: string; vision?: boolean }
+const nineRouterModels = ref<NineRouterModel[]>([])
+const nineRouterCatalogStatus = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+const nineRouterCatalogRevision = ref(0)
+const hasSavedNineRouter = computed(() => !!providerApiKeys['9router'] && !!providerBaseURLs['9router'])
+const hasNineRouterTasks = computed(() => taskAISettings.value.some(task => task.provider === '9router'))
+const nineRouterDraftMatchesSaved = computed(() => hasSavedNineRouter.value &&
+  aiSettings.apiKey === providerApiKeys['9router'] &&
+  (aiSettings.baseUrl || '').trim().replace(/\/+$/, '') === providerBaseURLs['9router']?.trim().replace(/\/+$/, ''))
+const needsNineRouterCatalog = computed(() => (isNineRouter.value && nineRouterDraftMatchesSaved.value) || hasNineRouterTasks.value)
+
+const nineRouterCatalogMessage = computed(() => {
+  if (nineRouterCatalogStatus.value === 'error') return t('nine_router_models_failed')
+  if (nineRouterCatalogStatus.value !== 'loaded') return ''
+  return nineRouterModels.value.length
+    ? t('nine_router_models_count', { count: nineRouterModels.value.length })
+    : t('nine_router_models_empty')
+})
+
+function groupNineRouterModels(models: NineRouterModel[]) {
+  const groups = [
+    { label: 'Codex', matches: (id: string) => /^(cx|codex)\//i.test(id) },
+    { label: 'Gemini', matches: (id: string) => /^(?:[^/]+\/)?(?:gemini|gemma)[-/.]/i.test(id) },
+    { label: 'Claude', matches: (id: string) => /^(?:[^/]+\/)?claude[-/.]/i.test(id) },
+    { label: t('nine_router_other_models'), matches: () => true },
+  ]
+  const grouped = groups.map(group => ({ ...group, ids: [] as string[] }))
+  for (const model of models) grouped.find(group => group.matches(model.id))?.ids.push(model.id)
+  return grouped.flatMap(({ label, ids }, index) => ids.length ? [
+    { title: label, value: index, type: 'subheader' },
+    ...ids.map(id => ({ title: id, value: id, type: 'item' })),
+  ] : [])
+}
+
+const nineRouterModelOptions = computed(() => groupNineRouterModels(nineRouterModels.value))
+const nineRouterVisionModelOptions = computed(() => groupNineRouterModels(nineRouterModels.value.filter(model => model.vision)))
+
+watch(
+  [tenantId, hasSavedNineRouter, needsNineRouterCatalog, () => providerBaseURLs['9router'], nineRouterCatalogRevision],
+  async ([currentTenant, configured, needed], _, onCleanup) => {
+    nineRouterModels.value = []
+    nineRouterCatalogStatus.value = 'idle'
+    if (!currentTenant || !configured || !needed) return
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+    nineRouterCatalogStatus.value = 'loading'
+    try {
+      const { data } = await api.get(`/tenants/${currentTenant}/settings/ai/9router-models`, { signal: controller.signal })
+      if (controller.signal.aborted) return
+      nineRouterModels.value = Array.isArray(data?.models) ? data.models : []
+      nineRouterCatalogStatus.value = 'loaded'
+    } catch {
+      if (!controller.signal.aborted) nineRouterCatalogStatus.value = 'error'
+    }
+  },
+)
+
 const modelOptions = computed(() => {
   switch (aiSettings.provider) {
     case 'claude':
@@ -901,6 +984,7 @@ async function saveAI(credentialsOnly: boolean) {
     })
     providerApiKeys[provider] = apiKey
     providerBaseURLs[provider] = baseURL
+    if (provider === '9router') nineRouterCatalogRevision.value++
     if (!credentialsOnly) {
       taskDefaults.provider = provider
       taskDefaults.model = modelStr
