@@ -74,3 +74,14 @@ it('refreshes and keeps the conflict notice when another admin already made a de
   expect(api.get).toHaveBeenCalledTimes(2)
   expect(wrapper.get('[role=alert]').text()).toContain(en.personal_zalo_approval_stale)
 })
+
+it('focuses the review heading when opened from a notification', async () => {
+  const wrapper = mountApprovals()
+  const heading = wrapper.get('h2').element
+  const focus = vi.spyOn(heading, 'focus')
+  const scroll = vi.spyOn(heading, 'scrollIntoView')
+  await wrapper.setProps({ focusReview: true })
+  expect(focus).toHaveBeenCalledOnce()
+  expect(scroll).toHaveBeenCalledWith({ block: 'center' })
+  expect(wrapper.emitted('reviewFocused')).toHaveLength(1)
+})

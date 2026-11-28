@@ -1,7 +1,7 @@
 <template>
   <v-card class="pa-4 mb-4">
     <div class="d-flex align-center mb-2">
-      <h2 class="text-subtitle-1 font-weight-bold">
+      <h2 ref="reviewHeading" tabindex="-1" class="text-subtitle-1 font-weight-bold">
         <v-icon start size="small">mdi-shield-account</v-icon>
         {{ t('personal_zalo_approval_title') }}
       </h2>
@@ -76,8 +76,10 @@ interface Approval {
   first_seen_at: string
 }
 
-const props = defineProps<{ tenantId: string; channelId: string }>()
+const props = defineProps<{ tenantId: string; channelId: string; focusReview?: boolean }>()
+const emit = defineEmits<{ reviewFocused: [] }>()
 const { t, locale } = useI18n()
+const reviewHeading = ref<HTMLHeadingElement | null>(null)
 const status = ref<ApprovalStatus>('pending')
 const items = ref<Approval[]>([])
 const total = ref(0)
@@ -153,6 +155,14 @@ async function decide(item: Approval, decision: Decision) {
 }
 
 watch([status, offset], loadApprovals, { immediate: true })
+watch([() => props.focusReview, reviewHeading], ([focus, heading]) => {
+  if (!focus || !heading) return
+  selectStatus('pending')
+  offset.value = 0
+  heading.focus()
+  heading.scrollIntoView({ block: 'center' })
+  emit('reviewFocused')
+}, { flush: 'post' })
 useTenantEventRefresh(() => props.tenantId, 'personal_zalo_approvals_updated', loadApprovals)
 onUnmounted(() => { latestRequest++ })
 </script>

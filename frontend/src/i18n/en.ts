@@ -605,6 +605,8 @@ export default {
   personal_zalo_group_staff_call_only_hint: 'Applies to Zalo accounts assigned to CQA users on the channel details page. After the bot sends a reply successfully, staff can follow up for up to five minutes without calling it again.',
   personal_zalo_group_bot_names_hint: 'Separate with ;, for example Bull;bot. Empty means "bot". When assistant mode is off, everyone must call a name as its own word or use a session keyword.',
   personal_zalo_approval_title: 'Personal Zalo access review',
+  personal_zalo_approval_notice: '{count} personal Zalo contact or group is pending review | {count} personal Zalo contacts or groups are pending review',
+  personal_zalo_approval_open_channel: 'Review {name} ({count})',
   personal_zalo_approval_hint: 'Approve or reject contacts and groups discovered while chatbot auto-reply is enabled.',
   personal_zalo_approval_pending: 'Pending',
   personal_zalo_approval_approved: 'Approved',

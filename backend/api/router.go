@@ -232,6 +232,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			personalZaloApprovals := tenant.Group("/channels/:channelId/personal-zalo/approvals", middleware.RequireRole("owner", "admin"))
 			personalZaloApprovals.GET("", handlers.GetPersonalZaloApprovals)
 			personalZaloApprovals.PUT("/:threadType/:threadId", handlers.DecidePersonalZaloApproval)
+			tenant.GET("/personal-zalo/approvals/pending", middleware.RequireRole("owner", "admin"), handlers.GetPendingPersonalZaloApprovalChannels)
 			tenant.GET("/channels/:channelId/personal-zalo/groups", middleware.RequireRole("owner", "admin"), handlers.GetPersonalZaloInternbotGroups)
 			personalZaloIdentity := tenant.Group("/channels/:channelId/personal-zalo/identity-links", middleware.RequireRole("owner", "admin"))
 			personalZaloIdentity.GET("", handlers.ListPersonalZaloIdentityLinks)

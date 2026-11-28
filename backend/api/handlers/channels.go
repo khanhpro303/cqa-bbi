@@ -431,7 +431,8 @@ func UpdateChannel(c *gin.Context) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "personal_zalo_roster_unavailable"})
 			return
 		}
-		if changed {
+		if changed || req.AutoReplyEnabled != nil || req.IsActive != nil || internbotPatch.Mode != nil ||
+			(req.Name != "" && req.Name != channel.Name) {
 			realtime.Publish(ctx, tenantID, realtime.EventPersonalZaloApprovalsUpdated)
 		}
 	} else {
@@ -557,6 +558,7 @@ func DeleteChannel(c *gin.Context) {
 	// Best effort: the channel is already gone, and an unreachable gateway
 	// now pauses the orphaned account itself on the first rejected import.
 	if channel.ChannelType == "personal_zalo_import" {
+		realtime.Publish(c.Request.Context(), tenantID, realtime.EventPersonalZaloApprovalsUpdated)
 		if cfg, err := config.Load(); err == nil && cfg.PersonalZaloGatewayBaseURL != "" {
 			if n, err := deletePersonalZaloGatewayAccounts(cfg.PersonalZaloGatewayBaseURL, tenantID, channelID); err != nil {
 				log.Printf("[channels] delete channel %s: removing personal Zalo gateway accounts failed after %d: %v", channelID, n, err)

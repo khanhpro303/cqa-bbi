@@ -221,6 +221,16 @@
         </div>
       </v-alert>
 
+      <PersonalZaloApprovalNotice
+        v-if="tenantId && canReviewPersonalZalo"
+        :key="tenantId"
+        :tenant-id="tenantId"
+      >
+        <template #icon="{ count }">
+          <v-icon :key="count" color="warning" class="bell-ring-animation personal-zalo-approval-bell text-h5" aria-hidden="true">mdi-bell-ring</v-icon>
+        </template>
+      </PersonalZaloApprovalNotice>
+
       <slot />
     </v-container>
   </v-main>
@@ -423,6 +433,7 @@ import { useCampaignWarningsStore } from '../stores/campaignWarnings'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import CampaignWarningBell from '../components/CampaignWarningBell.vue'
+import PersonalZaloApprovalNotice from '../components/channels/PersonalZaloApprovalNotice.vue'
 import api from '../api'
 import FacebookAccountManager from '../components/FacebookAccountManager.vue'
 
@@ -442,6 +453,10 @@ const isDark = computed(() => theme.global.current.value.dark)
 const isRail = computed(() => mdAndUp.value && rail.value)
 
 const tenantId = computed(() => route.params.tenantId as string)
+const canReviewPersonalZalo = computed(() => {
+  const role = authStore.tenantPerms?.role
+  return role === 'owner' || role === 'admin'
+})
 
 // Tenant switcher
 interface TenantItem { id: string; name: string; slug: string }
@@ -891,6 +906,14 @@ async function deleteGlobalCustomer(customerId: string) {
   animation: bell-ring 1.5s infinite;
   transform-origin: top center;
   display: inline-block;
+}
+
+.bell-ring-animation.personal-zalo-approval-bell {
+  animation-iteration-count: 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .personal-zalo-approval-bell { animation: none; }
 }
 
 @keyframes bell-ring {

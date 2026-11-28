@@ -62,6 +62,30 @@ func GetPersonalZaloApprovals(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items, "total": total})
 }
 
+func GetPendingPersonalZaloApprovalChannels(c *gin.Context) {
+	type pendingChannel struct {
+		ChannelID string `json:"channel_id"`
+		Name      string `json:"name"`
+		Count     int64  `json:"count"`
+	}
+	channels := make([]pendingChannel, 0)
+	err := db.DB.WithContext(c.Request.Context()).Table("channels AS channel").
+		Select("channel.id AS channel_id, channel.name, COUNT(*) AS count").
+		Joins("JOIN personal_zalo_thread_approvals AS approval ON approval.channel_id = channel.id AND approval.account_external_id = channel.external_id").
+		Where("channel.tenant_id = ? AND channel.channel_type = ? AND channel.is_active = ? AND channel.personal_zalo_auto_reply_enabled = ?",
+			middleware.GetTenantID(c), "personal_zalo_import", true, true).
+		Where("COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(channel.metadata, '$.chatbot_mode')), 'null'), ?) = ?",
+			personalZaloChatbotMode, personalZaloChatbotMode).
+		Where("approval.status = ? AND approval.present = ?", personalZaloPending, true).
+		Group("channel.id, channel.name").Order("channel.name, channel.id").
+		Find(&channels).Error
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "personal_zalo_approvals_unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"channels": channels})
+}
+
 func DecidePersonalZaloApproval(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	channelID, threadType, threadID := c.Param("channelId"), c.Param("threadType"), c.Param("threadId")
