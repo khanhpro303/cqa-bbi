@@ -150,6 +150,69 @@ describe('Agents AI page', () => {
     expect(mocks.get.mock.calls.filter(c => c[0] === '/tenants/tenant-1/ai-teams')).toHaveLength(2)
   })
 
+  it('tells same-named teams apart and warns when a channel points at an empty one', async () => {
+    const leftover = { ...debtTeam, id: 't9', name: 'Mặc định', default_agent_id: '', members: [], memberships: [],
+      channels: [{ id: 'oa', name: 'OA BBI', channel_type: 'zalo_oa', ai_team_id: 't9' }], silent: ['customer', 'staff'] }
+    mocks.get.mockImplementation(routeGet({ '/tenants/tenant-1/ai-teams': { teams: [{ ...defaultTeam, channels: [] }, leftover] } }))
+    const wrapper = shallowMount(AIAgents, stubs)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    const titles = vm.teamItems.map((i: any) => i.title)
+    expect(titles[0]).toContain('ag_channel_follow_default')
+    expect(vm.teamLabel(defaultTeam)).toBe('Mặc định · ag_team_n_agents:{"n":2}')
+    expect(vm.teamLabel(leftover)).toBe('Mặc định · ag_team_empty_short')
+    const oa = vm.channelRows.find((r: any) => r.channel.id === 'oa')
+    expect(oa.selectValue).toBe('t9')
+    expect(oa.silentTeam).toBe('Mặc định')
+    vm.tab = 'channels'
+    await flushPromises()
+    expect(wrapper.find('[data-testid="channel-silent-oa"]').exists()).toBe(true)
+  })
+
+  it('gives otherwise identical explicit teams distinct labels', async () => {
+    const duplicate = { ...debtTeam, id: 't3', channels: [] }
+    mocks.get.mockImplementation(routeGet({ '/tenants/tenant-1/ai-teams': { teams: [defaultTeam, debtTeam, duplicate] } }))
+    const wrapper = shallowMount(AIAgents, stubs)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    expect(vm.teamItems.slice(1)).toEqual([
+      { value: 't2', title: 'Công nợ · ag_team_n_agents:{"n":1} · t2' },
+      { value: 't3', title: 'Công nợ · ag_team_n_agents:{"n":1} · t3' },
+    ])
+    wrapper.unmount()
+  })
+
+  it('distinguishes channels pinned to the current default from channels that follow it', async () => {
+    const team = { ...defaultTeam, channels: [
+      ...defaultTeam.channels,
+      { id: 'pinned', name: 'OA ghim bộ', channel_type: 'zalo_oa', ai_team_id: defaultTeam.id },
+    ] }
+    mocks.get.mockImplementation(routeGet({ '/tenants/tenant-1/ai-teams': { teams: [team, debtTeam] } }))
+    const wrapper = shallowMount(AIAgents, stubs)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    expect(vm.channelRows.find((row: any) => row.channel.id === 'oa').selectValue).toBe('')
+    expect(vm.channelRows.find((row: any) => row.channel.id === 'pinned').selectValue).toBe('t1')
+    expect(vm.teamItems.map((item: any) => item.value)).toEqual(['', 't1', 't2'])
+    expect(vm.teamItems[0].title).not.toBe(vm.teamItems[1].title)
+    wrapper.unmount()
+  })
+
+  it('hides the empty-team warning while Agents AI is off', async () => {
+    const emptyDefault = { ...defaultTeam, default_agent_id: '', members: [], memberships: [] }
+    mocks.get.mockImplementation(routeGet({
+      '/tenants/tenant-1/settings/ai-agents': { enabled: false },
+      '/tenants/tenant-1/ai-teams': { teams: [emptyDefault] },
+    }))
+    const wrapper = shallowMount(AIAgents, stubs)
+    await flushPromises()
+    ;(wrapper.vm as any).tab = 'channels'
+    await flushPromises()
+    expect(wrapper.find('[data-testid="channel-row-oa"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="channel-silent-oa"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('falls back to the default team when a channel points at a team that is off', async () => {
     mocks.get.mockImplementation(routeGet({ '/tenants/tenant-1/ai-teams': { teams: [defaultTeam, { ...debtTeam, is_active: false }] } }))
     const wrapper = shallowMount(AIAgents, stubs)

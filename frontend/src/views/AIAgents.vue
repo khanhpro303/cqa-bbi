@@ -218,7 +218,8 @@
                   :data-testid="`channel-team-${row.channel.id}`"
                   @update:model-value="v => setChannelTeam(row.channel.id, v as string)"
                 />
-                <div v-if="row.ownInactive" class="text-caption text-warning mt-1">{{ $t('ag_channel_team_inactive') }}</div>
+                <div v-if="settings.enabled && row.ownInactive && defaultTeam" class="text-caption text-warning mt-1">{{ $t('ag_channel_team_inactive') }}</div>
+                <div v-if="settings.enabled && row.silentTeam" class="text-caption text-warning mt-1" :data-testid="`channel-silent-${row.channel.id}`">{{ $t('ag_channel_team_silent', { name: row.silentTeam }) }}</div>
               </td>
               <td>
                 <span v-if="row.picks.customer">{{ row.picks.customer.name }}</span>
@@ -355,6 +356,9 @@ interface ChannelRow {
   channel: TeamChannel
   selectValue: string
   ownInactive: boolean
+  // Name of the team the channel answers through when no agent in it
+  // answers anyone, so the channel stays silent.
+  silentTeam: string
   picks: { customer: Agent | null, staff: Agent | null }
 }
 
@@ -366,24 +370,43 @@ const channelRows = computed<ChannelRow[]>(() => {
     for (const ch of team.channels) {
       const own = ch.ai_team_id ? teams.value.find(x => x.id === ch.ai_team_id) || null : null
       const effective = own && own.is_active ? own : defaultTeam.value
+      const picks = { customer: pickFor(effective, 'customer'), staff: pickFor(effective, 'staff') }
       rows.push({
         channel: ch,
-        selectValue: own && !own.is_default ? own.id : '',
+        selectValue: own?.id || '',
         ownInactive: !!own && !own.is_active,
-        picks: { customer: pickFor(effective, 'customer'), staff: pickFor(effective, 'staff') },
+        silentTeam: effective && !picks.customer && !picks.staff ? effective.name : '',
+        picks,
       })
     }
   }
   return rows.sort((a, b) => a.channel.name.localeCompare(b.channel.name, 'vi'))
 })
 
-const teamItems = computed(() => [
-  { title: t('ag_channel_follow_default', { name: defaultTeam.value?.name || '—' }), value: '' },
-  ...teams.value.filter(team => !team.is_default).map(team => ({
-    title: team.is_active ? team.name : `${team.name} (${t('ag_inactive').toLowerCase()})`,
-    value: team.id,
-  })),
-])
+// Teams can share a name (an old "Mặc định" left over from an earlier
+// copy), so each option also says how many agents answer through it.
+function teamLabel(team: Team): string {
+  const answering = orderedMembers(team).filter(m => m.on).length
+  const parts = [answering ? t('ag_team_n_agents', { n: answering }) : t('ag_team_empty_short')]
+  if (!team.is_active) parts.push(t('ag_inactive').toLowerCase())
+  return `${team.name} · ${parts.join(', ')}`
+}
+
+const teamItems = computed(() => {
+  const pinned = new Set(channelRows.value.map(row => row.selectValue))
+  const explicitTeams = teams.value.filter(team => !team.is_default || pinned.has(team.id))
+    .map(team => ({ title: teamLabel(team), value: team.id }))
+  const followDefault = { title: t('ag_channel_follow_default', { name: defaultTeam.value ? teamLabel(defaultTeam.value) : '—' }), value: '' }
+  const items = [followDefault, ...explicitTeams]
+  return items.map(item => {
+    if (!item.value) return item
+    const matches = items.filter(other => other !== item && other.title === item.title)
+    if (!matches.length) return item
+    const shortId = item.value.slice(0, 8)
+    const id = matches.some(other => other.value.startsWith(shortId)) ? item.value : shortId
+    return { ...item, title: `${item.title} · ${id}` }
+  })
+})
 
 function openAgent(id: string) {
   editingAgentId.value = id
