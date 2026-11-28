@@ -130,3 +130,22 @@ func TestKeepCandidatesForGuests(t *testing.T) {
 		t.Fatal("the AI Engine bot always answers guests")
 	}
 }
+
+func TestKeepGuestCandidatesPreservesPersonalZaloComplaints(t *testing.T) {
+	docs := Agent{ID: "docs", Key: "docs", Tools: []string{"search_knowledge"}}
+	complaints := Agent{ID: "case", Key: "case", Tools: []string{ToolComplaintRecord}}
+	debt := Agent{ID: "debt", Key: "debt", Tools: []string{"lookup_debt"}}
+	start := Plan{Mode: ModeAgent, Selection: Selection{
+		Agent: complaints, Candidates: []Agent{complaints, docs, debt},
+	}}
+	knowledgeOnly := start
+	if !knowledgeOnly.KeepGuestCandidates(false) || knowledgeOnly.Selection.Agent.ID != docs.ID ||
+		len(knowledgeOnly.Selection.Candidates) != 1 {
+		t.Fatalf("knowledge-only candidates = %+v", knowledgeOnly.Selection)
+	}
+	withComplaints := start
+	if !withComplaints.KeepGuestCandidates(true) || withComplaints.Selection.Agent.ID != complaints.ID ||
+		len(withComplaints.Selection.Candidates) != 2 || withComplaints.GuestKnowledgeRules().Knowledge {
+		t.Fatalf("complaint-enabled candidates = %+v", withComplaints.Selection)
+	}
+}

@@ -68,6 +68,7 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 	}
 	agentsOn := false
 	audience := agents.AudienceCustomer
+	var agentTools []string
 	err = database.Callback().Query().After("gorm:query").Register("test:oa-guest-knowledge", func(tx *gorm.DB) {
 		switch row := tx.Statement.Dest.(type) {
 		case *[]models.Channel:
@@ -89,7 +90,7 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 		case *[]models.AIAgent:
 			var agent models.AIAgent
 			agents.Agent{Key: "bao-hanh", Audience: audience, IsActive: true,
-				SystemPrompt: "Tư vấn bảo hành.", Tools: []string{"search_knowledge"}, KnowledgeTags: []string{"bảo hành"}}.ApplyTo(&agent)
+				SystemPrompt: "Tư vấn bảo hành.", Tools: agentTools, KnowledgeTags: []string{"bảo hành"}}.ApplyTo(&agent)
 			agent.ID, agent.TenantID = "agent", tenantID
 			*row = []models.AIAgent{agent}
 		}
@@ -136,8 +137,12 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 			}
 			agent, _ := input.Tweaks["Agent-fixture"].(map[string]any)
 			prompt, _ := agent["system_prompt"].(string)
-			if !strings.Contains(prompt, "3–4 gạch đầu dòng thật ngắn") || !strings.Contains(prompt, "Giữ nguyên mã tiêu chuẩn") {
-				t.Error("Goby question did not receive the concise, source-grounded product instruction")
+			hasProductAdvice := strings.Contains(prompt, "3–4 gạch đầu dòng thật ngắn") && strings.Contains(prompt, "Giữ nguyên mã tiêu chuẩn")
+			if hasProductAdvice == agentsOn {
+				t.Errorf("product advice in guest prompt = %t, specialist = %t", hasProductAdvice, agentsOn)
+			}
+			if !strings.Contains(prompt, engine.KnowledgeImageMarker) {
+				t.Error("guest prompt lacks knowledge image rules")
 			}
 			if agentsOn && !strings.Contains(prompt, "Tư vấn bảo hành.") {
 				t.Error("guest specialist prompt missing")
@@ -169,16 +174,19 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 		wantCalls int
 		agentsOn  bool
 		audience  string
+		tools     []string
 	}{
-		{question, "user_send_text", true, answer, 1, false, ""},
-		{"FF901 còn size L không?", "user_send_text", true, engine.GuestKnowledgeVerificationReply, 0, false, ""},
-		{"Công nợ của tôi bao nhiêu?", "user_send_text", true, engine.GuestKnowledgeVerificationReply, 0, false, ""},
-		{question, "user_send_text", false, "", 0, false, ""},
-		{question, "user_send_group_text", true, "", 0, false, ""},
-		{question, "user_send_text", true, answer, 1, true, agents.AudienceCustomer},
-		{question, "user_send_text", true, "", 0, true, agents.AudienceStaff},
+		{question, "user_send_text", true, answer, 1, false, "", nil},
+		{"FF901 còn size L không?", "user_send_text", true, engine.GuestKnowledgeVerificationReply, 0, false, "", nil},
+		{"Công nợ của tôi bao nhiêu?", "user_send_text", true, engine.GuestKnowledgeVerificationReply, 0, false, "", nil},
+		{question, "user_send_text", false, "", 0, false, "", nil},
+		{question, "user_send_group_text", true, "", 0, false, "", nil},
+		{question, "user_send_text", true, answer, 1, true, agents.AudienceCustomer, []string{"search_knowledge"}},
+		{question, "user_send_text", true, engine.GuestKnowledgeUnavailableReply, 0, true, agents.AudienceCustomer, []string{"lookup_debt"}},
+		{"FF901 còn size L không?", "user_send_text", true, engine.GuestKnowledgeVerificationReply, 0, true, agents.AudienceCustomer, []string{"lookup_debt"}},
+		{question, "user_send_text", true, "", 0, true, agents.AudienceStaff, nil},
 	} {
-		agentsOn, audience = tc.agentsOn, tc.audience
+		agentsOn, audience, agentTools = tc.agentsOn, tc.audience, tc.tools
 		payload := ZaloWebhookPayload{EventName: tc.event, SignatureVerified: tc.signed}
 		payload.Sender.ID, payload.Recipient.ID, payload.Message.Text = senderID, oaID, tc.text
 		task, err := NewZaloWebhookTask(payload)

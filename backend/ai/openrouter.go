@@ -102,19 +102,42 @@ var (
 	openRouterModelsMu    sync.Mutex
 	openRouterModelsCache []OpenRouterModel
 	openRouterModelsAt    time.Time
+	openRouterRefreshAt   time.Time
+	openRouterRefreshErr  error
 	openRouterModelsURL   = OpenRouterBaseURL + "/models"
 )
 
-const openRouterModelsTTL = 10 * time.Minute
+const (
+	openRouterModelsTTL       = 10 * time.Minute
+	openRouterRefreshInterval = 15 * time.Second
+)
 
 // OpenRouterFreeModels lists OpenRouter's free models (cached 10 minutes).
-// The catalogue is public: no API key is needed.
-func OpenRouterFreeModels(ctx context.Context) ([]OpenRouterModel, error) {
+// Explicit refreshes share a short cooldown because the catalogue is global.
+func OpenRouterFreeModels(ctx context.Context, refresh bool) ([]OpenRouterModel, error) {
 	openRouterModelsMu.Lock()
 	defer openRouterModelsMu.Unlock()
-	if openRouterModelsCache != nil && time.Since(openRouterModelsAt) < openRouterModelsTTL {
+	if refresh && time.Since(openRouterRefreshAt) < openRouterRefreshInterval {
+		return openRouterModelsCache, openRouterRefreshErr
+	}
+	if !refresh && openRouterModelsCache != nil && time.Since(openRouterModelsAt) < openRouterModelsTTL {
 		return openRouterModelsCache, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	models, err := fetchOpenRouterFreeModels(ctx)
+	if refresh {
+		openRouterRefreshAt, openRouterRefreshErr = time.Now(), err
+	}
+	if err != nil {
+		return nil, err
+	}
+	openRouterModelsCache, openRouterModelsAt = models, time.Now()
+	return models, nil
+}
+
+func fetchOpenRouterFreeModels(ctx context.Context) ([]OpenRouterModel, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openRouterModelsURL, nil)
 	if err != nil {
 		return nil, err
@@ -128,12 +151,7 @@ func OpenRouterFreeModels(ctx context.Context) ([]OpenRouterModel, error) {
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("openrouter models error %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	models, err := ParseOpenRouterFreeModels(body)
-	if err != nil {
-		return nil, err
-	}
-	openRouterModelsCache, openRouterModelsAt = models, time.Now()
-	return models, nil
+	return ParseOpenRouterFreeModels(body)
 }
 
 // ParseOpenRouterFreeModels keeps the free models of a /models response,

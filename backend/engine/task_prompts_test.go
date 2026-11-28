@@ -131,7 +131,7 @@ func TestTurnRuleDefaults(t *testing.T) {
 			}
 		}
 	}
-	guest := guestKnowledgePrompt("")
+	guest := guestKnowledgePrompt("", GuestKnowledgeRules{Knowledge: true, ProductAdvice: true})
 	if !strings.HasSuffix(guest, "\n\n"+TaskPromptText("", PromptProductAdvice)) {
 		t.Error("guest prompt should end with the product advice rules")
 	}

@@ -37,9 +37,23 @@
         <v-icon start size="small">mdi-connection</v-icon>{{ $t('ag_tab_channels') }}
         <v-chip size="x-small" class="ml-2" variant="tonal">{{ channelRows.length }}</v-chip>
       </v-tab>
+      <v-tab value="models" data-testid="tab-models">
+        <v-icon start size="small">mdi-tune-variant</v-icon>{{ $t('ag_tab_models') }}
+      </v-tab>
     </v-tabs>
 
     <v-progress-linear v-if="loading" indeterminate color="primary" class="mb-2" />
+
+    <!-- Task models: also used by the AI Engine bot, so it works with agents off -->
+    <TaskModelsPanel
+      v-if="tab === 'models'"
+      :key="tenantId"
+      :tenant-id="tenantId"
+      :can-edit="canEdit"
+      :agents="agents"
+      @notify="showSnack"
+      @open-agent="openAgent"
+    />
 
     <!-- Agents -->
     <v-card v-if="tab === 'agents'" class="pa-4 pa-sm-5" data-testid="panel-agents">
@@ -267,6 +281,7 @@ import TeamEditorDialog from '../components/ai-agents/TeamEditorDialog.vue'
 import TeamTestDialog from '../components/ai-agents/TeamTestDialog.vue'
 import type { Agent, AgentSettings, KnowledgeTag, Team, TeamChannel, ToolInfo } from '../components/ai-agents/types'
 import { pickAgent } from '../components/ai-agents/agentRules'
+import TaskModelsPanel from '../components/ai-agents/TaskModelsPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -277,7 +292,7 @@ const tenantId = computed(() => route.params.tenantId as string)
 const canEdit = computed(() => authStore.canEdit('settings'))
 const canSwitch = computed(() => ['owner', 'admin'].includes(authStore.tenantPerms?.role || ''))
 
-const tab = ref<'agents' | 'teams' | 'channels'>('agents')
+const tab = ref<'agents' | 'teams' | 'channels' | 'models'>('agents')
 const loading = ref(false)
 const loaded = ref(false)
 const loadError = ref('')
@@ -477,7 +492,7 @@ watch(tab, v => {
 
 onMounted(() => {
   const q = route.query?.tab
-  if (q === 'teams' || q === 'channels' || q === 'agents') tab.value = q
+  if (q === 'teams' || q === 'channels' || q === 'agents' || q === 'models') tab.value = q
   loadAll()
 })
 

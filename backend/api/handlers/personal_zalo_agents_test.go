@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/vietbui/chat-quality-agent/agents"
@@ -117,7 +118,7 @@ func TestPersonalZaloAgentScopeForGroupAndGuestDraft(t *testing.T) {
 		t.Fatal("specialist scope must fail closed without a signing key")
 	}
 
-	var sentPermission, sentAgentToken string
+	var sentPermission, sentAgentToken, sentPrompt string
 	flowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			_, _ = fmt.Fprint(w, `{"data":{"nodes":[{"id":"Agent-fixture","data":{"node":{"template":{"system_prompt":{}}}}}]}}`)
@@ -131,6 +132,9 @@ func TestPersonalZaloAgentScopeForGroupAndGuestDraft(t *testing.T) {
 		}
 		sentPermission, _ = input.Tweaks["permission_token"].(string)
 		sentAgentToken = r.Header.Get("X-Langflow-Global-Var-CQA_ERP_AGENT_TOKEN")
+		if agent, ok := input.Tweaks["Agent-fixture"].(map[string]any); ok {
+			sentPrompt, _ = agent["system_prompt"].(string)
+		}
 		_, _ = fmt.Fprint(w, `{"outputs":[{"outputs":[{"results":{"message":{"text":"draft ok"}}}]}]}`)
 	}))
 	t.Cleanup(flowServer.Close)
@@ -140,11 +144,15 @@ func TestPersonalZaloAgentScopeForGroupAndGuestDraft(t *testing.T) {
 	}
 	client := engine.NewLangflowClient(cfg)
 	result, err := engine.RunPersonalZaloGuestDraft(context.Background(), client, flow, cfg.EncryptionKey,
-		req.TenantID, "group-draft", "soạn câu trả lời", permissionToken, "Viết ngắn gọn.")
+		req.TenantID, "group-draft", "soạn câu trả lời", permissionToken, "Viết ngắn gọn.", plan.GuestKnowledgeRules())
 	if err != nil || result.Text != "draft ok" || sentPermission != permissionToken ||
 		resolveKnowledgePreviewAgent(cfg.EncryptionKey, req.TenantID, sentAgentToken) != "public" {
 		t.Fatalf("draft specialist scope was not propagated: result=%+v permission=%q token=%q err=%v",
 			result, sentPermission, sentAgentToken, err)
+	}
+	if !strings.Contains(sentPrompt, engine.KnowledgeImageMarker) ||
+		strings.Contains(sentPrompt, "TƯ VẤN TÍNH NĂNG SẢN PHẨM") {
+		t.Fatalf("documents-only draft prompt = %q", sentPrompt)
 	}
 }
 

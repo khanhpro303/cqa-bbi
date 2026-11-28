@@ -144,3 +144,19 @@ func (p *Plan) KeepCandidates(keep func(Agent) bool) bool {
 func AnswersFromDocuments(a Agent) bool {
 	return a.HasTool(toolSearchKnowledge)
 }
+
+// KeepGuestCandidates limits a guest turn to document search and, when enabled
+// for Personal Zalo, complaint recording.
+func (p *Plan) KeepGuestCandidates(complaints bool) bool {
+	return p.KeepCandidates(func(a Agent) bool {
+		return AnswersFromDocuments(a) || (complaints && a.HasTool(ToolComplaintRecord))
+	})
+}
+
+// GuestKnowledgeRules gives the guest flow the same tool rules as other turns.
+func (p Plan) GuestKnowledgeRules() engine.GuestKnowledgeRules {
+	return engine.GuestKnowledgeRules{
+		Knowledge:     p.UsesRule(engine.PromptGuestKnowledge),
+		ProductAdvice: p.UsesRule(engine.PromptProductAdvice),
+	}
+}

@@ -117,12 +117,13 @@ func SaveAISettings(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	var req struct {
 		Provider        string `json:"provider" binding:"required"`
-		APIKey          string `json:"api_key" binding:"required"`
+		APIKey          string `json:"api_key" binding:"required_without=ModelOnly"`
 		Model           string `json:"model"`
 		BaseURL         string `json:"base_url"`
 		BatchMode       string `json:"batch_mode"`
 		BatchSize       string `json:"batch_size"`
 		CredentialsOnly bool   `json:"credentials_only"`
+		ModelOnly       bool   `json:"model_only"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "details": err.Error()})
@@ -132,7 +133,13 @@ func SaveAISettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_provider"})
 		return
 	}
-	if req.Provider == "9router" {
+	if req.ModelOnly {
+		req.Model = strings.TrimSpace(req.Model)
+		if req.Model == "" || req.CredentialsOnly {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "model_required"})
+			return
+		}
+	} else if req.Provider == "9router" {
 		if err := ai.ValidateNineRouterBaseURL(req.BaseURL); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_base_url", "details": err.Error()})
 			return
@@ -152,7 +159,7 @@ func SaveAISettings(c *gin.Context) {
 	providerKey := ai.ProviderAPIKeySettingKey(req.Provider)
 	providerBaseURLKey := ai.ProviderBaseURLSettingKey(req.Provider)
 	baseURL := strings.TrimSpace(req.BaseURL)
-	apiKeyChanged := !isMaskedSecret(req.APIKey)
+	apiKeyChanged := !req.ModelOnly && !isMaskedSecret(req.APIKey)
 	var encrypted []byte
 	if apiKeyChanged {
 		encrypted, err = pkg.Encrypt([]byte(req.APIKey), cfg.EncryptionKey)
@@ -164,6 +171,7 @@ func SaveAISettings(c *gin.Context) {
 
 	var oldProvider, oldModel string
 	missingKey, nineRouterURLChanged := false, false
+	var baseURLError error
 	err = db.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		var existing []models.AppSetting
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -186,7 +194,25 @@ func SaveAISettings(c *gin.Context) {
 			missingKey = true
 			return gorm.ErrRecordNotFound
 		}
-		if req.Provider == "9router" && !apiKeyChanged && !sameNineRouterBaseURL(baseURL, getSettingValue(existing, providerBaseURLKey, "")) {
+		if req.ModelOnly {
+			baseURL = ""
+			if oldProvider == req.Provider && req.Provider != "9router" {
+				baseURL = getSettingValue(existing, "ai_base_url", "")
+			}
+			for _, row := range existing {
+				if row.SettingKey == providerBaseURLKey {
+					baseURL = row.ValuePlain
+					break
+				}
+			}
+			if req.Provider == "9router" {
+				baseURLError = ai.ValidateNineRouterBaseURL(baseURL)
+				if baseURLError != nil {
+					return gorm.ErrInvalidData
+				}
+			}
+		}
+		if req.Provider == "9router" && !req.ModelOnly && !apiKeyChanged && !sameNineRouterBaseURL(baseURL, getSettingValue(existing, providerBaseURLKey, "")) {
 			nineRouterURLChanged = true
 			return gorm.ErrInvalidData
 		}
@@ -197,7 +223,9 @@ func SaveAISettings(c *gin.Context) {
 		if apiKeyChanged {
 			put(providerKey, "", encrypted)
 		}
-		put(providerBaseURLKey, baseURL, nil)
+		if !req.ModelOnly {
+			put(providerBaseURLKey, baseURL, nil)
+		}
 		if !req.CredentialsOnly || oldProvider == req.Provider {
 			put("ai_base_url", baseURL, nil)
 		}
@@ -242,6 +270,8 @@ func SaveAISettings(c *gin.Context) {
 	if err != nil {
 		if missingKey {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "no_api_key_configured"})
+		} else if baseURLError != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_base_url", "details": baseURLError.Error()})
 		} else if nineRouterURLChanged {
 			writeNineRouterURLChanged(c)
 		} else {
@@ -919,7 +949,7 @@ func getFirstSettingByKeys(tenantID string, keys []string) (*models.AppSetting, 
 func ListOpenRouterFreeModels(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
-	models, err := ai.OpenRouterFreeModels(ctx)
+	models, err := ai.OpenRouterFreeModels(ctx, c.Query("refresh") == "1")
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "openrouter_models_failed", "details": err.Error()})
 		return

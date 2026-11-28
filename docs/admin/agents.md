@@ -55,7 +55,7 @@ Mỗi lượt chatbot Zalo OA ghi mã agent đã trả lời vào nhật ký chi
 | Hướng dẫn khiếu nại và mọi prompt khiếu nại của Zalo cá nhân | `complaint_record` |
 | Chuyển người khi bot không có căn cứ, trợ lý nhóm, lời dặn hồ sơ khách, lời dặn chat riêng / phiên chưa có quyền ERP / chuyển nhân viên / Internbot của Zalo cá nhân | mọi agent (không gắn công cụ) |
 
-  Các prompt còn lại (phân loại tin, Bộ điều phối, xã giao, đọc ảnh, tóm tắt, khớp mã ERP, quyết định khiếu nại cũ hay mới...) chạy bằng lượt gọi AI riêng, không nối vào prompt của agent. Test `TestEveryTaskPromptIsClassified` bắt mọi prompt tác vụ mới phải được xếp vào một trong ba loại này. Khách chưa xác thực chỉ được trả lời từ tài liệu, nên Bộ điều phối chỉ chọn cho họ trong các agent có `search_knowledge`.
+  Các prompt còn lại (phân loại tin, Bộ điều phối, xã giao, đọc ảnh, tóm tắt, khớp mã ERP, quyết định khiếu nại cũ hay mới...) chạy bằng lượt gọi AI riêng, không nối vào prompt của agent. Test `TestEveryTaskPromptIsClassified` bắt mọi prompt tác vụ mới phải được xếp vào một trong ba loại này. Với khách chưa xác thực, Bộ điều phối chọn agent có `search_knowledge` để tư vấn từ tài liệu. Kênh Zalo cá nhân có bật tiếp nhận khiếu nại cũng có thể chọn agent có `complaint_record`.
 
 ## Runtime native (không qua Langflow)
 

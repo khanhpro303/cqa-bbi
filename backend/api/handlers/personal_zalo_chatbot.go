@@ -186,10 +186,6 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		addressed := req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req, sessionConfig)
-		if guest && !agentPlan.KeepCandidates(agents.AnswersFromDocuments) {
-			// An unverified guest is answered from documents only.
-			log.Printf("[agents] personal Zalo channel %s: no agent of team %s can search documents for a guest", req.ChannelID, agentPlan.Selection.Team.ID)
-		}
 		var inferredComplaint bool
 		groupTurn := preparePersonalZaloGroupTurn(ctx, channel, sessionConfig, req, addressed, func(ctx context.Context, tenantID, input string) bool {
 			reply, handover := workers.PersonalZaloGroupNeedsReply(ctx, tenantID, input)
@@ -198,6 +194,10 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		})
 		staffGroupComplaint := groupTurn.Staff && addressed
 		complaintEligible := customercases.EnabledFor(channel.Metadata) && (!groupTurn.Staff || staffGroupComplaint) && req.Text != ""
+		canRouteGuest := !guest || agentPlan.KeepGuestCandidates(complaintEligible)
+		if !canRouteGuest {
+			log.Printf("[agents] personal Zalo channel %s: no agent of team %s can answer this guest", req.ChannelID, agentPlan.Selection.Team.ID)
+		}
 		canRouteComplaint := complaintEligible && (agentPlan.Allows(agents.ToolComplaintRecord) || (addressed && agentPlan.NeedsRouting()))
 		requestedHandover := personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
 		handover := !canRouteComplaint && !guest && requestedHandover
@@ -224,7 +224,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 		promoteComplaint := !guest && canRouteComplaint && addressed && !turn.RunFlow && turn.Reply == "" &&
 			!personalZaloMatchesKeyword(req.Text, sessionConfig.SessionEndKeyword) &&
 			(requestedHandover || workers.PersonalZaloComplaintNeedsHandover(ctx, req.TenantID, req.Text))
-		if addressed && !handover && (turn.RunFlow || promoteComplaint) {
+		if addressed && canRouteGuest && !handover && (turn.RunFlow || promoteComplaint) {
 			agentPlan = routePersonalZaloAgent(ctx, cfg, req, agentPlan, sessionConfig.SessionTimeoutMinutes)
 		}
 		complaints := complaintEligible && agentPlan.Allows(agents.ToolComplaintRecord)

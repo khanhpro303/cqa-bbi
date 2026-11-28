@@ -2235,7 +2235,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 		}
 
-		if payload.SignatureVerified && agentPlan.UsesRule(engine.PromptKnowledgeImages) {
+		knowledgeImages := payload.SignatureVerified && agentPlan.UsesRule(engine.PromptKnowledgeImages)
+		if knowledgeImages {
 			langflowInput, systemPromptToUse = engine.AddKnowledgeImageInstruction(matchedChannel.TenantID, langflowInput, systemPromptToUse)
 		}
 		// 2. Answer the turn. An agent on the native runtime calls its own
@@ -2414,7 +2415,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			return fmt.Errorf("failed to send reply to Zalo: %w", sendErr)
 		}
 		knowledgeImageAttempted := false
-		if payload.SignatureVerified && replyText != botEmptyAnswerMessage && len(knowledgeImageIDs) > 0 {
+		if knowledgeImages && replyText != botEmptyAnswerMessage && len(knowledgeImageIDs) > 0 {
 			var err error
 			knowledgeImageAttempted, err = sendKnowledgeImage(ctx, adapter, matchedChannel.TenantID, agentType, payload.Sender.ID, matchedGroup.ZaloGroupID, knowledgeImageIDs)
 			if err != nil {

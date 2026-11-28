@@ -96,6 +96,10 @@ func (g *personalZaloDirectGrant) allowComplaints(ctx context.Context, key strin
 }
 
 func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cfg *config.Config, flow engine.LangflowConfig, req personalZaloChatbotRequest, scope string, complaints, staffGroup bool, plan agents.Plan) (engine.LangflowResult, error) {
+	rules := plan.GuestKnowledgeRules()
+	if !complaints && (!rules.Knowledge || plan.Mode != agents.ModeAgent) {
+		return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope, req.Text, "", "", false, rules)
+	}
 	p := engine.GroupPermissionContext{
 		TenantID: req.TenantID, ChannelID: req.ChannelID, ZaloUserID: req.SenderID, AgentType: "public", PersonalZalo: true,
 	}
@@ -112,17 +116,13 @@ func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cf
 		// must never gain a write tool from that agent.
 		p.DryRun = true
 	}
-	if plan.Mode == agents.ModeAgent {
-		plan.Sign(&p)
-	} else if !complaints {
-		return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope, req.Text, "", "", false)
-	}
+	plan.Sign(&p)
 	permission, err := engine.SignPermissionToken(p, cfg.EncryptionKey)
 	if err != nil {
 		return engine.LangflowResult{}, err
 	}
 	return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope,
-		req.Text, permission, guide, complaints)
+		req.Text, permission, guide, complaints, rules)
 }
 
 func finishPersonalZaloComplaint(ctx context.Context, cfg *config.Config, channel models.Channel, req personalZaloChatbotRequest, turnID, reply string, forceHandover, staffGroup bool) (string, bool) {

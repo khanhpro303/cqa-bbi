@@ -21,317 +21,117 @@
       </v-col>
 
       <v-col cols="12" md="9">
-        <!-- AI Config -->
-        <v-card v-if="activeTab === 'ai'" class="pa-4 pa-sm-6">
-          <div class="text-subtitle-1 font-weight-bold mb-4">
+        <!-- AI Config: provider keys and model lists only. Picking models
+             happens in Agents AI > Model tác vụ. -->
+        <v-card v-if="activeTab === 'ai'" class="pa-4 pa-sm-6" data-testid="ai-provider-settings">
+          <div class="text-subtitle-1 font-weight-bold mb-1">
             <v-icon start size="small">mdi-robot</v-icon>
             {{ $t('ai_config') }}
           </div>
-
-          <v-select
-            v-model="aiSettings.provider"
-            :label="$t('ai_provider')"
-            :items="providerOptions"
-            class="mb-3"
-            @update:model-value="onProviderChange"
-          />
-
-          <v-text-field
-            v-model="aiSettings.apiKey"
-            :label="$t(isNineRouter ? 'nine_router_api_key' : 'api_key')"
-            :type="showKey ? 'text' : 'password'"
-            :append-inner-icon="showKey ? 'mdi-eye-off' : 'mdi-eye'"
-            @click:append-inner="showKey = !showKey"
-            class="mb-3"
-          />
-
-          <v-switch
-            v-if="!isNineRouter"
-            v-model="useCustomBaseUrl"
-            :label="$t('custom_api_url')"
-            color="primary"
-            density="compact"
-            hide-details
-            class="mt-1 mb-2"
-          />
-          <div v-if="!hasCustomBaseUrl" class="text-caption text-grey mb-2">{{ $t('custom_api_url_hint') }}</div>
-
-          <v-text-field
-            v-if="hasCustomBaseUrl"
-            v-model="aiSettings.baseUrl"
-            label="Base URL"
-            :placeholder="baseURLPlaceholder"
-            :hint="isNineRouter ? $t('nine_router_url_hint') : 'Để trống để dùng mặc định'"
-            persistent-hint
-            clearable
-            :rules="[
-              v => !!v || (isNineRouter ? 'Vui lòng nhập URL 9router' : 'Vui lòng nhập URL hoặc tắt tùy chỉnh'),
-              v => !v || v.startsWith('http://') || v.startsWith('https://') || 'URL phải bắt đầu bằng http:// hoặc https://',
-              v => !isNineRouter || !v || /\/v1\/*$/.test(v.trim()) || 'URL 9router phải kết thúc bằng /v1',
-            ]"
-            class="mb-3"
-          />
-
-          <v-combobox
-            v-if="isNineRouter"
-            :model-value="aiSettings.model"
-            :label="$t('ai_model')"
-            :items="nineRouterDraftMatchesSaved ? nineRouterModelOptions : []"
-            :loading="nineRouterDraftMatchesSaved && nineRouterCatalogStatus === 'loading'"
-            :hint="$t(nineRouterDraftMatchesSaved ? 'nine_router_model_hint' : 'nine_router_save_connection_hint')"
-            :return-object="false"
-            clearable
-            persistent-hint
-            class="mb-3"
-            data-testid="nine-router-default-model"
-            @update:model-value="aiSettings.model = $event ?? ''"
-          />
-          <v-select
-            v-else-if="aiSettings.provider !== 'openai' && aiSettings.provider !== 'openrouter'"
-            v-model="aiSettings.model"
-            :label="$t('ai_model')"
-            :items="modelOptions"
-            item-title="title"
-            item-value="value"
-            class="mb-3"
-          />
-          <v-combobox
-            v-else
-            v-model="aiSettings.model"
-            :label="$t('ai_model')"
-            :items="modelOptions"
-            item-title="title"
-            item-value="value"
-            :return-object="false"
-            :hint="aiSettings.provider === 'openrouter' ? $t('openrouter_free_models_hint') : 'Chọn model gợi ý hoặc nhập model OpenAI tùy chỉnh'"
-            :loading="loadingOpenRouterModels"
-            persistent-hint
-            clearable
-            class="mb-3"
-            data-testid="ai-model-combobox"
-          />
-          <v-btn
-            v-if="aiSettings.provider === 'openrouter'"
-            variant="text"
-            size="small"
-            prepend-icon="mdi-refresh"
-            class="mb-3 px-0"
-            :loading="loadingOpenRouterModels"
-            data-testid="openrouter-load-models"
-            @click="loadOpenRouterModels(true)"
-          >{{ $t('openrouter_load_models') }}</v-btn>
-
-          <div class="d-flex flex-wrap ga-2">
-            <v-btn color="primary" :loading="savingAI" :disabled="savingAICredentials" @click="saveAI(false)">Lưu cấu hình AI chung</v-btn>
-            <v-btn variant="tonal" :loading="savingAICredentials" :disabled="savingAI" @click="saveAI(true)">{{ $t(isNineRouter ? 'nine_router_save_connection' : 'save_ai_provider_credentials') }}</v-btn>
-            <v-btn variant="outlined" :loading="testingKey" @click="testKey">{{ $t(isNineRouter ? 'nine_router_test_model' : 'test_api_key') }}</v-btn>
+          <div class="text-body-2 text-medium-emphasis mb-4">
+            {{ $t('ai_keys_intro') }}
+            <router-link :to="{ path: `/${tenantId}/ai-agents`, query: { tab: 'models' } }" data-testid="ai-task-models-link">{{ $t('ai_keys_models_link') }}</router-link>.
           </div>
 
-          <div v-if="hasSavedNineRouter && ((isNineRouter && nineRouterDraftMatchesSaved) || hasNineRouterTasks)" class="d-flex align-center flex-wrap ga-2 mt-3">
-            <v-btn
-              variant="text"
-              size="small"
-              prepend-icon="mdi-refresh"
-              :loading="nineRouterCatalogStatus === 'loading'"
-              data-testid="nine-router-refresh-models"
-              @click="nineRouterCatalogRevision++"
-            >{{ $t('nine_router_refresh_models') }}</v-btn>
-            <span role="status" class="text-caption text-medium-emphasis">
-              {{ nineRouterCatalogMessage }}
-            </span>
-          </div>
-
-          <v-divider class="my-6" />
-
-          <div data-testid="ai-task-model-settings">
-            <div class="text-subtitle-1 font-weight-bold mb-1">Model theo tác vụ</div>
-            <div class="text-body-2 text-medium-emphasis mb-4">
-              Tác vụ để trống sẽ dùng cấu hình chung. Tác vụ có model riêng dùng API key và Base URL đã lưu cho nhà cung cấp được chọn.
-            </div>
-
-            <v-alert
-              v-if="taskSettingsError"
-              type="error"
-              variant="tonal"
-              class="mb-4"
-              data-testid="ai-task-settings-error"
+          <v-expansion-panels v-model="openProviders" multiple variant="accordion" class="mb-6">
+            <v-expansion-panel
+              v-for="option in providerOptions"
+              :key="option.value"
+              :value="option.value"
+              :data-testid="`ai-provider-${option.value}`"
             >
-              <div>{{ taskSettingsError }}</div>
-              <v-btn variant="text" size="small" class="mt-1 px-0" @click="loadTaskAISettings">Tải lại</v-btn>
-            </v-alert>
+              <v-expansion-panel-title>
+                <div class="d-flex align-center flex-wrap ga-2">
+                  <span class="font-weight-medium">{{ option.title }}</span>
+                  <v-chip size="x-small" :color="creds.apiKeys[option.value] ? 'success' : 'grey'" variant="tonal">
+                    {{ creds.apiKeys[option.value] ? $t(option.value === '9router' ? 'ai_token_saved' : 'ai_key_saved') : $t('ai_key_missing') }}
+                  </v-chip>
+                  <v-chip v-if="creds.defaultProvider === option.value" size="x-small" color="primary" variant="tonal">{{ $t('ai_default_provider') }}</v-chip>
+                </div>
+              </v-expansion-panel-title>
+              <v-expansion-panel-text>
+                <v-text-field
+                  v-model="drafts[option.value].apiKey"
+                  :label="$t(option.value === '9router' ? 'nine_router_api_key' : 'api_key')"
+                  :type="drafts[option.value].showKey ? 'text' : 'password'"
+                  :append-inner-icon="drafts[option.value].showKey ? 'mdi-eye-off' : 'mdi-eye'"
+                  autocomplete="off"
+                  class="mb-2"
+                  :data-testid="`ai-key-${option.value}`"
+                  @click:append-inner="drafts[option.value].showKey = !drafts[option.value].showKey"
+                />
 
-            <v-progress-linear v-if="loadingTaskSettings" indeterminate color="primary" class="mb-4" />
-
-            <template v-else-if="taskAISettings.length">
-              <div
-                v-for="group in taskGroups"
-                :key="group"
-                class="mb-5"
-              >
-                <div class="text-subtitle-2 font-weight-bold mb-2">{{ group }}</div>
-                <v-card
-                  v-for="task in tasksByGroup[group]"
-                  :key="task.key"
-                  variant="outlined"
-                  class="pa-3 mb-2"
-                  :data-testid="`ai-task-${task.key}`"
-                >
-                  <div class="d-flex flex-wrap align-center justify-space-between ga-2 mb-3">
-                    <div>
-                      <div class="text-body-2 font-weight-medium">{{ task.label }}</div>
-                      <div class="text-caption text-medium-emphasis">
-                        {{ task.capability === 'vision' ? 'Đọc hình ảnh' : 'Văn bản' }}
-                      </div>
-                    </div>
-                    <v-chip v-if="!task.provider" size="small" color="primary" variant="tonal">
-                      Kế thừa {{ taskDefaultLabel }}
-                    </v-chip>
-                  </div>
-
-                  <v-row dense>
-                    <v-col cols="12" md="5">
-                      <v-select
-                        :model-value="task.provider"
-                        label="Nhà cung cấp"
-                        :items="taskProviderOptions"
-                        density="compact"
-                        hide-details="auto"
-                        :disabled="savingTaskSettings"
-                        @update:model-value="selectTaskProvider(task, $event)"
-                      />
-                    </v-col>
-                    <v-col cols="12" md="7">
-                      <v-combobox
-                        :model-value="task.model"
-                        label="Model"
-                        :items="taskModelOptions(task)"
-                        item-title="title"
-                        item-value="value"
-                        :return-object="false"
-                        :loading="task.provider === '9router' && nineRouterCatalogStatus === 'loading'"
-                        :disabled="!task.provider || savingTaskSettings"
-                        :placeholder="task.provider ? 'Chọn hoặc nhập model' : taskDefaults.model"
-                        :hint="taskModelHint(task)"
-                        persistent-hint
-                        density="compact"
-                        clearable
-                        @update:model-value="task.model = $event ?? ''"
-                      />
-                    </v-col>
-                  </v-row>
-                </v-card>
-              </div>
-
-              <div class="d-flex align-center flex-wrap ga-3">
-                <v-btn
-                  color="primary"
-                  :loading="savingTaskSettings"
-                  :disabled="hasInvalidTaskSettings || !taskChanges.length"
-                  data-testid="save-ai-task-settings"
-                  @click="saveTaskAISettings"
-                >
-                  Lưu model theo tác vụ
-                </v-btn>
-                <span v-if="hasInvalidTaskSettings" class="text-caption text-error">
-                  Tác vụ chọn nhà cung cấp riêng phải có model.
-                </span>
-              </div>
-            </template>
-          </div>
-
-          <v-divider class="my-6" />
-
-          <div data-testid="ai-flow-model-settings">
-            <div class="d-flex justify-space-between align-center mb-1">
-              <div class="text-subtitle-1 font-weight-bold">Model chatbot Langflow</div>
-              <v-btn
-                variant="text"
-                size="small"
-                prepend-icon="mdi-refresh"
-                :disabled="loadingFlowSettings || !!savingFlowRole"
-                @click="loadFlowAISettings"
-              >Tải lại</v-btn>
-            </div>
-            <div class="text-body-2 text-medium-emphasis mb-4">
-              Đồng bộ cập nhật model trên flow đang chạy. Đổi nhà cung cấp và khóa API của agent trong Langflow.
-            </div>
-
-            <v-alert
-              v-if="flowSettingsError"
-              type="error"
-              variant="tonal"
-              class="mb-4"
-              data-testid="ai-flow-settings-error"
-            >
-              <div>{{ flowSettingsError }}</div>
-            </v-alert>
-
-            <v-progress-linear v-if="loadingFlowSettings" indeterminate color="primary" class="mb-4" />
-
-            <v-row v-else-if="hasFlowSettings">
-              <v-col v-for="role in flowRoles" :key="role" cols="12" lg="6">
-                <v-card variant="outlined" class="pa-4 h-100" :data-testid="`ai-flow-${role}`">
-                  <div class="d-flex align-start justify-space-between ga-2 mb-1">
-                    <div class="text-subtitle-2 font-weight-bold">{{ flowRoleLabel(role) }}</div>
-                    <v-chip
-                      size="small"
-                      :color="flowSettings[role]?.managed ? 'success' : 'warning'"
-                      variant="tonal"
-                    >
-                      {{ flowSettings[role]?.managed ? 'Quản lý tập trung' : 'Chỉ đọc' }}
-                    </v-chip>
-                  </div>
-                  <div class="text-caption text-medium-emphasis mb-3 text-truncate">
-                    {{ flowSettings[role]?.name || flowSettings[role]?.flow_id || 'Chưa cấu hình flow' }}
-                  </div>
-
-                  <v-alert
-                    v-if="flowSettings[role]?.management_problem"
-                    type="warning"
-                    variant="tonal"
+                <template v-if="option.value !== '9router'">
+                  <v-switch
+                    v-model="drafts[option.value].customUrl"
+                    :label="$t('custom_api_url')"
+                    color="primary"
                     density="compact"
-                    class="mb-3"
-                  >
-                    {{ flowSettings[role]?.management_problem }}
-                  </v-alert>
-
-                  <v-alert
-                    v-if="(flowSettings[role]?.shared_roles?.length || 0) > 1"
-                    type="info"
-                    variant="tonal"
-                    density="compact"
-                    class="mb-3"
-                  >
-                    Flow này dùng chung cho {{ sharedFlowRoles(flowSettings[role]!) }}. Một lần đồng bộ sẽ cập nhật tất cả vai trò dùng chung.
-                  </v-alert>
-
-                  <v-autocomplete
-                    v-model="flowSelections[role]"
-                    label="Model trong flow"
-                    :items="flowModelOptions(flowSettings[role])"
-                    item-title="title"
-                    return-object
-                    :disabled="!flowSettings[role]?.managed || !!savingFlowRole"
-                    :loading="savingFlowRole === role"
-                    density="compact"
-                    persistent-hint
-                    :hint="flowSelectionHint(role)"
-                    class="mb-3"
+                    hide-details
+                    class="mb-2"
                   />
+                  <div v-if="!drafts[option.value].customUrl" class="text-caption text-grey mb-2">{{ $t('custom_api_url_hint') }}</div>
+                </template>
+                <v-text-field
+                  v-if="option.value === '9router' || drafts[option.value].customUrl"
+                  v-model="drafts[option.value].baseUrl"
+                  label="Base URL"
+                  :placeholder="baseURLPlaceholders[option.value]"
+                  :hint="option.value === '9router' ? $t('nine_router_url_hint') : ''"
+                  persistent-hint
+                  clearable
+                  :rules="baseURLRules(option.value)"
+                  class="mb-3"
+                  :data-testid="`ai-base-url-${option.value}`"
+                />
 
+                <div class="d-flex flex-wrap ga-2 mt-1">
                   <v-btn
                     color="primary"
                     variant="tonal"
-                    :loading="savingFlowRole === role"
-                    :disabled="!canSaveFlow(role) || !!savingFlowRole"
-                    :data-testid="`save-ai-flow-${role}`"
-                    @click="saveFlowAISetting(role)"
-                  >
-                    Đồng bộ vào Langflow
-                  </v-btn>
-                </v-card>
-              </v-col>
-            </v-row>
+                    :loading="drafts[option.value].saving"
+                    :disabled="drafts[option.value].testing"
+                    :data-testid="`ai-save-${option.value}`"
+                    @click="saveProvider(option.value)"
+                  >{{ $t(option.value === '9router' ? 'nine_router_save_connection' : 'save_ai_provider_credentials') }}</v-btn>
+                  <v-btn
+                    variant="outlined"
+                    :loading="drafts[option.value].testing"
+                    :disabled="drafts[option.value].saving"
+                    :data-testid="`ai-test-${option.value}`"
+                    @click="testProvider(option.value)"
+                  >{{ $t(option.value === '9router' ? 'ai_test_token' : 'test_api_key') }}</v-btn>
+                </div>
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+          </v-expansion-panels>
+
+          <div data-testid="ai-model-catalogs">
+            <div class="text-subtitle-1 font-weight-bold mb-1">{{ $t('ai_catalogs_title') }}</div>
+            <div class="text-body-2 text-medium-emphasis mb-3">{{ $t('ai_catalogs_desc') }}</div>
+            <v-table density="compact" class="mb-3 catalog-table">
+              <tbody>
+                <tr data-testid="ai-catalog-9router">
+                  <td class="font-weight-medium">9router</td>
+                  <td class="text-medium-emphasis">{{ nineRouterCatalogMessage }}</td>
+                </tr>
+                <tr data-testid="ai-catalog-openrouter">
+                  <td class="font-weight-medium">OpenRouter (free)</td>
+                  <td class="text-medium-emphasis">{{ openRouterCatalogMessage }}</td>
+                </tr>
+                <tr>
+                  <td class="font-weight-medium">Claude, Gemini, OpenAI</td>
+                  <td class="text-medium-emphasis">{{ $t('ai_catalog_builtin') }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+            <v-btn
+              variant="tonal"
+              prepend-icon="mdi-refresh"
+              :loading="refreshingCatalogs"
+              data-testid="refresh-model-catalogs"
+              @click="refreshCatalogs"
+            >{{ $t('ai_catalogs_refresh') }}</v-btn>
           </div>
         </v-card>
 
@@ -345,7 +145,7 @@
 
           <div class="text-subtitle-2 mb-2">Chế độ Batch (tối ưu chi phí)</div>
           <v-switch
-            v-model="aiSettings.batchMode"
+            v-model="analysisSettings.batchMode"
             label="Bật chế độ Batch"
             hint="Gom nhiều cuộc chat vào 1 lần gọi AI. Tiết kiệm token nhưng có thể giảm độ chính xác."
             persistent-hint
@@ -354,8 +154,8 @@
             class="mb-3"
           />
           <v-select
-            v-if="aiSettings.batchMode"
-            v-model="aiSettings.batchSize"
+            v-if="analysisSettings.batchMode"
+            v-model="analysisSettings.batchSize"
             label="Số cuộc chat / batch"
             :items="[3, 5, 10, 15, 20, 30]"
             density="compact"
@@ -424,19 +224,26 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import FacebookAccountManager from '../components/FacebookAccountManager.vue'
+import {
+  type AIProvider,
+  clearNineRouterModels,
+  defaultModelByProvider,
+  loadNineRouterModels,
+  loadOpenRouterModels,
+  parseProviderCredentials,
+  providerOptions,
+  useAIModelCatalog,
+} from '../composables/aiModelCatalog'
 
 const route = useRoute()
 const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
 
 const activeTab = ref(typeof route.query.facebook_link === 'string' ? 'facebook' : 'ai')
-const showKey = ref(false)
 const snackbar = ref(false)
 const snackText = ref('')
 const snackColor = ref('success')
 
-const savingAI = ref(false)
-const testingKey = ref(false)
 const savingGeneral = ref(false)
 
 const tabs = [
@@ -446,339 +253,191 @@ const tabs = [
   { label: 'facebook_account', value: 'facebook', icon: 'mdi-facebook' },
 ]
 
-type AIProvider = 'claude' | 'gemini' | 'openai' | 'openrouter' | '9router'
+// ---- provider keys ----
+type ProviderDraft = { apiKey: string; baseUrl: string; customUrl: boolean; showKey: boolean; saving: boolean; testing: boolean }
 
-type TaskAISetting = {
-  key: string
-  label: string
-  group: string
-  capability: 'text' | 'vision'
-  provider: AIProvider | ''
-  model: string
+const catalog = useAIModelCatalog()
+const creds = reactive(parseProviderCredentials({}))
+const drafts = reactive(Object.fromEntries(providerOptions.map(({ value }) => [value, {
+  apiKey: '', baseUrl: '', customUrl: false, showKey: false, saving: false, testing: false,
+}])) as Record<AIProvider, ProviderDraft>)
+const openProviders = ref<AIProvider[]>([])
+
+const baseURLPlaceholders: Record<AIProvider, string> = {
+  claude: 'https://api.anthropic.com',
+  gemini: 'https://generativelanguage.googleapis.com',
+  openai: 'https://api.openai.com/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+  '9router': 'https://router.example.com/v1',
 }
 
-type FlowRole = 'internal' | 'public'
-
-type FlowModelOption = {
-  title?: string
-  name: string
-  provider: string
+function baseURLRules(provider: AIProvider) {
+  const nineRouter = provider === '9router'
+  return [
+    (v: string) => !!v || (nineRouter ? 'Vui lòng nhập URL 9router' : 'Vui lòng nhập URL hoặc tắt tùy chỉnh'),
+    (v: string) => !v || v.startsWith('http://') || v.startsWith('https://') || 'URL phải bắt đầu bằng http:// hoặc https://',
+    (v: string) => !nineRouter || !v || /\/v1\/*$/.test(v.trim()) || 'URL 9router phải kết thúc bằng /v1',
+  ]
 }
 
-type FlowAISetting = {
-  role: FlowRole
-  flow_id: string
-  name: string
-  model: string
-  provider: string
-  options: FlowModelOption[]
-  source: string
-  managed: boolean
-  management_problem?: string
-  shared_roles?: FlowRole[]
+function draftBaseURL(provider: AIProvider) {
+  const draft = drafts[provider]
+  return provider === '9router' || draft.customUrl ? (draft.baseUrl || '').trim() : ''
 }
 
-const providerOptions = [
-  { title: 'Claude (Anthropic)', value: 'claude' },
-  { title: 'Gemini (Google)', value: 'gemini' },
-  { title: 'OpenAI API', value: 'openai' },
-  { title: 'OpenRouter (nhiều hãng, có model free)', value: 'openrouter' },
-  { title: '9router', value: '9router' },
-]
-
-const claudeModels = [
-  { title: 'Claude Sonnet 4.6 (Recommended)', value: 'claude-sonnet-4-6' },
-  { title: 'Claude Haiku 4.5 (Fast & Cheap)', value: 'claude-haiku-4-5-20251001' },
-  { title: 'Claude Opus 4 (Most Capable)', value: 'claude-opus-4' },
-  { title: 'Claude Sonnet 4.5 (CLIProxy)', value: 'claude-sonnet-4-5-20250929' },
-  { title: 'Claude Opus 4.6 (CLIProxy)', value: 'claude-opus-4-6' },
-]
-const geminiModels = [
-  { title: 'Gemini 2.5 Flash (Fast & Cheap)', value: 'gemini-2.5-flash' },
-  { title: 'Gemini 2.5 Flash Lite (Fastest)', value: 'gemini-2.5-flash-lite' },
-  { title: 'Gemini 2.5 Pro (Most Capable)', value: 'gemini-2.5-pro' },
-]
-const openAIModels = [
-  { title: 'GPT-5.4 Mini (Recommended)', value: 'gpt-5.4-mini' },
-  { title: 'GPT-5.3-Codex (Coding)', value: 'gpt-5.3-codex' },
-  { title: 'GPT-5.3 Chat (General)', value: 'gpt-5.3-chat-latest' },
-  { title: 'GPT-5 Mini (Low Cost)', value: 'gpt-5-mini' },
-  { title: 'GPT-5 Nano (Cheapest)', value: 'gpt-5-nano' },
-]
-
-const defaultModelByProvider: Record<AIProvider, string> = {
-  claude: 'claude-sonnet-4-6',
-  gemini: 'gemini-2.5-flash',
-  openai: 'gpt-5.4-mini',
-  openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
-  '9router': '',
+function resetDraft(provider: AIProvider) {
+  const draft = drafts[provider]
+  draft.apiKey = creds.apiKeys[provider] || ''
+  draft.baseUrl = creds.baseURLs[provider] || ''
+  draft.customUrl = !!draft.baseUrl
 }
 
-const providerApiKeys = reactive<Record<AIProvider, string>>({
-  claude: '',
-  gemini: '',
-  openai: '',
-  openrouter: '',
-  '9router': '',
-})
-const providerBaseURLs = reactive<Partial<Record<AIProvider, string>>>({})
+const sameURL = (a: string, b: string) => a.trim().replace(/\/+$/, '') === b.trim().replace(/\/+$/, '')
+const hasSavedNineRouter = computed(() => !!creds.apiKeys['9router'] && !!creds.baseURLs['9router'])
+const nineRouterDraftMatchesSaved = computed(() => hasSavedNineRouter.value &&
+  drafts['9router'].apiKey === creds.apiKeys['9router'] &&
+  sameURL(drafts['9router'].baseUrl || '', creds.baseURLs['9router'] || ''))
 
-type OpenRouterModel = { id: string; name: string; context_length?: number; vision?: boolean; json_mode?: boolean }
-const openRouterModels = ref<OpenRouterModel[]>([])
-const loadingOpenRouterModels = ref(false)
-const openRouterModelOptions = computed(() => openRouterModels.value.map(m => {
-  const tags = [m.vision ? 'đọc ảnh' : '', m.json_mode ? 'JSON' : '', m.context_length ? `${Math.round(m.context_length / 1000)}k` : '']
-    .filter(Boolean).join(', ')
-  return { title: tags ? `${m.name} (${tags})` : m.name, value: m.id }
-}))
-
-const taskAISettings = ref<TaskAISetting[]>([])
-const savedTaskModels = ref(new Map<string, { provider: AIProvider | ''; model: string }>())
-const taskDefaults = reactive({ provider: '', model: '' })
-const loadingTaskSettings = ref(false)
-const savingTaskSettings = ref(false)
-const taskSettingsError = ref('')
-
-const taskProviderOptions = [
-  { title: 'Dùng cấu hình chung', value: '' },
-  ...providerOptions,
-]
-
-const taskGroups = computed(() => [...new Set(taskAISettings.value.map(task => task.group))])
-const tasksByGroup = computed(() => Object.fromEntries(
-  taskGroups.value.map(group => [group, taskAISettings.value.filter(task => task.group === group)]),
-) as Record<string, TaskAISetting[]>)
-const taskDefaultLabel = computed(() => [taskDefaults.provider, taskDefaults.model].filter(Boolean).join(' / '))
-const hasInvalidTaskSettings = computed(() => taskAISettings.value.some(task => task.provider && !task.model.trim()))
-const taskChanges = computed(() => taskAISettings.value.flatMap(task => {
-  const model = task.provider ? task.model.trim() : ''
-  const saved = savedTaskModels.value.get(task.key)
-  return task.provider === saved?.provider && model === saved?.model
-    ? []
-    : [{ key: task.key, provider: task.provider, model }]
-}))
-
-const flowRoles: FlowRole[] = ['internal', 'public']
-const flowSettings = reactive<Record<FlowRole, FlowAISetting | null>>({ internal: null, public: null })
-const flowSelections = reactive<Record<FlowRole, FlowModelOption | null>>({ internal: null, public: null })
-const loadingFlowSettings = ref(false)
-const savingFlowRole = ref<FlowRole | ''>('')
-const flowSettingsError = ref('')
-const hasFlowSettings = computed(() => flowRoles.some(role => flowSettings[role]))
-
-async function loadOpenRouterModels(force = false) {
-  if (loadingOpenRouterModels.value || (openRouterModels.value.length && !force)) return
-  loadingOpenRouterModels.value = true
-  try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/settings/ai/openrouter-models`)
-    openRouterModels.value = Array.isArray(data?.models) ? data.models : []
-  } catch {
-    showSnack(t('openrouter_load_failed'), 'error')
-  } finally {
-    loadingOpenRouterModels.value = false
-  }
+function failureText(err: any) {
+  const failure = err.response?.data
+  return ['invalid_base_url', '9router_endpoint_changed', 'invalid_ai_configuration', 'api_test_failed'].includes(failure?.error) && failure?.details
+    ? failure.details
+    : failure?.error || t('error')
 }
 
-function taskModelOptions(task: TaskAISetting) {
-  switch (task.provider) {
-    case 'claude':
-      return claudeModels
-    case 'gemini':
-      return geminiModels
-    case 'openai':
-      return openAIModels
-    case 'openrouter':
-      if (task.capability === 'vision') {
-        const visionModelIDs = new Set(openRouterModels.value.filter(model => model.vision).map(model => model.id))
-        return openRouterModelOptions.value.filter(model => visionModelIDs.has(model.value))
-      }
-      return openRouterModelOptions.value
-    case '9router':
-      return task.capability === 'vision' ? nineRouterVisionModelOptions.value : nineRouterModelOptions.value
-    default:
-      return []
-  }
-}
-
-function selectTaskProvider(task: TaskAISetting, provider: AIProvider | '') {
-  if (!provider) {
-    task.provider = ''
-    task.model = ''
+async function saveProvider(provider: AIProvider) {
+  const draft = drafts[provider]
+  const saveTenant = tenantId.value
+  if (!draft.apiKey) {
+    showSnack('Vui lòng nhập API Key', 'error')
     return
   }
-
-  if (task.provider !== provider) {
-    task.provider = provider
-    task.model = defaultModelByProvider[provider]
+  const baseURL = draftBaseURL(provider)
+  if ((provider === '9router' || draft.customUrl) && !baseURL) {
+    showSnack('Vui lòng nhập Base URL', 'error')
+    return
   }
-  if (provider === 'openrouter') loadOpenRouterModels()
-}
-
-function taskModelHint(task: TaskAISetting) {
-  if (!task.provider) return `Đang dùng ${taskDefaultLabel.value || 'cấu hình chung'}`
-  if (task.provider === '9router') {
-    if (!hasSavedNineRouter.value) return t('nine_router_save_connection_hint')
-    return t(task.capability === 'vision' ? 'nine_router_vision_hint' : 'nine_router_model_hint')
-  }
-  if (!providerApiKeys[task.provider]) return `Chưa lưu API key cho ${task.provider}. Hãy lưu ở cấu hình chung trước.`
-  if (task.capability === 'vision') return 'Chọn model có khả năng đọc hình ảnh.'
-  return 'Chọn model gợi ý hoặc nhập model tùy chỉnh.'
-}
-
-function applyTaskAISettings(data: any) {
-  taskDefaults.provider = typeof data?.default_provider === 'string' ? data.default_provider : ''
-  taskDefaults.model = typeof data?.default_model === 'string' ? data.default_model : ''
-  taskAISettings.value = Array.isArray(data?.tasks)
-    ? data.tasks.map((task: any) => ({
-        key: String(task.key || ''),
-        label: String(task.label || task.key || ''),
-        group: String(task.group || 'Tác vụ khác'),
-        capability: task.capability === 'vision' ? 'vision' : 'text',
-        provider: providerOptions.some(option => option.value === task.provider) ? task.provider : '',
-        model: typeof task.model === 'string' ? task.model : '',
-      })).filter((task: TaskAISetting) => task.key)
-    : []
-  savedTaskModels.value = new Map(taskAISettings.value.map(({ key, provider, model }) => [key, { provider, model }]))
-}
-
-async function loadTaskAISettings() {
-  loadingTaskSettings.value = true
-  taskSettingsError.value = ''
+  const submitted = { apiKey: draft.apiKey, baseUrl: draft.baseUrl, customUrl: draft.customUrl }
+  draft.saving = true
   try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/settings/ai/tasks`)
-    applyTaskAISettings(data)
-    if (taskAISettings.value.some(task => task.provider === 'openrouter')) loadOpenRouterModels()
-  } catch (err: any) {
-    taskSettingsError.value = err.response?.data?.error || 'Không thể tải cấu hình model theo tác vụ. Kiểm tra kết nối rồi thử lại.'
-  } finally {
-    loadingTaskSettings.value = false
-  }
-}
-
-async function saveTaskAISettings() {
-  if (hasInvalidTaskSettings.value || !taskChanges.value.length || savingTaskSettings.value) return
-  savingTaskSettings.value = true
-  taskSettingsError.value = ''
-  try {
-    const { data } = await api.put(`/tenants/${tenantId.value}/settings/ai/tasks`, {
-      tasks: taskChanges.value,
+    // The first key saved when the default provider has none becomes the
+    // default, so a new tenant works without a trip to Model tác vụ.
+    const becomeDefault = provider !== creds.defaultProvider && !creds.apiKeys[creds.defaultProvider] && provider !== '9router'
+    await api.put(`/tenants/${saveTenant}/settings/ai`, {
+      provider,
+      api_key: draft.apiKey,
+      base_url: baseURL,
+      ...(becomeDefault ? { model: defaultModelByProvider[provider] } : { credentials_only: true }),
     })
-    applyTaskAISettings(data)
-    showSnack('Đã lưu model theo tác vụ', 'success')
-  } catch (err: any) {
-    taskSettingsError.value = err.response?.data?.details || err.response?.data?.error || 'Không thể lưu cấu hình model theo tác vụ. Kiểm tra API key và tên model rồi thử lại.'
-  } finally {
-    savingTaskSettings.value = false
-  }
-}
-
-function flowRoleLabel(role: FlowRole) {
-  return role === 'internal' ? 'Chatbot nội bộ' : 'Chatbot khách hàng'
-}
-
-function sharedFlowRoles(flow: FlowAISetting) {
-  return (flow.shared_roles || []).map(flowRoleLabel).join(' và ')
-}
-
-function flowModelOptions(flow: FlowAISetting | null) {
-  if (!flow) return []
-  const options = [...(Array.isArray(flow.options) ? flow.options : [])]
-  if (flow.model && !options.some(option => option.name === flow.model && option.provider === flow.provider)) {
-    options.unshift({ name: flow.model, provider: flow.provider })
-  }
-  return options.map(option => ({
-    ...option,
-    title: option.provider ? `${option.name} · ${option.provider}` : option.name,
-  }))
-}
-
-function flowSelectionHint(role: FlowRole) {
-  const flow = flowSettings[role]
-  if (!flow) return 'Chưa cấu hình flow.'
-  if (!flow.managed) return flow.management_problem || 'Flow này đang dùng cấu hình dùng chung và chưa thể đồng bộ từ tenant.'
-  return flow.provider ? `Hiện tại: ${flow.model} · ${flow.provider}` : `Hiện tại: ${flow.model}`
-}
-
-function canSaveFlow(role: FlowRole) {
-  const flow = flowSettings[role]
-  const selection = flowSelections[role]
-  return !!flow?.managed && !!selection?.name && (
-    selection.name !== flow.model || selection.provider !== flow.provider
-  )
-}
-
-function applyFlowAISettings(data: any) {
-  for (const role of flowRoles) {
-    const value = data?.flows?.[role]
-    if (!value || typeof value !== 'object') {
-      flowSettings[role] = null
-      flowSelections[role] = null
-      continue
+    if (tenantId.value !== saveTenant || !await loadSettings([]) || tenantId.value !== saveTenant) return
+    if (draft.apiKey === submitted.apiKey && draft.baseUrl === submitted.baseUrl && draft.customUrl === submitted.customUrl) {
+      resetDraft(provider)
     }
-    const flow: FlowAISetting = {
-      role,
-      flow_id: String(value.flow_id || ''),
-      name: String(value.name || ''),
-      model: String(value.model || ''),
-      provider: String(value.provider || ''),
-      options: Array.isArray(value.options) ? value.options : [],
-      source: String(value.source || ''),
-      managed: value.managed === true,
-      management_problem: typeof value.management_problem === 'string' ? value.management_problem : undefined,
-      shared_roles: Array.isArray(value.shared_roles)
-        ? value.shared_roles.filter((item: unknown): item is FlowRole => item === 'internal' || item === 'public')
-        : [],
+    if (becomeDefault) {
+      showSnack(t('ai_became_default'), 'success')
+      return
     }
-    flowSettings[role] = flow
-    flowSelections[role] = flowModelOptions(flow).find(option => (
-      option.name === flow.model && option.provider === flow.provider
-    )) || null
-  }
-}
-
-async function loadFlowAISettings() {
-  if (loadingFlowSettings.value) return
-  loadingFlowSettings.value = true
-  flowSettingsError.value = ''
-  try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/settings/ai/flows`)
-    applyFlowAISettings(data)
+    if (provider === '9router') {
+      clearNineRouterModels()
+      loadNineRouterModels(tenantId.value, true)
+    }
+    showSnack(t('success'), 'success')
   } catch (err: any) {
-    flowSettingsError.value = err.response?.data?.message || err.response?.data?.error || 'Không thể đọc model từ Langflow. Kiểm tra URL, token và Flow ID rồi thử lại.'
+    showSnack(failureText(err), 'error')
   } finally {
-    loadingFlowSettings.value = false
+    draft.saving = false
   }
 }
 
-async function saveFlowAISetting(role: FlowRole) {
-  const selection = flowSelections[role]
-  if (!selection || !canSaveFlow(role) || savingFlowRole.value) return
-  savingFlowRole.value = role
-  flowSettingsError.value = ''
+// "Kiểm tra key": a one-line call to the provider. For 9router the check is
+// listing the routes of the saved connection, which needs no model ID.
+async function testProvider(provider: AIProvider) {
+  const draft = drafts[provider]
+  if (!draft.apiKey) {
+    showSnack('Vui lòng nhập API Key', 'error')
+    return
+  }
+  draft.testing = true
   try {
-    const { data } = await api.put(`/tenants/${tenantId.value}/settings/ai/flows/${role}`, {
-      model: selection.name,
-      provider: selection.provider,
+    if (provider === '9router') {
+      if (!nineRouterDraftMatchesSaved.value) {
+        showSnack(t('ai_test_token_save_first'), 'error')
+        return
+      }
+      await loadNineRouterModels(tenantId.value, true)
+      if (catalog.nineRouterStatus === 'loaded') {
+        showSnack(t('ai_test_token_ok', { count: catalog.nineRouter.length }), 'success')
+      } else {
+        showSnack(t('nine_router_models_failed'), 'error')
+      }
+      return
+    }
+    const baseURL = draftBaseURL(provider)
+    if (draft.customUrl && !baseURL) {
+      showSnack('Vui lòng nhập Base URL', 'error')
+      return
+    }
+    // The default provider is tested with the saved default model.
+    const { data } = await api.post(`/tenants/${tenantId.value}/settings/ai/test`, {
+      provider,
+      api_key: draft.apiKey,
+      base_url: baseURL,
+      model: provider === creds.defaultProvider ? '' : defaultModelByProvider[provider],
     })
-    const updatedRoles = Array.isArray(data?.updated_roles) ? data.updated_roles : [role]
-    await loadFlowAISettings()
-    showSnack(`Đã đồng bộ ${updatedRoles.map((item: FlowRole) => flowRoleLabel(item)).join(' và ')}`, 'success')
+    showSnack(`${data.provider}: ${data.message}`, 'success')
   } catch (err: any) {
-    flowSettingsError.value = err.response?.data?.message || err.response?.data?.error || 'Không thể đồng bộ model vào Langflow. Kiểm tra model có trong danh sách của node rồi thử lại.'
+    showSnack(failureText(err), 'error')
   } finally {
-    savingFlowRole.value = ''
+    draft.testing = false
   }
 }
 
-const useCustomBaseUrl = ref(false)
-const aiSettings = reactive<{ provider: AIProvider; model: string; apiKey: string; baseUrl: string; batchMode: boolean; batchSize: number }>({
-  provider: 'claude',
-  model: 'claude-sonnet-4-6',
-  apiKey: '',
-  baseUrl: '',
-  batchMode: true,
-  batchSize: 5,
+// ---- model lists that feed the Model tác vụ dropdowns ----
+const refreshingCatalogs = ref(false)
+
+const nineRouterCatalogMessage = computed(() => {
+  if (!hasSavedNineRouter.value) return t('ai_catalog_nine_router_not_saved')
+  switch (catalog.nineRouterStatus) {
+    case 'loading':
+      return t('ai_catalog_loading')
+    case 'error':
+      return t('nine_router_models_failed')
+    case 'loaded':
+      return catalog.nineRouter.length ? t('nine_router_models_count', { count: catalog.nineRouter.length }) : t('nine_router_models_empty')
+    default:
+      return t('ai_catalog_not_loaded')
+  }
 })
+
+const openRouterCatalogMessage = computed(() => {
+  switch (catalog.openRouterStatus) {
+    case 'loading':
+      return t('ai_catalog_loading')
+    case 'error':
+      return t('openrouter_load_failed')
+    case 'loaded':
+      return t('ai_catalog_openrouter_count', { count: catalog.openRouter.length })
+    default:
+      return t('ai_catalog_not_loaded')
+  }
+})
+
+async function refreshCatalogs() {
+  refreshingCatalogs.value = true
+  try {
+    await Promise.all([
+      loadOpenRouterModels(tenantId.value, true),
+      hasSavedNineRouter.value ? loadNineRouterModels(tenantId.value, true) : Promise.resolve(),
+    ])
+    const failed = catalog.openRouterStatus === 'error' || (hasSavedNineRouter.value && catalog.nineRouterStatus === 'error')
+    showSnack(failed ? t('ai_catalogs_refresh_partial') : t('ai_catalogs_refreshed'), failed ? 'warning' : 'success')
+  } finally {
+    refreshingCatalogs.value = false
+  }
+}
+
+// ---- analysis + general ----
+const analysisSettings = reactive({ batchMode: true, batchSize: 5 })
 const generalSettings = reactive({ companyName: '', timezone: 'Asia/Ho_Chi_Minh', language: 'vi', exchangeRate: 26000, appUrl: '' })
 
 const appUrlRules = [
@@ -786,142 +445,20 @@ const appUrlRules = [
   (v: string) => !v || !v.endsWith('/') || 'URL không nên có dấu / ở cuối',
 ]
 
-const isNineRouter = computed(() => aiSettings.provider === '9router')
-const hasCustomBaseUrl = computed(() => isNineRouter.value || useCustomBaseUrl.value)
+let settingsLoadToken = 0
 
-type NineRouterModel = { id: string; vision?: boolean }
-const nineRouterModels = ref<NineRouterModel[]>([])
-const nineRouterCatalogStatus = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
-const nineRouterCatalogRevision = ref(0)
-const hasSavedNineRouter = computed(() => !!providerApiKeys['9router'] && !!providerBaseURLs['9router'])
-const hasNineRouterTasks = computed(() => taskAISettings.value.some(task => task.provider === '9router'))
-const nineRouterDraftMatchesSaved = computed(() => hasSavedNineRouter.value &&
-  aiSettings.apiKey === providerApiKeys['9router'] &&
-  (aiSettings.baseUrl || '').trim().replace(/\/+$/, '') === providerBaseURLs['9router']?.trim().replace(/\/+$/, ''))
-const needsNineRouterCatalog = computed(() => (isNineRouter.value && nineRouterDraftMatchesSaved.value) || hasNineRouterTasks.value)
-
-const nineRouterCatalogMessage = computed(() => {
-  if (nineRouterCatalogStatus.value === 'error') return t('nine_router_models_failed')
-  if (nineRouterCatalogStatus.value !== 'loaded') return ''
-  return nineRouterModels.value.length
-    ? t('nine_router_models_count', { count: nineRouterModels.value.length })
-    : t('nine_router_models_empty')
-})
-
-function groupNineRouterModels(models: NineRouterModel[]) {
-  const groups = [
-    { label: 'Codex', matches: (id: string) => /^(cx|codex)\//i.test(id) },
-    { label: 'Gemini', matches: (id: string) => /^(?:[^/]+\/)?(?:gemini|gemma)[-/.]/i.test(id) },
-    { label: 'Claude', matches: (id: string) => /^(?:[^/]+\/)?claude[-/.]/i.test(id) },
-    { label: t('nine_router_other_models'), matches: () => true },
-  ]
-  const grouped = groups.map(group => ({ ...group, ids: [] as string[] }))
-  for (const model of models) grouped.find(group => group.matches(model.id))?.ids.push(model.id)
-  return grouped.flatMap(({ label, ids }, index) => ids.length ? [
-    { title: label, value: index, type: 'subheader' },
-    ...ids.map(id => ({ title: id, value: id, type: 'item' })),
-  ] : [])
-}
-
-const nineRouterModelOptions = computed(() => groupNineRouterModels(nineRouterModels.value))
-const nineRouterVisionModelOptions = computed(() => groupNineRouterModels(nineRouterModels.value.filter(model => model.vision)))
-
-watch(
-  [tenantId, hasSavedNineRouter, needsNineRouterCatalog, () => providerBaseURLs['9router'], nineRouterCatalogRevision],
-  async ([currentTenant, configured, needed], _, onCleanup) => {
-    nineRouterModels.value = []
-    nineRouterCatalogStatus.value = 'idle'
-    if (!currentTenant || !configured || !needed) return
-    const controller = new AbortController()
-    onCleanup(() => controller.abort())
-    nineRouterCatalogStatus.value = 'loading'
-    try {
-      const { data } = await api.get(`/tenants/${currentTenant}/settings/ai/9router-models`, { signal: controller.signal })
-      if (controller.signal.aborted) return
-      nineRouterModels.value = Array.isArray(data?.models) ? data.models : []
-      nineRouterCatalogStatus.value = 'loaded'
-    } catch {
-      if (!controller.signal.aborted) nineRouterCatalogStatus.value = 'error'
-    }
-  },
-)
-
-const modelOptions = computed(() => {
-  switch (aiSettings.provider) {
-    case 'claude':
-      return claudeModels
-    case 'gemini':
-      return geminiModels
-    case 'openai':
-      return openAIModels
-    case 'openrouter':
-      return openRouterModelOptions.value
-    default:
-      return claudeModels
-  }
-})
-
-function onProviderChange() {
-  aiSettings.model = isNineRouter.value && taskDefaults.provider === '9router'
-    ? taskDefaults.model
-    : defaultModelByProvider[aiSettings.provider]
-  aiSettings.apiKey = providerApiKeys[aiSettings.provider] || ''
-  aiSettings.baseUrl = providerBaseURLs[aiSettings.provider] || ''
-  useCustomBaseUrl.value = !!aiSettings.baseUrl
-  if (aiSettings.provider === 'openrouter') loadOpenRouterModels()
-}
-
-const baseURLPlaceholder = computed(() => {
-  switch (aiSettings.provider) {
-    case 'claude':
-      return 'https://api.anthropic.com'
-    case 'gemini':
-      return 'https://generativelanguage.googleapis.com'
-    case 'openai':
-      return 'https://api.openai.com/v1'
-    case 'openrouter':
-      return 'https://openrouter.ai/api/v1'
-    case '9router':
-      return 'https://router.example.com/v1'
-    default:
-      return ''
-  }
-})
-
-async function loadSettings() {
+async function loadSettings(resetProviders: AIProvider[] = providerOptions.map(({ value }) => value)) {
+  const requestedTenant = tenantId.value
+  const loadToken = ++settingsLoadToken
   try {
-    const { data } = await api.get(`/tenants/${tenantId.value}/settings`)
+    const { data } = await api.get(`/tenants/${requestedTenant}/settings`)
+    if (loadToken !== settingsLoadToken || requestedTenant !== tenantId.value) return false
     const settings = data.settings || {}
+    Object.assign(creds, parseProviderCredentials(settings))
+    for (const provider of resetProviders) resetDraft(provider)
 
-    providerApiKeys.claude = settings.ai_api_key_claude || ''
-    providerApiKeys.gemini = settings.ai_api_key_gemini || ''
-    providerApiKeys.openai = settings.ai_api_key_openai || ''
-    providerApiKeys.openrouter = settings.ai_api_key_openrouter || ''
-    providerApiKeys['9router'] = settings.ai_api_key_9router || ''
-
-    const provider = (settings.ai_provider as AIProvider) || 'claude'
-    aiSettings.provider = provider
-    for (const { value } of providerOptions) {
-      const scopedProvider = value as AIProvider
-      providerBaseURLs[scopedProvider] = settings[`ai_base_url_${scopedProvider}`] ?? (scopedProvider === provider ? settings.ai_base_url || '' : '')
-    }
-
-    if (provider === 'openrouter') loadOpenRouterModels()
-    if (!providerApiKeys[provider] && settings.ai_api_key && provider !== 'openrouter' && provider !== '9router') {
-      providerApiKeys[provider] = settings.ai_api_key
-    }
-    aiSettings.apiKey = providerApiKeys[provider] || ''
-
-    if (settings.ai_model) {
-      aiSettings.model = settings.ai_model
-    } else {
-      aiSettings.model = defaultModelByProvider[provider]
-    }
-
-    aiSettings.baseUrl = providerBaseURLs[provider] || ''
-    useCustomBaseUrl.value = !!aiSettings.baseUrl
-    if (settings.ai_batch_mode) aiSettings.batchMode = settings.ai_batch_mode === 'true'
-    if (settings.ai_batch_size) aiSettings.batchSize = parseInt(settings.ai_batch_size) || 5
+    if (settings.ai_batch_mode) analysisSettings.batchMode = settings.ai_batch_mode === 'true'
+    if (settings.ai_batch_size) analysisSettings.batchSize = parseInt(settings.ai_batch_size) || 5
     if (settings.exchange_rate_vnd) generalSettings.exchangeRate = parseFloat(settings.exchange_rate_vnd) || 26000
     if (settings.app_url) generalSettings.appUrl = settings.app_url
     if (data.tenant) {
@@ -929,8 +466,10 @@ async function loadSettings() {
       generalSettings.timezone = data.tenant.timezone || 'Asia/Ho_Chi_Minh'
       generalSettings.language = data.tenant.language || 'vi'
     }
+    return true
   } catch {
     // Settings not yet saved
+    return false
   }
 }
 
@@ -940,95 +479,14 @@ async function saveAnalysis() {
   savingAnalysis.value = true
   try {
     await api.put(`/tenants/${tenantId.value}/settings/analysis`, {
-      batch_mode: aiSettings.batchMode ? 'true' : 'false',
-      batch_size: String(aiSettings.batchSize),
+      batch_mode: analysisSettings.batchMode ? 'true' : 'false',
+      batch_size: String(analysisSettings.batchSize),
     })
     showSnack(t('success'), 'success')
   } catch (err: any) {
     showSnack(err.response?.data?.error || t('error'), 'error')
   } finally {
     savingAnalysis.value = false
-  }
-}
-
-const savingAICredentials = ref(false)
-
-async function saveAI(credentialsOnly: boolean) {
-  if (!aiSettings.apiKey) {
-    showSnack('Vui lòng nhập API Key', 'error')
-    return
-  }
-  if (!credentialsOnly && !aiSettings.model) {
-    showSnack('Vui lòng chọn hoặc nhập model', 'error')
-    return
-  }
-  const baseURL = hasCustomBaseUrl.value ? (aiSettings.baseUrl || '').trim() : ''
-  if (hasCustomBaseUrl.value && !baseURL) {
-    showSnack('Vui lòng nhập Base URL', 'error')
-    return
-  }
-  const loading = credentialsOnly ? savingAICredentials : savingAI
-  loading.value = true
-  try {
-    const { provider, apiKey } = aiSettings
-    const modelStr = typeof aiSettings.model === 'object' && aiSettings.model ? (aiSettings.model as any).value : aiSettings.model
-    await api.put(`/tenants/${tenantId.value}/settings/ai`, {
-      provider,
-      api_key: apiKey,
-      base_url: baseURL,
-      ...(credentialsOnly ? { credentials_only: true } : {
-        model: modelStr,
-        batch_mode: aiSettings.batchMode ? 'true' : 'false',
-        batch_size: String(aiSettings.batchSize),
-      }),
-    })
-    providerApiKeys[provider] = apiKey
-    providerBaseURLs[provider] = baseURL
-    if (provider === '9router') nineRouterCatalogRevision.value++
-    if (!credentialsOnly) {
-      taskDefaults.provider = provider
-      taskDefaults.model = modelStr
-    }
-    showSnack(t('success'), 'success')
-  } catch (err: any) {
-    const failure = err.response?.data
-    showSnack(failure?.error === 'invalid_base_url' || failure?.error === '9router_endpoint_changed'
-      ? failure.details : failure?.error || t('error'), 'error')
-  } finally {
-    loading.value = false
-  }
-}
-
-async function testKey() {
-  if (!aiSettings.apiKey) {
-    showSnack('Vui lòng nhập API Key', 'error')
-    return
-  }
-  const baseURL = hasCustomBaseUrl.value ? (aiSettings.baseUrl || '').trim() : ''
-  if (isNineRouter.value && !baseURL) {
-    showSnack('Vui lòng nhập Base URL', 'error')
-    return
-  }
-  if (isNineRouter.value && !aiSettings.model?.trim()) {
-    showSnack('Vui lòng nhập model ID 9router', 'error')
-    return
-  }
-  testingKey.value = true
-  try {
-    const modelStr = typeof aiSettings.model === 'object' && aiSettings.model ? (aiSettings.model as any).value : aiSettings.model
-    const { data } = await api.post(`/tenants/${tenantId.value}/settings/ai/test`, {
-      provider: aiSettings.provider,
-      api_key: aiSettings.apiKey,
-      model: modelStr,
-      base_url: baseURL,
-    })
-    showSnack(`${data.provider}: ${data.message}`, 'success')
-  } catch (err: any) {
-    const failure = err.response?.data
-    showSnack(failure?.error === 'invalid_ai_configuration' || failure?.error === '9router_endpoint_changed'
-      ? failure.details : failure?.error || t('error'), 'error')
-  } finally {
-    testingKey.value = false
   }
 }
 
@@ -1056,9 +514,22 @@ function showSnack(text: string, color: string) {
   snackbar.value = true
 }
 
-onMounted(() => {
-  loadSettings()
-  loadTaskAISettings()
-  loadFlowAISettings()
-})
+async function loadTenantSettings() {
+  if (!await loadSettings()) return
+  // Open the default provider so its key is one click away.
+  openProviders.value = [creds.defaultProvider]
+  loadOpenRouterModels(tenantId.value)
+  if (hasSavedNineRouter.value) loadNineRouterModels(tenantId.value)
+}
+
+watch(tenantId, loadTenantSettings)
+onMounted(loadTenantSettings)
+
+defineExpose({ creds, drafts, saveProvider, testProvider, refreshCatalogs, analysisSettings })
 </script>
+
+<style scoped>
+.catalog-table :deep(td:first-child) {
+  width: 200px;
+}
+</style>
