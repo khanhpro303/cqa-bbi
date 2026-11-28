@@ -10,6 +10,7 @@ import (
 
 	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
 )
@@ -69,6 +70,11 @@ func TestPersonalZaloDirectGrantUsesAgent(t *testing.T) {
 }
 
 func TestPersonalZaloAgentScopeForGroupAndGuestDraft(t *testing.T) {
+	// Exercise guest prompts with their defaults, independent of other tests' DB fixtures.
+	previousDB := db.DB
+	db.DB = nil
+	t.Cleanup(func() { db.DB = previousDB })
+
 	cfg := &config.Config{EncryptionKey: stockFixtureSigningKey}
 	req := personalZaloChatbotRequest{
 		TenantID: "tenant", ChannelID: "channel", ThreadType: personalZaloThreadGroup,
