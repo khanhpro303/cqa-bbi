@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/hibiken/asynq"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -24,8 +25,26 @@ func handleZaloOAGuestKnowledge(
 	flow engine.LangflowConfig,
 	text string,
 ) error {
+	plan, err := agents.PlanTurn(ctx, channel.TenantID, channel.ID, agents.TierPublic)
+	if err != nil {
+		log.Printf("[agents] OA guest channel %s: %v; staying silent (%s)", channel.ID, err, plan.LogFields())
+		return nil
+	}
+	if plan.Mode == agents.ModeSilent {
+		return nil
+	}
+	var permission, prompt string
+	if plan.Mode == agents.ModeAgent {
+		scope := engine.GroupPermissionContext{TenantID: channel.TenantID, ChannelID: channel.ID, AgentType: agents.TierPublic, DryRun: true}
+		plan.Sign(&scope)
+		permission, err = engine.SignPermissionToken(scope, cfg.EncryptionKey)
+		if err != nil {
+			return fmt.Errorf("sign OA guest agent scope: %w", err)
+		}
+		prompt = plan.BasePrompt("")
+	}
 	sessionScope := strings.Join([]string{"zalo-oa", channel.ID, payload.Sender.ID}, "\x00")
-	result, err := engine.RunGuestKnowledge(ctx, langflow, flow, cfg.EncryptionKey, channel.TenantID, sessionScope, text)
+	result, err := engine.RunGuestKnowledgeWithScope(ctx, langflow, flow, cfg.EncryptionKey, channel.TenantID, sessionScope, text, permission, prompt)
 	if errors.Is(err, engine.ErrGuestKnowledgeNotConfigured) {
 		return adapter.SendTextMessage(ctx, payload.Sender.ID, engine.GuestKnowledgeUnavailableReply)
 	}

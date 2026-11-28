@@ -83,3 +83,69 @@ func TestStockPromptsDoNotMandatePublicStockCounts(t *testing.T) {
 		t.Fatalf("group assistant prompt should forbid stock counts in customer groups: %s", groupPrompt.Instructions)
 	}
 }
+
+// A prompt whose default asks the bot for a marker the code reads must list
+// it in Required, so an edit in AI Engine cannot drop it.
+func TestMarkersInDefaultsAreRequired(t *testing.T) {
+	markers := []string{HumanReviewMarker, GuestVerificationMarker, ComplaintCodeMarker, KnowledgeImageMarker}
+	for _, p := range TaskPrompts() {
+		for _, m := range markers {
+			if strings.Contains(p.Instructions, m) && !slicesContains(p.Required, m) {
+				t.Errorf("%s: default uses %s but does not require it", p.Key, m)
+			}
+		}
+		if missing := p.MissingRequired(p.Instructions); len(missing) > 0 {
+			t.Errorf("%s: default lacks its own required %v", p.Key, missing)
+		}
+	}
+}
+
+func TestMissingRequired(t *testing.T) {
+	p, _ := LookupTaskPrompt(PromptUnansweredHandover)
+	if got := p.MissingRequired("Không có mã."); len(got) != 1 || got[0] != HumanReviewMarker {
+		t.Fatalf("missing = %v", got)
+	}
+	if got := p.MissingRequired("Trả " + HumanReviewMarker + " khi cần."); len(got) != 0 {
+		t.Fatalf("missing = %v", got)
+	}
+}
+
+// The rules added to a chat turn keep the wording the code used before they
+// became editable; spot-check the parts other code and tests rely on.
+func TestTurnRuleDefaults(t *testing.T) {
+	checks := map[string][]string{
+		PromptMissingDataRules:   {"QUY TẮC TRẢ LỜI KHI THIẾU DỮ LIỆU", "lookup_outcome=no_visible_match"},
+		PromptPublicOrderLookup:  {"lookup_order", `search="đơn hàng"`},
+		PromptUnansweredHandover: {"chỉ trả nguyên văn " + HumanReviewMarker + " trên một dòng"},
+		PromptBusinessScope:      {"OUT_OF_SCOPE", "Bitcoin"},
+		PromptGuestKnowledge:     {"chỉ trả đúng một dòng " + GuestVerificationMarker},
+		PromptPZHandover:         {"chỉ trả đúng " + HumanReviewMarker + " trên một dòng"},
+		PromptPZStaffNoCode:      {"Chỉ trả " + ComplaintCodeMarker + "."},
+		PromptOrderApproval:      {"Return exactly CONFIRMED", "Return NONE"},
+	}
+	for key, wants := range checks {
+		got := TaskPromptText("", key)
+		for _, want := range wants {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: default lacks %q", key, want)
+			}
+		}
+	}
+	guest := guestKnowledgePrompt("")
+	if !strings.HasSuffix(guest, "\n\n"+TaskPromptText("", PromptProductAdvice)) {
+		t.Error("guest prompt should end with the product advice rules")
+	}
+	staff := BuildTaskPrompt("", PromptPZStaffCode, map[string]string{"customer_code": "KH123"})
+	if !strings.HasSuffix(staff, "\n\nMã khách đã xác thực: KH123") {
+		t.Errorf("staff code prompt = %q", staff)
+	}
+}
+
+func slicesContains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

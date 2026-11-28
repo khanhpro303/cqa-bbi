@@ -432,6 +432,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/knowledge/text", middleware.RequirePermission("settings", "w"), handlers.CreateKnowledgeText)
 			tenant.POST("/knowledge/url", middleware.RequirePermission("settings", "w"), middleware.RateLimit(12), handlers.CreateKnowledgeURL)
 			tenant.POST("/knowledge/search", middleware.RequirePermission("settings", "r"), handlers.SearchKnowledgeTest)
+			tenant.GET("/knowledge/tags", middleware.RequirePermission("settings", "r"), handlers.ListKnowledgeTags)
 			tenant.POST("/knowledge/chat-preview", middleware.RequirePermission("settings", "r"), middleware.RateLimit(12), handlers.NewKnowledgeChatPreview(cfg))
 			tenant.POST("/knowledge/import-astra", middleware.RequireRole("owner", "admin"), handlers.ImportKnowledgeFromAstra)
 			tenant.GET("/knowledge/parser", middleware.RequirePermission("settings", "r"), handlers.GetKnowledgeParser)

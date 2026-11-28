@@ -55,6 +55,7 @@ func TestERPMCPAgentToolAllowlist(t *testing.T) {
 	_, calls := setupWarehouseFixture(t)
 	router := gin.New()
 	router.POST("/mcp/erp/:tenantId", ERPMCP)
+	router.POST("/api/v1/tenants/:tenantId/erp/query", ERPQuery)
 	signed := func(agentKey string, tools []string, dryRun bool) string {
 		token, err := engine.SignPermissionToken(engine.GroupPermissionContext{
 			TenantID: stockFixtureTenant, AgentType: "private", ZaloUserID: "fixture-zalo",
@@ -115,6 +116,19 @@ func TestERPMCPAgentToolAllowlist(t *testing.T) {
 	if got := calls.Load() - before; got != 1 {
 		t.Errorf("warehouse requests = %d, want 1 (the refused call must not reach the ERP)", got)
 	}
+	raw := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/"+stockFixtureTenant+"/erp/query",
+		strings.NewReader(`{"resource":"inventory","search":"SP457996","tool":"inventory_by_sku"}`))
+	raw.Header.Set("Content-Type", "application/json")
+	raw.Header.Set("X-Agent-Token", "fixture-agent-token")
+	raw.Header.Set("X-Permission-Token", stock)
+	rawResponse := httptest.NewRecorder()
+	router.ServeHTTP(rawResponse, raw)
+	if rawResponse.Code != http.StatusForbidden || !strings.Contains(rawResponse.Body.String(), "tool_not_allowed") {
+		t.Fatalf("direct ERP query bypassed specialist scope: %d %s", rawResponse.Code, rawResponse.Body.String())
+	}
+	if got := calls.Load() - before; got != 1 {
+		t.Errorf("direct ERP query reached the warehouse: %d total requests, want 1", got)
+	}
 
 	dry := signed("kho", []string{"inventory_by_sku", "order_cart_update"}, true)
 	if got := listNames(dry); strings.Join(got, ",") != "inventory_by_sku" {
@@ -129,16 +143,28 @@ func TestERPMCPAgentToolAllowlist(t *testing.T) {
 	if len(legacy) < len(agents.AllToolNames())-1 {
 		t.Errorf("legacy tool list shrank: %v", legacy)
 	}
+	if got := listNames(""); len(got) != len(legacy) {
+		t.Errorf("tool list for a legacy call without a permission token = %v", got)
+	}
 	// An agent with no tools gets none, not all.
 	if got := listNames(signed("rong", nil, false)); len(got) != 0 {
 		t.Errorf("tool list for an agent without tools = %v", got)
 	}
-	// A token for another tenant is ignored by the filter (and refused by
-	// every data tool itself).
+	// Invalid or mismatched tokens cannot fall back to an unscoped tool list
+	// or run any tool.
 	other, _ := engine.SignPermissionToken(engine.GroupPermissionContext{
 		TenantID: "other-tenant", AgentType: "private", AgentKey: "kho", AgentTools: []string{"inventory_by_sku"},
 	}, stockFixtureSigningKey)
-	if got := listNames(other); len(got) != len(legacy) {
-		t.Errorf("foreign token filtered the list: %v", got)
+	const search = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_knowledge","arguments":{"query":"tài liệu"}}}`
+	for name, token := range map[string]string{"foreign tenant": other, "malformed": "invalid-token"} {
+		t.Run(name, func(t *testing.T) {
+			if got := listNames(token); len(got) != 0 {
+				t.Errorf("unverified token exposed tools: %v", got)
+			}
+			if body := request(token, search); !strings.Contains(body, "forbidden_token") ||
+				!strings.Contains(body, `"isError":true`) {
+				t.Errorf("unverified token could search knowledge: %s", body)
+			}
+		})
 	}
 }

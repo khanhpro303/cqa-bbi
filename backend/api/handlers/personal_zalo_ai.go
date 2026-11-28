@@ -55,7 +55,7 @@ func personalZaloAgentPlan(ctx context.Context, req personalZaloChatbotRequest, 
 	}
 	plan, err := agents.PlanTurn(ctx, req.TenantID, req.ChannelID, tier)
 	if err != nil {
-		log.Printf("[agents] personal Zalo channel %s: %v; answering with the AI Engine prompt", req.ChannelID, err)
+		log.Printf("[agents] personal Zalo channel %s: %v; staying silent until routing recovers", req.ChannelID, err)
 	}
 	if sel, ok := plan.Agent(); ok && sel.Agent.Runtime == agents.RuntimeNative {
 		// Personal Zalo turns keep their memory in Langflow (its chat log is
@@ -64,6 +64,32 @@ func personalZaloAgentPlan(ctx context.Context, req personalZaloChatbotRequest, 
 		log.Printf("[agents] personal Zalo channel %s: native agent %s runs on Langflow here", req.ChannelID, sel.Agent.Key)
 	}
 	return plan
+}
+
+// personalZaloAgentScope signs only the selected specialist's tool and
+// knowledge scope. It deliberately carries no ERP groups or customer code.
+// Legacy turns return empty values and keep their existing preview behavior.
+func personalZaloAgentScope(cfg *config.Config, req personalZaloChatbotRequest, agentType string, plan agents.Plan, dryRun bool) (permission, agentToken string, err error) {
+	if plan.Mode != agents.ModeAgent {
+		return "", "", nil
+	}
+	if cfg == nil || cfg.EncryptionKey == "" {
+		return "", "", errors.New("specialist permission signing is unavailable")
+	}
+	p := engine.GroupPermissionContext{
+		TenantID: req.TenantID, ChannelID: req.ChannelID, ZaloUserID: req.SenderID,
+		AgentType: agentType, PersonalZalo: true, DryRun: dryRun,
+	}
+	plan.Sign(&p)
+	permission, err = engine.SignPermissionToken(p, cfg.EncryptionKey)
+	if err != nil {
+		return "", "", err
+	}
+	agentToken, err = signKnowledgePreviewToken(cfg.EncryptionKey, req.TenantID, agentType)
+	if err != nil {
+		return "", "", err
+	}
+	return permission, agentToken, nil
 }
 
 type personalZaloAIResult struct {
@@ -76,8 +102,6 @@ type personalZaloAIResult struct {
 	caseTurnID    string
 	caseText      string
 }
-
-const personalZaloInternbotDraftGuide = "Đây là bản nháp cho nhân viên. Chỉ dùng công cụ tra cứu được phép. Không tiết lộ mã xác thực, mật khẩu, token hoặc thông tin không cần thiết. Không tuyên bố đã xác thực, chuyển tiếp, tạo phiếu hay thực hiện thao tác thay đổi dữ liệu. Nếu cần nhân viên xử lý, chỉ trả " + personalZaloAIHandoverMarker + "."
 
 func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.Channel, req personalZaloChatbotRequest,
 	settings map[string]models.AppSetting, options personalZaloAIOptions) (personalZaloAIResult, error) {
@@ -97,11 +121,17 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 		var response engine.LangflowResult
 		var err error
 		if options.draft {
-			prompt := strings.TrimSpace(plan.BasePrompt(settings["ai_engine_system_prompt"].ValuePlain) + "\n\n" + personalZaloInternbotDraftGuide)
+			permission, _, scopeErr := personalZaloAgentScope(ai.cfg, req, "public", plan, true)
+			if scopeErr != nil {
+				result.settingsError = true
+				return result, scopeErr
+			}
+			prompt := strings.TrimSpace(plan.BasePrompt(settings["ai_engine_system_prompt"].ValuePlain) + "\n\n" +
+				engine.TaskPromptText(req.TenantID, engine.PromptPZInternbotDraft))
 			response, err = engine.RunPersonalZaloGuestDraft(flowCtx, ai.scoped, flow, ai.cfg.EncryptionKey,
-				req.TenantID, options.scope, req.Text, prompt)
+				req.TenantID, options.scope, req.Text, permission, prompt)
 		} else {
-			response, err = runPersonalZaloGuest(flowCtx, ai.scoped, ai.cfg, flow, req, options.scope, options.complaint, false)
+			response, err = runPersonalZaloGuest(flowCtx, ai.scoped, ai.cfg, flow, req, options.scope, options.complaint, false, plan)
 		}
 		if errors.Is(err, engine.ErrGuestKnowledgeNotConfigured) {
 			result.reply = engine.GuestKnowledgeUnavailableReply
@@ -140,12 +170,12 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 			return result, err
 		}
 		if options.draft {
-			grant.draftGuide = personalZaloInternbotDraftGuide
+			grant.draftGuide = engine.TaskPromptText(req.TenantID, engine.PromptPZInternbotDraft)
 		}
 		if target.raw != "" {
 			result.caseTurnID = target.pending.TurnID
 			result.caseText = target.pending.Text
-			grant.complaintGuide += "\nNhân viên đã trả lời xác nhận mã cho nội dung khiếu nại sau. Hãy ghi nhận ngay bằng complaint_record."
+			grant.complaintGuide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZStaffConfirmed)
 			req.Text = target.pending.Text + "\n\nMã khách đã xác nhận: " + target.code
 		}
 		result.grant = grant
@@ -183,13 +213,13 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 			strings.TrimSpace(result.reply) == personalZaloAIHandoverMarker
 		return result, err
 	case options.complaint && flow.PublicFlowIDSource == engine.LangflowSourceTenant && flow.APIKeySource == engine.LangflowSourceTenant:
-		response, err := runPersonalZaloGuest(flowCtx, ai.scoped, ai.cfg, flow, req, options.scope, true, options.staffGroupComplaint)
+		response, err := runPersonalZaloGuest(flowCtx, ai.scoped, ai.cfg, flow, req, options.scope, true, options.staffGroupComplaint, plan)
 		result.reply, _ = engine.ParseKnowledgeImageReply(response.Text, 0)
 		return result, err
 	default:
 		flowID, _ := plan.Flow(flow.PublicFlowID)
-		if flow.APIURL == "" || flow.PublicFlowID == "" || strings.EqualFold(flow.PublicFlowID, flow.FlowID) ||
-			strings.EqualFold(flowID, flow.FlowID) {
+		if flow.APIURL == "" || flow.PublicFlowID == "" || canonicalAIFlowID(flow.PublicFlowID) == canonicalAIFlowID(flow.FlowID) ||
+			canonicalAIFlowID(flowID) == canonicalAIFlowID(flow.FlowID) {
 			return result, nil
 		}
 		prompt := strings.TrimSpace(plan.BasePrompt(settings["ai_engine_system_prompt"].ValuePlain))
@@ -200,9 +230,22 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 				prompt += "\n\n" + instruction
 			}
 		}
-		input, prompt := engine.AddProductAdviceInstruction(req.Text, prompt)
-		reply, err := ai.langflow.RunFlowWithOverrides(flowCtx, options.scope, options.scope,
-			input, flow.APIURL, flow.APIKey, flowID, prompt)
+		input, prompt := engine.AddProductAdviceInstruction(req.TenantID, req.Text, prompt)
+		var reply string
+		var err error
+		if plan.Mode == agents.ModeAgent {
+			permission, agentToken, scopeErr := personalZaloAgentScope(ai.cfg, req, "public", plan, false)
+			if scopeErr != nil {
+				result.settingsError = true
+				return result, scopeErr
+			}
+			response, runErr := ai.scoped.RunFlowWithCustomerUsage(flowCtx, options.scope, options.scope,
+				input, flow.APIURL, flow.APIKey, flowID, "", permission, agentToken, prompt)
+			reply, err = response.Text, runErr
+		} else {
+			reply, err = ai.langflow.RunFlowWithOverrides(flowCtx, options.scope, options.scope,
+				input, flow.APIURL, flow.APIKey, flowID, prompt)
+		}
 		result.reply, _ = engine.ParseKnowledgeImageReply(reply, 0)
 		result.handover = instruction != "" && options.canHandover && strings.TrimSpace(result.reply) == personalZaloAIHandoverMarker
 		return result, err

@@ -50,16 +50,20 @@ func database(ctx context.Context) (*gorm.DB, error) {
 }
 
 // Enabled reports whether the tenant answers chats with agents.
-func Enabled(ctx context.Context, tenantID string) bool {
+func Enabled(ctx context.Context, tenantID string) (bool, error) {
 	d, err := database(ctx)
-	if err != nil || tenantID == "" {
-		return false
+	if err != nil {
+		return false, err
 	}
 	var s models.AppSetting
-	if err := d.Select("value_plain").Where("tenant_id = ? AND setting_key = ?", tenantID, EnabledSettingKey).First(&s).Error; err != nil {
-		return false
+	err = d.Select("value_plain").Where("tenant_id = ? AND setting_key = ?", tenantID, EnabledSettingKey).First(&s).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
 	}
-	return strings.TrimSpace(s.ValuePlain) == "true"
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(s.ValuePlain) == "true", nil
 }
 
 // SetEnabled turns agents on or off for the tenant. Turning on copies the

@@ -19,13 +19,25 @@
       {{ $t('kb_keyword_only') }}
     </v-alert>
 
-    <KnowledgePlayground :base="base" :is-admin="isAdmin" />
+    <KnowledgePlayground :base="base" :is-admin="isAdmin" :known-tags="knownTags" />
 
     <div class="d-flex flex-wrap align-center ga-2 mb-3">
       <v-tabs v-model="view" color="primary" density="compact" @update:model-value="load">
         <v-tab value="active" data-testid="tab-active">{{ $t('kb_tab_active') }}</v-tab>
         <v-tab value="archived" data-testid="tab-archived">{{ $t('kb_tab_archived') }}</v-tab>
       </v-tabs>
+      <v-select
+        v-if="knownTags.length"
+        v-model="tagFilter"
+        :items="knownTags"
+        :label="$t('kb_tags_filter')"
+        prepend-inner-icon="mdi-tag-outline"
+        density="compact"
+        hide-details
+        clearable
+        class="tag-filter"
+        data-testid="kb-tag-filter"
+      />
       <v-spacer />
       <template v-if="canEdit">
         <v-btn color="primary" prepend-icon="mdi-upload" @click="uploadDialog = true">{{ $t('kb_upload') }}</v-btn>
@@ -51,13 +63,18 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="d in documents" :key="d.id">
+          <tr v-for="d in visibleDocuments" :key="d.id">
             <td class="py-2">
               <button type="button" class="document-link" aria-haspopup="dialog" @click="openDoc(d, $event)">{{ d.title }}</button>
               <div class="text-caption text-medium-emphasis">{{ documentSource(d) }}</div>
-              <v-chip v-if="d.image_count" size="x-small" variant="tonal" prepend-icon="mdi-image-outline" class="mt-1">
-                {{ $t('kb_images_count', { count: d.image_count }) }}
-              </v-chip>
+              <div v-if="d.image_count || d.tags?.length" class="d-flex flex-wrap ga-1 mt-1">
+                <v-chip v-if="d.image_count" size="x-small" variant="tonal" prepend-icon="mdi-image-outline">
+                  {{ $t('kb_images_count', { count: d.image_count }) }}
+                </v-chip>
+                <v-chip v-for="tag in d.tags" :key="tag" size="x-small" variant="outlined" prepend-icon="mdi-tag-outline" data-testid="kb-doc-tag">
+                  {{ tag }}
+                </v-chip>
+              </div>
             </td>
             <td>
               <v-chip size="small" :color="d.audience === 'internal' ? 'deep-purple' : 'teal'" variant="tonal">
@@ -91,8 +108,10 @@
               </template>
             </td>
           </tr>
-          <tr v-if="!loading && !listError && documents.length === 0">
-            <td :colspan="view === 'active' ? 6 : 5" class="text-center text-medium-emphasis py-6">{{ view === 'archived' ? $t('kb_no_archived') : $t('kb_empty') }}</td>
+          <tr v-if="!loading && !listError && visibleDocuments.length === 0">
+            <td :colspan="view === 'active' ? 6 : 5" class="text-center text-medium-emphasis py-6">
+              {{ documents.length && tagFilter ? $t('kb_tags_filter_empty') : view === 'archived' ? $t('kb_no_archived') : $t('kb_empty') }}
+            </td>
           </tr>
         </tbody>
       </v-table>
@@ -106,6 +125,7 @@
           <v-file-input v-model="uploadFiles" :label="$t('kb_files')" :accept="acceptTypes" multiple show-size density="compact" prepend-icon="mdi-paperclip" />
           <div class="text-caption text-medium-emphasis mb-3">{{ $t('kb_supported', { types: supported.join(', '), mb: maxUploadMb }) }}</div>
           <v-select v-model="uploadAudience" :items="audienceOptions" :label="$t('kb_col_audience')" density="compact" />
+          <KnowledgeTagsInput v-model="uploadTags" :known="knownTags" class="mb-3" />
           <v-alert v-if="uploadErrors.length" type="error" variant="tonal" density="compact">
             <div v-for="e in uploadErrors" :key="e">{{ e }}</div>
           </v-alert>
@@ -126,6 +146,7 @@
           <v-text-field v-model="textTitle" :label="$t('kb_col_title')" :disabled="savingText" density="compact" />
           <v-textarea v-model="textContent" :label="$t('kb_text_content')" :disabled="savingText" rows="12" auto-grow density="compact" />
           <v-select v-model="textAudience" :items="audienceOptions" :label="$t('kb_col_audience')" :disabled="savingText" density="compact" />
+          <KnowledgeTagsInput v-model="textTags" :known="knownTags" :disabled="savingText" class="mb-3" />
           <KnowledgeDocumentImages v-if="textDialog" v-model:drafts="textImageDrafts" :can-edit="canEdit" :disabled="savingText" />
         </v-card-text>
         <v-card-actions>
@@ -151,6 +172,7 @@
             <v-text-field v-model="linkForm.url" :label="$t('kb_link_url')" :hint="$t('kb_link_public_hint')" persistent-hint type="url" placeholder="https://example.com" maxlength="2048" density="compact" :disabled="savingLink" data-testid="kb-link-url" />
             <v-text-field v-model="linkForm.title" :label="$t('kb_link_title')" density="compact" maxlength="250" :disabled="savingLink" data-testid="kb-link-title" />
             <v-select v-model="linkForm.audience" :items="audienceOptions" :label="$t('kb_col_audience')" density="compact" :disabled="savingLink" data-testid="kb-link-audience" />
+            <KnowledgeTagsInput v-model="linkTags" :known="knownTags" :disabled="savingLink" class="mb-3" />
             <v-alert v-if="linkError" type="error" variant="tonal" density="compact" data-testid="kb-link-error">
               {{ $t(linkError) }}
             </v-alert>
@@ -177,6 +199,7 @@
                 {{ $t('kb_link_open_source') }}
               </a>
               <v-chip size="small" variant="tonal">{{ $t(selected.audience === 'internal' ? 'kb_audience_internal' : 'kb_audience_public') }}</v-chip>
+              <v-chip v-for="tag in selected.tags" :key="tag" size="small" variant="outlined" prepend-icon="mdi-tag-outline">{{ tag }}</v-chip>
             </div>
           </div>
           <v-btn icon="mdi-close" variant="text" size="small" :disabled="imageChangePending" :aria-label="$t('cm_close')" @click="docDialog = false" />
@@ -216,7 +239,8 @@
           <section v-if="editingDoc" class="mt-6">
             <v-divider class="mb-4" />
             <v-text-field v-model="editTitle" :label="$t('kb_col_title')" density="compact" variant="outlined" maxlength="250" />
-            <v-select v-model="editAudience" :items="audienceOptions" :label="$t('kb_col_audience')" density="compact" variant="outlined" hide-details />
+            <v-select v-model="editAudience" :items="audienceOptions" :label="$t('kb_col_audience')" density="compact" variant="outlined" hide-details class="mb-4" />
+            <KnowledgeTagsInput v-model="editTags" :known="knownTags" variant="outlined" />
           </section>
         </v-card-text>
         <v-card-actions v-if="canEdit && selected.status !== 'archived'" class="px-4 px-sm-6">
@@ -254,6 +278,7 @@ import api from '../api'
 import { uploadKnowledgeImages, type KnowledgeImage, type KnowledgeImageDraft } from '../api/knowledgeImages'
 import KnowledgeDocumentImages from '../components/KnowledgeDocumentImages.vue'
 import KnowledgePlayground from '../components/KnowledgePlayground.vue'
+import KnowledgeTagsInput from '../components/KnowledgeTagsInput.vue'
 import ProductAdvisory from '../components/ProductAdvisory.vue'
 import { useAuthStore } from '../stores/auth'
 
@@ -264,6 +289,7 @@ export interface KnowledgeDoc {
   source: string
   source_url?: string
   audience: 'public' | 'internal'
+  tags?: string[]
   enabled: boolean
   status: 'processing' | 'ready' | 'failed' | 'archived'
   error?: string
@@ -287,6 +313,12 @@ const isAdmin = computed(() => ['owner', 'admin'].includes(authStore.tenantPerms
 const section = ref<'documents' | 'products'>('documents')
 const view = ref<'active' | 'archived'>('active')
 const documents = ref<KnowledgeDoc[]>([])
+// Tags in use (from the list response) and the optional list filter.
+const knownTags = ref<string[]>([])
+const tagFilter = ref<string | null>(null)
+const visibleDocuments = computed(() => tagFilter.value
+  ? documents.value.filter((d) => d.tags?.includes(tagFilter.value as string))
+  : documents.value)
 const loading = ref(false)
 const listError = ref(false)
 const vectorStore = ref('')
@@ -330,6 +362,10 @@ async function load() {
     const { data } = await api.get(base.value, { params: { view: view.value } })
     if (request !== listRequest) return
     documents.value = data?.documents || []
+    knownTags.value = Array.isArray(data?.tags) ? data.tags.map((tag: { tag: string }) => tag.tag) : []
+    if (tagFilter.value && !documents.value.some((d) => d.tags?.includes(tagFilter.value as string))) {
+      tagFilter.value = null
+    }
     listError.value = false
     vectorStore.value = data?.vector_store || ''
     parser.value = data?.parser || ''
@@ -369,6 +405,7 @@ const uploadList = computed<File[]>(() => {
   return Array.isArray(v) ? v : [v]
 })
 const uploadAudience = ref<'public' | 'internal'>('public')
+const uploadTags = ref<string[]>([])
 const uploading = ref(false)
 const uploadErrors = ref<string[]>([])
 async function upload() {
@@ -379,6 +416,7 @@ async function upload() {
     const form = new FormData()
     form.append('file', file)
     form.append('audience', uploadAudience.value)
+    for (const tag of uploadTags.value) form.append('tags', tag)
     try {
       await api.post(`${base.value}/upload`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
       ok++
@@ -391,6 +429,7 @@ async function upload() {
   if (uploadErrors.value.length === 0) {
     uploadDialog.value = false
     uploadFiles.value = []
+    uploadTags.value = []
   }
   view.value = 'active'
   await load()
@@ -401,6 +440,7 @@ const textDialog = ref(false)
 const textTitle = ref('')
 const textContent = ref('')
 const textAudience = ref<'public' | 'internal'>('public')
+const textTags = ref<string[]>([])
 const savingText = ref(false)
 const textImageDrafts = ref<KnowledgeImageDraft[]>([])
 let textRequest = 0
@@ -413,6 +453,7 @@ async function saveText() {
   try {
     const { data: document } = await api.post<KnowledgeDoc>(`${endpoint}/text`, {
       title: textTitle.value, content: textContent.value, audience: textAudience.value,
+      ...(textTags.value.length ? { tags: textTags.value } : {}),
     })
     if (request !== textRequest) return
     let imageUploadFailed = false
@@ -429,6 +470,7 @@ async function saveText() {
     textDialog.value = false
     textTitle.value = ''
     textContent.value = ''
+    textTags.value = []
     textImageDrafts.value = []
     view.value = 'active'
     if (imageUploadFailed) {
@@ -447,6 +489,7 @@ async function saveText() {
 
 const linkDialog = ref(false)
 const linkForm = ref({ url: '', title: '', audience: 'public' })
+const linkTags = ref<string[]>([])
 const savingLink = ref(false)
 const linkError = ref('')
 let linkRequest = 0
@@ -473,10 +516,14 @@ async function saveLink() {
   savingLink.value = true
   linkError.value = ''
   try {
-    await api.post(`${endpoint}/url`, { ...linkForm.value, url, title: linkForm.value.title.trim() })
+    await api.post(`${endpoint}/url`, {
+      ...linkForm.value, url, title: linkForm.value.title.trim(),
+      ...(linkTags.value.length ? { tags: linkTags.value } : {}),
+    })
     if (request !== linkRequest) return
     linkDialog.value = false
     linkForm.value = { url: '', title: '', audience: 'public' }
+    linkTags.value = []
     notify(t('kb_link_submitted'))
     view.value = 'active'
     await load()
@@ -498,7 +545,7 @@ async function saveLink() {
 }
 
 // Row actions
-async function patchDoc(d: KnowledgeDoc, body: Partial<Pick<KnowledgeDoc, 'title' | 'audience' | 'enabled'>>) {
+async function patchDoc(d: KnowledgeDoc, body: Partial<Pick<KnowledgeDoc, 'title' | 'audience' | 'enabled' | 'tags'>>) {
   try {
     const { data } = await api.patch<KnowledgeDoc>(`${base.value}/${d.id}`, body)
     await load()
@@ -574,7 +621,8 @@ const summaryError = ref('')
 const editingDoc = ref(false)
 const editTitle = ref('')
 const editAudience = ref<'public' | 'internal'>('public')
-let editOriginal: Pick<KnowledgeDoc, 'title' | 'audience'> | null = null
+const editTags = ref<string[]>([])
+let editOriginal: Pick<KnowledgeDoc, 'title' | 'audience' | 'tags'> | null = null
 const savingDoc = ref(false)
 const detailExtracting = computed(() => selected.value?.status === 'processing' && !selected.value.chunk_count)
 const canGenerateSummary = computed(() => canEdit.value && !!selected.value?.chunk_count && !summary.value?.text &&
@@ -711,19 +759,22 @@ function toggleDocSettings() {
   editingDoc.value = !editingDoc.value
   if (editingDoc.value) {
     const { title, audience } = selected.value
-    editOriginal = { title, audience }
+    const tags = [...(selected.value.tags || [])]
+    editOriginal = { title, audience, tags }
     editTitle.value = title
     editAudience.value = audience
+    editTags.value = tags
   }
 }
 
 async function saveDoc() {
   if (!selected.value || !editOriginal) return
   const request = detailRequest
-  const body: Partial<Pick<KnowledgeDoc, 'title' | 'audience'>> = {}
+  const body: Partial<Pick<KnowledgeDoc, 'title' | 'audience' | 'tags'>> = {}
   const title = editTitle.value.trim()
   if (title && title !== editOriginal.title) body.title = title
   if (editAudience.value !== editOriginal.audience) body.audience = editAudience.value
+  if ([...editTags.value].sort().join('\n') !== [...(editOriginal.tags || [])].sort().join('\n')) body.tags = editTags.value
   if (Object.keys(body).length === 0) {
     editingDoc.value = false
     return
@@ -767,6 +818,7 @@ defineExpose({ load, documents, parser, upload, uploadFiles, patchDoc, archive, 
 </script>
 
 <style scoped>
+.tag-filter { max-width: 240px; min-width: 180px; }
 .document-table { border-color: rgba(var(--v-border-color), var(--v-border-opacity)); }
 .document-link {
   appearance: none;

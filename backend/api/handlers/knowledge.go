@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -54,8 +55,14 @@ func ListKnowledgeDocuments(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
 		return
 	}
+	tags, err := knowledgeTagCounts(ctx, tenantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"documents":            documents,
+		"tags":                 tags,
 		"vector_store":         svc.IndexName(),
 		"parser":               parserName,
 		"supported_extensions": knowledge.AcceptedExtensions(parser),
@@ -65,7 +72,8 @@ func ListKnowledgeDocuments(c *gin.Context) {
 }
 
 // UploadKnowledgeDocument takes a multipart file (field "file") plus optional
-// "title" and "audience" (public | internal).
+// "title", "audience" (public | internal) and "tags" (repeated or
+// comma-separated).
 func UploadKnowledgeDocument(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, knowledge.MaxUploadBytes+(1<<20))
@@ -99,11 +107,15 @@ func UploadKnowledgeDocument(c *gin.Context) {
 	if title == "" {
 		title = strings.TrimSuffix(name, filepath.Ext(name))
 	}
+	tags, ok := knowledgeTagsFromRequest(c, knowledge.SplitTagInput(c.PostFormArray("tags")))
+	if !ok {
+		return
+	}
 	// Reading (Unstructured can take minutes on a scanned PDF), chunking and
 	// indexing run in the background; the page polls the status.
 	doc, err := knowledge.Default().CreateFromFile(knowledge.NewDocumentInput{
 		TenantID: tenantID, Title: title, FileName: name, MimeType: fh.Header.Get("Content-Type"),
-		Source: "upload", SizeBytes: int64(len(data)), Audience: c.PostForm("audience"),
+		Source: "upload", SizeBytes: int64(len(data)), Audience: c.PostForm("audience"), Tags: tags,
 		CreatedBy: middleware.GetUserEmail(c),
 	}, data, parser)
 	if err != nil {
@@ -119,13 +131,18 @@ func UploadKnowledgeDocument(c *gin.Context) {
 func CreateKnowledgeText(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	var req struct {
-		Title    string `json:"title"`
-		Content  string `json:"content"`
-		Audience string `json:"audience"`
+		Title    string   `json:"title"`
+		Content  string   `json:"content"`
+		Audience string   `json:"audience"`
+		Tags     []string `json:"tags"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8<<20)
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Content) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "title_and_content_required"})
+		return
+	}
+	tags, ok := knowledgeTagsFromRequest(c, req.Tags)
+	if !ok {
 		return
 	}
 	text := knowledge.NormalizeText(req.Content)
@@ -135,7 +152,7 @@ func CreateKnowledgeText(c *gin.Context) {
 	}
 	doc, err := knowledge.Default().CreateDocument(knowledge.NewDocumentInput{
 		TenantID: tenantID, Title: req.Title, Source: "text", SizeBytes: int64(len(req.Content)),
-		Audience: req.Audience, CreatedBy: middleware.GetUserEmail(c), Text: text,
+		Audience: req.Audience, Tags: tags, CreatedBy: middleware.GetUserEmail(c), Text: text,
 	})
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "save_failed", "message": err.Error()})
@@ -208,8 +225,9 @@ func GenerateKnowledgeSummary(c *gin.Context, cfg *config.Config) {
 	}
 }
 
-// UpdateKnowledgeDocument changes title, audience or enabled. A change of
-// audience or enabled rebuilds the document's vectors.
+// UpdateKnowledgeDocument changes title, audience, tags or enabled. A change
+// of title, audience or enabled rebuilds the document's vectors; tags are
+// read from MySQL at search time, so changing them needs no re-index.
 func UpdateKnowledgeDocument(c *gin.Context) {
 	doc, release := lockKnowledgeDoc(c)
 	if doc == nil {
@@ -217,13 +235,21 @@ func UpdateKnowledgeDocument(c *gin.Context) {
 	}
 	defer release()
 	var req struct {
-		Title    *string `json:"title"`
-		Audience *string `json:"audience"`
-		Enabled  *bool   `json:"enabled"`
+		Title    *string   `json:"title"`
+		Audience *string   `json:"audience"`
+		Tags     *[]string `json:"tags"`
+		Enabled  *bool     `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_body"})
 		return
+	}
+	var tags []string
+	if req.Tags != nil {
+		var ok bool
+		if tags, ok = knowledgeTagsFromRequest(c, *req.Tags); !ok {
+			return
+		}
 	}
 	if doc.Status == knowledge.StatusArchived {
 		c.JSON(http.StatusConflict, gin.H{"error": "archived"})
@@ -241,6 +267,9 @@ func UpdateKnowledgeDocument(c *gin.Context) {
 			updates["audience"] = a
 			reindex = true
 		}
+	}
+	if req.Tags != nil {
+		updates["tags"] = models.KnowledgeTagList(tags)
 	}
 	if req.Enabled != nil && *req.Enabled != doc.Enabled {
 		updates["enabled"] = *req.Enabled
@@ -392,9 +421,10 @@ func PurgeKnowledgeDocument(c *gin.Context) {
 // "thử hỏi" box. agent_type public shows what customers can get.
 func SearchKnowledgeTest(c *gin.Context) {
 	var req struct {
-		Query     string `json:"query"`
-		AgentType string `json:"agent_type"`
-		Limit     int    `json:"limit"`
+		Query     string   `json:"query"`
+		AgentType string   `json:"agent_type"`
+		Limit     int      `json:"limit"`
+		Tags      []string `json:"tags"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Query) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query_required"})
@@ -407,7 +437,8 @@ func SearchKnowledgeTest(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 	tenantID := middleware.GetTenantID(c)
-	hits, err := knowledge.Default().Search(ctx, tenantID, agent, req.Query, req.Limit)
+	// tags previews what a specialist agent with these knowledge tags finds.
+	hits, err := knowledge.Default().SearchTagged(ctx, tenantID, agent, req.Query, req.Limit, req.Tags)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "search_failed", "message": err.Error()})
 		return
@@ -548,4 +579,59 @@ func TestKnowledgeParser(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "transform": p.IsTransform()})
+}
+
+// knowledgeTagsFromRequest validates document tags from a request and
+// answers 400 when one is invalid or there are too many.
+func knowledgeTagsFromRequest(c *gin.Context, raw []string) ([]string, bool) {
+	tags, err := knowledge.NormalizeTags(raw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_tag", "message": err.Error()})
+		return nil, false
+	}
+	if len(tags) > knowledge.MaxDocumentTags {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too_many_tags", "max": knowledge.MaxDocumentTags})
+		return nil, false
+	}
+	return tags, true
+}
+
+type knowledgeTagCount struct {
+	Tag       string `json:"tag"`
+	Documents int    `json:"documents"`
+}
+
+// knowledgeTagCounts lists the tags used by the tenant's documents that are
+// not archived, with how many documents carry each.
+func knowledgeTagCounts(ctx context.Context, tenantID string) ([]knowledgeTagCount, error) {
+	var docs []models.KnowledgeDocument
+	err := db.DB.WithContext(ctx).Select("id", "tags").
+		Where("tenant_id = ? AND status <> ? AND tags IS NOT NULL", tenantID, knowledge.StatusArchived).
+		Find(&docs).Error
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int{}
+	for _, d := range docs {
+		for _, tag := range d.Tags {
+			counts[tag]++
+		}
+	}
+	out := make([]knowledgeTagCount, 0, len(counts))
+	for tag, n := range counts {
+		out = append(out, knowledgeTagCount{Tag: tag, Documents: n})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Tag < out[j].Tag })
+	return out, nil
+}
+
+// ListKnowledgeTags lists the document tags in use, for the specialist agent
+// form and the knowledge page filter.
+func ListKnowledgeTags(c *gin.Context) {
+	tags, err := knowledgeTagCounts(c.Request.Context(), middleware.GetTenantID(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tags": tags})
 }

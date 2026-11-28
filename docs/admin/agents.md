@@ -14,6 +14,7 @@ Trước đây mỗi tầng có một bot làm tất cả: một prompt cho khá
 2. Tìm Bộ điều phối của kênh, lấy các agent đang bật phục vụ đối tượng đó.
 3. Chọn agent: chỉ có một thì lấy agent đó; nhiều hơn thì lấy agent mặc định của Bộ điều phối nếu hợp, không thì agent đầu danh sách. (Bản tiếp theo sẽ cho Bộ điều phối tự chọn agent theo nội dung tin nhắn, giữ agent theo cuộc chat và cho agent chuyển lượt cho nhau.)
 4. Không agent nào phục vụ đối tượng đó: bot **im lặng** với người này trên kênh đó, tin nhắn vẫn vào lịch sử chat để nhân viên trả lời. Ví dụ một Zalo cá nhân chỉ có bot công nợ cho khách thì nhân viên nhắn vào sẽ không được bot trả lời. Danh sách Bộ điều phối trả về `silent` để giao diện cảnh báo.
+5. Khi không đọc được cấu hình hoặc không tìm thấy Bộ điều phối khả dụng sau khi bật agent, bot để nhân viên xử lý lượt chat.
 
 ## Agent thay đổi gì trong một lượt chat
 
@@ -21,12 +22,14 @@ Trước đây mỗi tầng có một bot làm tất cả: một prompt cho khá
 - **Flow**: flow Langflow riêng của agent nếu có, không thì flow của AI Engine cho tầng đó. Agent phục vụ khách không được chạy trên flow nội bộ (API từ chối, và luồng chat cũng chặn).
 - **Công cụ**: token ký mang `agent_key` và danh sách công cụ của agent. Máy chủ MCP `/mcp/erp/:tenantId` chỉ liệt kê và chỉ chạy các công cụ đó; gọi công cụ khác nhận lỗi `tool_not_allowed`. Agent không có công cụ nào thì không gọi được công cụ nào.
 - **Việc backend làm thay bot** cũng theo công cụ của agent: ghi khiếu nại thành case chỉ khi agent có `complaint_record`; giỏ hàng chỉ khi agent có công cụ `order_cart_*`; tra đơn đang giao trả lời thẳng chỉ khi agent có `lookup_order`; ghi chú tư vấn sản phẩm và hướng dẫn tồn kho chỉ khi agent có công cụ nhóm sản phẩm.
+- **Tài liệu**: token mang `knowledge_tags` của agent. Agent có nhãn thì `search_knowledge` chỉ tra tài liệu mang ít nhất một nhãn đó (gắn nhãn ở trang Tài liệu chatbot, `GET /knowledge/tags` liệt kê nhãn đang dùng). Agent không có nhãn tra tài liệu mà tầng bảo mật của lượt chat được đọc.
+- **Quy tắc hệ thống nối thêm** (thiếu dữ liệu ERP, tồn kho với khách, tra đơn, chuyển người, ảnh tài liệu, khách chưa xác thực, các phần của Zalo cá nhân) là prompt tác vụ trong AI Engine → Prompt cho các tác vụ AI, dùng chung cho mọi agent. Prompt nào có mã hệ thống đọc (ví dụ `[CQA_REQUEST_HUMAN_REVIEW]`) thì không lưu được nếu xoá mã đó.
 
 ## Runtime native (không qua Langflow)
 
 Mỗi agent chọn **runtime**: `langflow` (mặc định, chạy trên flow Langflow như trước) hoặc `native` (backend gọi thẳng model của agent và tự gọi công cụ MCP, không cần flow Langflow).
 
-- **Model**: agent native chọn nhà cung cấp và mã model như ô chọn model của từng tác vụ AI (Cài đặt → AI): `claude`, `gemini`, `openai`, `openrouter`. Khoá API và Base URL lấy từ cài đặt AI của tenant cho đúng nhà cung cấp đó (không dùng khoá của nhà cung cấp khác). Agent native bắt buộc có system prompt.
+- **Model**: agent native chọn nhà cung cấp và mã model như ô chọn model của từng tác vụ AI (Cài đặt → AI): `claude`, `gemini`, `openai`, `openrouter`, `9router`. Khoá API và Base URL lấy từ cài đặt AI của tenant cho đúng nhà cung cấp đó. Agent native bắt buộc có system prompt.
 - **Một lượt chat**: prompt (giọng chung + prompt agent + ngữ cảnh như với Langflow) và hội thoại gần đây lấy từ trí nhớ chat (tối đa 20 tin, khoảng 10.000 ký tự; trong nhóm chỉ lấy tin của người đang hỏi và câu bot trả lời họ) được gửi cho model cùng danh sách công cụ của agent. Model gọi công cụ, backend chạy công cụ trên máy chủ MCP `/mcp/erp/:tenantId` ngay trong tiến trình, với đúng token agent và token quyền ký của lượt đó (nên vẫn lọc công cụ theo agent, giới hạn dữ liệu theo người nhắn, chặn công cụ ghi khi chạy thử), rồi gửi kết quả lại cho model tới khi model trả lời.
 - **Công cụ được đưa cho model**: giao của các công cụ máy chủ MCP liệt kê cho token của lượt đó và công cụ của agent. Lượt không có token agent ERP (ví dụ tenant chưa cài token) thì model trả lời không có công cụ.
 - **Tuỳ chọn** (`options`): `max_tool_calls` (1–20, để 0 là 8) giới hạn số lần gọi công cụ trong một lượt; hết lượt thì model phải trả lời bằng thông tin đã có. `temperature` (0–2, Claude tối đa 1); model không nhận temperature (một số model suy luận) thì backend gửi lại không kèm temperature.

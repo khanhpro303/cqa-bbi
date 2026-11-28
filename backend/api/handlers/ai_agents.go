@@ -40,7 +40,11 @@ func agentSettings(ctx context.Context, tenantID string) (agentSettingsResponse,
 	if drift == nil {
 		drift = []string{}
 	}
-	return agentSettingsResponse{Enabled: agents.Enabled(ctx, tenantID), HasAgents: len(list) > 0, Drift: drift}, nil
+	enabled, err := agents.Enabled(ctx, tenantID)
+	if err != nil {
+		return agentSettingsResponse{}, err
+	}
+	return agentSettingsResponse{Enabled: enabled, HasAgents: len(list) > 0, Drift: drift}, nil
 }
 
 // GetAIAgentSettings returns whether chats are answered by agents.
@@ -165,8 +169,8 @@ func saveAIAgent(c *gin.Context, id string) {
 	in.ID = id
 	tenantID := middleware.GetTenantID(c)
 	ctx := c.Request.Context()
-	if verr := checkAgentRuntime(ctx, tenantID, in); verr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_agent", "field": verr.Field, "message": verr.Message})
+	if err := checkAgentRuntime(ctx, tenantID, in); err != nil {
+		agentError(c, "validate runtime", err)
 		return
 	}
 	saved, err := agents.SaveAgent(ctx, tenantID, middleware.GetUserID(c), in)
@@ -187,7 +191,7 @@ func saveAIAgent(c *gin.Context, id string) {
 // checkAgentRuntime refuses settings the chat path cannot honour: a runtime
 // that is not installed, or a customer-facing agent on the staff flow (the
 // AI Engine keeps those flows apart and so do agents).
-func checkAgentRuntime(ctx context.Context, tenantID string, a agents.Agent) *agents.ValidationError {
+func checkAgentRuntime(ctx context.Context, tenantID string, a agents.Agent) error {
 	runtime := strings.TrimSpace(a.Runtime)
 	if !agents.RuntimeAvailable(runtime) {
 		return &agents.ValidationError{Field: "runtime", Message: "runtime " + runtime + " chưa được cài đặt trên máy chủ"}
@@ -199,11 +203,11 @@ func checkAgentRuntime(ctx context.Context, tenantID string, a agents.Agent) *ag
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		return nil
+		return err
 	}
 	settings, err := loadPersonalZaloChatbotSettings(ctx, tenantID, engine.LangflowSettingKeys...)
 	if err != nil {
-		return nil
+		return err
 	}
 	flow := engine.ResolveTenantLangflowConfig(settings, cfg)
 	if flow.FlowID != "" && canonicalAIFlowID(flowID) == canonicalAIFlowID(flow.FlowID) {

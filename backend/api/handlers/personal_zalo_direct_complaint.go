@@ -21,7 +21,7 @@ const (
 	personalZaloComplaintConfirmTTL = 10 * time.Minute
 	personalZaloComplaintNeedCode   = "Dạ, em chưa ghi nhận khiếu nại. Anh/chị cho em xin mã khách cần ghi nhận ạ."
 	personalZaloComplaintCacheError = "Dạ, em chưa kiểm tra được mã khách. Anh/chị thử lại sau giúp em ạ."
-	personalZaloComplaintCodeMarker = "[CQA_CONFIRM_COMPLAINT_CUSTOMER]"
+	personalZaloComplaintCodeMarker = engine.ComplaintCodeMarker
 )
 
 var (

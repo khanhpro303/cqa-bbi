@@ -1,6 +1,11 @@
 package models
 
-import "time"
+import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 // KnowledgeDocument is one business document the chatbot may answer from
 // (policies, warranty, shipping, product guides...). MySQL holds the
@@ -20,6 +25,10 @@ type KnowledgeDocument struct {
 	// bot only).
 	Audience string `gorm:"type:varchar(20);not null;default:'public'" json:"audience"`
 	Enabled  bool   `gorm:"not null;default:true" json:"enabled"`
+	// Tags group documents by topic (for example "công nợ", "bảo hành").
+	// A specialist agent with knowledge tags searches only documents that
+	// carry one of them. Stored normalized (knowledge.NormalizeTags).
+	Tags KnowledgeTagList `gorm:"type:json" json:"tags"`
 	// Status: processing | ready | failed | archived.
 	Status string `gorm:"type:varchar(20);not null;default:'processing';index:idx_kbdoc_tenant_status,priority:2" json:"status"`
 	// Error is why the document failed, or a notice on a ready document
@@ -42,6 +51,50 @@ type KnowledgeDocument struct {
 }
 
 func (KnowledgeDocument) TableName() string { return "knowledge_documents" }
+
+// KnowledgeTagList is a JSON array column that reads NULL (documents saved
+// before tags existed) as an empty list and always encodes as an array.
+type KnowledgeTagList []string
+
+func (l *KnowledgeTagList) Scan(v interface{}) error {
+	var raw []byte
+	switch t := v.(type) {
+	case nil:
+		*l = KnowledgeTagList{}
+		return nil
+	case []byte:
+		raw = t
+	case string:
+		raw = []byte(t)
+	default:
+		return fmt.Errorf("KnowledgeTagList: unsupported scan type %T", v)
+	}
+	if len(raw) == 0 {
+		*l = KnowledgeTagList{}
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return err
+	}
+	*l = KnowledgeTagList(out)
+	return nil
+}
+
+func (l KnowledgeTagList) Value() (driver.Value, error) {
+	if len(l) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal([]string(l))
+	return string(b), err
+}
+
+func (l KnowledgeTagList) MarshalJSON() ([]byte, error) {
+	if l == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]string(l))
+}
 
 // KnowledgeChunk is one searchable passage of a document. Its ID is also the
 // vector ID in the index.

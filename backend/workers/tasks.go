@@ -208,12 +208,30 @@ type ChannelMetadata struct {
 // runs on the staff flow, even if an agent was set up with it.
 func agentTurnFlow(plan agents.Plan, lf engine.LangflowConfig, tier string) (flowID, source string) {
 	flowID, source = lf.FlowFor(tier)
+	if plan.Mode != agents.ModeAgent || tier == agents.TierPrivate {
+		if id, own := plan.Flow(flowID); own {
+			return id, "agent"
+		}
+		return flowID, source
+	}
+	isStaffFlow := func(id string) bool {
+		id, staffFlow := strings.TrimSpace(id), strings.TrimSpace(lf.FlowID)
+		if strings.EqualFold(id, staffFlow) {
+			return id != ""
+		}
+		parsed, err := uuid.Parse(id)
+		staffID, staffErr := uuid.Parse(staffFlow)
+		return err == nil && staffErr == nil && parsed == staffID
+	}
+	if isStaffFlow(flowID) {
+		flowID, source = "", ""
+	}
 	id, own := plan.Flow(flowID)
 	if !own {
 		return flowID, source
 	}
-	if staffFlow, _ := lf.FlowFor(agents.TierPrivate); tier != agents.TierPrivate && strings.EqualFold(strings.TrimSpace(id), strings.TrimSpace(staffFlow)) {
-		log.Printf("[agents] agent %s is set to the staff flow; this customer turn uses the AI Engine flow", plan.Selection.Agent.Key)
+	if isStaffFlow(id) {
+		log.Printf("[agents] customer agent %s is set to the staff flow; ignoring that flow", plan.Selection.Agent.Key)
 		return flowID, source
 	}
 	return id, "agent"
@@ -263,17 +281,6 @@ func stockLookupFailureMessage(err error) string {
 	}
 	return botUnavailableMessage
 }
-
-const langflowUnansweredInstruction = `QUY TẮC TRẢ LỜI KHI THIẾU DỮ LIỆU
-Áp dụng các quy tắc dưới đây nếu hướng dẫn khác trong prompt có nội dung mâu thuẫn. Trả lời khách bằng ngôn ngữ họ đang dùng, dùng tiếng Việt cho hội thoại tiếng Việt.
-- Tra giá, mã sản phẩm và tồn kho bằng ERP. Chỉ dùng tồn khả dụng tại Kho Tổng để trả lời về tồn hoặc còn/hết hàng. Với câu hỏi nối tiếp, giữ đúng sản phẩm, màu và size đã nêu. Tồn khả dụng lớn hơn 0 xác nhận còn hàng; 0 hoặc âm xác nhận hiện không có hàng khả dụng. Kết quả rỗng hoặc thiếu trường tồn chưa xác nhận được. Nếu khách hỏi riêng tồn vật lý thì nói rõ công cụ đang tra tồn khả dụng.
-- Khi công cụ sản phẩm hoặc tồn kho của ERP trả lookup_outcome=no_visible_match, hoặc trả data rỗng với truy vấn có tên/mã và không có lựa chọn hay thông báo đã gửi qua Zalo, kết thúc tra cứu mục đó. Diễn đạt customer_message theo điều khách hỏi, hoặc nói ngắn gọn rằng em chưa xác nhận được từ dữ liệu hiện có và có thể hướng khách hỏi nhân viên phụ trách. Không kết luận sản phẩm không tồn tại, sai mã hay hết hàng. Không yêu cầu khách gửi lại mã, ảnh, màu hoặc size để giải quyết kết quả rỗng này. Không gọi search_knowledge, Astra, SQL hay nguồn khác để tìm lại thông tin ERP cho mục đó.
-- Khi tra sản phẩm, chỉ hỏi bổ sung nếu còn thiếu thông tin nhận diện hoặc ERP trả lựa chọn hợp lệ cần khách chọn. Tiếp tục xử lý các câu hỏi khác trong cùng tin nhắn theo đúng nguồn của từng câu hỏi. Chỉ nói về giới hạn quyền khi công cụ trả lỗi từ chối quyền rõ ràng. Nếu công cụ báo lỗi tạm thời, nói chưa tra được và mời thử lại sau.`
-
-const publicStockStatusInstruction = `QUY TẮC TRẢ LỜI TỒN KHO CHO KHÁCH HÀNG (BẮT BUỘC)
-Áp dụng quy tắc dưới đây thay cho mọi hướng dẫn khác về số lượng tồn kho khi trả lời khách hàng.
-- Khi trả lời về tồn kho, còn hàng/hết hàng, chọn màu/size hoặc giỏ hàng không đủ tồn: CHỈ báo trạng thái "còn hàng" (khi in_stock=true / còn khả dụng) hoặc "hết hàng" / "hiện không có hàng khả dụng" (khi in_stock=false / hết khả dụng).
-- TUYỆT ĐỐI KHÔNG nêu số lượng tồn kho cụ thể (kể cả tổng tồn dòng, tồn từng màu/size hay số lượng tồn còn lại), ngay cả khi khách hỏi "còn mấy cái / bao nhiêu con". Nếu khách hỏi "còn size nào", chỉ liệt kê tên các size còn hàng hoặc hết hàng.`
 
 func publicLineStockReply(label string, stock float64) string {
 	if stock > 0 {
@@ -1098,11 +1105,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 		agentPlan, planErr := agents.PlanTurn(ctx, matchedChannel.TenantID, matchedChannel.ID, turnTier)
 		if planErr != nil {
-			log.Printf("[agents] channel %s: %v; answering with the AI Engine prompt", matchedChannel.ID, planErr)
+			log.Printf("[agents] channel %s: %v; staying silent (%s)", matchedChannel.ID, planErr, agentPlan.LogFields())
+			return nil
 		}
 		if agentPlan.Mode == agents.ModeSilent {
 			// The message is already in chat memory for staff to pick up.
-			log.Printf("[agents] channel %s sender %s: no agent serves this sender here; staying silent (%s)",
+			log.Printf("[agents] channel %s sender %s: staying silent (%s)",
 				matchedChannel.ID, payload.Sender.ID, agentPlan.LogFields())
 			return nil
 		}
@@ -1455,15 +1463,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			systemPromptToUse = appendComplaintContext(ctx, matchedChannel.TenantID, matchedChannel.ID, caseSubjectType, caseSubjectID, customerCode, !groupGuest, systemPromptToUse)
 		}
 		if systemPromptToUse != "" {
-			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
+			// Turn rules, editable in AI Engine → task prompts.
+			tenantID := matchedChannel.TenantID
+			systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptMissingDataRules)
 			if agentType != "private" && agentPlan.AllowsGroup(agents.ToolGroupProducts) {
-				systemPromptToUse += "\n\n" + publicStockStatusInstruction
+				systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptPublicStockRules)
 			}
 			if meta.UnansweredHandoverEnabled && agentType == "public" && agentPlan.Allows(agents.ToolLookupOrder) {
-				systemPromptToUse += "\n\n" + publicOrderLookupInstruction
+				systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptPublicOrderLookup)
 			}
 			if permCtx.UnansweredLookupID != "" {
-				systemPromptToUse += "\n\n" + unansweredHandoverInstruction
+				systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptUnansweredHandover)
 			}
 		}
 
@@ -1497,8 +1507,35 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		// Intercept Zalo OA interactive button clicks
+		noAgentTool := func() error {
+			return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, "Trợ lý này chưa được cấp công cụ cho thao tác đó.")
+		}
+		productAllowed, _, productGroups := permCtx.IsResourceAllowed("products")
+		productBrands, allProductBrands := permCtx.ResolveBrandFilter("products")
+		filterAgentVariants := func(products []map[string]interface{}) []map[string]interface{} {
+			if agentPlan.Mode != agents.ModeAgent {
+				return products
+			}
+			visible := products[:0]
+			for _, product := range products {
+				group := getMapString(product, "LIST_TEN_NHOM_VTHH", "list_ten_nhom_vthh", "group")
+				brand := getMapString(product, "NHAN_HIEU_NAME", "nhan_hieu_name", "brand")
+				if engine.WarehouseProductAllowed(group, brand, productGroups, productBrands, allProductBrands) {
+					visible = append(visible, product)
+				}
+			}
+			return visible
+		}
+		canReadVariants := agentPlan.Allows("search_product_variants") && (agentPlan.Mode != agents.ModeAgent || productAllowed)
+		var variantPermissions *engine.GroupPermissionContext
+		if agentPlan.Mode == agents.ModeAgent {
+			variantPermissions = &permCtx
+		}
 		// A. Choose Flow Type: dongsp or skucuthe
 		if strings.HasPrefix(userText, "#choose_flow_type:dongsp:") {
+			if !agentPlan.Allows("inventory_by_line") {
+				return noAgentTool()
+			}
 			allowed, _, groups := permCtx.IsResourceAllowed("inventory")
 			if !allowed {
 				return sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, "Tài khoản của anh/chị chưa có quyền xem tồn kho.")
@@ -1569,6 +1606,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		if strings.HasPrefix(userText, "#choose_flow_type:skucuthe:") {
+			if !agentPlan.Allows("inventory_by_sku") {
+				return noAgentTool()
+			}
 			keyword := strings.TrimPrefix(userText, "#choose_flow_type:skucuthe:")
 			// Lock the chosen line so the follow-up color/size free-text turn is
 			// scoped to exactly this line. Without the lock the Agent re-derives a
@@ -1605,7 +1645,8 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// system prompt's "ambiguous → stock" default. The intent travels
 			// inside the postback (baked at list-build time from the Agent's
 			// classification), so the pick replays it verbatim — no keyword guess.
-			if pickIntent == engine.StockPickIntentPrice {
+			if pickIntent == engine.StockPickIntentPrice && agentPlan.Allows("search_products") &&
+				(agentPlan.Mode != agents.ModeAgent || productAllowed) {
 				if priceReply, priceErr := priceRangeReplyByWebName(ctx, matchedChannel.TenantID, &permCtx, webName); priceErr == nil && priceReply != "" {
 					var sendErr error
 					if matchedGroup.ZaloGroupID != "" {
@@ -1624,6 +1665,22 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			}
 
 			prompt, buttons := engine.BuildExactWebStockPicker(webName)
+			if agentPlan.Mode == agents.ModeAgent {
+				allowedButtons := buttons[:0]
+				for _, button := range buttons {
+					tool := "inventory_by_line"
+					if strings.HasPrefix(button.Payload, "#choose_flow_type:skucuthe:") {
+						tool = "inventory_by_sku"
+					}
+					if agentPlan.Allows(tool) {
+						allowedButtons = append(allowedButtons, button)
+					}
+				}
+				buttons = allowedButtons
+				if len(buttons) == 0 {
+					return noAgentTool()
+				}
+			}
 			text := channels.BuildButtonOptionsAsText(prompt, buttons)
 			engine.StorePendingOptions(ctx, workKey, buttons, meta.SessionTimeout)
 			var sendErr error
@@ -1640,6 +1697,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// 1. Parent Code Options Selection (#show_macha_options:<MA_CHA>)
 		if strings.HasPrefix(userText, "#show_macha_options:") {
+			if !agentPlan.Allows("inventory_by_line") {
+				return noAgentTool()
+			}
 			maCha := strings.TrimPrefix(userText, "#show_macha_options:")
 			allowed, _, groups := permCtx.IsResourceAllowed("inventory")
 			if !allowed {
@@ -1740,6 +1800,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Resolve the selected web name to its parent codes, then fetch
 		// inventory for all eligible SKUs belonging to those parents.
 		if strings.HasPrefix(userText, "#show_macha_options_by_web:") {
+			if !agentPlan.Allows("inventory_by_line") {
+				return noAgentTool()
+			}
 			if allowed, _, _ := permCtx.IsResourceAllowed("inventory"); !allowed {
 				reply := "Tài khoản của anh/chị chưa có quyền xem tồn kho."
 				if matchedGroup.ZaloGroupID != "" {
@@ -1810,6 +1873,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// 2. Web Synchronized Name Selection (#check_stock_webname:<JSON>)
 		if strings.HasPrefix(userText, "#check_stock_webname:") {
+			if !agentPlan.Allows("inventory_by_line") {
+				return noAgentTool()
+			}
 			payloadStr := strings.TrimPrefix(userText, "#check_stock_webname:")
 			var parsed struct {
 				MaCha   string `json:"MA_CHA"`
@@ -1844,6 +1910,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// A. "Xem theo màu" button click
 		if strings.HasPrefix(userText, "#xem_mau_size:") {
+			if !agentPlan.Allows("inventory_by_sku") {
+				return noAgentTool()
+			}
 			parts := strings.Split(strings.TrimPrefix(userText, "#xem_mau_size:"), ":")
 			maChaName := parts[0]
 			if len(parts) > 1 {
@@ -1866,6 +1935,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			MaChaName string `json:"MA_CHA_NAME"`
 		}
 		if strings.HasPrefix(userText, "{") && json.Unmarshal([]byte(userText), &clickPayload) == nil && clickPayload.MaCha != "" {
+			if !agentPlan.Allows("inventory_by_line") {
+				return noAgentTool()
+			}
 			displayName := clickPayload.MaCha
 			if clickPayload.MaChaName != "" {
 				displayName = clickPayload.MaChaName
@@ -1895,8 +1967,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// 3. Show Product Variants Selection (#show_product_variants:<MA_CHA>)
 		if strings.HasPrefix(userText, "#show_product_variants:") {
+			if !canReadVariants {
+				return noAgentTool()
+			}
 			maCha := engine.RealParentOf(strings.TrimPrefix(userText, "#show_product_variants:"))
 			childProducts, err := getProductsByMaChaFromCache(ctx, matchedChannel.TenantID, maCha, engine.ExcludeDKCopies)
+			childProducts = filterAgentVariants(childProducts)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, "Không tìm thấy thông tin chi tiết của dòng sản phẩm.")
 				return nil
@@ -1905,7 +1981,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if len(childProducts) == 1 {
 				p := childProducts[0]
 				sku := getMapString(p, "MA", "code", "ma")
-				sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID)
+				sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID, variantPermissions)
 				return nil
 			}
 
@@ -1951,8 +2027,12 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// flow. Renders the variant SKUs (color/size) across every MA_CHA in
 		// the line so the user sees the full catalog for that product line.
 		if strings.HasPrefix(userText, "#show_web_variants:") {
+			if !canReadVariants {
+				return noAgentTool()
+			}
 			webName := strings.TrimPrefix(userText, "#show_web_variants:")
 			childProducts, err := getProductsByWebNameFromCache(ctx, matchedChannel.TenantID, webName)
+			childProducts = filterAgentVariants(childProducts)
 			if err != nil || len(childProducts) == 0 {
 				_ = adapter.SendMessage(ctx, payload.Sender.ID, fmt.Sprintf("Không tìm thấy sản phẩm nào trong dòng '%s'.", webName))
 				return nil
@@ -1961,7 +2041,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			if len(childProducts) == 1 {
 				p := childProducts[0]
 				sku := getMapString(p, "MA", "code", "ma")
-				sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID)
+				sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID, variantPermissions)
 				return nil
 			}
 
@@ -2007,8 +2087,11 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		// 4. Show Product Detail Selection (#show_product_detail:<SKU>)
 		if strings.HasPrefix(userText, "#show_product_detail:") {
+			if !canReadVariants {
+				return noAgentTool()
+			}
 			sku := strings.TrimPrefix(userText, "#show_product_detail:")
-			sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID)
+			sendProductDetailsDirectly(ctx, adapter, matchedChannel.TenantID, sku, matchedGroup.ZaloGroupID, payload.Sender.ID, variantPermissions)
 			return nil
 		}
 
@@ -2021,7 +2104,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		// Single-use: consumed here so it never leaks into unrelated later turns.
 		// Small talk ("cảm ơn" before the color and size) leaves it for the
 		// actual answer.
-		if !strings.HasPrefix(userText, "#") && classified != "CASUAL" {
+		if !strings.HasPrefix(userText, "#") && classified != "CASUAL" && agentPlan.Allows("inventory_by_sku") {
 			if lockedLine := engine.TakeAwaitingVariantLine(ctx, workKey); lockedLine != "" {
 				log.Printf("[stock-pick] variant-line lock active: scoping %q to chosen line %q (workKey=%s)", userText, lockedLine, workKey)
 				userText = fmt.Sprintf("%s [DÒNG ĐÃ CHỌN: %s — chỉ tra tồn kho đúng dòng này bằng exact_web_name=true; KHÔNG mở rộng sang dòng khác]", userText, lockedLine)
@@ -2031,6 +2114,9 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		permissionToken, err := engine.SignPermissionToken(permCtx, cfg.EncryptionKey)
 		if err != nil {
 			log.Printf("[worker] failed to sign permission token: %v", err)
+			if agentPlan.Mode == agents.ModeAgent {
+				return err
+			}
 		}
 
 		// Per-sender Langflow memory: in a group, scope the session_id to the sender
@@ -2096,7 +2182,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		var adviceImages []models.ProductAdvisoryImage
 		if intent == "IN_SCOPE" && !complaintHandover && !strings.HasPrefix(userText, "#") && agentPlan.AllowsGroup(agents.ToolGroupProducts) {
-			langflowInput, systemPromptToUse = engine.AddProductAdviceInstruction(langflowInput, systemPromptToUse)
+			langflowInput, systemPromptToUse = engine.AddProductAdviceInstruction(matchedChannel.TenantID, langflowInput, systemPromptToUse)
 			advice, adviceErr := productAdviceForTurn(ctx, &permCtx, input, func() []chatmemory.RecentTurn {
 				if matchedGroup.ZaloGroupID != "" {
 					return chatmemory.RecentTurnsForSender(ctx, sessionID, msgID, input, payload.Sender.ID, 2)
@@ -2118,7 +2204,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		if payload.SignatureVerified {
-			langflowInput, systemPromptToUse = engine.AddKnowledgeImageInstruction(langflowInput, systemPromptToUse)
+			langflowInput, systemPromptToUse = engine.AddKnowledgeImageInstruction(matchedChannel.TenantID, langflowInput, systemPromptToUse)
 		}
 		// 2. Answer the turn. An agent on the native runtime calls its own
 		// model and MCP tools directly, with the same prompt, tokens and
@@ -2627,12 +2713,20 @@ func getProductsByMaChaFromCache(ctx context.Context, tenantID, maCha string, sc
 	return results, nil
 }
 
-func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAdapter, tenantID, sku, zaloGroupID, senderID string) {
+func sendProductDetailsDirectly(ctx context.Context, adapter *channels.ZaloOAAdapter, tenantID, sku, zaloGroupID, senderID string, permissions *engine.GroupPermissionContext) {
 	var p models.CachedProduct
 	if err := db.DB.WithContext(ctx).Scopes(engine.ExcludeDKCopies).Where("tenant_id = ? AND ma = ?", tenantID, sku).First(&p).Error; err != nil {
 		log.Printf("[worker] error finding cached product details: %v", err)
 		_ = adapter.SendMessage(ctx, senderID, "Không tìm thấy thông tin chi tiết cho mã SKU: "+sku)
 		return
+	}
+	if permissions != nil {
+		allowed, _, groups := permissions.IsResourceAllowed("products")
+		brands, allBrands := permissions.ResolveBrandFilter("products")
+		if !allowed || !engine.WarehouseProductAllowed(p.LIST_TEN_NHOM_VTHH, p.NHAN_HIEU_NAME, groups, brands, allBrands) {
+			_ = sendChatReply(ctx, adapter, zaloGroupID, senderID, "Không tìm thấy thông tin chi tiết cho mã SKU: "+sku)
+			return
+		}
 	}
 
 	// Format price nicely
@@ -2840,7 +2934,7 @@ func classifyWithTaskPrompt(ctx context.Context, tenantID, promptKey, input stri
 	}
 	systemPrompt := engine.BuildTaskPrompt(tenantID, promptKey, nil)
 	if businessRouting {
-		systemPrompt += "\n\n" + businessClassifierInstruction
+		systemPrompt += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptBusinessScope)
 	}
 
 	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
