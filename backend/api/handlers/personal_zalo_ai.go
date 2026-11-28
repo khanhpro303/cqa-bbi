@@ -57,6 +57,12 @@ func personalZaloAgentPlan(ctx context.Context, req personalZaloChatbotRequest, 
 	if err != nil {
 		log.Printf("[agents] personal Zalo channel %s: %v; answering with the AI Engine prompt", req.ChannelID, err)
 	}
+	if sel, ok := plan.Agent(); ok && sel.Agent.Runtime == agents.RuntimeNative {
+		// Personal Zalo turns keep their memory in Langflow (its chat log is
+		// imported minutes later), so a native agent answers here on the
+		// tier's Langflow flow with its prompt and tools.
+		log.Printf("[agents] personal Zalo channel %s: native agent %s runs on Langflow here", req.ChannelID, sel.Agent.Key)
+	}
 	return plan
 }
 

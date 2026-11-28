@@ -22,6 +22,19 @@ Trước đây mỗi tầng có một bot làm tất cả: một prompt cho khá
 - **Công cụ**: token ký mang `agent_key` và danh sách công cụ của agent. Máy chủ MCP `/mcp/erp/:tenantId` chỉ liệt kê và chỉ chạy các công cụ đó; gọi công cụ khác nhận lỗi `tool_not_allowed`. Agent không có công cụ nào thì không gọi được công cụ nào.
 - **Việc backend làm thay bot** cũng theo công cụ của agent: ghi khiếu nại thành case chỉ khi agent có `complaint_record`; giỏ hàng chỉ khi agent có công cụ `order_cart_*`; tra đơn đang giao trả lời thẳng chỉ khi agent có `lookup_order`; ghi chú tư vấn sản phẩm và hướng dẫn tồn kho chỉ khi agent có công cụ nhóm sản phẩm.
 
+## Runtime native (không qua Langflow)
+
+Mỗi agent chọn **runtime**: `langflow` (mặc định, chạy trên flow Langflow như trước) hoặc `native` (backend gọi thẳng model của agent và tự gọi công cụ MCP, không cần flow Langflow).
+
+- **Model**: agent native chọn nhà cung cấp và mã model như ô chọn model của từng tác vụ AI (Cài đặt → AI): `claude`, `gemini`, `openai`, `openrouter`. Khoá API và Base URL lấy từ cài đặt AI của tenant cho đúng nhà cung cấp đó (không dùng khoá của nhà cung cấp khác). Agent native bắt buộc có system prompt.
+- **Một lượt chat**: prompt (giọng chung + prompt agent + ngữ cảnh như với Langflow) và hội thoại gần đây lấy từ trí nhớ chat (tối đa 20 tin, khoảng 10.000 ký tự; trong nhóm chỉ lấy tin của người đang hỏi và câu bot trả lời họ) được gửi cho model cùng danh sách công cụ của agent. Model gọi công cụ, backend chạy công cụ trên máy chủ MCP `/mcp/erp/:tenantId` ngay trong tiến trình, với đúng token agent và token quyền ký của lượt đó (nên vẫn lọc công cụ theo agent, giới hạn dữ liệu theo người nhắn, chặn công cụ ghi khi chạy thử), rồi gửi kết quả lại cho model tới khi model trả lời.
+- **Công cụ được đưa cho model**: giao của các công cụ máy chủ MCP liệt kê cho token của lượt đó và công cụ của agent. Lượt không có token agent ERP (ví dụ tenant chưa cài token) thì model trả lời không có công cụ.
+- **Tuỳ chọn** (`options`): `max_tool_calls` (1–20, để 0 là 8) giới hạn số lần gọi công cụ trong một lượt; hết lượt thì model phải trả lời bằng thông tin đã có. `temperature` (0–2, Claude tối đa 1); model không nhận temperature (một số model suy luận) thì backend gửi lại không kèm temperature.
+- **Phần còn lại của lượt chat giữ nguyên**: xử lý `[RICH_MESSAGE_SENT]`, chuyển người hỗ trợ, ảnh tài liệu/sản phẩm, bỏ mã case, ghi chi phí AI (token cộng dồn mọi lần gọi model trong lượt, tính theo model thật của agent).
+- **Thời gian**: một lượt native (mọi lần gọi model và công cụ, kể cả thử lại) tối đa 2 phút.
+- **Lỗi**: thiếu khoá API, mã model sai, khoá bị từ chối thì bot trả lời câu "chưa trả lời được" ngay, không thử lại; lỗi tạm thời (quá tải, mạng) thì thử lại như với Langflow.
+- **Phạm vi**: runtime native chạy cho Zalo OA (chat riêng và nhóm). Trên Zalo cá nhân, trí nhớ hội thoại vẫn nằm trong Langflow (lịch sử chat chỉ được nhập về sau vài phút), nên agent native ở đó vẫn trả lời qua flow Langflow của tầng với prompt và công cụ của agent.
+
 ## Bật agent và chuyển prompt cũ
 
 - **Công tắc** `ai_agents_enabled` (Cài đặt → Agent). Tắt (mặc định): mọi thứ chạy như trước bằng prompt AI Engine.
@@ -49,7 +62,7 @@ Lỗi kiểm tra trả `400 {"error":"invalid_agent","field":...,"message":...}`
 
 ## Giới hạn hiện tại
 
-- Runtime `native` (gọi thẳng nhà cung cấp AI với công cụ của agent, không qua Langflow) chưa có: API từ chối lưu agent `native` cho tới khi máy chủ cài runtime đó.
+- Agent `native` trên Zalo cá nhân vẫn chạy qua flow Langflow của tầng (xem Runtime native).
 - Khách chưa xác thực nhắn Zalo cá nhân vẫn dùng bot tài liệu cho khách lạ như trước (chỉ đọc tài liệu công khai); agent áp dụng cho người đã xác thực và nhóm chat.
 - Nhóm chat trên Zalo cá nhân chạy không có token quyền ERP (như trước), nên ở đó agent đổi prompt và flow nhưng danh sách công cụ không được máy chủ MCP lọc theo agent.
 - `system_prompt` đặt trong metadata của từng kênh OA (không có trên giao diện) bị bỏ qua khi agent đang bật.

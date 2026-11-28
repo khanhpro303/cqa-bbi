@@ -71,3 +71,22 @@ func TestRecentTurnsFromLimits(t *testing.T) {
 		t.Fatalf("got %d turns, %d chars; want 1..6 turns within %d chars", len(got), total, recentTurnsMaxChars)
 	}
 }
+
+func TestConversationTurnLimits(t *testing.T) {
+	long := strings.Repeat("b", 1000)
+	var rows []recentRow
+	for i := 0; i < 30; i++ {
+		rows = append(rows, recentRow{ExternalMessageID: string(rune('A' + i)), SenderType: "customer", Content: long})
+	}
+	got := turnsFrom(rows, "x", "x", turnLimits{count: conversationTurns, perTurn: conversationTurnChars, total: conversationTurnsMaxChars})
+	total := 0
+	for _, turn := range got {
+		if turn.Text != long {
+			t.Fatalf("a 1000-character turn must be kept whole for the answering model, got %d runes", len([]rune(turn.Text)))
+		}
+		total += len(turn.Text)
+	}
+	if len(got) < 7 || len(got) > conversationTurns || total > conversationTurnsMaxChars {
+		t.Fatalf("got %d turns, %d chars; want more than the classifier and within %d chars", len(got), total, conversationTurnsMaxChars)
+	}
+}

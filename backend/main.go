@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 
+	"github.com/vietbui/chat-quality-agent/agents"
+	"github.com/vietbui/chat-quality-agent/agents/native"
 	"github.com/vietbui/chat-quality-agent/api"
 	"github.com/vietbui/chat-quality-agent/api/handlers"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
@@ -104,6 +106,11 @@ func main() {
 		go cloudifyorders.NewWatcher(db.DB, cfg.EncryptionKey).Run(watcherCtx)
 		log.Println("[cloudify-orders] order watcher enabled")
 	}
+
+	// Specialist agents on runtime "native" call their model and their MCP
+	// tools directly (no Langflow). Registered before the worker starts so
+	// no turn of a native agent falls back to Langflow at boot.
+	agents.RegisterRuntime(agents.RuntimeNative, native.New(cfg, native.MCPClient{Handler: handlers.ERPMCPHandler()}))
 
 	// Start worker pool (Asynq server)
 	workerPool := workers.NewWorkerPool(cfg, handlers.LookupCurrentZaloOrderDelivery)

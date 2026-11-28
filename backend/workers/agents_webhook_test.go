@@ -191,13 +191,57 @@ func TestZaloWebhookAnswersWithAgent(t *testing.T) {
 		t.Fatal("chatbot usage write did not finish")
 	}
 
+	// The same agent on the native runtime: its own model answers through
+	// the runtime with the same prompt and agent token; Langflow is not
+	// called.
+	var nativeStock models.AIAgent
+	agents.Agent{Key: "kho", Name: "Bot kho", Audience: agents.AudienceCustomer, Runtime: agents.RuntimeNative,
+		Provider: "openai", Model: "gpt-5-mini", SystemPrompt: "Bạn là bot kho.",
+		Tools: []string{"inventory_by_sku", "search_products"}, IsActive: true}.ApplyTo(&nativeStock)
+	nativeStock.ID, nativeStock.TenantID = "agent-kho", group.TenantID
+	members = []models.AIAgent{nativeStock, staff}
+	runtime := &recordingRuntime{text: "Dạ mẫu này còn 2 đôi ạ."}
+	agents.RegisterRuntime(agents.RuntimeNative, runtime)
+	t.Cleanup(func() { agents.RegisterRuntime(agents.RuntimeNative, nil) })
+	replies, flowCalls = nil, 0
+	if err := send(); err != nil || flowCalls != 0 || len(replies) != 1 || replies[0] != runtime.text {
+		t.Fatalf("native turn: replies %v, flow calls %d, error %v", replies, flowCalls, err)
+	}
+	if len(runtime.inputs) != 1 {
+		t.Fatalf("runtime runs = %d", len(runtime.inputs))
+	}
+	in := runtime.inputs[0]
+	if in.Agent.Key != "kho" || in.Tier != agents.TierPublic || !strings.HasPrefix(in.Input, question) ||
+		!strings.HasPrefix(in.SystemPrompt, "Xưng em, gọi anh/chị.\n\nBạn là bot kho.") {
+		t.Errorf("native run input = %+v", in)
+	}
+	permissions, err := engine.VerifyPermissionToken(in.PermissionToken, key)
+	if err != nil || permissions.AgentKey != "kho" || !permissions.ToolAllowed("inventory_by_sku") || permissions.ToolAllowed("lookup_debt") {
+		t.Errorf("native turn permissions = %+v, %v", permissions, err)
+	}
+	select {
+	case <-usageDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("native turn usage write did not finish")
+	}
+
 	// Only a staff agent left: customers in the group get no bot reply.
 	members = []models.AIAgent{staff}
 	team.DefaultAgentID = staff.ID
 	replies, flowCalls = nil, 0
-	if err := send(); err != nil || flowCalls != 0 || len(replies) != 0 {
+	if err := send(); err != nil || flowCalls != 0 || len(replies) != 0 || len(runtime.inputs) != 1 {
 		t.Fatalf("silent turn: replies %v, flow calls %d, error %v", replies, flowCalls, err)
 	}
+}
+
+type recordingRuntime struct {
+	text   string
+	inputs []agents.RunInput
+}
+
+func (r *recordingRuntime) Run(_ context.Context, in agents.RunInput) (agents.RunResult, error) {
+	r.inputs = append(r.inputs, in)
+	return agents.RunResult{Text: r.text, Usage: agents.Usage{Provider: "openai", Model: "gpt-5-mini", InputTokens: 10, OutputTokens: 2, HasUsage: true}}, nil
 }
 
 func TestAgentTurnFlow(t *testing.T) {
