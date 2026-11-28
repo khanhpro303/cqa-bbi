@@ -913,3 +913,50 @@ test('an ambiguous Internbot Zalo send is retained separately from legacy drafts
   assert.equal(retained.reply, undefined);
   assert.equal(retained.internbotReply?.groupId, internbotGroup);
 });
+
+test('a session-close notice goes to the chat and its echo is not a manual reply', { timeout: 10_000 }, async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async (_text: string, _threadId: string, _type: number) => ({ message: { msgId: '7000001' } }));
+  const { account, listener, pool } = await connectFixture(t, { ownId: '10001', sendMessage });
+  const idleSince = Date.now() - 1_000;
+
+  assert.equal(await pool.sendSessionNotice(account.id, { threadType: 'user', threadId: '20002', text: 'Hẹn gặp lại', idleSince }), 'sent');
+  assert.deepEqual(sendMessage.mock.calls[0]?.arguments, ['Hẹn gặp lại', '20002', 0]);
+  // The echo arrives with a different id than the receipt (as when it beats sendMessage).
+  await listener.message({
+    ...directMessage('7000002'), isSelf: true,
+    data: { ...directMessage('7000002').data, uidFrom: '10001', content: 'Hẹn gặp lại' },
+  });
+  assert.equal(await pool.sendSessionNotice(account.id, { threadType: 'user', threadId: '20002', text: 'Lần hai', idleSince }), 'sent');
+
+  assert.equal(await pool.sendSessionNotice(account.id, { threadType: 'group', threadId: '50005', text: 'Nhóm', idleSince }), 'sent');
+  assert.deepEqual(sendMessage.mock.calls[2]?.arguments, ['Nhóm', '50005', 1]);
+});
+
+test('a session-close notice is skipped after a manual reply or while the chat is busy', { timeout: 5_000 }, async (t) => {
+  configureTestChatbot(t);
+  const sendMessage = t.mock.fn(async () => ({}));
+  const { account, listener, pool } = await connectFixture(t, { ownId: '10001', sendMessage });
+  const idleSince = Date.now() - 1_000;
+  await listener.message({
+    ...directMessage('7100001'), isSelf: true,
+    data: { ...directMessage('7100001').data, uidFrom: '10001', content: 'Nhân viên trả lời tay' },
+  });
+  assert.equal(await pool.sendSessionNotice(account.id, { threadType: 'user', threadId: '20002', text: 'Hẹn gặp lại', idleSince }), 'skipped_manual');
+  assert.equal(await pool.sendSessionNotice(account.id, { threadType: 'user', threadId: '20002', text: 'Hẹn gặp lại', idleSince: Date.now() + 1 }), 'sent');
+
+  let requestStarted!: () => void;
+  let finishRequest!: (response: Response) => void;
+  const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+  const pending = new Promise<Response>((resolve) => { finishRequest = resolve; });
+  t.mock.method(globalThis, 'fetch', async () => {
+    requestStarted();
+    return pending;
+  });
+  const processing = listener.message(directMessage('7100002', '20003'));
+  await started;
+  assert.equal(await pool.sendSessionNotice(account.id, { threadType: 'user', threadId: '20003', text: 'Hẹn gặp lại' }), 'skipped_busy');
+  finishRequest(new Response(null, { status: 204 }));
+  await processing;
+  assert.equal(sendMessage.mock.callCount(), 1);
+});

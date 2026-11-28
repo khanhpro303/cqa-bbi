@@ -100,11 +100,13 @@
               <v-alert v-if="editChannelType === 'personal_zalo_import'" type="info" variant="tonal" density="compact" class="mb-3">
                 {{ $t('personal_zalo_session_hint') }}
               </v-alert>
-              <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" persistent-hint density="compact" class="mb-3" />
-              <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" persistent-hint density="compact" class="mb-3" />
-              <v-text-field v-model="editForm.session_welcome_message" :label="$t('session_welcome')" :hint="$t('session_welcome_hint')" persistent-hint density="compact" class="mb-3" />
-              <v-text-field v-model="editForm.session_goodbye_message" :label="$t('session_goodbye')" :hint="$t('session_goodbye_hint')" persistent-hint density="compact" class="mb-3" />
-              <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" :min="editChannelType === 'personal_zalo_import' ? 0 : undefined" :max="editChannelType === 'personal_zalo_import' ? 1440 : undefined" type="number" density="compact" class="mb-3" />
+              <v-text-field v-model="editForm.session_keyword" :label="$t('session_keyword')" :hint="$t('session_keyword_hint')" :placeholder="sessionPlaceholder('session_keyword')" persistent-hint persistent-placeholder density="compact" class="mb-3" />
+              <v-text-field v-model="editForm.session_end_keyword" :label="$t('session_end_keyword')" :hint="$t('session_end_keyword_hint')" :placeholder="sessionPlaceholder('session_end_keyword')" persistent-hint persistent-placeholder density="compact" class="mb-3" />
+              <v-text-field v-model="editForm.session_welcome_message" :label="$t('session_welcome')" :hint="$t('session_welcome_hint')" :placeholder="sessionPlaceholder('session_welcome_message')" persistent-hint persistent-placeholder density="compact" class="mb-3" />
+              <v-text-field v-model="editForm.session_goodbye_message" :label="$t('session_goodbye')" :hint="$t('session_goodbye_hint')" :placeholder="sessionPlaceholder('session_goodbye_message')" persistent-hint persistent-placeholder density="compact" class="mb-3" />
+              <v-text-field v-model.number="editForm.session_timeout_minutes" :label="$t('session_timeout')" :hint="sessionTimeoutHint" :min="editChannelType === 'personal_zalo_import' ? 0 : undefined" :max="editChannelType === 'personal_zalo_import' ? 1440 : undefined" type="number" persistent-hint density="compact" class="mb-3" />
+              <v-switch v-model="editForm.session_timeout_notice" :label="$t('session_timeout_notice')" :hint="$t(editChannelType === 'personal_zalo_import' ? 'personal_zalo_session_timeout_notice_hint' : 'session_timeout_notice_hint')" persistent-hint color="primary" density="compact" class="mb-3" data-testid="session-timeout-notice" />
+              <v-text-field v-if="editForm.session_timeout_notice" v-model="editForm.session_timeout_message" :label="$t('session_timeout_message')" :hint="$t('session_timeout_message_hint')" :placeholder="sessionPlaceholder('session_timeout_message')" persistent-hint persistent-placeholder density="compact" class="mb-3" data-testid="session-timeout-message" />
               <template v-if="editChannelType === 'zalo_oa'">
                 <v-divider class="my-4" />
                 <div class="text-subtitle-2 mb-1">{{ $t('casual_budget_title') }}</div>
@@ -173,6 +175,7 @@
 
 <script setup lang="ts">
 import { isAxiosError } from 'axios'
+import api from '../../api'
 import { computed, reactive, ref, shallowRef, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '../../stores/auth'
@@ -227,6 +230,7 @@ const editForm = reactive({
   name: '', is_active: true, sync_files: false, sync_interval: 15, sync_scope: 'all',
   personal_sync_interval: 'gateway' as number | 'gateway',
   session_keyword: '', session_end_keyword: '', session_welcome_message: '', session_goodbye_message: '', session_timeout_minutes: 0,
+  session_timeout_notice: true, session_timeout_message: '',
   casual_full_agent_turns: CASUAL_FULL_AGENT_TURNS_DEFAULT as number | string, casual_quiet_after: CASUAL_QUIET_AFTER_DEFAULT as number | string,
 })
 const editGroupSettings = ref(readZaloGroupSettings())
@@ -261,6 +265,34 @@ const personalSyncIntervalOptions = computed(() => {
   return [{ title: t('personal_zalo_sync_gateway_default'), value: 'gateway' }, ...syncIntervalOptions.value, ...customOption]
 })
 
+// Texts the backend uses when a session field is empty (.env defaults),
+// shown as placeholders so an empty field reads as what is actually sent.
+type SessionDefaults = Partial<Record<'session_keyword' | 'session_end_keyword' | 'session_welcome_message' |
+  'session_goodbye_message' | 'session_timeout_message', string> & { session_timeout_minutes: number }>
+const sessionDefaults = ref<SessionDefaults>({})
+let sessionDefaultsTenant = ''
+async function loadSessionDefaults(tenantId: string) {
+  if (sessionDefaultsTenant === tenantId) return
+  sessionDefaultsTenant = tenantId
+  try {
+    const { data } = await api.get(`/tenants/${tenantId}/channels/session-defaults`)
+    sessionDefaults.value = data && typeof data === 'object' && !Array.isArray(data) ? data : {}
+  } catch {
+    sessionDefaultsTenant = ''
+  }
+}
+// Personal Zalo has no default opening keyword and greets 1:1 chats by role,
+// so those two .env defaults would be misleading there.
+function sessionPlaceholder(key: Exclude<keyof SessionDefaults, 'session_timeout_minutes'>): string | undefined {
+  if (editChannelType.value === 'personal_zalo_import' && (key === 'session_keyword' || key === 'session_welcome_message')) return undefined
+  const value = sessionDefaults.value[key]
+  return typeof value === 'string' && value ? value : undefined
+}
+const sessionTimeoutHint = computed(() => {
+  const minutes = sessionDefaults.value.session_timeout_minutes
+  return typeof minutes === 'number' && minutes > 0 ? t('session_timeout_default_hint', { minutes }) : undefined
+})
+
 watch(open, (isOpen) => {
   if (!isOpen) return
 
@@ -290,12 +322,17 @@ watch(open, (isOpen) => {
     session_welcome_message: typeof metadata.session_welcome_message === 'string' ? metadata.session_welcome_message : '',
     session_goodbye_message: typeof metadata.session_goodbye_message === 'string' ? metadata.session_goodbye_message : '',
     session_timeout_minutes: typeof metadata.session_timeout_minutes === 'number' ? metadata.session_timeout_minutes : 0,
+    // Unset: on for Zalo OA (long-standing behaviour), off for personal Zalo.
+    session_timeout_notice: typeof metadata.session_timeout_notice === 'boolean'
+      ? metadata.session_timeout_notice : channel.channel_type === 'zalo_oa',
+    session_timeout_message: typeof metadata.session_timeout_message === 'string' ? metadata.session_timeout_message : '',
     casual_full_agent_turns: parseCasualSetting(metadata.casual_full_agent_turns) ?? CASUAL_FULL_AGENT_TURNS_DEFAULT,
     casual_quiet_after: parseCasualSetting(metadata.casual_quiet_after) ?? CASUAL_QUIET_AFTER_DEFAULT,
   })
   editGroupSettings.value = readZaloGroupSettings(metadata)
   editPersonalGroupSettings.value = readPersonalZaloGroupSettings(metadata)
   initialSettings = settingsMetadata()
+  if (isZaloChatbotChannel.value) void loadSessionDefaults(props.tenantId)
 }, { immediate: true })
 
 function changeBotMode(mode: PersonalZaloBotMode) {
@@ -319,6 +356,8 @@ function settingsMetadata(): Record<string, unknown> {
     session_welcome_message: editForm.session_welcome_message,
     session_goodbye_message: editForm.session_goodbye_message,
     session_timeout_minutes: Number(editForm.session_timeout_minutes),
+    session_timeout_notice: editForm.session_timeout_notice,
+    session_timeout_message: editForm.session_timeout_message,
   }
   if (editChannelType.value === 'personal_zalo_import') {
     return {

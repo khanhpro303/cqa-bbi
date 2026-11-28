@@ -15,7 +15,9 @@ type WorkerPool struct {
 	cfg    *config.Config
 }
 
-func NewWorkerPool(cfg *config.Config, lookupOrderDelivery CurrentOrderDeliveryLookup) *WorkerPool {
+// personalZaloSessionTimeout handles TypePersonalZaloSessionTimeout; nil
+// leaves those tasks unhandled.
+func NewWorkerPool(cfg *config.Config, lookupOrderDelivery CurrentOrderDeliveryLookup, personalZaloSessionTimeout asynq.HandlerFunc) *WorkerPool {
 	if cfg.RedisURL == "" {
 		log.Println("[worker] REDIS_URL is not set, task processing will be disabled")
 		return nil
@@ -50,6 +52,9 @@ func NewWorkerPool(cfg *config.Config, lookupOrderDelivery CurrentOrderDeliveryL
 	// Register handlers
 	mux.HandleFunc(TypeZaloWebhook, HandleZaloWebhookTask(cfg, langflowClient, lookupOrderDelivery))
 	mux.HandleFunc(TypeSessionTimeout, HandleSessionTimeoutTask(cfg))
+	if personalZaloSessionTimeout != nil {
+		mux.HandleFunc(TypePersonalZaloSessionTimeout, personalZaloSessionTimeout)
+	}
 	mux.HandleFunc(typeZaloOrderScreenshot, func(ctx context.Context, task *asynq.Task) error {
 		return handleZaloOrderScreenshot(ctx, task, cfg.EncryptionKey)
 	})

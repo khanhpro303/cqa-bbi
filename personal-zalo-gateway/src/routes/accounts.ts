@@ -162,6 +162,30 @@ function registerAuthorizedAccountRoutes(app: FastifyInstance, deps: AccountRout
     return { status: 'connecting' };
   });
 
+  app.post('/api/v1/accounts/:accountId/chatbot/session-notice', async (request, reply) => {
+    const { accountId } = request.params as { accountId: string };
+    const body = (request.body ?? {}) as { threadType?: unknown; threadId?: unknown; text?: unknown; idleSince?: unknown };
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    const idleSince = typeof body.idleSince === 'string' ? Date.parse(body.idleSince) : Number.NaN;
+    if ((body.threadType !== 'user' && body.threadType !== 'group') || typeof body.threadId !== 'string' ||
+        !/^[0-9]{1,64}$/.test(body.threadId) || !text || text.length > 4000 ||
+        (body.idleSince !== undefined && Number.isNaN(idleSince))) {
+      return reply.status(400).send({ error: 'invalid_session_notice' });
+    }
+    if (!await deps.store.getAccount(accountId)) return reply.status(404).send({ error: 'account_not_found' });
+    try {
+      const status = await deps.pool.sendSessionNotice(accountId, {
+        threadType: body.threadType, threadId: body.threadId, text,
+        idleSince: Number.isNaN(idleSince) ? undefined : idleSince,
+      });
+      if (status === 'unavailable') return reply.status(409).send({ error: 'account_not_connected' });
+      return { status };
+    } catch (error) {
+      logger.warn(`[zalo:${accountId}] session notice failed`, error);
+      return reply.status(502).send({ error: 'session_notice_failed' });
+    }
+  });
+
   app.post('/api/v1/accounts/:accountId/sync', async (request, reply) => {
     const { accountId } = request.params as { accountId: string };
     try {

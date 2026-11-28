@@ -10,7 +10,7 @@ const adminSecret = 'gateway-admin-test-secret-at-least-32-bytes';
 process.env.PERSONAL_ZALO_GATEWAY_ADMIN_SECRET = adminSecret;
 const { registerAccountRoutes } = await import('../src/routes/accounts.js');
 
-async function fixture() {
+async function fixture(sendSessionNotice: (...args: unknown[]) => Promise<string> = async () => 'sent') {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pzgw-routes-'));
   const store = new GatewayStore(path.join(dir, 'state.json'));
   await store.init();
@@ -34,6 +34,7 @@ async function fixture() {
       disconnect: () => undefined,
       loginQR: async () => undefined,
       reconnect: async () => undefined,
+      sendSessionNotice,
     } as never,
   });
   return { app, account };
@@ -110,6 +111,32 @@ test('an existing account binding cannot be repointed to another channel', async
     });
     assert.equal(response.statusCode, 409);
     assert.equal(response.json().error, 'account_binding_immutable');
+  } finally {
+    await app.close();
+  }
+});
+
+test('session notices are authenticated, validated and passed to the pool', async () => {
+  const calls: unknown[][] = [];
+  const { app, account } = await fixture(async (...args) => {
+    calls.push(args);
+    return 'skipped_manual';
+  });
+  try {
+    const url = `/api/v1/accounts/${account.id}/chatbot/session-notice`;
+    const payload = { threadType: 'group', threadId: '50005', text: ' Hẹn gặp lại ', idleSince: '2026-11-28T10:00:00Z' };
+    assert.equal((await app.inject({ method: 'POST', url, payload })).statusCode, 401);
+    const headers = { authorization: `Bearer ${adminSecret}` };
+    for (const invalid of [{ ...payload, threadType: 'room' }, { ...payload, threadId: 'abc' }, { ...payload, text: ' ' },
+      { ...payload, idleSince: 'yesterday' }]) {
+      assert.equal((await app.inject({ method: 'POST', url, headers, payload: invalid })).statusCode, 400);
+    }
+    const response = await app.inject({ method: 'POST', url, headers, payload });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), { status: 'skipped_manual' });
+    assert.deepEqual(calls, [[account.id, {
+      threadType: 'group', threadId: '50005', text: 'Hẹn gặp lại', idleSince: Date.parse('2026-11-28T10:00:00Z'),
+    }]]);
   } finally {
     await app.close();
   }
