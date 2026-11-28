@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,8 @@ const (
 // ErrPersonalZaloAttachmentUnavailable indicates that the source cannot be
 // archived. Network and storage failures are reported separately for retry.
 var ErrPersonalZaloAttachmentUnavailable = errors.New("personal Zalo attachment unavailable")
+
+var personalZaloFileHost = regexp.MustCompile(`^(file-stal-|do)[0-9]+\.dlfl\.vn$`)
 
 var personalZaloImageExtensions = map[string]string{
 	"image/jpeg": ".jpg",
@@ -90,7 +93,7 @@ func allowedPersonalZaloAttachmentURL(u *url.URL) bool {
 			return true
 		}
 	}
-	return false
+	return personalZaloFileHost.MatchString(host)
 }
 
 // Store copies the attachment to disk and returns a path relative to the

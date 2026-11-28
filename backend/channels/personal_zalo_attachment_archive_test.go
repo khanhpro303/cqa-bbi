@@ -38,7 +38,7 @@ func TestPersonalZaloAttachmentArchiveStoresAndReusesCopies(t *testing.T) {
 		data       []byte
 	}{
 		{Attachment{Type: "image", URL: "https://photo.zdn.vn/photo?sign=original"}, ".png", photo},
-		{Attachment{Type: "file", URL: "https://zbox.zadn.vn/file?sign=original", Name: "../../document.pdf"}, ".bin", file},
+		{Attachment{Type: "file", URL: "https://file-stal-1.dlfl.vn/file?sign=original", Name: "../../document.pdf"}, ".bin", file},
 	} {
 		t.Run(tc.attachment.Type, func(t *testing.T) {
 			name, err := archive.Store(ctx, "tenant", "conversation", "message", 0, tc.attachment)
@@ -61,6 +61,28 @@ func TestPersonalZaloAttachmentArchiveStoresAndReusesCopies(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d, expected one per attachment", requests)
+	}
+}
+
+func TestAllowedPersonalZaloAttachmentFileCDN(t *testing.T) {
+	for _, source := range []string{
+		"https://file-stal-1.dlfl.vn/file",
+		"https://file-stal-12.dlfl.vn/file",
+		"https://do35.dlfl.vn/file",
+	} {
+		if !AllowedPersonalZaloAttachmentURL(source) {
+			t.Errorf("valid Zalo file CDN rejected: %s", source)
+		}
+	}
+	for _, source := range []string{
+		"https://dlfl.vn/file",
+		"https://other.dlfl.vn/file",
+		"https://file-stal-1.dlfl.vn.example.com/file",
+		"https://file-stal-1.dlfl.vn:8443/file",
+	} {
+		if AllowedPersonalZaloAttachmentURL(source) {
+			t.Errorf("unverified Zalo file CDN accepted: %s", source)
+		}
 	}
 }
 

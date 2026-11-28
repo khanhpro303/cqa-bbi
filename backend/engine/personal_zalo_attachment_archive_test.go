@@ -35,7 +35,7 @@ func TestPersonalZaloLegacyAttachmentPayloads(t *testing.T) {
 		name, kind, content, wantURL, wantName string
 	}{
 		{"original image", "image", `{"href":"https://photo.zadn.vn/full.jpg","thumb":"https://photo.zadn.vn/thumb.jpg"}`, "https://photo.zadn.vn/full.jpg", "full.jpg"},
-		{"named file", "file", `{"href":"https://file.zalo.me/dl?id=1","title":"Hóa đơn.pdf"}`, "https://file.zalo.me/dl?id=1", "Hóa đơn.pdf"},
+		{"named file", "file", `{"href":"https://file-stal-1.dlfl.vn/dl?id=1","title":"Hóa đơn.pdf"}`, "https://file-stal-1.dlfl.vn/dl?id=1", "Hóa đơn.pdf"},
 		{"file URL fallback", "file", `{"fileUrl":"https://file.zalo.me/dl","fileName":"folder\\data.csv"}`, "https://file.zalo.me/dl", "data.csv"},
 		{"image URL fallback", "image", `{"oriUrl":"https://photo.zadn.vn/full.jpg"}`, "https://photo.zadn.vn/full.jpg", "full.jpg"},
 		{"thumbnail only", "image", `{"thumb":"https://photo.zadn.vn/thumb.jpg"}`, "", ""},
