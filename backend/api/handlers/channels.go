@@ -104,18 +104,23 @@ func ListChannels(c *gin.Context) {
 const personalZaloListAvatarTimeout = 2 * time.Second
 
 func enrichPersonalZaloAvatars(ctx context.Context, tenantID string, channels []ChannelResponse, gatewayBaseURL string) {
-	if strings.TrimSpace(gatewayBaseURL) == "" {
-		return
-	}
-	hasPersonalZalo := false
+	var channelIDs []string
 	for _, ch := range channels {
 		if ch.ChannelType == "personal_zalo_import" {
-			hasPersonalZalo = true
-			break
+			channelIDs = append(channelIDs, ch.ID)
 		}
 	}
-	if !hasPersonalZalo {
-		return
+	avatars := personalZaloChannelAvatars(ctx, tenantID, channelIDs, gatewayBaseURL)
+	for i := range channels {
+		if avatar := avatars[channels[i].ID]; avatar != "" {
+			channels[i].AvatarURL = avatar
+		}
+	}
+}
+
+func personalZaloChannelAvatars(ctx context.Context, tenantID string, channelIDs []string, gatewayBaseURL string) map[string]string {
+	if len(channelIDs) == 0 || strings.TrimSpace(gatewayBaseURL) == "" {
+		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -127,21 +132,18 @@ func enrichPersonalZaloAvatars(ctx context.Context, tenantID string, channels []
 	accounts, err := listPersonalZaloGatewayAccountsContext(lookupCtx, gatewayBaseURL)
 	if err != nil {
 		log.Printf("[channels] list personal Zalo avatars failed: %v", err)
-		return
+		return nil
 	}
 
-	for i := range channels {
-		if channels[i].ChannelType != "personal_zalo_import" {
-			continue
-		}
-		account := findPersonalZaloGatewayAccount(accounts, tenantID, channels[i].ID)
-		if account == nil {
-			continue
-		}
-		if avatar := strings.TrimSpace(account.AvatarURL); avatar != "" {
-			channels[i].AvatarURL = avatar
+	avatars := make(map[string]string, len(channelIDs))
+	for _, id := range channelIDs {
+		if account := findPersonalZaloGatewayAccount(accounts, tenantID, id); account != nil {
+			if avatar := strings.TrimSpace(account.AvatarURL); avatar != "" {
+				avatars[id] = avatar
+			}
 		}
 	}
+	return avatars
 }
 
 func CreateChannel(c *gin.Context) {

@@ -495,6 +495,7 @@ type TeamChannel struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	ChannelType string `json:"channel_type"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
 	// AITeamID is the team the channel itself points at; empty when it
 	// follows the tenant's default team.
 	AITeamID string `json:"ai_team_id"`
@@ -507,7 +508,7 @@ func ListTeams(ctx context.Context, tenantID string) ([]TeamDetail, error) {
 		return nil, err
 	}
 	var rows []models.AITeam
-	if err := d.Where("tenant_id = ?", tenantID).Order("is_default DESC, created_at").Find(&rows).Error; err != nil {
+	if err := d.Where("tenant_id = ?", tenantID).Order("created_at, id").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	var channelRows []models.Channel
@@ -553,8 +554,8 @@ func ListTeams(ctx context.Context, tenantID string) ([]TeamDetail, error) {
 	return out, nil
 }
 
-// lockTenantForTeamChange gives default-team changes and migration the same
-// lock order before any of them read or update a team.
+// lockTenantForTeamChange serializes default changes, channel assignments,
+// team deletion and legacy migration for a tenant.
 func lockTenantForTeamChange(tx *gorm.DB, tenantID string) error {
 	var tenant models.Tenant
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", tenantID).First(&tenant).Error
@@ -601,9 +602,8 @@ func DeleteTeam(ctx context.Context, tenantID, id string) error {
 	})
 }
 
-// SetDefaultTeam makes an active team the tenant's default: every channel
-// without its own team answers through it. The previous default becomes a
-// normal team that can be deleted once no channel points at it.
+// SetDefaultTeam makes an active team the tenant's default. Channel links to
+// the old and new defaults become inherited assignments, as shown in the UI.
 func SetDefaultTeam(ctx context.Context, tenantID, id string) error {
 	d, err := database(ctx)
 	if err != nil {
@@ -624,6 +624,13 @@ func SetDefaultTeam(ctx context.Context, tenantID, id string) error {
 		if !target.IsActive {
 			return invalid("is_active", "bật Bộ điều phối trước khi đặt làm mặc định")
 		}
+		defaultIDs := tx.Model(&models.AITeam{}).Select("id").
+			Where("tenant_id = ? AND (is_default = ? OR id = ?)", tenantID, true, id)
+		if err := tx.Model(&models.Channel{}).
+			Where("tenant_id = ? AND channel_type IN ? AND ai_team_id IN (?)", tenantID, ChatChannelTypes, defaultIDs).
+			Update("ai_team_id", nil).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&models.AITeam{}).Where("tenant_id = ? AND id <> ? AND is_default = ?", tenantID, id, true).
 			Update("is_default", false).Error; err != nil {
 			return err
@@ -632,24 +639,30 @@ func SetDefaultTeam(ctx context.Context, tenantID, id string) error {
 	})
 }
 
-// SetChannelTeam points a channel at a team; an empty teamID returns it to
-// the tenant's default team.
+// SetChannelTeam points a channel at a team. An empty or current default
+// teamID makes the channel follow the tenant's default team.
 func SetChannelTeam(ctx context.Context, tenantID, channelID, teamID string) error {
 	d, err := database(ctx)
 	if err != nil {
 		return err
 	}
 	return d.Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantForTeamChange(tx, tenantID); err != nil {
+			return err
+		}
 		var value any
 		if teamID != "" {
-			var count int64
-			if err := tx.Model(&models.AITeam{}).Where("tenant_id = ? AND id = ?", tenantID, teamID).Count(&count).Error; err != nil {
-				return err
-			}
-			if count == 0 {
+			var team models.AITeam
+			err := tx.Select("is_default").Where("tenant_id = ? AND id = ?", tenantID, teamID).Take(&team).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
-			value = teamID
+			if err != nil {
+				return err
+			}
+			if !team.IsDefault {
+				value = teamID
+			}
 		}
 		var count int64
 		if err := tx.Model(&models.Channel{}).Where("tenant_id = ? AND id = ? AND channel_type IN ?", tenantID, channelID, ChatChannelTypes).Count(&count).Error; err != nil {

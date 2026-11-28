@@ -377,3 +377,77 @@ func TestAgentDefaultTeamSurvivesConcurrentDeleteMySQL(t *testing.T) {
 		t.Fatalf("original default team did not survive: %+v", teams)
 	}
 }
+
+func TestDefaultTeamPromotionReleasesLegacyChannelLinksMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := t.Context()
+	tenantID, channels := seedTenant(t, "Prompt khách", "Prompt nội bộ")
+	oa, personal := channels[0], channels[1]
+	_, err := MigrateLegacy(ctx, tenantID, "admin")
+	must(t, err)
+	teams, err := ListTeams(ctx, tenantID)
+	must(t, err)
+	first := teams[0]
+	var members []MemberInput
+	for i, agent := range first.Members {
+		members = append(members, MemberInput{AgentID: agent.ID, Position: i, Enabled: true})
+	}
+	_, err = SaveTeam(ctx, tenantID, "admin", TeamInput{ID: first.ID, Name: first.Name})
+	must(t, err)
+	next, err := SaveTeam(ctx, tenantID, "admin", TeamInput{Name: first.Name, DefaultAgentID: first.DefaultAgentID, Members: members})
+	must(t, err)
+	custom, err := SaveTeam(ctx, tenantID, "admin", TeamInput{Name: "Gán riêng"})
+	must(t, err)
+	customChannel := uuid.NewString()
+	must(t, db.DB.Create(&models.Channel{ID: customChannel, TenantID: tenantID, ChannelType: "zalo_oa",
+		Name: "OA riêng", ExternalID: customChannel, CredentialsEncrypted: []byte{}, Metadata: "{}"}).Error)
+	must(t, SetChannelTeam(ctx, tenantID, customChannel, custom.ID))
+	// Older versions stored a direct link when the request named the default.
+	must(t, db.DB.Model(&models.Channel{}).Where("id IN ?", []string{oa, personal}).Update("ai_team_id", first.ID).Error)
+	must(t, SetEnabled(ctx, tenantID, "admin", true))
+	before, err := ListTeams(ctx, tenantID)
+	must(t, err)
+	must(t, SetDefaultTeam(ctx, tenantID, next.ID))
+	teams, err = ListTeams(ctx, tenantID)
+	must(t, err)
+	if len(before) != 3 || len(teams) != len(before) {
+		t.Fatalf("team counts before and after promotion = %d, %d", len(before), len(teams))
+	}
+	byID := make(map[string]TeamDetail, len(teams))
+	for i, team := range teams {
+		if team.ID != before[i].ID {
+			t.Fatalf("promotion reordered the team at index %d", i)
+		}
+		byID[team.ID] = team
+	}
+	previous, current := byID[first.ID], byID[next.ID]
+	if previous.IsDefault || len(previous.Channels) != 0 || !current.IsDefault || len(current.Channels) != 2 || len(current.Members) != 2 {
+		t.Fatalf("teams after promotion = %+v", teams)
+	}
+	for _, ch := range current.Channels {
+		if ch.AITeamID != "" {
+			t.Errorf("channel %s still has a direct link: %q", ch.ID, ch.AITeamID)
+		}
+		for _, tier := range []string{TierPublic, TierPrivate} {
+			plan, err := PlanTurn(ctx, tenantID, ch.ID, tier)
+			if err != nil || plan.Mode != ModeAgent || plan.Selection.Team.ID != next.ID {
+				t.Errorf("channel %s tier %s plan = %+v, %v", ch.ID, tier, plan, err)
+			}
+		}
+	}
+	must(t, DeleteTeam(ctx, tenantID, first.ID))
+	if got := byID[custom.ID].Channels; len(got) != 1 || got[0].ID != customChannel || got[0].AITeamID != custom.ID {
+		t.Fatalf("custom team's channels = %+v", got)
+	}
+	if err := DeleteTeam(ctx, tenantID, custom.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("delete custom team with a direct assignment: %v", err)
+	}
+	// A request naming the current default saves an inherited assignment.
+	must(t, SetChannelTeam(ctx, tenantID, oa, custom.ID))
+	must(t, SetChannelTeam(ctx, tenantID, oa, next.ID))
+	var channel models.Channel
+	must(t, db.DB.First(&channel, "id = ?", oa).Error)
+	if channel.AITeamID != nil {
+		t.Fatalf("current default was saved as a direct link: %q", *channel.AITeamID)
+	}
+}

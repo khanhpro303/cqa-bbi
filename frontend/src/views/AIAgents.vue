@@ -165,10 +165,15 @@
               {{ $t('ag_team_silent_on_channels', { audiences: team.silent.map(a => $t(`ag_audience_${a}`).toLowerCase()).join(', '), n: team.channels.length }) }}
             </v-alert>
 
-            <div class="text-caption text-medium-emphasis mt-1">
+            <div v-if="team.channels.length" class="d-flex flex-wrap ga-1 mt-1">
+              <v-chip v-for="ch in team.channels" :key="ch.id" size="small" variant="outlined">
+                <ChannelAvatar :channel-type="ch.channel_type" :channel-id="ch.id" :avatar-url="ch.avatar_url" size="18" variant="bare" class="mr-1" aria-hidden="true" />
+                {{ ch.name }}
+              </v-chip>
+            </div>
+            <div v-else class="text-caption text-medium-emphasis mt-1">
               <v-icon size="x-small" class="mr-1">mdi-connection</v-icon>
-              <template v-if="team.channels.length">{{ team.channels.map(c => c.name).join(', ') }}</template>
-              <template v-else>{{ $t('ag_team_no_channels') }}</template>
+              {{ $t('ag_team_no_channels') }}
             </div>
             <div v-if="canEdit && !team.is_default && team.is_active" class="mt-2">
               <v-btn
@@ -177,6 +182,7 @@
                 color="primary"
                 prepend-icon="mdi-star-outline"
                 :loading="settingDefault === team.id"
+                :disabled="!!settingDefault && settingDefault !== team.id"
                 :data-testid="`team-make-default-${team.id}`"
                 @click="makeDefaultTeam(team)"
               >{{ $t('ag_team_make_default') }}</v-btn>
@@ -203,8 +209,13 @@
           <tbody>
             <tr v-for="row in channelRows" :key="row.channel.id" :data-testid="`channel-row-${row.channel.id}`">
               <td class="py-2">
-                <div class="font-weight-medium">{{ row.channel.name }}</div>
-                <div class="text-caption text-medium-emphasis">{{ $t(`ag_channel_type_${row.channel.channel_type}`) }}</div>
+                <div class="d-flex align-center ga-2">
+                  <ChannelAvatar :channel-type="row.channel.channel_type" :channel-id="row.channel.id" :avatar-url="row.channel.avatar_url" size="28" variant="bare" class="flex-shrink-0" aria-hidden="true" />
+                  <div>
+                    <div class="font-weight-medium">{{ row.channel.name }}</div>
+                    <div class="text-caption text-medium-emphasis">{{ $t(`ag_channel_type_${row.channel.channel_type}`) }}</div>
+                  </div>
+                </div>
               </td>
               <td>
                 <v-select
@@ -280,6 +291,7 @@ import AgentSwitchCard from '../components/ai-agents/AgentSwitchCard.vue'
 import AgentEditorDialog from '../components/ai-agents/AgentEditorDialog.vue'
 import TeamEditorDialog from '../components/ai-agents/TeamEditorDialog.vue'
 import TeamTestDialog from '../components/ai-agents/TeamTestDialog.vue'
+import ChannelAvatar from '../components/channels/ChannelAvatar.vue'
 import type { Agent, AgentSettings, KnowledgeTag, Team, TeamChannel, ToolInfo } from '../components/ai-agents/types'
 import { pickAgent } from '../components/ai-agents/agentRules'
 import TaskModelsPanel from '../components/ai-agents/TaskModelsPanel.vue'
@@ -310,7 +322,8 @@ const knowledgeTags = ref<KnowledgeTag[] | null>(null)
 const agentDialog = ref(false)
 const editingAgentId = ref('')
 const teamDialog = ref(false)
-const editingTeam = ref<Team | null>(null)
+const editingTeamId = ref('')
+const editingTeam = computed(() => teams.value.find(team => team.id === editingTeamId.value) || null)
 const testDialog = ref(false)
 const testingTeam = ref<Team | null>(null)
 const savingChannel = ref('')
@@ -413,7 +426,7 @@ function openAgent(id: string) {
   agentDialog.value = true
 }
 function openTeam(team: Team | null) {
-  editingTeam.value = team
+  editingTeamId.value = team?.id || ''
   teamDialog.value = true
 }
 function openTest(team: Team) {
@@ -423,6 +436,7 @@ function openTest(team: Team) {
 
 const settingDefault = ref('')
 async function makeDefaultTeam(team: Team) {
+  if (settingDefault.value || team.is_default || !team.is_active) return
   settingDefault.value = team.id
   try {
     await api.post(`/tenants/${tenantId.value}/ai-teams/${team.id}/default`)
@@ -461,8 +475,15 @@ async function loadAgents() {
   const { data } = await api.get(`/tenants/${tenantId.value}/ai-agents`)
   agents.value = (data.agents || []).map((a: Agent) => ({ ...a, tools: a.tools || [], knowledge_tags: a.knowledge_tags || [] }))
 }
+let teamsRequest = 0
+let appliedTeamsRequest = 0
 async function loadTeams() {
-  const { data } = await api.get(`/tenants/${tenantId.value}/ai-teams`)
+  const tenant = tenantId.value
+  const request = ++teamsRequest
+  const { data } = await api.get(`/tenants/${tenant}/ai-teams`)
+  // A reload started before a promotion may finish after its refresh.
+  if (request < appliedTeamsRequest || tenant !== tenantId.value) return
+  appliedTeamsRequest = request
   teams.value = (data.teams || []).map((team: Team) => ({
     ...team, members: team.members || [], memberships: team.memberships || [], channels: team.channels || [], silent: team.silent || [], options: team.options || {},
   }))

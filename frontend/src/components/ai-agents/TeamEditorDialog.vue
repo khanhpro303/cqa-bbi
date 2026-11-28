@@ -161,7 +161,10 @@
         <div v-if="team && team.channels.length" class="mt-4">
           <div class="text-subtitle-2 mb-1">{{ $t('ag_team_channels') }}</div>
           <div class="d-flex flex-wrap ga-1">
-            <v-chip v-for="ch in team.channels" :key="ch.id" size="small" variant="outlined" :prepend-icon="channelIcon(ch.channel_type)">{{ ch.name }}</v-chip>
+            <v-chip v-for="ch in team.channels" :key="ch.id" size="small" variant="outlined">
+              <ChannelAvatar :channel-type="ch.channel_type" :channel-id="ch.id" :avatar-url="ch.avatar_url" size="18" variant="bare" class="mr-1" aria-hidden="true" />
+              {{ ch.name }}
+            </v-chip>
           </div>
           <div class="text-caption text-medium-emphasis mt-1">{{ $t('ag_team_channels_hint') }}</div>
         </div>
@@ -253,6 +256,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../../api'
+import ChannelAvatar from '../channels/ChannelAvatar.vue'
 import type { Agent, MemberInput, Team, TeamInput } from './types'
 import { errorCodeOf, fieldErrorOf } from './types'
 import { moveItem, pickAgent, silentAudiences } from './agentRules'
@@ -323,10 +327,6 @@ const dirty = computed(() => snapshot.value !== '' && serialize() !== snapshot.v
 function audienceColor(a: string): string {
   return a === 'staff' ? 'indigo' : a === 'all' ? 'teal' : 'primary'
 }
-function channelIcon(type: string): string {
-  return type === 'zalo_oa' ? 'mdi-alpha-z-box-outline' : 'mdi-account-circle-outline'
-}
-
 function load() {
   errors.value = {}
   addAgentId.value = null

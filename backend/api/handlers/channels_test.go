@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/db/models"
 )
 
@@ -228,5 +229,25 @@ func TestEnrichPersonalZaloAvatarsDegradesGracefullyOnFailure(t *testing.T) {
 
 	if channels[0].AvatarURL != "" {
 		t.Fatalf("expected empty AvatarURL on gateway error, got %q", channels[0].AvatarURL)
+	}
+}
+
+func TestEnrichAITeamAvatarsUsesTheLinkedPersonalZaloAccount(t *testing.T) {
+	setPersonalZaloGatewayAdminSecret(t)
+	const avatar = "https://cdn.example.com/personal.jpg"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(personalZaloGatewayListResponse{Accounts: []personalZaloGatewayAccountRecord{
+			{TenantID: "tenant-1", ChannelID: "personal", AvatarURL: avatar},
+			{TenantID: "tenant-2", ChannelID: "other", AvatarURL: "https://cdn.example.com/other.jpg"},
+		}})
+	}))
+	defer server.Close()
+	teams := []agents.TeamDetail{
+		{Channels: []agents.TeamChannel{{ID: "oa", ChannelType: "zalo_oa"}, {ID: "personal", ChannelType: "personal_zalo_import"}}},
+		{Channels: []agents.TeamChannel{{ID: "other", ChannelType: "personal_zalo_import"}}},
+	}
+	enrichAITeamAvatars(t.Context(), "tenant-1", teams, server.URL)
+	if teams[0].Channels[1].AvatarURL != avatar || teams[0].Channels[0].AvatarURL != "" || teams[1].Channels[0].AvatarURL != "" {
+		t.Fatalf("unexpected team channel avatars: %+v %+v", teams[0].Channels, teams[1].Channels)
 	}
 }

@@ -5,7 +5,7 @@ Trước đây mỗi tầng có một bot làm tất cả: một prompt cho khá
 ## Khái niệm
 
 - **Agent**: mã (`key`, không đổi sau khi tạo), tên, mô tả, **đối tượng** (`customer` khách hàng, `staff` nhân viên nội bộ, `all` cả hai), system prompt, danh sách **công cụ MCP** được gọi, nhãn tài liệu (`knowledge_tags`), runtime và flow Langflow riêng nếu có. Mỗi lần lưu là một phiên bản (giữ 30 phiên bản gần nhất).
-- **Bộ điều phối**: tên, **giọng chung** (`persona_prompt`, đặt trước prompt của agent đang trả lời), danh sách agent theo thứ tự, agent mặc định. Có đúng một Bộ điều phối **mặc định**; kênh chưa gán Bộ điều phối nào thì trả lời qua nó. Nút **Đặt làm mặc định** trên thẻ một Bộ điều phối đang bật chuyển cờ mặc định sang nó; Bộ điều phối mặc định cũ sau đó xoá được nếu không kênh nào trỏ tới.
+- **Bộ điều phối**: tên, **giọng chung** (`persona_prompt`, đặt trước prompt của agent đang trả lời), danh sách agent theo thứ tự, agent mặc định. Kênh theo mặc định trả lời qua Bộ điều phối có nhãn **Mặc định**. Khi bấm **Đặt làm mặc định** trên một Bộ điều phối đang bật, các kênh theo mặc định và các kênh gán vào bộ mặc định cũ hoặc bộ vừa chọn đều chuyển sang chế độ theo mặc định. Sau đó có thể xoá bộ cũ.
 - **Gán kênh**: mỗi kênh `zalo_oa` / `personal_zalo_import` trỏ tới một Bộ điều phối, hoặc để trống để dùng Bộ điều phối mặc định. Nhiều kênh có thể dùng chung một Bộ điều phối (một "bộ mặt" cho nhiều agent, hoặc nhiều bộ mặt cho cùng một nhóm agent).
 
 ## Ai trả lời một tin nhắn
@@ -103,8 +103,8 @@ Khi agent đang bật, trang **AI Engines** hiện hai prompt chatbot ở chế 
 | POST | `/ai-agents/test` | settings:w (nhân viên: owner/admin), 12 lần/phút | `{team_id, audience: customer\|staff, message, current_agent?, reply?, session_id?}` → `{agent, reason, router_reason, routed, candidates}`, kèm `{reply, runtime, usage, session_id}` khi `reply`; `{silent: true}` khi không agent nào phục vụ đối tượng |
 | GET/POST | `/ai-teams` | settings:r / w | danh sách kèm thành viên, kênh (`ai_team_id` rỗng là kênh theo mặc định), `silent` / tạo |
 | PUT/DELETE | `/ai-teams/:teamId` | settings:w | lưu (thay toàn bộ thành viên) / xoá (không xoá được Bộ điều phối mặc định hay đang có kênh dùng) |
-| POST | `/ai-teams/:teamId/default` | settings:w | đặt Bộ điều phối (đang bật) làm mặc định, bỏ cờ ở bộ cũ |
-| PUT | `/channels/:channelId/ai-team` | settings:w | `{team_id}`, rỗng là về Bộ điều phối mặc định |
+| POST | `/ai-teams/:teamId/default` | settings:w | đặt Bộ điều phối (đang bật) làm mặc định, đưa kênh đang gán vào bộ cũ hoặc bộ mới về chế độ theo mặc định |
+| PUT | `/channels/:channelId/ai-team` | settings:w | `{team_id}`, rỗng hoặc ID của bộ mặc định hiện tại là theo mặc định |
 | GET | `/analytics/ai-cost?group_by=agent` | như trang chủ | chi phí chatbot theo agent |
 
 Lỗi kiểm tra trả `400 {"error":"invalid_agent","field":...,"message":...}` để giao diện hiện cạnh ô nhập. Mọi thao tác ghi vào nhật ký hoạt động (prompt chỉ ghi mã băm, không ghi nội dung).
