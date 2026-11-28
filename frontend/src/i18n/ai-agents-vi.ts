@@ -220,7 +220,7 @@ export default {
   ag_channel_follow_default: 'Theo Bộ điều phối mặc định: {name}',
   ag_team_n_agents: '{n} agent',
   ag_team_empty_short: 'chưa có agent',
-  ag_channel_team_silent: 'Bộ điều phối {name} không có agent nào đang trả lời nên kênh này im lặng. Chọn "Theo Bộ điều phối mặc định" hoặc thêm agent vào bộ đó.',
+  ag_channel_team_silent: 'Bộ điều phối {name} không có agent nào đang trả lời nên kênh này im lặng. Thêm agent đang hoạt động vào bộ này hoặc chọn bộ có agent đang hoạt động.',
   ag_channel_team_inactive: 'Bộ điều phối này đang tắt: kênh trả lời qua Bộ điều phối mặc định.',
   ag_channel_saved: 'Đã đổi Bộ điều phối của kênh.',
   ag_channels_empty: 'Chưa có kênh Zalo OA hoặc Zalo cá nhân nào.',

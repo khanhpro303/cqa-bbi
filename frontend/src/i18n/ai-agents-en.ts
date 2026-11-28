@@ -220,7 +220,7 @@ export default {
   ag_channel_follow_default: 'Follow the default team: {name}',
   ag_team_n_agents: '{n} agents',
   ag_team_empty_short: 'no agents',
-  ag_channel_team_silent: 'No agent in {name} answers, so this channel stays silent. Pick "Follow the default team" or add agents to that team.',
+  ag_channel_team_silent: 'No agent in {name} answers, so this channel stays silent. Add an active agent to this team or choose a team with an active agent.',
   ag_channel_team_inactive: 'This team is off: the channel answers through the default team.',
   ag_channel_saved: 'Changed the channel\'s team.',
   ag_channels_empty: 'No Zalo OA or personal Zalo channels yet.',
