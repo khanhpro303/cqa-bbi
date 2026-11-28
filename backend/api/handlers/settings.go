@@ -917,6 +917,9 @@ func getFirstSettingByKeys(tenantID string, keys []string) (*models.AppSetting, 
 // ListOpenRouterFreeModels lists OpenRouter's current free models for the
 // AI settings page (the catalogue is public; no key is used).
 func ListOpenRouterFreeModels(c *gin.Context) {
+	if c.Query("refresh") == "1" {
+		ai.ResetOpenRouterFreeModelsCache()
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
 	models, err := ai.OpenRouterFreeModels(ctx)

@@ -107,6 +107,15 @@ var (
 
 const openRouterModelsTTL = 10 * time.Minute
 
+// ResetOpenRouterFreeModelsCache makes the next OpenRouterFreeModels call
+// fetch the catalogue again (the "refresh model lists" button).
+func ResetOpenRouterFreeModelsCache() {
+	openRouterModelsMu.Lock()
+	defer openRouterModelsMu.Unlock()
+	openRouterModelsCache = nil
+	openRouterModelsAt = time.Time{}
+}
+
 // OpenRouterFreeModels lists OpenRouter's free models (cached 10 minutes).
 // The catalogue is public: no API key is needed.
 func OpenRouterFreeModels(ctx context.Context) ([]OpenRouterModel, error) {

@@ -88,3 +88,35 @@ func TestParseOpenRouterFreeModels(t *testing.T) {
 		t.Errorf("flags = %+v", got)
 	}
 }
+
+func TestResetOpenRouterFreeModelsCacheFetchesAgain(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = io.WriteString(w, `{"data":[{"id":"a/b:free","name":"B","pricing":{"prompt":"0","completion":"0"}}]}`)
+	}))
+	defer srv.Close()
+	oldURL := openRouterModelsURL
+	openRouterModelsURL = srv.URL
+	ResetOpenRouterFreeModelsCache()
+	defer func() {
+		openRouterModelsURL = oldURL
+		ResetOpenRouterFreeModelsCache()
+	}()
+
+	for i := 0; i < 2; i++ {
+		if _, err := OpenRouterFreeModels(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("cached calls = %d, want 1", calls)
+	}
+	ResetOpenRouterFreeModelsCache()
+	if _, err := OpenRouterFreeModels(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls after reset = %d, want 2", calls)
+	}
+}

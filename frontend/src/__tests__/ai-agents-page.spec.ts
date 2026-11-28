@@ -6,6 +6,7 @@ import AIAgents from '../views/AIAgents.vue'
 import AgentEditorDialog from '../components/ai-agents/AgentEditorDialog.vue'
 import TeamEditorDialog from '../components/ai-agents/TeamEditorDialog.vue'
 import AgentSwitchCard from '../components/ai-agents/AgentSwitchCard.vue'
+import TaskModelsPanel from '../components/ai-agents/TaskModelsPanel.vue'
 import AIEngines from '../views/AIEngines.vue'
 import { useAuthStore } from '../stores/auth'
 import type { ToolInfo } from '../components/ai-agents/types'
@@ -112,6 +113,20 @@ describe('Agents AI page', () => {
     expect(wrapper.find('[data-testid="team-silent-alert-t2"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="team-silent-alert-t1"]').exists()).toBe(false)
     expect(mocks.replace).toHaveBeenCalledWith({ query: { tab: 'teams' } })
+  })
+
+  it('shows the task models tab while the agent switch is off', async () => {
+    mocks.get.mockImplementation(routeGet({ '/tenants/tenant-1/settings/ai-agents': { enabled: false, has_agents: false, drift: [] } }))
+    const wrapper = shallowMount(AIAgents, stubs)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    expect(wrapper.find('[data-testid="tab-models"]').exists()).toBe(true)
+    vm.tab = 'models'
+    await flushPromises()
+    const panel = wrapper.findComponent(TaskModelsPanel)
+    expect(panel.exists()).toBe(true)
+    expect(panel.props('agents')).toHaveLength(3)
+    expect(mocks.replace).toHaveBeenCalledWith({ query: { tab: 'models' } })
   })
 
   it('moves a channel back to the default team', async () => {
