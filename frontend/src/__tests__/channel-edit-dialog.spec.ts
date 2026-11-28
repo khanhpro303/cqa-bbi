@@ -155,6 +155,9 @@ describe.each([false, true])('channel editor on detail page = %s', (detail) => {
     expect(tabs.map(tab => tab.text())).toEqual([en.general_settings, en.chatbot_session, en.zalo_group_settings_tab, en.complaint_settings_tab])
     expect((dialog.get(field(en.sync_scope)).element as HTMLSelectElement).value).toBe('direct')
     await dialog.get(field(en.sync_scope)).setValue('all')
+    const storageSwitch = dialog.get<HTMLInputElement>(field(en.sync_files))
+    expect(storageSwitch.element.checked).toBe(false)
+    await storageSwitch.setValue(true)
 
     await tabs[1]!.trigger('click')
     expect((dialog.get(field(en.session_keyword)).element as HTMLInputElement).value).toBe('Hello Bull')
@@ -178,7 +181,7 @@ describe.each([false, true])('channel editor on detail page = %s', (detail) => {
 
     expect(api.put).toHaveBeenCalledExactlyOnceWith(channelPath, { metadata: expect.any(String) })
     expect(JSON.parse(api.put.mock.calls[0]![1].metadata)).toEqual({
-      sync_scope: 'all', session_keyword: 'Call Bull', session_timeout_minutes: 60,
+      sync_scope: 'all', sync_files: true, session_keyword: 'Call Bull', session_timeout_minutes: 60,
       personal_zalo_group_reply_enabled: true, personal_zalo_handover_staff_id: 'staff', handover_alert_group_id: '',
       complaint_cases: true,
     })
@@ -187,6 +190,7 @@ describe.each([false, true])('channel editor on detail page = %s', (detail) => {
     expect(JSON.parse(refreshed!.metadata)).toMatchObject({ account_owners: ['keep'], session_keyword: 'Call Bull' })
 
     await wrapper.get(editButton).trigger('click')
+    expect(wrapper.get<HTMLInputElement>(field(en.sync_files)).element.checked).toBe(true)
     await wrapper.findAll('button[role="tab"]')[1]!.trigger('click')
     expect((wrapper.get(field(en.session_keyword)).element as HTMLInputElement).value).toBe('Call Bull')
   })
@@ -221,27 +225,28 @@ it('creates an Internbot channel in setup mode before connecting Zalo', async ()
   await wrapper.findAll('button').find(button => button.text() === en.connect_channel)!.trigger('click')
   const dialog = wrapper.get('[role="dialog"]')
   expect(dialog.findComponent(PersonalZaloBotModePicker).exists()).toBe(false)
+  await dialog.get(field(en.sync_files)).setValue(true)
   await dialog.get(field(en.channel_type)).setValue('personal_zalo_import')
   dialog.getComponent(PersonalZaloBotModePicker).vm.$emit('update:modelValue', 'internbot')
   await dialog.get(field(en.sync_interval)).setValue('30')
-  expect(dialog.find(field(en.sync_files)).exists()).toBe(false)
+  const storageSwitch = dialog.get<HTMLInputElement>(field(en.sync_files))
+  expect(storageSwitch.element.checked).toBe(false)
+  await storageSwitch.setValue(true)
   await dialog.get(field(en.channel_name)).setValue('Intern account')
   await dialog.findAll('button').find(button => button.text() === en.create_personal_zalo)!.trigger('click')
   await flushPromises()
 
   expect(api.post).toHaveBeenCalledExactlyOnceWith(tenant + '/channels', {
     name: 'Intern account', channel_type: 'personal_zalo_import', credentials: {},
-    metadata: JSON.stringify({ sync_scope: 'all', sync_interval: 30, chatbot_mode: 'internbot' }),
+    metadata: JSON.stringify({ sync_scope: 'all', sync_interval: 30, sync_files: true, chatbot_mode: 'internbot' }),
   })
 })
 
-it('sets or clears the personal import interval without offering file storage', async () => {
+it('saves and clears personal import settings independently', async () => {
   const { wrapper } = await mountPage(false)
   await wrapper.get(editButton).trigger('click')
   let dialog = wrapper.get('[role="dialog"]')
   expect(dialog.get<HTMLSelectElement>(field(en.sync_interval)).element.value).toBe('gateway')
-  expect(dialog.find(field(en.sync_files)).exists()).toBe(false)
-  expect(dialog.text()).toContain(en.personal_zalo_sync_files_unavailable)
   await dialog.get(field(en.sync_interval)).setValue('30')
   await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
   await flushPromises()
@@ -250,9 +255,17 @@ it('sets or clears the personal import interval without offering file storage', 
   await wrapper.get(editButton).trigger('click')
   dialog = wrapper.get('[role="dialog"]')
   await dialog.get(field(en.sync_interval)).setValue('gateway')
+  await dialog.get(field(en.sync_files)).setValue(true)
   await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
   await flushPromises()
-  expect(api.put).toHaveBeenNthCalledWith(2, channelPath, { metadata: JSON.stringify({ sync_interval: null }) })
+  expect(api.put).toHaveBeenNthCalledWith(2, channelPath, { metadata: JSON.stringify({ sync_interval: null, sync_files: true }) })
+
+  await wrapper.get(editButton).trigger('click')
+  dialog = wrapper.get('[role="dialog"]')
+  await dialog.get(field(en.sync_files)).setValue(false)
+  await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
+  await flushPromises()
+  expect(api.put).toHaveBeenNthCalledWith(3, channelPath, { metadata: JSON.stringify({ sync_files: false }) })
 })
 
 it('labels both Zalo card modes and uses the gateway for a personal channel sync', async () => {

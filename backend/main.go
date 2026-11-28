@@ -77,6 +77,7 @@ func main() {
 	importCtx, stopImports := context.WithCancel(context.Background())
 	defer stopImports()
 	go handlers.RunProductAdvisoryImportWorker(importCtx, cfg)
+	go engine.RunPersonalZaloAttachmentArchive(importCtx)
 
 	// Start scheduler
 	scheduler, err := engine.NewScheduler(cfg)
