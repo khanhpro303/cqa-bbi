@@ -80,6 +80,11 @@ type LangflowRuntime struct {
 // ErrNoFlow means the agent has no Langflow flow to run on.
 var ErrNoFlow = errors.New("agent has no Langflow flow")
 
+// ErrPermanent marks a runtime error that trying again will not fix: no API
+// key for the agent's provider, a model id the provider does not know, a
+// refused key. Callers answer with their fallback instead of retrying.
+var ErrPermanent = errors.New("agent runtime error is permanent")
+
 // Run sends the turn to the agent's flow.
 func (r LangflowRuntime) Run(ctx context.Context, in RunInput) (RunResult, error) {
 	if r.Client == nil {
@@ -114,10 +119,14 @@ var (
 
 // RegisterRuntime makes a runtime available to agents under name. The
 // Langflow runtime needs no registration: every agent can fall back to the
-// AI Engine flows.
+// AI Engine flows. A nil r removes the runtime.
 func RegisterRuntime(name string, r Runtime) {
 	runtimesMu.Lock()
 	defer runtimesMu.Unlock()
+	if r == nil {
+		delete(runtimes, name)
+		return
+	}
 	runtimes[name] = r
 }
 
@@ -136,4 +145,16 @@ func RuntimeAvailable(name string) bool {
 	}
 	_, ok := RuntimeFor(name)
 	return ok
+}
+
+// NativeRuntime returns the runtime that answers the turn without Langflow:
+// the answering agent runs on runtime "native" and this server has it
+// installed. Otherwise the turn runs on Langflow as before (an agent saved
+// as native while the runtime is missing keeps working on the tier's flow).
+func (p Plan) NativeRuntime() (Runtime, bool) {
+	sel, ok := p.Agent()
+	if !ok || sel.Agent.Runtime != RuntimeNative {
+		return nil, false
+	}
+	return RuntimeFor(RuntimeNative)
 }

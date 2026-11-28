@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 )
 
 // Security tiers of a chat turn, as signed in the permission token.
@@ -167,7 +168,6 @@ func mustJSON(v any) string {
 var (
 	agentKeyPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 	flowIDPattern    = regexp.MustCompile(`^[A-Za-z0-9-]{0,64}$`)
-	modelIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_./:@-]{0,127}$`)
 	knowledgeTagExpr = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} _.-]{0,47}$`)
 )
 
@@ -223,13 +223,24 @@ func Normalize(a Agent) (Agent, error) {
 		return a, invalid("langflow_flow_id", "mã flow không hợp lệ")
 	}
 	if a.Runtime == RuntimeNative {
-		switch a.Provider {
-		case "openai", "claude", "gemini", "openrouter":
-		default:
-			return a, invalid("provider", "runtime native cần nhà cung cấp openai, claude, gemini hoặc openrouter")
+		// The same providers and model ids as the AI task settings, so an
+		// agent model resolves exactly like a task override does.
+		if a.Provider == "" {
+			return a, invalid("provider", "runtime native cần chọn nhà cung cấp AI")
 		}
-		if !modelIDPattern.MatchString(a.Model) {
-			return a, invalid("model", "mã model không hợp lệ")
+		if a.Model == "" {
+			return a, invalid("model", "runtime native cần mã model")
+		}
+		if _, err := engine.NormalizeAITaskModel(engine.AITaskModel{Provider: a.Provider, Model: a.Model}); err != nil {
+			field := "model"
+			if strings.Contains(err.Error(), "nhà cung cấp") {
+				field = "provider"
+			}
+			return a, invalid(field, "%s", err.Error())
+		}
+		// A native agent has no flow whose own prompt could stand in.
+		if strings.TrimSpace(a.SystemPrompt) == "" {
+			return a, invalid("system_prompt", "agent chạy native cần system prompt")
 		}
 	} else if a.Provider != "" || a.Model != "" {
 		// A Langflow agent's model lives in its flow; a stray value here

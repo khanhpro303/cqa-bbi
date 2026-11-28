@@ -18,6 +18,11 @@ const (
 	recentTurnChars     = 400
 	recentTurnsMaxChars = 2000
 	recentTurnsTimeout  = 2 * time.Second
+	// The conversation a model answering the chat reads (ConversationTurns):
+	// enough for a product or order thread a few exchanges deep.
+	conversationTurns         = 20
+	conversationTurnChars     = 1200
+	conversationTurnsMaxChars = 10000
 	// recentClockSlack widens the sent_at range below the session start:
 	// customer rows carry Zalo's clock, bot rows ours.
 	recentClockSlack = 5 * time.Minute
@@ -51,7 +56,30 @@ type recentRow struct {
 // the current message is dropped by its text. It returns nil when chat memory
 // is off or nothing is found; callers then classify without context.
 func RecentTurns(ctx context.Context, sessionID, currentMsgID, currentText string, limit int) []RecentTurn {
-	return recentTurns(ctx, sessionID, currentMsgID, currentText, "", limit)
+	return recentTurns(ctx, sessionID, currentMsgID, currentText, "", classifierLimits(limit))
+}
+
+// ConversationTurns is RecentTurns sized for a model that answers the chat
+// itself (the native agent runtime keeps no memory of its own): more and
+// longer turns than the classifier excerpt. A non-empty senderID limits a
+// shared group session as RecentTurnsForSender does.
+func ConversationTurns(ctx context.Context, sessionID, currentMsgID, currentText, senderID string) []RecentTurn {
+	return recentTurns(ctx, sessionID, currentMsgID, currentText, senderID,
+		turnLimits{count: conversationTurns, perTurn: conversationTurnChars, total: conversationTurnsMaxChars})
+}
+
+// turnLimits bound an excerpt: turns, characters per turn, characters in all.
+type turnLimits struct {
+	count, perTurn, total int
+}
+
+// classifierLimits are the classifier excerpt's limits with limit turns
+// (0 = default).
+func classifierLimits(limit int) turnLimits {
+	if limit <= 0 {
+		limit = recentTurnsDefault
+	}
+	return turnLimits{count: limit, perTurn: recentTurnChars, total: recentTurnsMaxChars}
 }
 
 // RecentTurnsForSender limits a shared group session to this sender's messages
@@ -60,15 +88,12 @@ func RecentTurnsForSender(ctx context.Context, sessionID, currentMsgID, currentT
 	if senderID == "" {
 		return nil
 	}
-	return recentTurns(ctx, sessionID, currentMsgID, currentText, senderID, limit)
+	return recentTurns(ctx, sessionID, currentMsgID, currentText, senderID, classifierLimits(limit))
 }
 
-func recentTurns(ctx context.Context, sessionID, currentMsgID, currentText, senderID string, limit int) []RecentTurn {
+func recentTurns(ctx context.Context, sessionID, currentMsgID, currentText, senderID string, lim turnLimits) []RecentTurn {
 	if !Enabled() || db.DB == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
-	}
-	if limit <= 0 {
-		limit = recentTurnsDefault
 	}
 	ctx, cancel := context.WithTimeout(ctx, recentTurnsTimeout)
 	defer cancel()
@@ -107,17 +132,22 @@ func recentTurns(ctx context.Context, sessionID, currentMsgID, currentText, send
 	var rows []recentRow
 	err := q.Select("external_message_id, sender_type, content, " +
 		"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.cqa_source')), '') AS source").
-		Order("created_at DESC, sent_at DESC").Limit(limit + 1).Scan(&rows).Error
+		Order("created_at DESC, sent_at DESC").Limit(lim.count + 1).Scan(&rows).Error
 	if err != nil {
 		log.Printf("[chat-memory] recent turns: session %s: %v", sessionID, err)
 		return nil
 	}
-	return recentTurnsFrom(rows, currentMsgID, currentText, limit)
+	return turnsFrom(rows, currentMsgID, currentText, lim)
 }
 
-// recentTurnsFrom turns newest-first rows into an oldest-first excerpt,
-// without the message being classified and within the size limits.
+// recentTurnsFrom turns newest-first rows into an oldest-first classifier
+// excerpt, without the message being classified and within the size limits.
 func recentTurnsFrom(newestFirst []recentRow, currentMsgID, currentText string, limit int) []RecentTurn {
+	return turnsFrom(newestFirst, currentMsgID, currentText, classifierLimits(limit))
+}
+
+func turnsFrom(newestFirst []recentRow, currentMsgID, currentText string, lim turnLimits) []RecentTurn {
+	limit := lim.count
 	rows := make([]recentRow, 0, len(newestFirst))
 	droppedCurrent := false
 	for _, r := range newestFirst {
@@ -143,8 +173,8 @@ func recentTurnsFrom(newestFirst []recentRow, currentMsgID, currentText string, 
 		if text == "" {
 			continue
 		}
-		text = truncate(text, recentTurnChars)
-		if total+len(text) > recentTurnsMaxChars {
+		text = truncate(text, lim.perTurn)
+		if total+len(text) > lim.total {
 			break
 		}
 		total += len(text)

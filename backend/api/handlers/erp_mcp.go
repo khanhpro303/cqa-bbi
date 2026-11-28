@@ -382,3 +382,13 @@ func (t mcpTurn) refuse(name string) string {
 	}
 	return ""
 }
+
+// ERPMCPHandler serves the ERP MCP route in this process for the native
+// agent runtime (agents/native.MCPClient): its tool calls take the same
+// handler, tokens and checks as Langflow's calls over HTTP.
+func ERPMCPHandler() http.Handler {
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.POST("/mcp/erp/:tenantId", ERPMCP)
+	return router
+}
