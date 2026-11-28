@@ -3,7 +3,7 @@ package agents
 import "github.com/vietbui/chat-quality-agent/engine"
 
 // Every task prompt in the AI Engine registry (engine.TaskPrompts) falls in
-// one of three kinds, and a test keeps the lists below complete:
+// one of four kinds, and a test keeps the lists below complete:
 //
 //   - standalonePrompts run their own AI call (classifiers, summaries,
 //     matchers). Agents do not change them.
@@ -12,6 +12,8 @@ import "github.com/vietbui/chat-quality-agent/engine"
 //     (handover, group, customer card, session), not about a tool.
 //   - toolRules are added only when the answering agent has a tool they
 //     are about, so a debt agent is not taught stock rules it cannot use.
+//   - messageTemplates are not prompts: the code sends them to people as is
+//     (engine.TaskKindMessage), so agents never add them to a prompt.
 //
 // The AI Engine bot (agents off) has every tool, so it gets every rule.
 
@@ -65,6 +67,11 @@ var sharedRules = []string{
 	engine.PromptPZHandover,
 	engine.PromptPZInternbotDraft,
 	engine.PromptPZGuestChannelLead,
+}
+
+var messageTemplates = []string{
+	engine.PromptPZInternbotFrame,
+	engine.PromptPZInternbotHandover,
 }
 
 var standalonePrompts = []string{

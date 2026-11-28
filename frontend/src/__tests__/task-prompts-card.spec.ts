@@ -76,3 +76,36 @@ describe('TaskPromptsCard', () => {
     expect(vm.openGroups).toEqual(['erp'])
   })
 })
+
+describe('TaskPromptsCard message templates', () => {
+  it('previews a message template with sample data and the conditional line', async () => {
+    mocks.get.mockReset().mockResolvedValue({ data: { data: [{
+      key: 'personal_zalo_internbot_frame', group: 'personal_zalo', title: 'Khung', description: 'd', format: '', kind: 'message',
+      required: ['{phan_hoi}'], customized: false,
+      default: 'Internbot · {nhom}\n{neu_can_nhan_vien}Cần nhân viên xử lý\n{phan_hoi}',
+      value: 'Internbot · {nhom}\n{neu_can_nhan_vien}Cần nhân viên xử lý\n{phan_hoi}',
+      placeholders: [
+        { name: 'nhom', description: 'n', example: 'Đại lý {phan_hoi}' },
+        { name: 'neu_can_nhan_vien', description: 'c', line: true },
+        { name: 'phan_hoi', description: 'p', example: 'Dạ còn ạ.' },
+      ],
+    }] } })
+    const wrapper = shallowMount(TaskPromptsCard, {
+      props: { tenantId: 'tenant-1' },
+      global: { mocks: { $t: (key: string) => key }, renderStubDefaultSlot: true },
+    })
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.openEditor(vm.prompts[0])
+    expect(vm.isMessage).toBe(true)
+    expect(vm.preview).toBe('Internbot · Đại lý {phan_hoi}\nDạ còn ạ.')
+    vm.previewConditions = true
+    expect(vm.preview).toBe('Internbot · Đại lý {phan_hoi}\nCần nhân viên xử lý\nDạ còn ạ.')
+    vm.draft = '{khach_hang} {phan_hoi}'
+    expect(vm.unknownPlaceholders).toEqual(['{khach_hang}'])
+    vm.draft = 'Không có biến'
+    expect(vm.missingRequired).toEqual(['{phan_hoi}'])
+    vm.insertPlaceholder('phan_hoi')
+    expect(vm.missingRequired).toEqual([])
+  })
+})

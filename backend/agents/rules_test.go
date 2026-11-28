@@ -27,6 +27,9 @@ func TestEveryTaskPromptIsClassified(t *testing.T) {
 	for _, k := range sharedRules {
 		mark(k, "shared")
 	}
+	for _, k := range messageTemplates {
+		mark(k, "message")
+	}
 	for k, need := range toolRules {
 		mark(k, "tool rule")
 		if len(need.tools)+len(need.groups) == 0 {
@@ -50,6 +53,9 @@ func TestEveryTaskPromptIsClassified(t *testing.T) {
 	for _, p := range engine.TaskPrompts() {
 		if _, ok := seen[p.Key]; !ok {
 			t.Errorf("task prompt %s (%s) is not classified in agents/rules.go", p.Key, p.Title)
+		}
+		if (p.Kind == engine.TaskKindMessage) != (seen[p.Key] == "message") {
+			t.Errorf("%s: kind %q does not match its %s classification", p.Key, p.Kind, seen[p.Key])
 		}
 	}
 }

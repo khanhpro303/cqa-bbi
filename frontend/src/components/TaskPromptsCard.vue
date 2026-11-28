@@ -76,17 +76,47 @@
             >
               <code>{{ r }}</code>
             </v-chip>
-            <div class="text-caption text-medium-emphasis mt-1">{{ $t('task_prompt_required_hint') }}</div>
+            <div class="text-caption text-medium-emphasis mt-1">{{ isMessage ? $t('task_prompt_message_required_hint') : $t('task_prompt_required_hint') }}</div>
+          </div>
+          <div v-if="isMessage && editing.placeholders?.length" class="mb-3" data-testid="task-prompt-placeholders">
+            <div class="text-caption font-weight-medium mb-1">{{ $t('task_prompt_placeholders') }}</div>
+            <div v-for="ph in editing.placeholders" :key="ph.name" class="d-flex align-center ga-2 mb-1">
+              <v-chip size="small" variant="tonal" color="primary" class="placeholder-chip" @click="insertPlaceholder(ph.name)">
+                <code>{{ '{' + ph.name + '}' }}</code>
+              </v-chip>
+              <span class="text-caption">{{ ph.description }}</span>
+            </div>
+            <div class="text-caption text-medium-emphasis">{{ $t('task_prompt_placeholders_hint') }}</div>
           </div>
           <v-textarea
+            ref="textareaRef"
             v-model="draft"
-            :label="$t('task_prompt_instructions')"
-            rows="16"
+            :label="isMessage ? $t('task_prompt_message_text') : $t('task_prompt_instructions')"
+            :rows="isMessage ? 8 : 16"
             auto-grow
             variant="outlined"
-            class="prompt-textarea"
+            :class="isMessage ? 'message-textarea' : 'prompt-textarea'"
             data-testid="task-prompt-textarea"
           />
+          <template v-if="isMessage">
+            <div v-if="unknownPlaceholders.length" class="text-caption text-warning mb-2" data-testid="task-prompt-unknown">
+              {{ $t('task_prompt_unknown_placeholders', { names: unknownPlaceholders.join(', ') }) }}
+            </div>
+            <div class="d-flex align-center mb-1">
+              <span class="text-caption font-weight-medium">{{ $t('task_prompt_preview') }}</span>
+              <v-spacer />
+              <v-switch
+                v-if="lineConditions.length"
+                v-model="previewConditions"
+                :label="$t('task_prompt_preview_condition')"
+                density="compact"
+                hide-details
+                color="primary"
+                data-testid="task-prompt-preview-switch"
+              />
+            </div>
+            <pre class="message-preview pa-3 rounded" data-testid="task-prompt-preview">{{ preview }}</pre>
+          </template>
           <template v-if="editing.format">
             <div class="text-caption font-weight-medium mb-1">{{ $t('task_prompt_fixed_format') }}</div>
             <pre class="fixed-format pa-3 rounded">{{ editing.format }}</pre>
@@ -115,6 +145,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 
+export interface TaskPlaceholder {
+  name: string
+  description: string
+  example?: string
+  // The placeholder prints nothing; its line shows only when the condition holds.
+  line?: boolean
+}
+
 export interface TaskPrompt {
   key: string
   group: string
@@ -124,6 +162,9 @@ export interface TaskPrompt {
   format: string
   // Markers the code reads in the bot's answer; an edit must keep them.
   required?: string[]
+  // 'message': text sent to people as is, with {name} placeholders.
+  kind?: string
+  placeholders?: TaskPlaceholder[]
   value: string
   customized: boolean
 }
@@ -179,6 +220,52 @@ watch(search, (q) => {
   if ((q || '').trim()) openGroups.value = groups.value.map(g => g.key)
 })
 
+const isMessage = computed(() => editing.value?.kind === 'message')
+const textareaRef = ref<any>(null)
+const previewConditions = ref(false)
+const lineConditions = computed(() => (editing.value?.placeholders || []).filter(p => p.line).map(p => p.name))
+
+// Mirrors engine.FillMessageTemplate: lines are picked first, then values go
+// in one pass so a value is never read as template.
+function fillMessageTemplate(template: string, vars: Record<string, string>, show: Record<string, boolean>) {
+  const kept: string[] = []
+  for (let line of template.split('\n')) {
+    let keep = true
+    for (const [name, on] of Object.entries(show)) {
+      const token = `{${name}}`
+      if (line.includes(token)) {
+        keep = keep && on
+        line = line.split(token).join('')
+      }
+    }
+    if (keep) kept.push(line)
+  }
+  return kept.join('\n').replace(/\{([a-z0-9_]+)\}/g, (m, name: string) => (name in vars ? vars[name] : m))
+}
+
+const preview = computed(() => {
+  const vars: Record<string, string> = {}
+  const show: Record<string, boolean> = {}
+  for (const p of editing.value?.placeholders || []) {
+    if (p.line) show[p.name] = previewConditions.value
+    else vars[p.name] = p.example || ''
+  }
+  return fillMessageTemplate(draft.value, vars, show)
+})
+
+const unknownPlaceholders = computed(() => {
+  const known = new Set((editing.value?.placeholders || []).map(p => p.name))
+  const found = [...draft.value.matchAll(/\{([a-z0-9_]+)\}/g)].map(m => m[1]).filter(n => !known.has(n))
+  return [...new Set(found)].map(n => `{${n}}`)
+})
+
+function insertPlaceholder(name: string) {
+  const token = `{${name}}`
+  const el: HTMLTextAreaElement | undefined = textareaRef.value?.$el?.querySelector?.('textarea')
+  const at = el && typeof el.selectionStart === 'number' ? el.selectionStart : draft.value.length
+  draft.value = draft.value.slice(0, at) + token + draft.value.slice(el?.selectionEnd ?? at)
+}
+
 const missingRequired = computed(() => (editing.value?.required || []).filter(r => !draft.value.includes(r)))
 
 async function load() {
@@ -195,6 +282,7 @@ async function load() {
 function openEditor(p: TaskPrompt) {
   editing.value = p
   draft.value = p.value
+  previewConditions.value = false
   editorOpen.value = true
 }
 
@@ -222,7 +310,8 @@ async function saveDraft() {
 onMounted(load)
 watch(() => props.tenantId, load)
 
-defineExpose({ prompts, openEditor, saveDraft, draft, editing, editorOpen, search, groups, missingRequired, openGroups })
+defineExpose({ prompts, openEditor, saveDraft, draft, editing, editorOpen, search, groups, missingRequired, openGroups,
+  isMessage, preview, previewConditions, unknownPlaceholders, insertPlaceholder })
 </script>
 
 <style scoped>
@@ -239,6 +328,18 @@ defineExpose({ prompts, openEditor, saveDraft, draft, editing, editorOpen, searc
   background: rgba(128, 128, 128, 0.08);
   max-height: 260px;
   overflow: auto;
+}
+.placeholder-chip code {
+  font-size: 12px;
+}
+.message-preview {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  background: rgba(128, 128, 128, 0.08);
+}
+.message-textarea :deep(textarea) {
+  font-size: 14px;
 }
 .prompt-textarea :deep(textarea) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

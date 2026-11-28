@@ -33,6 +33,8 @@ const (
 	PromptPZHandover              = "personal_zalo_handover"
 	PromptPZHandoverComplaintLead = "personal_zalo_handover_complaint_lead"
 	PromptPZInternbotDraft        = "personal_zalo_internbot_draft"
+	PromptPZInternbotFrame        = "personal_zalo_internbot_frame"
+	PromptPZInternbotHandover     = "personal_zalo_internbot_handover_reply"
 	PromptPZGuestChannelLead      = "personal_zalo_guest_channel_lead"
 	PromptPZGuestComplaint        = "personal_zalo_guest_complaint"
 	PromptPZKnowledgeImages       = "personal_zalo_knowledge_images"
@@ -189,6 +191,37 @@ var personalZaloPrompts = []TaskPrompt{
 		Description:  "Zalo cá nhân, chế độ Internbot: nối vào prompt khi bot soạn bản nháp để nhân viên duyệt thay vì trả lời khách ngay. Bot trả mã [CQA_REQUEST_HUMAN_REVIEW] khi cần nhân viên xử lý; phải giữ nguyên mã này khi sửa.",
 		Instructions: `Đây là bản nháp cho nhân viên. Chỉ dùng công cụ tra cứu được phép. Không tiết lộ mã xác thực, mật khẩu, token hoặc thông tin không cần thiết. Không tuyên bố đã xác thực, chuyển tiếp, tạo phiếu hay thực hiện thao tác thay đổi dữ liệu. Nếu cần nhân viên xử lý, chỉ trả ` + HumanReviewMarker + `.`,
 		Required:     []string{HumanReviewMarker},
+	},
+	{
+		Key:         PromptPZInternbotFrame,
+		Group:       "personal_zalo",
+		Kind:        TaskKindMessage,
+		Title:       "Internbot: khung tin gửi nhóm giám thị",
+		Description: "Zalo cá nhân, chế độ Internbot: khung của mỗi tin bot gửi vào nhóm giám thị. Đây là tin gửi cho nhân viên, không phải prompt cho AI. Phải giữ {phan_hoi} để tin có câu trả lời bot soạn. Tin dài quá giới hạn của Zalo thì phần phản hồi được cắt bớt.",
+		Instructions: `Internbot · {nhom}
+Khách: {khach} · {gio}
+Tin nhắn: {tin_nhan}
+{neu_can_nhan_vien}Cần nhân viên xử lý
+
+Phản hồi đề xuất:
+{phan_hoi}`,
+		Required: []string{"{phan_hoi}"},
+		Placeholders: []TaskPlaceholder{
+			{Name: "nhom", Description: "Tên nhóm khách nhắn, hoặc \"Chat 1:1\" với chat riêng", Example: "Đại lý Minh Phát"},
+			{Name: "khach", Description: "Tên Zalo của khách", Example: "Nguyễn Văn An"},
+			{Name: "gio", Description: "Giờ khách nhắn (HH:MM, giờ Việt Nam)", Example: "09:30"},
+			{Name: "tin_nhan", Description: "Tin của khách, tối đa 400 ký tự", Example: "Shop còn mũ FF399 size L không ạ?"},
+			{Name: "neu_can_nhan_vien", Description: "Đặt ở đầu một dòng: dòng đó chỉ hiện khi cần nhân viên xử lý (mã này không in ra)", Line: true},
+			{Name: "phan_hoi", Description: "Câu trả lời bot soạn, hoặc câu chuyển nhân viên", Example: "Dạ mẫu FF399 size L hiện còn hàng ạ."},
+		},
+	},
+	{
+		Key:          PromptPZInternbotHandover,
+		Group:        "personal_zalo",
+		Kind:         TaskKindMessage,
+		Title:        "Internbot: câu chuyển nhân viên",
+		Description:  "Zalo cá nhân, chế độ Internbot: câu đặt vào phần {phan_hoi} của khung tin khi khách cần nhân viên xử lý (khách đòi gặp người, khiếu nại, hay bot không có căn cứ trả lời).",
+		Instructions: `Dạ, em xin phép nhờ nhân viên phụ trách tiếp tục hỗ trợ anh/chị ạ.`,
 	},
 	{
 		Key:          PromptPZGuestChannelLead,

@@ -149,3 +149,41 @@ func slicesContains(list []string, s string) bool {
 	}
 	return false
 }
+
+func TestFillMessageTemplate(t *testing.T) {
+	tpl := "A {x}\n{cond}Chỉ khi cần\nB {y}"
+	vars := map[string]string{"x": "{y}\nhai dòng", "y": "{cond}"}
+	if got := FillMessageTemplate(tpl, vars, map[string]bool{"cond": false}); got != "A {y}\nhai dòng\nB {cond}" {
+		t.Fatalf("hidden line = %q", got)
+	}
+	if got := FillMessageTemplate(tpl, vars, map[string]bool{"cond": true}); got != "A {y}\nhai dòng\nChỉ khi cần\nB {cond}" {
+		t.Fatalf("shown line = %q", got)
+	}
+}
+
+// Message templates use single-brace placeholders the code fills, and each
+// one the default uses is documented for the AI Engine page.
+func TestMessageTemplatesDocumentTheirPlaceholders(t *testing.T) {
+	for _, p := range TaskPrompts() {
+		if p.Kind != TaskKindMessage {
+			if len(p.Placeholders) > 0 {
+				t.Errorf("%s: placeholders on a prompt", p.Key)
+			}
+			continue
+		}
+		for _, ph := range p.Placeholders {
+			if ph.Description == "" || (!ph.Line && ph.Example == "") {
+				t.Errorf("%s: placeholder %s needs a description and an example", p.Key, ph.Name)
+			}
+		}
+		for _, r := range p.Required {
+			found := false
+			for _, ph := range p.Placeholders {
+				found = found || "{"+ph.Name+"}" == r
+			}
+			if !found {
+				t.Errorf("%s: required %s is not a documented placeholder", p.Key, r)
+			}
+		}
+	}
+}

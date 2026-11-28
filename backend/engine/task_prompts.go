@@ -29,6 +29,25 @@ type TaskPrompt struct {
 	Instructions string   `json:"default"`
 	Format       string   `json:"format"`
 	Required     []string `json:"required,omitempty"`
+	// Kind is empty for a prompt the AI reads, or TaskKindMessage for text
+	// the code sends to people as is (the Internbot draft frame...), with
+	// {name} Placeholders filled by FillMessageTemplate.
+	Kind         string            `json:"kind,omitempty"`
+	Placeholders []TaskPlaceholder `json:"placeholders,omitempty"`
+}
+
+// TaskKindMessage marks a TaskPrompt that is a message template, not a prompt.
+const TaskKindMessage = "message"
+
+// TaskPlaceholder documents one {name} of a message template. Example is the
+// value the AI Engine page uses for its preview.
+type TaskPlaceholder struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Example     string `json:"example"`
+	// Line: the placeholder prints nothing; the line holding it is kept only
+	// when the condition it names holds.
+	Line bool `json:"line,omitempty"`
 }
 
 // SettingKey is the app_settings key holding the tenant's override.
@@ -487,4 +506,32 @@ func ComposeTaskPrompt(instructions, format string, vars map[string]string) stri
 		return instructions
 	}
 	return instructions + "\n\n" + format
+}
+
+// FillMessageTemplate fills the {name} placeholders of a message template.
+// A line holding a placeholder listed in show is kept only when show[name] is
+// true, and that placeholder prints nothing. Lines are picked before values
+// go in, and values are filled in one pass, so text inside a value (a
+// customer's "{phan_hoi}" or a line break) is never read as template.
+func FillMessageTemplate(template string, vars map[string]string, show map[string]bool) string {
+	lines := strings.Split(template, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		keep := true
+		for name, on := range show {
+			token := "{" + name + "}"
+			if strings.Contains(line, token) {
+				keep = keep && on
+				line = strings.ReplaceAll(line, token, "")
+			}
+		}
+		if keep {
+			kept = append(kept, line)
+		}
+	}
+	pairs := make([]string, 0, len(vars)*2)
+	for k, v := range vars {
+		pairs = append(pairs, "{"+k+"}", v)
+	}
+	return strings.NewReplacer(pairs...).Replace(strings.Join(kept, "\n"))
 }
