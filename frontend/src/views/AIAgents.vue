@@ -219,6 +219,7 @@
                   @update:model-value="v => setChannelTeam(row.channel.id, v as string)"
                 />
                 <div v-if="row.ownInactive" class="text-caption text-warning mt-1">{{ $t('ag_channel_team_inactive') }}</div>
+                <div v-if="row.silentTeam" class="text-caption text-warning mt-1" :data-testid="`channel-silent-${row.channel.id}`">{{ $t('ag_channel_team_silent', { name: row.silentTeam }) }}</div>
               </td>
               <td>
                 <span v-if="row.picks.customer">{{ row.picks.customer.name }}</span>
@@ -355,6 +356,9 @@ interface ChannelRow {
   channel: TeamChannel
   selectValue: string
   ownInactive: boolean
+  // Name of the team the channel answers through when no agent in it
+  // answers anyone, so the channel stays silent.
+  silentTeam: string
   picks: { customer: Agent | null, staff: Agent | null }
 }
 
@@ -370,6 +374,7 @@ const channelRows = computed<ChannelRow[]>(() => {
         channel: ch,
         selectValue: own && !own.is_default ? own.id : '',
         ownInactive: !!own && !own.is_active,
+        silentTeam: effective && !pickFor(effective, 'customer') && !pickFor(effective, 'staff') ? effective.name : '',
         picks: { customer: pickFor(effective, 'customer'), staff: pickFor(effective, 'staff') },
       })
     }
@@ -377,12 +382,18 @@ const channelRows = computed<ChannelRow[]>(() => {
   return rows.sort((a, b) => a.channel.name.localeCompare(b.channel.name, 'vi'))
 })
 
+// Teams can share a name (an old "Mặc định" left over from an earlier
+// copy), so each option also says how many agents answer through it.
+function teamLabel(team: Team): string {
+  const answering = orderedMembers(team).filter(m => m.on).length
+  const parts = [answering ? t('ag_team_n_agents', { n: answering }) : t('ag_team_empty_short')]
+  if (!team.is_active) parts.push(t('ag_inactive').toLowerCase())
+  return `${team.name} · ${parts.join(', ')}`
+}
+
 const teamItems = computed(() => [
-  { title: t('ag_channel_follow_default', { name: defaultTeam.value?.name || '—' }), value: '' },
-  ...teams.value.filter(team => !team.is_default).map(team => ({
-    title: team.is_active ? team.name : `${team.name} (${t('ag_inactive').toLowerCase()})`,
-    value: team.id,
-  })),
+  { title: t('ag_channel_follow_default', { name: defaultTeam.value ? teamLabel(defaultTeam.value) : '—' }), value: '' },
+  ...teams.value.filter(team => !team.is_default).map(team => ({ title: teamLabel(team), value: team.id })),
 ])
 
 function openAgent(id: string) {

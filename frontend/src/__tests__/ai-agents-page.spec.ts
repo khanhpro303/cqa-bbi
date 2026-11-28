@@ -150,6 +150,25 @@ describe('Agents AI page', () => {
     expect(mocks.get.mock.calls.filter(c => c[0] === '/tenants/tenant-1/ai-teams')).toHaveLength(2)
   })
 
+  it('tells same-named teams apart and warns when a channel points at an empty one', async () => {
+    const leftover = { ...debtTeam, id: 't9', name: 'Mặc định', default_agent_id: '', members: [], memberships: [],
+      channels: [{ id: 'oa', name: 'OA BBI', channel_type: 'zalo_oa', ai_team_id: 't9' }], silent: ['customer', 'staff'] }
+    mocks.get.mockImplementation(routeGet({ '/tenants/tenant-1/ai-teams': { teams: [{ ...defaultTeam, channels: [] }, leftover] } }))
+    const wrapper = shallowMount(AIAgents, stubs)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    const titles = vm.teamItems.map((i: any) => i.title)
+    expect(titles[0]).toContain('ag_channel_follow_default')
+    expect(vm.teamLabel(defaultTeam)).toBe('Mặc định · ag_team_n_agents:{"n":2}')
+    expect(vm.teamLabel(leftover)).toBe('Mặc định · ag_team_empty_short')
+    const oa = vm.channelRows.find((r: any) => r.channel.id === 'oa')
+    expect(oa.selectValue).toBe('t9')
+    expect(oa.silentTeam).toBe('Mặc định')
+    vm.tab = 'channels'
+    await flushPromises()
+    expect(wrapper.find('[data-testid="channel-silent-oa"]').exists()).toBe(true)
+  })
+
   it('falls back to the default team when a channel points at a team that is off', async () => {
     mocks.get.mockImplementation(routeGet({ '/tenants/tenant-1/ai-teams': { teams: [defaultTeam, { ...debtTeam, is_active: false }] } }))
     const wrapper = shallowMount(AIAgents, stubs)
