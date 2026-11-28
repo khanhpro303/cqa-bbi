@@ -26,6 +26,7 @@ vi.mock('../api', () => ({
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 const product = {
+  group_key: 'a'.repeat(64),
   parent_code: 'LS2-FF800',
   web_name: 'Storm II',
   brand: 'LS2',
@@ -109,7 +110,7 @@ describe('ProductAdvisory', () => {
     wrapper.unmount()
   })
 
-  it('loads and saves advisory notes for one parent code', async () => {
+  it('loads and saves advisory notes for one product group', async () => {
     mocks.get
       .mockResolvedValueOnce({ data: { items: [product], total: 1 } })
       .mockResolvedValueOnce({ data: detail })
@@ -124,11 +125,51 @@ describe('ProductAdvisory', () => {
     await (wrapper.vm as any).save()
     await flushPromises()
 
-    expect(mocks.get).toHaveBeenCalledWith('/tenants/tenant-1/product-advisory/LS2-FF800')
-    expect(mocks.put).toHaveBeenCalledWith('/tenants/tenant-1/product-advisory/LS2-FF800', {
+    expect(mocks.get).toHaveBeenCalledWith(`/tenants/tenant-1/product-advisory/${product.group_key}`)
+    expect(mocks.put).toHaveBeenCalledWith(`/tenants/tenant-1/product-advisory/${product.group_key}`, {
       notes: 'Êm, phù hợp đi phố.',
       source_url: '',
     })
+    wrapper.unmount()
+  })
+
+  it('keeps same-parent product lines separate and opens the selected group key', async () => {
+    const helmet = {
+      ...product,
+      group_key: 'b'.repeat(64),
+      parent_code: 'SP462693',
+      web_name: 'LS2 FF818',
+      product_category: 'Nguyên Đầu',
+      variant_count: 51,
+    }
+    const accessory = {
+      ...product,
+      group_key: 'c'.repeat(64),
+      parent_code: 'SP462693',
+      web_name: 'Phụ Kiện LS2',
+      product_category: 'Phụ kiện',
+      variant_count: 1,
+    }
+    mocks.get
+      .mockResolvedValueOnce({ data: { items: [helmet, accessory], total: 2 } })
+      .mockResolvedValueOnce({ data: { ...detail, ...accessory } })
+    const wrapper = shallowMount(ProductAdvisory, {
+      props: { tenantId: 'tenant-1', canEdit: true },
+      global: { mocks: { $t: (key: string) => key }, renderStubDefaultSlot: true },
+    })
+    await flushPromises()
+
+    expect((wrapper.vm as any).products.map((item: typeof product) => [item.parent_code, item.web_name])).toEqual([
+      ['SP462693', 'LS2 FF818'],
+      ['SP462693', 'Phụ Kiện LS2'],
+    ])
+    expect(wrapper.text()).toContain('Nguyên Đầu')
+    expect(wrapper.text()).toContain('Phụ kiện')
+    await (wrapper.vm as any).openProduct(accessory)
+    await flushPromises()
+
+    expect(mocks.get).toHaveBeenLastCalledWith(`/tenants/tenant-1/product-advisory/${accessory.group_key}`)
+    expect((wrapper.vm as any).selected.web_name).toBe('Phụ Kiện LS2')
     wrapper.unmount()
   })
 
@@ -185,7 +226,7 @@ describe('ProductAdvisory', () => {
 
     expect(mocks.post).toHaveBeenCalledOnce()
     const [url, body] = mocks.post.mock.calls[0]!
-    expect(url).toBe('/tenants/tenant-1/product-advisory/LS2-FF800/images')
+    expect(url).toBe(`/tenants/tenant-1/product-advisory/${product.group_key}/images`)
     expect(body.getAll('images')).toEqual([file])
     wrapper.unmount()
   })
@@ -228,14 +269,14 @@ describe('ProductAdvisory', () => {
       'product_advisory_pending_review',
     ])
 
-    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/product-advisory/LS2-FF800/scrape', {
+    expect(mocks.post).toHaveBeenCalledWith(`/tenants/tenant-1/product-advisory/${product.group_key}/scrape`, {
       url: 'https://example.com/storm',
     })
     wrapper.unmount()
   })
 
   it('loads protected uploaded images through the authenticated API client', async () => {
-    const protectedURL = '/api/v1/tenants/tenant-1/product-advisory/LS2-FF800/images/image-1/content'
+    const protectedURL = `/api/v1/tenants/tenant-1/product-advisory/${product.group_key}/images/image-1/content`
     mocks.get
       .mockResolvedValueOnce({ data: { items: [product], total: 1 } })
       .mockResolvedValueOnce({
@@ -254,7 +295,7 @@ describe('ProductAdvisory', () => {
     await flushPromises()
 
     expect(mocks.get).toHaveBeenCalledWith(
-      '/tenants/tenant-1/product-advisory/LS2-FF800/images/image-1/content',
+      `/tenants/tenant-1/product-advisory/${product.group_key}/images/image-1/content`,
       { responseType: 'blob' },
     )
     wrapper.unmount()

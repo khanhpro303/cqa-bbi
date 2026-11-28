@@ -137,6 +137,9 @@ func AutoMigrate() error {
 	if err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
+	if err := MigrateProductAdvisoryGroups(DB); err != nil {
+		return fmt.Errorf("migrate product advisory groups: %w", err)
+	}
 
 	// Backfill: pre-existing channels should auto-reply (preserve legacy behavior
 	// where the global chatbot_active flag alone gated auto-reply). Idempotent.

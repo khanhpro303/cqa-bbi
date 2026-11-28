@@ -136,6 +136,7 @@
                     <td>
                       <div class="font-weight-medium">{{ item.web_name || item.input_web_name || '—' }}</div>
                       <code>{{ item.parent_code || item.input_parent_code || '—' }}</code>
+                      <span v-if="item.product_category" class="text-caption text-medium-emphasis ml-2">{{ item.product_category }}</span>
                       <v-chip v-if="item.overwrite" size="x-small" color="warning" variant="tonal" class="ml-2">
                         {{ t('product_advisory_import_overwrite') }}
                       </v-chip>
@@ -150,7 +151,7 @@
                       </v-chip>
                       <div v-if="item.error_code || item.summary_error" class="text-caption text-medium-emphasis mt-1">
                         {{ t(`product_advisory_import_error_${item.error_code || item.summary_error}`) }}
-                        <span v-if="item.error_code === 'ambiguous_web_name' && item.error_message">({{ item.error_message }})</span>
+                        <span v-if="(item.error_code === 'ambiguous_web_name' || item.error_code === 'ambiguous_parent_code') && item.error_message">({{ item.error_message }})</span>
                       </div>
                     </td>
                   </tr>

@@ -192,4 +192,87 @@ func TestProductAdvisoryMySQL(t *testing.T) {
 	if cleared.ScrapedContent != "" || cleared.SourceSummary != "" || len(cleared.Images) != 1 || cleared.Images[0].ID != manual.ID {
 		t.Fatalf("clearing source affected wrong fields: %+v", cleared)
 	}
+
+	const sharedParent = "SP462693"
+	shared := []models.CachedProduct{
+		{ID: pkg.NewUUID(), TenantID: tenant, MA: "SP462693", MA_CHA: sharedParent, TEN_DONG_BO_WEB: "LS2 FF818", LIST_TEN_NHOM_VTHH: "Nguyên Đầu"},
+		{ID: pkg.NewUUID(), TenantID: tenant, MA: "SP462696", MA_CHA: sharedParent, TEN_DONG_BO_WEB: " ls2 ff818 ", LIST_TEN_NHOM_VTHH: " nguyên đầu "},
+		{ID: pkg.NewUUID(), TenantID: tenant, MA: "SP462552", MA_CHA: sharedParent, TEN_DONG_BO_WEB: "Phụ Kiện LS2", TEN: "Vỏ mũ FF818", LIST_TEN_NHOM_VTHH: "Phụ kiện"},
+		{ID: pkg.NewUUID(), TenantID: otherTenant, MA: "SP462696", MA_CHA: sharedParent, TEN_DONG_BO_WEB: "Other tenant"},
+	}
+	if err := database.Create(&shared).Error; err != nil {
+		t.Fatal(err)
+	}
+	const legacyIndex = "idx_product_advisory_tenant_parent"
+	if err := database.Exec("CREATE UNIQUE INDEX " + legacyIndex + " ON product_advisories (tenant_id, parent_code)").Error; err != nil {
+		t.Fatal(err)
+	}
+	legacy := models.ProductAdvisory{ID: pkg.NewUUID(), TenantID: tenant, ParentCode: sharedParent, WebName: "Phụ Kiện LS2", Notes: "Ghi chú phụ kiện cũ"}
+	if err := database.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacyImage := models.ProductAdvisoryImage{ID: pkg.NewUUID(), TenantID: tenant, ProductAdvisoryID: legacy.ID, Source: "upload", Enabled: true, MediaType: "image/png", Data: imageData.Bytes()}
+	if err := database.Create(&legacyImage).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := db.MigrateProductAdvisoryGroups(database); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(query string) []productAdvisoryListItem {
+		t.Helper()
+		list := request(tenant, http.MethodGet, "/?q="+query, "", "", http.StatusOK, ListProductAdvisories)
+		var payload struct {
+			Items []productAdvisoryListItem
+			Total int
+		}
+		if err := json.Unmarshal(list.Body.Bytes(), &payload); err != nil || payload.Total != len(payload.Items) {
+			t.Fatalf("unexpected search result for %q: %s", query, list.Body.String())
+		}
+		return payload.Items
+	}
+	byParent := search(sharedParent)
+	byName, bySKU, accessory := search("FF818"), search("sp462696"), search("SP462552")
+	if len(byParent) != 2 || len(byName) != 1 || len(bySKU) != 1 || len(accessory) != 1 ||
+		len(byName[0].GroupKey) != 64 || byName[0].GroupKey != bySKU[0].GroupKey ||
+		bySKU[0].VariantCount != 2 || bySKU[0].HasContent ||
+		accessory[0].GroupKey == bySKU[0].GroupKey || !accessory[0].HasContent {
+		t.Fatalf("wrong group split: parent=%+v name=%+v sku=%+v accessory=%+v", byParent, byName, bySKU, accessory)
+	}
+	line := func(method, key, body, imageID string, status int, handler gin.HandlerFunc) *httptest.ResponseRecorder {
+		t.Helper()
+		return call(tenant, method, "/"+key, "application/json", bytes.NewReader([]byte(body)), key, imageID, status, handler)
+	}
+	line(http.MethodGet, sharedParent, "", "", http.StatusConflict, GetProductAdvisory)
+	line(http.MethodPut, bySKU[0].GroupKey, `{"notes":"Tư vấn cho mũ FF818"}`, "", http.StatusOK, SaveProductAdvisory)
+	for key, note := range map[string]string{bySKU[0].GroupKey: "Tư vấn cho mũ FF818", accessory[0].GroupKey: legacy.Notes} {
+		rec := line(http.MethodGet, key, "", "", http.StatusOK, GetProductAdvisory)
+		var detail productAdvisoryDetail
+		if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil || detail.Notes != note {
+			t.Fatalf("wrong advisory for %s: %s", key, rec.Body.String())
+		}
+	}
+	line(http.MethodGet, accessory[0].GroupKey, "", legacyImage.ID, http.StatusOK, GetProductAdvisoryImageContent)
+	line(http.MethodGet, bySKU[0].GroupKey, "", legacyImage.ID, http.StatusNotFound, GetProductAdvisoryImageContent)
+	line(http.MethodGet, sharedParent, "", legacyImage.ID, http.StatusOK, GetProductAdvisoryImageContent)
+
+	// Even a shared synchronized name cannot mix helmets with accessories.
+	if err := database.Model(&shared[2]).UpdateColumn("ten_dong_bo_web", "LS2 FF818").Error; err != nil {
+		t.Fatal(err)
+	}
+	sameName := search("FF818")
+	if len(sameName) != 2 || sameName[0].ProductCategory == sameName[1].ProductCategory {
+		t.Fatalf("same-name groups were not split by category: %+v", sameName)
+	}
+	saved := search("Phụ%20Kiện%20LS2")
+	if len(saved) != 1 || !saved[0].CatalogMissing || !saved[0].HasContent {
+		t.Fatalf("previously saved advice disappeared after ERP renamed its line: %+v", saved)
+	}
+	detail := line(http.MethodGet, saved[0].GroupKey, "", "", http.StatusOK, GetProductAdvisory)
+	if !strings.Contains(detail.Body.String(), legacy.Notes) {
+		t.Fatalf("saved advisory is not readable: %s", detail.Body.String())
+	}
+	line(http.MethodGet, saved[0].GroupKey, "", legacyImage.ID, http.StatusOK, GetProductAdvisoryImageContent)
+	line(http.MethodPut, saved[0].GroupKey, `{"notes":"Changed"}`, "", http.StatusNotFound, SaveProductAdvisory)
 }

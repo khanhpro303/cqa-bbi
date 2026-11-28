@@ -28,15 +28,18 @@ const (
 	maxProductAdvisoryUploadFiles   = 8
 	maxProductAdvisoryImageBytes    = 5 << 20
 	maxProductAdvisoryUploadRequest = 12 << 20 // nginx client_max_body_size
+	savedProductAdvisoryPrefix      = "saved-"
 )
 
-const productParentCodeExpr = "COALESCE(NULLIF(TRIM(ma_cha), ''), TRIM(ma))"
-const productCatalogGroupSelect = productParentCodeExpr + " AS parent_code, COALESCE(MAX(NULLIF(TRIM(ten_dong_bo_web), '')), MAX(NULLIF(TRIM(ten), '')), MAX(" + productParentCodeExpr + ")) AS web_name, COUNT(DISTINCT ma) AS variant_count, COALESCE(MAX(nhan_hieu_name), '') AS brand, COALESCE(MAX(NULLIF(TRIM(link_anh), '')), '') AS default_image_url"
+const productCatalogGroupSelect = models.ProductAdvisoryGroupKeySQL + " AS group_key, MAX(" + models.ProductAdvisoryParentSQL + ") AS parent_code, " + models.ProductAdvisoryWebNameSQL + " AS web_name, MAX(" + models.ProductAdvisoryCategorySQL + ") AS product_category, COUNT(DISTINCT TRIM(ma)) AS variant_count, COALESCE(MAX(nhan_hieu_name), '') AS brand, COALESCE(MAX(NULLIF(TRIM(link_anh), '')), '') AS default_image_url"
 
 type productCatalogGroup struct {
+	GroupKey        string `json:"group_key" gorm:"column:group_key"`
 	ParentCode      string `json:"parent_code" gorm:"column:parent_code"`
 	WebName         string `json:"web_name" gorm:"column:web_name"`
+	ProductCategory string `json:"product_category" gorm:"column:product_category"`
 	VariantCount    int    `json:"variant_count" gorm:"column:variant_count"`
+	CatalogMissing  bool   `json:"catalog_missing,omitempty" gorm:"column:catalog_missing"`
 	Brand           string `json:"brand" gorm:"column:brand"`
 	DefaultImageURL string `json:"default_image_url" gorm:"column:default_image_url"`
 }
@@ -58,9 +61,12 @@ type productAdvisoryListItem struct {
 }
 
 type productAdvisoryListRow struct {
+	GroupKey        string     `gorm:"column:group_key"`
 	ParentCode      string     `gorm:"column:parent_code"`
 	WebName         string     `gorm:"column:web_name"`
+	ProductCategory string     `gorm:"column:product_category"`
 	VariantCount    int        `gorm:"column:variant_count"`
+	CatalogMissing  bool       `gorm:"column:catalog_missing"`
 	Brand           string     `gorm:"column:brand"`
 	DefaultImageURL string     `gorm:"column:default_image_url"`
 	ProfileID       string     `gorm:"column:profile_id"`
@@ -80,20 +86,36 @@ type productAdvisoryDetail struct {
 	UpdatedAt      *time.Time                `json:"updated_at,omitempty"`
 }
 
+func productAdvisoryCatalog(tx *gorm.DB, tenantID string) *gorm.DB {
+	return tx.Model(&models.CachedProduct{}).Select(productCatalogGroupSelect).
+		Where("tenant_id = ? AND TRIM(ma) <> ''", tenantID).
+		Scopes(engine.ExcludeDKCopies).Group(models.ProductAdvisoryGroupKeySQL)
+}
+
 func ListProductAdvisories(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 	page := boundedPositiveInt(c.Query("page"), 1, 1, 1_000_000)
 	perPage := boundedPositiveInt(c.Query("per_page"), 50, 1, 100)
-	catalog := db.DB.WithContext(c.Request.Context()).Model(&models.CachedProduct{}).
-		Select(productCatalogGroupSelect).
-		Where("tenant_id = ? AND TRIM(ma) <> ''", tenantID).Scopes(engine.ExcludeDKCopies).Group(productParentCodeExpr)
-	base := db.DB.WithContext(c.Request.Context()).Table("(?) AS catalog", catalog).
-		Joins("LEFT JOIN product_advisories pa ON pa.tenant_id = ? AND pa.parent_code = catalog.parent_code", tenantID)
+	tx := db.DB.WithContext(c.Request.Context())
+	catalog := productAdvisoryCatalog(tx, tenantID)
+	liveKeys := tx.Model(&models.CachedProduct{}).Select("1").
+		Where("tenant_id = saved.tenant_id AND TRIM(ma) <> '' AND " + models.ProductAdvisoryParentSQL + " = saved.parent_code AND " + models.ProductAdvisoryGroupKeySQL + " = saved.group_key").
+		Scopes(engine.ExcludeDKCopies)
+	// Keep previously saved material visible if its ERP line disappears or
+	// changes identity. Only verified catalog rows can receive new advice.
+	saved := tx.Table("product_advisories AS saved").
+		Select("CONCAT(?, saved.id) AS group_key, saved.parent_code, saved.web_name, COALESCE(saved.product_category, '') AS product_category, 0 AS variant_count, '' AS brand, '' AS default_image_url, TRUE AS catalog_missing, saved.id AS saved_profile_id", savedProductAdvisoryPrefix).
+		Where("saved.tenant_id = ? AND NOT EXISTS (?)", tenantID, liveKeys)
 	query := strings.TrimSpace(c.Query("q"))
 	if query != "" {
-		like := "%" + query + "%"
-		base = base.Where("catalog.parent_code LIKE ? OR catalog.web_name LIKE ? OR catalog.brand LIKE ?", like, like, like)
+		like := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(query) + "%"
+		// Match any SKU without shrinking the displayed group or its SKU count.
+		catalog = catalog.Having("MAX("+models.ProductAdvisoryParentSQL+") LIKE ? ESCAPE '!' OR "+models.ProductAdvisoryWebNameSQL+" LIKE ? ESCAPE '!' OR MAX(CASE WHEN TRIM(ma) LIKE ? ESCAPE '!' OR nhan_hieu_name LIKE ? ESCAPE '!' THEN 1 ELSE 0 END) = 1", like, like, like, like)
+		saved = saved.Where("saved.parent_code LIKE ? ESCAPE '!' OR saved.web_name LIKE ? ESCAPE '!'", like, like)
 	}
+	active := tx.Table("(?) AS grouped", catalog).Select("grouped.*, FALSE AS catalog_missing, '' AS saved_profile_id")
+	base := tx.Table("(? UNION ALL ?) AS catalog", active, saved).
+		Joins("LEFT JOIN product_advisories pa ON pa.tenant_id = ? AND (pa.group_key = catalog.group_key OR pa.id = catalog.saved_profile_id)", tenantID)
 	hasContentSQL := "(COALESCE(TRIM(pa.notes), '') <> '' OR COALESCE(TRIM(pa.scraped_content), '') <> '' OR EXISTS (SELECT 1 FROM product_advisory_images AS ai WHERE ai.tenant_id = pa.tenant_id AND ai.product_advisory_id = pa.id AND ai.enabled = TRUE))"
 	switch strings.TrimSpace(c.DefaultQuery("configured", "all")) {
 	case "yes":
@@ -107,8 +129,8 @@ func ListProductAdvisories(c *gin.Context) {
 		return
 	}
 	var rows []productAdvisoryListRow
-	selectSQL := "catalog.parent_code, catalog.web_name, catalog.variant_count, catalog.brand, catalog.default_image_url, COALESCE(pa.id, '') AS profile_id, " + hasContentSQL + " AS has_content, pa.updated_at"
-	if err := base.Select(selectSQL).Order("catalog.web_name, catalog.parent_code").Offset((page - 1) * perPage).Limit(perPage).Scan(&rows).Error; err != nil {
+	selectSQL := "catalog.group_key, catalog.parent_code, catalog.web_name, catalog.product_category, catalog.variant_count, catalog.brand, catalog.default_image_url, catalog.catalog_missing, COALESCE(pa.id, '') AS profile_id, " + hasContentSQL + " AS has_content, pa.updated_at"
+	if err := base.Select(selectSQL).Order("catalog.web_name, catalog.parent_code, catalog.group_key").Offset((page - 1) * perPage).Limit(perPage).Scan(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
 		return
 	}
@@ -136,10 +158,10 @@ func ListProductAdvisories(c *gin.Context) {
 
 	items := make([]productAdvisoryListItem, 0, len(rows))
 	for _, row := range rows {
-		group := productCatalogGroup{ParentCode: row.ParentCode, WebName: row.WebName, VariantCount: row.VariantCount, Brand: row.Brand, DefaultImageURL: row.DefaultImageURL}
+		group := productCatalogGroup{GroupKey: row.GroupKey, ParentCode: row.ParentCode, WebName: row.WebName, ProductCategory: row.ProductCategory, VariantCount: row.VariantCount, CatalogMissing: row.CatalogMissing, Brand: row.Brand, DefaultImageURL: row.DefaultImageURL}
 		item := productAdvisoryListItem{productCatalogGroup: group, HasContent: row.HasContent, UpdatedAt: row.UpdatedAt}
 		if image, ok := thumbnailByProfile[row.ProfileID]; ok {
-			item.ThumbnailURL = productAdvisoryImageURL(tenantID, group.ParentCode, image)
+			item.ThumbnailURL = productAdvisoryImageURL(tenantID, group.GroupKey, image)
 		}
 		if item.ThumbnailURL == "" {
 			item.ThumbnailURL = group.DefaultImageURL
@@ -261,7 +283,7 @@ func ScrapeProductAdvisory(c *gin.Context, cfg *config.Config) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "save_failed"})
 		return
 	}
-	detail, status, err := loadProductAdvisoryDetail(c.Request.Context(), tenantID, group.ParentCode)
+	detail, status, err := loadProductAdvisoryDetail(c.Request.Context(), tenantID, group.GroupKey)
 	if err != nil {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
@@ -416,7 +438,7 @@ func UploadProductAdvisoryImages(c *gin.Context) {
 	}
 	images := make([]productAdvisoryImageDTO, 0, len(created))
 	for _, image := range created {
-		images = append(images, productAdvisoryImageDTOFromModel(tenantID, group.ParentCode, image))
+		images = append(images, productAdvisoryImageDTOFromModel(tenantID, group.GroupKey, image))
 	}
 	c.JSON(http.StatusCreated, gin.H{"images": images})
 }
@@ -453,7 +475,7 @@ func UpdateProductAdvisoryImage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "empty_update"})
 		return
 	}
-	image, status, err := findProductAdvisoryImage(c.Request.Context(), middleware.GetTenantID(c), c.Param("parentCode"), c.Param("imageId"))
+	image, status, err := findProductAdvisoryImage(c.Request.Context(), middleware.GetTenantID(c), c.Param("parentCode"), c.Param("imageId"), false)
 	if err != nil {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
@@ -470,7 +492,7 @@ func UpdateProductAdvisoryImage(c *gin.Context) {
 }
 
 func DeleteProductAdvisoryImage(c *gin.Context) {
-	image, status, err := findProductAdvisoryImage(c.Request.Context(), middleware.GetTenantID(c), c.Param("parentCode"), c.Param("imageId"))
+	image, status, err := findProductAdvisoryImage(c.Request.Context(), middleware.GetTenantID(c), c.Param("parentCode"), c.Param("imageId"), false)
 	if err != nil {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
@@ -483,7 +505,7 @@ func DeleteProductAdvisoryImage(c *gin.Context) {
 }
 
 func GetProductAdvisoryImageContent(c *gin.Context) {
-	image, status, err := findProductAdvisoryImage(c.Request.Context(), middleware.GetTenantID(c), c.Param("parentCode"), c.Param("imageId"))
+	image, status, err := findProductAdvisoryImage(c.Request.Context(), middleware.GetTenantID(c), c.Param("parentCode"), c.Param("imageId"), true)
 	if err != nil {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
@@ -496,34 +518,47 @@ func GetProductAdvisoryImageContent(c *gin.Context) {
 	c.Data(http.StatusOK, image.MediaType, image.Data)
 }
 
-func loadProductCatalogGroup(ctx context.Context, tenantID, rawParentCode string) (productCatalogGroup, int, error) {
-	parentCode := strings.TrimSpace(rawParentCode)
-	var group productCatalogGroup
-	result := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).Select(productCatalogGroupSelect).
-		Where("tenant_id = ? AND TRIM(ma) <> '' AND "+productParentCodeExpr+" = ?", tenantID, parentCode).
-		Scopes(engine.ExcludeDKCopies).Group(productParentCodeExpr).Scan(&group)
-	if result.Error != nil {
+func loadProductCatalogGroup(ctx context.Context, tenantID, rawGroup string) (productCatalogGroup, int, error) {
+	identifier := strings.TrimSpace(rawGroup)
+	catalog := productAdvisoryCatalog(db.DB.WithContext(ctx), tenantID)
+	var groups []productCatalogGroup
+	if err := catalog.Where(models.ProductAdvisoryGroupKeySQL+" = ? OR "+models.ProductAdvisoryParentSQL+" = ?", identifier, identifier).Limit(3).Scan(&groups).Error; err != nil {
 		return productCatalogGroup{}, http.StatusInternalServerError, errors.New("query_failed")
 	}
-	if result.RowsAffected != 0 {
-		return group, http.StatusOK, nil
+	if len(groups) == 1 {
+		return groups[0], http.StatusOK, nil
+	}
+	if len(groups) > 1 {
+		return productCatalogGroup{}, http.StatusConflict, errors.New("ambiguous_parent_code")
 	}
 	return productCatalogGroup{}, http.StatusNotFound, errors.New("product_not_found")
 }
 
-func loadProductAdvisoryDetail(ctx context.Context, tenantID, rawParentCode string) (productAdvisoryDetail, int, error) {
-	group, status, err := loadProductCatalogGroup(ctx, tenantID, rawParentCode)
-	if err != nil {
-		return productAdvisoryDetail{}, status, err
-	}
-	detail := productAdvisoryDetail{productCatalogGroup: group, Images: []productAdvisoryImageDTO{}}
+func loadProductAdvisoryDetail(ctx context.Context, tenantID, rawGroup string) (productAdvisoryDetail, int, error) {
+	tx := db.DB.WithContext(ctx)
 	var profile models.ProductAdvisory
-	err = db.DB.WithContext(ctx).Where("tenant_id = ? AND parent_code = ?", tenantID, group.ParentCode).Take(&profile).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return detail, http.StatusOK, nil
-	}
-	if err != nil {
-		return productAdvisoryDetail{}, http.StatusInternalServerError, errors.New("query_failed")
+	detail := productAdvisoryDetail{Images: []productAdvisoryImageDTO{}}
+	groupID := strings.TrimSpace(rawGroup)
+	if savedID, ok := strings.CutPrefix(groupID, savedProductAdvisoryPrefix); ok {
+		if err := tx.Where("tenant_id = ? AND id = ?", tenantID, savedID).Take(&profile).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return detail, http.StatusNotFound, errors.New("product_not_found")
+			}
+			return detail, http.StatusInternalServerError, errors.New("query_failed")
+		}
+		detail.productCatalogGroup = productCatalogGroup{GroupKey: groupID, ParentCode: profile.ParentCode, WebName: profile.WebName, ProductCategory: profile.ProductCategory, CatalogMissing: true}
+	} else {
+		group, status, err := loadProductCatalogGroup(ctx, tenantID, rawGroup)
+		if err != nil {
+			return detail, status, err
+		}
+		detail.productCatalogGroup = group
+		if err := tx.Where("tenant_id = ? AND group_key = ?", tenantID, group.GroupKey).Take(&profile).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return detail, http.StatusOK, nil
+			}
+			return detail, http.StatusInternalServerError, errors.New("query_failed")
+		}
 	}
 	detail.Notes, detail.SourceURL, detail.SourceTitle, detail.ScrapedContent = profile.Notes, profile.SourceURL, profile.SourceTitle, profile.ScrapedContent
 	detail.SourceSummary = profile.SourceSummary
@@ -534,25 +569,45 @@ func loadProductAdvisoryDetail(ctx context.Context, tenantID, rawParentCode stri
 		return productAdvisoryDetail{}, http.StatusInternalServerError, errors.New("query_failed")
 	}
 	for _, image := range images {
-		detail.Images = append(detail.Images, productAdvisoryImageDTOFromModel(tenantID, group.ParentCode, image))
+		detail.Images = append(detail.Images, productAdvisoryImageDTOFromModel(tenantID, detail.GroupKey, image))
 	}
 	return detail, http.StatusOK, nil
 }
 
 func ensureProductAdvisory(tx *gorm.DB, tenantID string, group productCatalogGroup) (models.ProductAdvisory, error) {
-	profile := models.ProductAdvisory{ID: pkg.NewUUID(), TenantID: tenantID, ParentCode: group.ParentCode, WebName: group.WebName}
-	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "tenant_id"}, {Name: "parent_code"}}, DoUpdates: clause.AssignmentColumns([]string{"web_name", "updated_at"})}).Create(&profile).Error; err != nil {
+	profile := models.ProductAdvisory{ID: pkg.NewUUID(), TenantID: tenantID, ParentCode: group.ParentCode, GroupKey: group.GroupKey, WebName: group.WebName, ProductCategory: group.ProductCategory}
+	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "tenant_id"}, {Name: "group_key"}}, DoUpdates: clause.AssignmentColumns([]string{"web_name", "product_category", "updated_at"})}).Create(&profile).Error; err != nil {
 		return profile, err
 	}
 	var stored models.ProductAdvisory
-	err := tx.Where("tenant_id = ? AND parent_code = ?", tenantID, group.ParentCode).Take(&stored).Error
+	err := tx.Where("tenant_id = ? AND group_key = ?", tenantID, group.GroupKey).Take(&stored).Error
 	return stored, err
 }
 
-func findProductAdvisoryImage(ctx context.Context, tenantID, rawParentCode, imageID string) (models.ProductAdvisoryImage, int, error) {
+func findProductAdvisoryImage(ctx context.Context, tenantID, rawGroup, imageID string, readOnly bool) (models.ProductAdvisoryImage, int, error) {
 	var image models.ProductAdvisoryImage
-	err := db.DB.WithContext(ctx).Model(&image).Joins("JOIN product_advisories pa ON pa.id = product_advisory_images.product_advisory_id AND pa.tenant_id = product_advisory_images.tenant_id").
-		Where("product_advisory_images.id = ? AND product_advisory_images.tenant_id = ? AND pa.parent_code = ?", imageID, tenantID, strings.TrimSpace(rawParentCode)).Take(&image).Error
+	query := db.DB.WithContext(ctx).Model(&image).
+		Joins("JOIN product_advisories pa ON pa.id = product_advisory_images.product_advisory_id AND pa.tenant_id = product_advisory_images.tenant_id").
+		Where("product_advisory_images.id = ? AND product_advisory_images.tenant_id = ?", imageID, tenantID)
+	identifier := strings.TrimSpace(rawGroup)
+	if readOnly {
+		if savedID, ok := strings.CutPrefix(identifier, savedProductAdvisoryPrefix); ok {
+			query = query.Where("pa.id = ?", savedID)
+		} else {
+			// The old image URL addressed an exact tenant/image under its parent.
+			query = query.Where("pa.group_key = ? OR pa.parent_code = ?", identifier, identifier)
+		}
+	} else {
+		group, status, err := loadProductCatalogGroup(ctx, tenantID, identifier)
+		if status == http.StatusNotFound {
+			return image, status, errors.New("image_not_found")
+		}
+		if err != nil {
+			return image, status, err
+		}
+		query = query.Where("pa.group_key = ?", group.GroupKey)
+	}
+	err := query.Take(&image).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return image, http.StatusNotFound, errors.New("image_not_found")
 	}

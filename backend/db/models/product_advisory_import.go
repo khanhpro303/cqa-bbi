@@ -33,7 +33,9 @@ type ProductAdvisoryImportItem struct {
 	InputParentCode string     `gorm:"type:varchar(100)" json:"input_parent_code"`
 	SourceURL       string     `gorm:"type:varchar(2048)" json:"source_url"`
 	ParentCode      string     `gorm:"type:varchar(100)" json:"parent_code"`
+	GroupKey        string     `gorm:"type:char(64);default:null" json:"-"`
 	WebName         string     `gorm:"type:varchar(255)" json:"web_name"`
+	ProductCategory string     `gorm:"type:varchar(500)" json:"product_category,omitempty"`
 	MatchedBy       string     `gorm:"type:varchar(20)" json:"matched_by"`
 	Overwrite       bool       `gorm:"not null;default:false" json:"overwrite"`
 	Status          string     `gorm:"type:varchar(20);not null;index:idx_product_advisory_import_item_claim,priority:2" json:"status"`

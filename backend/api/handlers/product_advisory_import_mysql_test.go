@@ -79,6 +79,9 @@ func TestProductAdvisoryImportMySQL(t *testing.T) {
 	failedProfile := models.ProductAdvisory{ID: pkg.NewUUID(), TenantID: tenant, ParentCode: "003", WebName: "Product 3", SourceURL: "https://example.com/prior", ScrapedContent: "Prior text", SourceSummary: "Keep this summary"}
 	insert(&oldProfile)
 	insert(&failedProfile)
+	if err := db.MigrateProductAdvisoryGroups(database); err != nil {
+		t.Fatal(err)
+	}
 	manualID, oldImageID, failedImageID := pkg.NewUUID(), pkg.NewUUID(), pkg.NewUUID()
 	insert(&[]models.ProductAdvisoryImage{
 		{ID: manualID, TenantID: tenant, ProductAdvisoryID: oldProfile.ID, Source: "upload", Enabled: true, Data: []byte{1, 2, 3}},
@@ -329,6 +332,27 @@ func TestProductAdvisoryImportMySQL(t *testing.T) {
 	if err := json.Unmarshal(latest.Body.Bytes(), &complete); err != nil || complete.Job.ID != interrupted.ID ||
 		complete.Job.Status != "completed" || complete.Job.FailedCount != 1 || complete.Items[0].ErrorCode != "retry_exhausted" {
 		t.Fatalf("interrupted job should finish as a row failure: %s %v", latest.Body, err)
+	}
+
+	insert(&[]models.CachedProduct{
+		{ID: pkg.NewUUID(), TenantID: tenant, MA: "SP462696", MA_CHA: "SP462693", TEN_DONG_BO_WEB: "LS2 FF818", LIST_TEN_NHOM_VTHH: "Nguyên Đầu"},
+		{ID: pkg.NewUUID(), TenantID: tenant, MA: "SP462552", MA_CHA: "SP462693", TEN_DONG_BO_WEB: "LS2 FF818", LIST_TEN_NHOM_VTHH: "Phụ kiện"},
+	})
+	categoryRows, err := parseProductAdvisoryImportRows([][]string{
+		{"ten_dong_bo_web", "ma_cha", "link", "nhom_vthh"},
+		{"LS2 FF818", "SP462693", "https://example.com/ambiguous", ""},
+		{"LS2 FF818", "SP462693", "https://example.com/helmet", "Nguyên Đầu"},
+		{"", "SP462552", "https://example.com/accessory", ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := mapProductAdvisoryImportRows(ctx, tenant, categoryRows)
+	if err != nil || len(items) != 3 || items[0].ErrorCode != "ambiguous_parent_code" ||
+		items[1].Status != "pending" || items[1].ProductCategory != "Nguyên Đầu" ||
+		items[2].Status != "pending" || items[2].ProductCategory != "Phụ kiện" ||
+		items[1].GroupKey == items[2].GroupKey {
+		t.Fatalf("shared parent import selected the wrong groups: %+v (%v)", items, err)
 	}
 }
 

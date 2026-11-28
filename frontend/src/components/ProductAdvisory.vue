@@ -97,7 +97,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="product in products" :key="product.parent_code">
+            <tr v-for="product in products" :key="productIdentity(product)">
               <td class="py-2">
                 <div class="d-flex align-center ga-3">
                   <v-avatar rounded="lg" size="48" color="surface-variant">
@@ -106,14 +106,15 @@
                   </v-avatar>
                   <div>
                     <div class="font-weight-medium">{{ product.web_name || product.parent_code }}</div>
-                    <div v-if="product.brand" class="text-caption text-medium-emphasis">{{ product.brand }}</div>
+                    <div v-if="product.brand || product.product_category" class="text-caption text-medium-emphasis">{{ [product.brand, product.product_category].filter(Boolean).join(' · ') }}</div>
                   </div>
                 </div>
               </td>
               <td><code>{{ product.parent_code }}</code></td>
               <td class="text-center">{{ product.variant_count }}</td>
               <td>
-                <v-chip v-if="product.has_content" color="success" size="small" variant="tonal">{{ $t('product_advisory_ready') }}</v-chip>
+                <v-chip v-if="product.catalog_missing" color="warning" size="small" variant="tonal">{{ $t('product_advisory_catalog_missing') }}</v-chip>
+                <v-chip v-else-if="product.has_content" color="success" size="small" variant="tonal">{{ $t('product_advisory_ready') }}</v-chip>
                 <v-chip v-else color="warning" size="small" variant="tonal">{{ $t('product_advisory_missing') }}</v-chip>
               </td>
               <td class="text-right">
@@ -153,7 +154,8 @@
               {{ selected.web_name || selected.parent_code }}
             </h3>
             <div class="editor-meta text-medium-emphasis">
-              <template v-if="selected.web_name && selected.web_name !== selected.parent_code">{{ selected.parent_code }} · </template>{{ $t('product_advisory_variant_count', { count: selected.variant_count }) }}
+              <template v-if="selected.web_name && selected.web_name !== selected.parent_code">{{ selected.parent_code }} · </template>
+              <template v-if="selected.product_category">{{ selected.product_category }} · </template>{{ $t('product_advisory_variant_count', { count: selected.variant_count }) }}
             </div>
           </div>
           <v-btn icon="mdi-close" variant="text" size="small" :aria-label="$t('cancel')" @click="dialog = false" />
@@ -162,6 +164,7 @@
         <v-card-text>
           <v-alert v-if="detailError" type="error" variant="tonal" density="compact" class="mb-4">{{ $t('product_advisory_detail_failed') }}</v-alert>
           <template v-if="detail">
+            <v-alert v-if="detail.catalog_missing" type="warning" variant="tonal" density="compact" class="mb-4">{{ $t('product_advisory_catalog_missing_hint') }}</v-alert>
             <v-textarea
               v-model="form.notes"
               :label="$t('product_advisory_notes')"
@@ -172,6 +175,7 @@
               maxlength="30000"
               variant="outlined"
               data-testid="product-notes"
+              :readonly="!canEditSelected"
             />
 
             <div class="text-subtitle-2 font-weight-bold mt-6 mb-2">{{ $t('product_advisory_web_source') }}</div>
@@ -187,6 +191,7 @@
                 variant="outlined"
                 class="flex-grow-1"
                 data-testid="product-source-url"
+                :readonly="!canEditSelected"
               />
               <v-btn
                 color="primary"
@@ -194,7 +199,7 @@
                 prepend-icon="mdi-web-sync"
                 class="mt-sm-1"
                 :loading="scraping"
-                :disabled="!canEdit || !validSourceURL || saving || !!activeScrape"
+                :disabled="!canEditSelected || !validSourceURL || saving || !!activeScrape"
                 data-testid="product-scrape"
                 @click="scrape"
               >
@@ -217,7 +222,7 @@
                 <div class="text-subtitle-2 font-weight-bold">{{ $t('product_advisory_images') }}</div>
                 <div class="text-caption text-medium-emphasis">{{ $t('product_advisory_images_hint') }}</div>
               </div>
-              <template v-if="canEdit">
+              <template v-if="canEditSelected">
                 <input ref="imageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden @change="uploadImages" />
                 <v-btn
                   color="primary"
@@ -248,10 +253,10 @@
                     :model-value="image.enabled"
                     color="primary"
                     :aria-label="$t('product_advisory_use_image')"
-                    :disabled="!canEdit || updatingImage === image.id"
+                    :disabled="!canEditSelected || updatingImage === image.id"
                     @update:model-value="(enabled) => setImageEnabled(image, !!enabled)"
                   />
-                  <v-btn v-if="canEdit" icon="mdi-delete-outline" size="x-small" variant="text" color="error" :aria-label="$t('delete')" @click="removeImage(image)" />
+                  <v-btn v-if="canEditSelected" icon="mdi-delete-outline" size="x-small" variant="text" color="error" :aria-label="$t('delete')" @click="removeImage(image)" />
                 </div>
                 <v-text-field
                   v-model="image.caption"
@@ -261,7 +266,7 @@
                   maxlength="500"
                   hide-details
                   class="px-2 pb-2"
-                  :disabled="!canEdit || updatingImage === image.id"
+                  :disabled="!canEditSelected || updatingImage === image.id"
                   @change="updateImageCaption(image)"
                 />
               </v-card>
@@ -277,7 +282,7 @@
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="dialog = false">{{ $t('cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" :loading="saving" :disabled="!canEdit || !detail || !sourceURLAcceptable || scraping || saving" data-testid="product-save" @click="save">
+          <v-btn color="primary" variant="flat" :loading="saving" :disabled="!canEditSelected || !detail || !sourceURLAcceptable || scraping || saving" data-testid="product-save" @click="save">
             {{ $t('save') }}
           </v-btn>
         </v-card-actions>
@@ -320,8 +325,11 @@ import {
 } from './productAdvisoryImport'
 
 type ProductGroup = {
+  group_key?: string
   parent_code: string
   web_name: string
+  product_category?: string
+  catalog_missing?: boolean
   brand?: string
   variant_count: number
   has_content: boolean
@@ -368,6 +376,14 @@ const loading = ref(false)
 const loadError = ref(false)
 let listRequest = 0
 let searchTimer: ReturnType<typeof setTimeout> | undefined
+
+function productIdentity(product: ProductGroup) {
+  return product.group_key || `${product.parent_code}\u0000${product.web_name}`
+}
+
+function productRouteKey(product: ProductGroup) {
+  return product.group_key || product.parent_code
+}
 
 const importDialog = ref(false)
 const reviewDialog = ref(false)
@@ -560,6 +576,7 @@ function debouncedLoad() {
 
 const dialog = ref(false)
 const selected = ref<ProductGroup | null>(null)
+const canEditSelected = computed(() => props.canEdit && !!selected.value && !selected.value.catalog_missing)
 const detail = ref<ProductDetail | null>(null)
 const summaryMessage = computed(() => {
   switch (detail.value?.summary_error) {
@@ -587,9 +604,10 @@ async function openProduct(product: ProductGroup) {
   detailError.value = false
   dialog.value = true
   const request = ++detailRequest
+  const routeKey = productRouteKey(product)
   loadingDetail.value = true
   try {
-    const { data } = await api.get(`${base.value}/${encodeURIComponent(product.parent_code)}`)
+    const { data } = await api.get(`${base.value}/${encodeURIComponent(routeKey)}`)
     if (request !== detailRequest || !dialog.value) return
     const loaded = { ...product, ...data, images: data?.images || [] } as ProductDetail
     detail.value = loaded
@@ -622,14 +640,14 @@ const saving = ref(false)
 async function save() {
   if (!selected.value || !detail.value || !props.canEdit || !sourceURLAcceptable.value || saving.value || scraping.value) return
   const requestBase = base.value
-  const parentCode = selected.value.parent_code
+  const routeKey = productRouteKey(selected.value)
   saving.value = true
   try {
-    const { data } = await api.put(`${requestBase}/${encodeURIComponent(parentCode)}`, {
+    const { data } = await api.put(`${requestBase}/${encodeURIComponent(routeKey)}`, {
       notes: form.value.notes.trim(),
       source_url: form.value.source_url.trim(),
     })
-    if (base.value !== requestBase || selected.value?.parent_code !== parentCode || !dialog.value || !detail.value) return
+    if (base.value !== requestBase || !selected.value || productRouteKey(selected.value) !== routeKey || !dialog.value || !detail.value) return
     const updated: ProductDetail = { ...detail.value, ...data }
     detail.value = updated
     form.value.source_url = updated.source_url
@@ -644,21 +662,21 @@ async function save() {
 
 const validSourceURL = computed(() => !!safeURL(form.value.source_url))
 const sourceURLAcceptable = computed(() => !form.value.source_url.trim() || validSourceURL.value)
-const activeScrape = ref<{ base: string; parentCode: string } | null>(null)
-const scraping = computed(() => activeScrape.value?.base === base.value && activeScrape.value?.parentCode === selected.value?.parent_code)
+const activeScrape = ref<{ base: string; routeKey: string } | null>(null)
+const scraping = computed(() => !!selected.value && activeScrape.value?.base === base.value && activeScrape.value?.routeKey === productRouteKey(selected.value))
 const sourceError = ref('')
 async function scrape() {
   if (!selected.value || !detail.value || !validSourceURL.value || !props.canEdit || saving.value || activeScrape.value) return
   const requestBase = base.value
-  const parentCode = selected.value.parent_code
+  const routeKey = productRouteKey(selected.value)
   const request = detailRequest
-  activeScrape.value = { base: requestBase, parentCode }
+  activeScrape.value = { base: requestBase, routeKey }
   sourceError.value = ''
   try {
-    const { data } = await api.post(`${requestBase}/${encodeURIComponent(parentCode)}/scrape`, {
+    const { data } = await api.post(`${requestBase}/${encodeURIComponent(routeKey)}/scrape`, {
       url: form.value.source_url.trim(),
     })
-    if (base.value !== requestBase || selected.value?.parent_code !== parentCode || !dialog.value || !detail.value) return
+    if (base.value !== requestBase || !selected.value || productRouteKey(selected.value) !== routeKey || !dialog.value || !detail.value) return
     const updated: ProductDetail = {
       ...detail.value,
       ...data,
@@ -693,13 +711,13 @@ async function uploadImages(event: Event) {
   const body = new FormData()
   files.forEach((file) => body.append('images', file))
   const requestBase = base.value
-  const parentCode = selected.value.parent_code
+  const routeKey = productRouteKey(selected.value)
   uploadingImages.value = true
   try {
-    const { data } = await api.post(`${requestBase}/${encodeURIComponent(parentCode)}/images`, body, {
+    const { data } = await api.post(`${requestBase}/${encodeURIComponent(routeKey)}/images`, body, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
-    if (base.value !== requestBase || selected.value?.parent_code !== parentCode || !detail.value) return
+    if (base.value !== requestBase || !selected.value || productRouteKey(selected.value) !== routeKey || !detail.value) return
     const added = data?.images || []
     detail.value!.images.push(...added)
     prepareImages(added.map((image: ProductImage) => image.url))
@@ -716,11 +734,11 @@ const updatingImage = ref('')
 async function setImageEnabled(image: ProductImage, enabled: boolean) {
   if (!selected.value || !props.canEdit) return
   const requestBase = base.value
-  const parentCode = selected.value.parent_code
+  const routeKey = productRouteKey(selected.value)
   updatingImage.value = image.id
   try {
-    await api.patch(`${requestBase}/${encodeURIComponent(parentCode)}/images/${encodeURIComponent(image.id)}`, { enabled })
-    if (base.value !== requestBase || selected.value?.parent_code !== parentCode) return
+    await api.patch(`${requestBase}/${encodeURIComponent(routeKey)}/images/${encodeURIComponent(image.id)}`, { enabled })
+    if (base.value !== requestBase || !selected.value || productRouteKey(selected.value) !== routeKey) return
     image.enabled = enabled
     await loadProducts(page.value)
   } catch {
@@ -733,10 +751,10 @@ async function setImageEnabled(image: ProductImage, enabled: boolean) {
 async function updateImageCaption(image: ProductImage) {
   if (!selected.value || !props.canEdit) return
   const requestBase = base.value
-  const parentCode = selected.value.parent_code
+  const routeKey = productRouteKey(selected.value)
   updatingImage.value = image.id
   try {
-    await api.patch(`${requestBase}/${encodeURIComponent(parentCode)}/images/${encodeURIComponent(image.id)}`, {
+    await api.patch(`${requestBase}/${encodeURIComponent(routeKey)}/images/${encodeURIComponent(image.id)}`, {
       caption: image.caption.trim(),
     })
   } catch {
@@ -749,10 +767,10 @@ async function updateImageCaption(image: ProductImage) {
 async function removeImage(image: ProductImage) {
   if (!selected.value || !props.canEdit) return
   const requestBase = base.value
-  const parentCode = selected.value.parent_code
+  const routeKey = productRouteKey(selected.value)
   try {
-    await api.delete(`${requestBase}/${encodeURIComponent(parentCode)}/images/${encodeURIComponent(image.id)}`)
-    if (base.value !== requestBase || selected.value?.parent_code !== parentCode || !detail.value) return
+    await api.delete(`${requestBase}/${encodeURIComponent(routeKey)}/images/${encodeURIComponent(image.id)}`)
+    if (base.value !== requestBase || !selected.value || productRouteKey(selected.value) !== routeKey || !detail.value) return
     detail.value!.images = detail.value!.images.filter((item) => item.id !== image.id)
     await loadProducts(page.value)
   } catch {

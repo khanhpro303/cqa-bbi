@@ -84,6 +84,9 @@ func TestPersonalZaloGobyAdvisoryMySQL(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := db.MigrateProductAdvisoryGroups(database); err != nil {
+		t.Fatal(err)
+	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {

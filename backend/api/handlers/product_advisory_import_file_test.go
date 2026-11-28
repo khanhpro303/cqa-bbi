@@ -105,8 +105,8 @@ func TestReadProductAdvisoryImportRejectsLegacyExcel(t *testing.T) {
 func TestMatchProductImportGroupPrefersAuthoritativeCode(t *testing.T) {
 	storm := productCatalogGroup{ParentCode: "SP1", WebName: "Storm"}
 	other := productCatalogGroup{ParentCode: "SP2", WebName: "Storm"}
-	byParent := map[string]productCatalogGroup{"sp1": storm, "sp2": other}
-	byChild := map[string]map[string]struct{}{"sp1-red": {"SP1": {}}}
+	byParent := map[string][]productCatalogGroup{"sp1": {storm}, "sp2": {other}}
+	byChild := map[string][]productCatalogGroup{"sp1-red": {storm}}
 	byName := map[string][]productCatalogGroup{"storm": {storm, other}}
 
 	group, matchedBy, _ := matchProductImportGroup(productAdvisoryImportRow{InputParentCode: "SP1", InputWebName: "Wrong"}, byParent, byChild, byName)
@@ -120,6 +120,28 @@ func TestMatchProductImportGroupPrefersAuthoritativeCode(t *testing.T) {
 	group, _, candidates := matchProductImportGroup(productAdvisoryImportRow{InputWebName: "STÖRM"}, byParent, byChild, byName)
 	if group.ParentCode != "" || len(candidates) != 2 {
 		t.Fatalf("expected ambiguous name, got %#v candidates=%v", group, candidates)
+	}
+}
+
+func TestMatchProductImportGroupWithSharedParent(t *testing.T) {
+	helmet := productCatalogGroup{ParentCode: "SP462693", WebName: "LS2 FF818", GroupKey: "helmet"}
+	accessory := productCatalogGroup{ParentCode: "SP462693", WebName: "Phụ Kiện LS2", GroupKey: "accessory"}
+	byParent := map[string][]productCatalogGroup{"sp462693": {helmet, accessory}}
+	byChild := map[string][]productCatalogGroup{"sp462696": {helmet}, "sp462552": {accessory}}
+	for _, tc := range []struct {
+		code, name, groupKey string
+		ambiguous            bool
+	}{
+		{code: "SP462693", ambiguous: true},
+		{code: "SP462693", name: "Phụ Kiện LS2", groupKey: "accessory"},
+		{code: "SP462693", name: "LS2 FF818", groupKey: "helmet"},
+		{code: "SP462696", groupKey: "helmet"},
+		{code: "SP462552", groupKey: "accessory"},
+	} {
+		got, _, candidates := matchProductImportGroup(productAdvisoryImportRow{InputParentCode: tc.code, InputWebName: tc.name}, byParent, byChild, nil)
+		if got.GroupKey != tc.groupKey || (len(candidates) > 1) != tc.ambiguous {
+			t.Errorf("%s %s: group=%+v, candidates=%v", tc.code, tc.name, got, candidates)
+		}
 	}
 }
 

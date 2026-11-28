@@ -296,6 +296,9 @@ func processClaimedProductAdvisoryImportItem(ctx context.Context, cfg *config.Co
 		if errors.Is(err, errProductAdvisoryImportClaimLost) {
 			return nil
 		}
+		if errors.Is(err, errProductAdvisoryImportGroupMissing) {
+			return releaseProductAdvisoryImportItem(ctx, item, "product_not_found", "The product line could no longer be identified in the catalog")
+		}
 		log.Printf("[product-advisory-import] save tenant=%s item=%s: %v", item.TenantID, item.ID, err)
 		return releaseProductAdvisoryImportItem(ctx, item, "save_failed", "Could not save product data")
 	}
@@ -367,6 +370,7 @@ func claimProductAdvisoryImportItem(ctx context.Context) (models.ProductAdvisory
 }
 
 var errProductAdvisoryImportClaimLost = errors.New("product advisory import claim lost")
+var errProductAdvisoryImportGroupMissing = errors.New("product advisory import group missing or ambiguous")
 
 func completeProductAdvisoryImportItem(ctx context.Context, item models.ProductAdvisoryImportItem, page knowledge.ScrapedPage, summary, summaryError string) error {
 	return db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -379,9 +383,23 @@ func completeProductAdvisoryImportItem(ctx context.Context, item models.ProductA
 			}
 			return err
 		}
-		group := productCatalogGroup{ParentCode: current.ParentCode, WebName: current.WebName}
+		catalog := productAdvisoryCatalog(tx, item.TenantID)
+		if current.GroupKey != "" {
+			catalog = catalog.Where(models.ProductAdvisoryGroupKeySQL+" = ?", current.GroupKey)
+		} else {
+			// An import queued before the split has a saved parent and name.
+			catalog = catalog.Where(models.ProductAdvisoryParentSQL+" = ?", current.ParentCode).
+				Having("LOWER("+models.ProductAdvisoryWebNameSQL+") = LOWER(?)", current.WebName)
+		}
+		var groups []productCatalogGroup
+		if err := catalog.Limit(2).Scan(&groups).Error; err != nil {
+			return err
+		}
+		if len(groups) != 1 {
+			return errProductAdvisoryImportGroupMissing
+		}
 		page.Title = clipProductImportText(page.Title, 500)
-		images, err := persistProductAdvisoryScrape(tx, item.TenantID, group, item.SourceURL, page, summary, true)
+		images, err := persistProductAdvisoryScrape(tx, item.TenantID, groups[0], item.SourceURL, page, summary, true)
 		if err != nil {
 			return err
 		}
@@ -398,7 +416,7 @@ func completeProductAdvisoryImportItem(ctx context.Context, item models.ProductA
 		}
 		if err := tx.Model(&models.ProductAdvisoryImportItem{}).
 			Where("id = ? AND tenant_id = ? AND claim_token = ?", item.ID, item.TenantID, item.ClaimToken).
-			Updates(map[string]any{"status": "succeeded", "summary_error": summaryError, "claim_token": "", "claimed_until": nil}).Error; err != nil {
+			Updates(map[string]any{"status": "succeeded", "group_key": groups[0].GroupKey, "product_category": groups[0].ProductCategory, "summary_error": summaryError, "claim_token": "", "claimed_until": nil}).Error; err != nil {
 			return err
 		}
 		return advanceProductAdvisoryImportJob(tx, item.JobID, item.TenantID, "succeeded_count")
