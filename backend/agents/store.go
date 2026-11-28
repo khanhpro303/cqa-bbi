@@ -451,6 +451,9 @@ type TeamChannel struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	ChannelType string `json:"channel_type"`
+	// AITeamID is the team the channel itself points at; empty when it
+	// follows the tenant's default team.
+	AITeamID string `json:"ai_team_id"`
 }
 
 // ListTeams returns the tenant's teams with members and channels.
@@ -494,7 +497,11 @@ func ListTeams(ctx context.Context, tenantID string) ([]TeamDetail, error) {
 		for _, ch := range channelRows {
 			own := ch.AITeamID != nil && *ch.AITeamID != ""
 			if (own && *ch.AITeamID == r.ID) || (!own && r.ID == defaultTeam) {
-				detail.Channels = append(detail.Channels, TeamChannel{ID: ch.ID, Name: ch.Name, ChannelType: ch.ChannelType})
+				link := TeamChannel{ID: ch.ID, Name: ch.Name, ChannelType: ch.ChannelType}
+				if own {
+					link.AITeamID = *ch.AITeamID
+				}
+				detail.Channels = append(detail.Channels, link)
 			}
 		}
 		out = append(out, detail)

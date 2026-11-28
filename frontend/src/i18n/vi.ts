@@ -1,10 +1,12 @@
 import serviceQuality from './service-quality-vi'
 import qualityMeta from './quality-meta-vi'
 import qualityInsight from './quality-insight-vi'
+import aiAgents from './ai-agents-vi'
 
 export default {
   ...serviceQuality,
   ...qualityMeta,
+  ...aiAgents,
   qualityInsight,
   // Common
   app_name: 'BBI CRM Agent',
