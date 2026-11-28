@@ -92,6 +92,47 @@ describe('AI task model settings', () => {
     wrapper.unmount()
   })
 
+  it('keeps 9router credentials separate and requires its endpoint when testing or saving', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/settings/ai/tasks')) return { data: structuredClone(taskResponse) }
+      return { data: { settings: {
+        ai_provider: 'openai',
+        ai_model: 'gpt-5-mini',
+        ai_api_key: 'legacy-key',
+        ai_api_key_openai: 'masked-openai-key',
+        ai_api_key_9router: '••••••••',
+        ai_base_url_9router: 'https://router.example.com/v1',
+      } } }
+    })
+    const wrapper = await mountSettings()
+    const vm = wrapper.vm as any
+    vm.aiSettings.provider = '9router'
+    vm.onProviderChange()
+    expect(vm.aiSettings.apiKey).toBe('••••••••')
+    expect(vm.aiSettings.model).toBe('')
+    vm.aiSettings.model = 'cx/gpt-5.6-luna'
+    vm.aiSettings.baseUrl = null
+    await vm.testKey()
+    await vm.saveAI(false)
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(mocks.put).not.toHaveBeenCalled()
+
+    vm.aiSettings.baseUrl = ' https://router.example.com/v1 '
+    await vm.testKey()
+    await vm.saveAI(false)
+    const config = {
+      provider: '9router', api_key: '••••••••',
+      model: 'cx/gpt-5.6-luna', base_url: 'https://router.example.com/v1',
+    }
+    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/settings/ai/test', config)
+    expect(mocks.put).toHaveBeenCalledWith('/tenants/tenant-1/settings/ai', expect.objectContaining(config))
+
+    vm.aiSettings.provider = 'openai'
+    vm.onProviderChange()
+    expect(vm.aiSettings.apiKey).toBe('masked-openai-key')
+    wrapper.unmount()
+  })
+
   it('renders an actionable error when task settings cannot be loaded', async () => {
     mocks.get.mockImplementation(async (url: string) => {
       if (url.endsWith('/settings/ai/tasks')) {

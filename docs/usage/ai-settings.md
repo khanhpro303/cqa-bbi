@@ -16,6 +16,7 @@ Vào menu **Cài đặt** > tab **Cấu hình AI**.
 | **Gemini** (Google) | Giá rẻ, tốc độ nhanh | Độ chính xác thấp hơn Claude |
 | **OpenAI (Codex)** | Hệ sinh thái model đa dạng, hỗ trợ OpenAI-compatible proxy | Cần chọn model phù hợp từng use case |
 | **OpenRouter** | Một key dùng model của nhiều hãng, có model miễn phí | Model free bị giới hạn lượt gọi mỗi ngày, danh sách model free thay đổi thường xuyên |
+| **9router** | Dùng các model đã kết nối vào 9router qua API tương thích OpenAI | Lượt gọi phụ thuộc quota và quy tắc định tuyến trong 9router |
 
 ### Bước 2: Chọn Model
 
@@ -53,6 +54,15 @@ Vào menu **Cài đặt** > tab **Cấu hình AI**.
 Nhập key vào ô **API Key**, bấm **Test API Key** — nếu hiện tick xanh "Kết nối thành công" là OK.
 
 Bấm **Lưu cấu hình**.
+
+### Dùng subscription đã kết nối với 9router
+
+1. Trên 9router, kết nối subscription của bạn và lấy API key từ dashboard của 9router.
+2. Trong **Cài đặt → Cấu hình AI** của CQA, chọn **9router**. Nhập Base URL của 9router mà máy chủ CQA truy cập được, kết thúc bằng `/v1`.
+3. Nhập API key 9router và mã model đầy đủ do 9router cung cấp, ví dụ `cx/gpt-5.6-luna` cho route Codex nếu model đó có trong danh sách của bạn.
+4. Bấm **Test API Key**. Để thử trên một tác vụ, chọn **Lưu API key và Base URL** rồi gán model trong **Model theo tác vụ**. Để dùng cho mọi tác vụ kế thừa cấu hình, chọn **Lưu cấu hình AI chung**.
+
+Nếu mục tiêu là dùng quota của subscription, hãy chọn trực tiếp model của provider đã kết nối và kiểm tra quy tắc fallback trong 9router trước khi dùng một Combo. Langflow và embedding có cấu hình riêng.
 
 ## Batch Mode
 
