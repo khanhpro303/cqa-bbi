@@ -71,20 +71,16 @@
           <div class="text-caption text-grey">{{ $t('sync_interval') }}</div>
           <div>{{ formatSyncInterval(metadata.sync_interval) }}</div>
         </v-col>
-        <template v-if="!isPersonalZalo">
-          <v-col cols="6" sm="3">
-            <div class="text-caption text-grey">{{ $t('sync_files') }}</div>
-            <v-chip size="small" :color="metadata.sync_files ? 'success' : 'grey'" variant="tonal">
-              {{ metadata.sync_files ? $t('enabled') : $t('disabled') }}
-            </v-chip>
-          </v-col>
-        </template>
-        <template v-else>
-          <v-col cols="6" sm="3">
-            <div class="text-caption text-grey">{{ $t('sync_scope') }}</div>
-            <div>{{ metadata.sync_scope === 'direct' ? $t('sync_scope_direct') : metadata.sync_scope === 'group' ? $t('sync_scope_group') : $t('sync_scope_all') }}</div>
-          </v-col>
-        </template>
+        <v-col cols="6" sm="3">
+          <div class="text-caption text-grey">{{ $t('sync_files') }}</div>
+          <v-chip size="small" :color="metadata.sync_files === true ? 'success' : 'grey'" variant="tonal">
+            {{ metadata.sync_files === true ? $t('enabled') : $t('disabled') }}
+          </v-chip>
+        </v-col>
+        <v-col v-if="isPersonalZalo" cols="6" sm="3">
+          <div class="text-caption text-grey">{{ $t('sync_scope') }}</div>
+          <div>{{ metadata.sync_scope === 'direct' ? $t('sync_scope_direct') : metadata.sync_scope === 'group' ? $t('sync_scope_group') : $t('sync_scope_all') }}</div>
+        </v-col>
         <v-col v-if="channel.channel_type === 'zalo_oa'" cols="6" sm="3">
           <div class="text-caption text-grey">{{ $t('campaign_alerts') }}</div>
           <v-chip size="small" :color="metadata.campaign_alerts_enabled ? 'success' : 'grey'" variant="tonal">

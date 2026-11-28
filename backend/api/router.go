@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/api/handlers"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
+	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -79,12 +80,35 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		}
 		fileTenantID := pathParts[0]
 		userID := middleware.GetUserID(c)
-		var count int64
-		db.DB.Model(&models.UserTenant{}).Where("user_id = ? AND tenant_id = ?", userID, fileTenantID).Count(&count)
-		if count == 0 {
+		var membership models.UserTenant
+		if err := db.DB.WithContext(c.Request.Context()).Where("user_id = ? AND tenant_id = ?", userID, fileTenantID).First(&membership).Error; err != nil {
 			log.Printf("[security] tenant access denied: user=%s tenant=%s ip=%s path=%s", userID, fileTenantID, c.ClientIP(), fp)
 			c.JSON(http.StatusForbidden, gin.H{"error": "tenant_access_denied"})
 			return
+		}
+		if len(pathParts) == 3 && strings.HasPrefix(pathParts[2], channels.PersonalZaloAttachmentDirectory+"/") {
+			c.Set("tenant_role", membership.Role)
+			c.Set("tenant_permissions", membership.Permissions)
+			middleware.RequirePermission("messages", "r")(c)
+			if c.IsAborted() {
+				return
+			}
+			var referenced models.Message
+			err := db.DB.WithContext(c.Request.Context()).Model(&models.Message{}).
+				Select("id").
+				Where("tenant_id = ? AND conversation_id = ?", fileTenantID, pathParts[1]).
+				Where("JSON_CONTAINS(attachments, JSON_OBJECT('local_path', ?)) = 1", strings.TrimPrefix(cleanPath, "/")).
+				Take(&referenced).Error
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "file_not_found"})
+				return
+			}
+			c.Header("X-Content-Type-Options", "nosniff")
+			c.Header("Cache-Control", "private, no-store")
+			if filepath.Ext(fullPath) == ".bin" {
+				c.Header("Content-Type", "application/octet-stream")
+				c.Header("Content-Disposition", "attachment")
+			}
 		}
 		c.File(fullPath)
 	})

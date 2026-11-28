@@ -253,7 +253,16 @@
               {{ $t('sync_interval_warning') }}
             </v-alert>
             <v-switch
-              v-if="newChannel.channel_type !== 'personal_zalo_import'"
+              v-if="newChannel.channel_type === 'personal_zalo_import'"
+              v-model="newChannel.personal_sync_files"
+              :label="$t('sync_files')"
+              :hint="$t('personal_zalo_sync_files_hint')"
+              persistent-hint
+              density="compact"
+              color="primary"
+            />
+            <v-switch
+              v-else
               v-model="newChannel.sync_files"
               :label="$t('sync_files')"
               :hint="$t('sync_files_hint')"
@@ -313,7 +322,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, shallowRef, onMounted } from 'vue'
+import { ref, computed, reactive, shallowRef, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { isAxiosError } from 'axios'
@@ -416,9 +425,14 @@ const newChannel = reactive({
   name: '',
   creds: {} as Record<string, string>,
   sync_files: false,
+  personal_sync_files: false,
   sync_interval: 15,
   sync_scope: 'all',
   chatbot_mode: 'chatbot' as PersonalZaloBotMode,
+})
+
+watch(showDialog, (open) => {
+  if (open) newChannel.personal_sync_files = false
 })
 
 onMounted(() => {
@@ -532,6 +546,7 @@ async function createPersonalZalo() {
       metadata: JSON.stringify({
         sync_scope: newChannel.sync_scope,
         sync_interval: newChannel.sync_interval,
+        sync_files: newChannel.personal_sync_files,
         ...(canCreateInternbot.value && newChannel.chatbot_mode === 'internbot' && { chatbot_mode: 'internbot' }),
       }),
     })

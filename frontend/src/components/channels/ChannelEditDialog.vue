@@ -70,7 +70,6 @@
                   class="mt-3"
                   persistent-hint
                 />
-                <p class="text-caption text-medium-emphasis mt-3 mb-0">{{ $t('personal_zalo_sync_files_unavailable') }}</p>
               </template>
               <template v-else>
                 <v-select
@@ -85,8 +84,15 @@
                 <v-alert v-if="editForm.sync_interval <= 5" type="warning" variant="tonal" density="compact" class="mb-3">
                   {{ $t('sync_interval_warning_fb_zalo') }}
                 </v-alert>
-                <v-switch v-model="editForm.sync_files" :label="$t('sync_files')" color="primary" density="compact" :hint="$t('sync_files_hint_short')" persistent-hint />
               </template>
+              <v-switch
+                v-model="editForm.sync_files"
+                :label="$t('sync_files')"
+                :hint="$t(editChannelType === 'personal_zalo_import' ? 'personal_zalo_sync_files_hint' : 'sync_files_hint_short')"
+                color="primary"
+                density="compact"
+                persistent-hint
+              />
             </v-window-item>
 
             <v-window-item v-if="isZaloChatbotChannel" :id="dialogId + '-chatbot'" value="chatbot" role="tabpanel" :aria-labelledby="dialogId + '-chatbot-tab'" class="pt-3">
@@ -315,6 +321,7 @@ function settingsMetadata(): Record<string, unknown> {
     return {
       sync_scope: editForm.sync_scope,
       sync_interval: editForm.personal_sync_interval === 'gateway' ? null : editForm.personal_sync_interval,
+      sync_files: editForm.sync_files,
       ...sessionSettings,
       ...personalZaloGroupSettingsPatch(editPersonalGroupSettings.value),
       ...editBotSettings.value,

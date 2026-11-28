@@ -4,8 +4,9 @@ import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent, h, nextTick, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import Messages from '../views/Messages.vue'
+import ChatAttachmentLink from '../components/ChatAttachmentLink.vue'
 import type { Channel } from '../stores/channels'
-import type { Conversation } from '../stores/conversations'
+import type { Conversation, Message } from '../stores/conversations'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -84,7 +85,7 @@ const VCardTitleStub = defineComponent({
 
 const HiddenStub = defineComponent({ setup: () => () => null })
 
-function mountMessages(channels: Channel[], conversations: Conversation[]) {
+function mountMessages(channels: Channel[], conversations: Conversation[], messages: Message[] = []) {
   const pinia = createPinia()
   setActivePinia(pinia)
 
@@ -102,7 +103,7 @@ function mountMessages(channels: Channel[], conversations: Conversation[]) {
       return Promise.resolve({
         data: {
           conversation: { id: conversations[0]?.id || 'conv-1', customer_name: 'Khách hàng', message_count: 1 },
-          messages: [],
+          messages,
         },
       })
     }
@@ -135,6 +136,7 @@ function mountMessages(channels: Channel[], conversations: Conversation[]) {
         VTextField: HiddenStub,
         VBtn: HiddenStub,
         VDivider: HiddenStub,
+        VExpandTransition: Container,
         VSpacer: HiddenStub,
         VDialog: HiddenStub,
         VTabs: HiddenStub,
@@ -266,6 +268,87 @@ describe('Messages channel placeholders and avatars', () => {
     await nextTick()
     expect(wrapper.find('.v-card-title-stub').getComponent(VImgStub).props('src')).toBe('https://s120-ava-talk.zadn.vn/personal.jpg')
 
+    wrapper.unmount()
+  })
+
+  it('renders the saved photo and downloads a stored file by its original name', async () => {
+    const photo = new Blob(['photo'], { type: 'image/jpeg' })
+    const file = new Blob(['file'])
+    const fetch = vi.fn().mockResolvedValue({ ok: true, blob: async () => photo })
+    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('localStorage', { getItem: () => 'test-token' })
+    const toObjectURL = vi.spyOn(URL, 'createObjectURL')
+      .mockImplementation(blob => blob === photo ? 'blob:stored-photo' : 'blob:stored-file')
+    const downloads: string[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this.download)
+    })
+    const sentAt = '2026-11-27T08:00:00Z'
+    const originalImageUrl = 'https://photo-stal-33.zdn.vn/gr/jpg/example.jpg'
+    const localImagePath = 'tenant-1/conv-1/personal-zalo/photo.jpg'
+    const fileName = 'Báo giá.pdf'
+    const wrapper = mountMessages([], [{
+      id: 'conv-1',
+      channel_id: 'ch-pz',
+      channel_name: 'Personal Zalo',
+      channel_type: 'personal_zalo_import',
+      customer_name: 'Khách hàng',
+      last_message_at: sentAt,
+      message_count: 2,
+      created_at: sentAt,
+    }], [{
+      id: 'photo',
+      sender_type: 'customer',
+      sender_name: 'Khách hàng',
+      content_type: 'image',
+      content: JSON.stringify({ href: originalImageUrl, title: 'Ảnh mẫu' }),
+      attachments: JSON.stringify([{ type: 'image', local_path: localImagePath }]),
+      sent_at: sentAt,
+    }, {
+      id: 'file',
+      sender_type: 'customer',
+      sender_name: 'Khách hàng',
+      content_type: 'file',
+      content: JSON.stringify({ href: 'https://file.zadn.vn/original', title: fileName }),
+      attachments: JSON.stringify([{ type: 'file', local_path: 'tenant-1/conv-1/personal-zalo/report #1.bin', name: fileName }]),
+      sent_at: sentAt,
+    }])
+    try {
+      await flushPromises()
+      await wrapper.get('.v-list-item-stub').trigger('click')
+      await flushPromises()
+
+      expect(fetch).toHaveBeenCalledExactlyOnceWith('/api/v1/files/' + localImagePath, {
+        headers: { Authorization: 'Bearer test-token' },
+      })
+      expect(wrapper.find('img[src="blob:stored-photo"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('Ảnh mẫu')
+      expect(wrapper.text()).not.toContain(originalImageUrl)
+      expect(wrapper.text()).not.toContain('https://file.zadn.vn/original')
+
+      mocks.get.mockResolvedValueOnce({ data: file })
+      await wrapper.getComponent(ChatAttachmentLink).get('[tag="button"]').trigger('click')
+      await flushPromises()
+
+      expect(mocks.get).toHaveBeenCalledWith('/files/tenant-1/conv-1/personal-zalo/report%20%231.bin', { responseType: 'blob' })
+      expect(downloads).toEqual([fileName])
+    } finally {
+      wrapper.unmount()
+      toObjectURL.mockRestore()
+      click.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('shows a filename without a link when the attachment URL is unsafe', async () => {
+    const wrapper = mount(ChatAttachmentLink, {
+      props: { fileName: 'Báo giá.pdf', externalUrl: 'javascript:void(0)' },
+      global: { stubs: { VChip: Container, VIcon: Container } },
+    })
+    expect(wrapper.text()).toContain('Báo giá.pdf')
+    expect(wrapper.find('[href]').exists()).toBe(false)
+    await wrapper.setProps({ externalUrl: 'https://file.zadn.vn/invoice.pdf' })
+    expect(wrapper.get('[href]').attributes('href')).toBe('https://file.zadn.vn/invoice.pdf')
     wrapper.unmount()
   })
 

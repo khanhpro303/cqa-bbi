@@ -875,7 +875,12 @@
                               <img v-if="authImageCache[getAttachmentUrl(att)] && authImageCache[getAttachmentUrl(att)] !== 'loading'" :src="authImageCache[getAttachmentUrl(att)]" style="max-width: 180px; max-height: 180px; border-radius: 8px; cursor: pointer;" @click="lightboxSrc = authImageCache[getAttachmentUrl(att)]" />
                               <v-progress-circular v-else-if="authImageCache[getAttachmentUrl(att)] === 'loading'" indeterminate size="20" width="2" class="ma-2" />
                             </div>
-                            <v-chip v-else size="x-small" variant="tonal" class="mr-1" :href="getAttachmentUrl(att)" target="_blank"><v-icon start size="12">mdi-paperclip</v-icon>{{ att.name || 'File' }}</v-chip>
+                            <ChatAttachmentLink
+                              v-else
+                              :file-name="att.name || 'File'"
+                              :local-path="att.local_path"
+                              :external-url="att.url"
+                            />
                           </template>
                         </div>
                         <div v-if="!msg.content && !hasAttachments(msg) && msg.content_type !== 'text'" class="text-caption font-italic">[{{ msg.content_type || 'File' }}]</div>
@@ -1079,7 +1084,12 @@
                           <img v-if="authImageCache[getAttachmentUrl(att)] && authImageCache[getAttachmentUrl(att)] !== 'loading'" :src="authImageCache[getAttachmentUrl(att)]" style="max-width: 180px; max-height: 180px; border-radius: 8px; cursor: pointer;" @click="lightboxSrc = authImageCache[getAttachmentUrl(att)]" />
                           <v-progress-circular v-else-if="authImageCache[getAttachmentUrl(att)] === 'loading'" indeterminate size="20" width="2" class="ma-2" />
                         </div>
-                        <v-chip v-else size="x-small" variant="tonal" class="mr-1" :href="getAttachmentUrl(att)" target="_blank"><v-icon start size="12">mdi-paperclip</v-icon>{{ att.name || 'File' }}</v-chip>
+                        <ChatAttachmentLink
+                          v-else
+                          :file-name="att.name || 'File'"
+                          :local-path="att.local_path"
+                          :external-url="att.url"
+                        />
                       </template>
                     </div>
                     <div v-if="!msg.content && !hasAttachments(msg) && msg.content_type !== 'text'" class="text-caption font-italic">[{{ msg.content_type || 'File' }}]</div>
@@ -1232,6 +1242,7 @@ import { useDisplay } from 'vuetify'
 import { useJobStore, type JobResult } from '../../stores/jobs'
 import { useAuthStore } from '../../stores/auth'
 import api from '../../api'
+import ChatAttachmentLink from '../../components/ChatAttachmentLink.vue'
 import ExcludeParentsImportModal from '../../components/erp-exclusions/ExcludeParentsImportModal.vue'
 import ExcludeParentsManageModal from '../../components/erp-exclusions/ExcludeParentsManageModal.vue'
 import ExcludeCustomersImportModal from '../../components/erp-exclusions/ExcludeCustomersImportModal.vue'
@@ -1253,7 +1264,7 @@ interface CustomerCodeRow {
   is_gmf_linked: boolean
   updated_at?: string
 }
-import { parseImageMessagePayload, parseStructuredMessageText, type ImageMessageView } from '../../utils/message-render'
+import { archivedMediaCaption, parseImageMessagePayload, parseStructuredMessageText, type ImageMessageView } from '../../utils/message-render'
 import { Line } from 'vue-chartjs'
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Filler, Legend } from 'chart.js'
 
@@ -1490,7 +1501,7 @@ function parseImagePayloadCached(content: string): ImageMessageView | null {
 
 function displayMessageImage(msg: any): ImageMessageView | null {
   const content = typeof msg?.content === 'string' ? msg.content : ''
-  if (!content) return null
+  if (!content || archivedMediaCaption(content, msg.content_type, msg.attachments) !== undefined) return null
   return parseImagePayloadCached(content)
 }
 
@@ -1505,7 +1516,9 @@ function displayMessageImageUrl(msg: any): string {
 function displayMessageContent(msg: any): string {
   const content = typeof msg?.content === 'string' ? msg.content : ''
   if (!content) return ''
-  if (displayMessageImage(msg)) return ''
+  const caption = archivedMediaCaption(content, msg.content_type, msg.attachments)
+  if (caption !== undefined) return caption
+  if (parseImagePayloadCached(content)) return ''
   return parseStructuredMessageText(content) || content
 }
 

@@ -120,6 +120,28 @@ function isLikelyImageUrl(url: string): boolean {
   )
 }
 
+export function archivedMediaCaption(content: string, contentType: string, attachments: string): string | undefined {
+  if (contentType !== 'image' && contentType !== 'file') return undefined
+  const payload = parseJsonObject(content)
+  if (!payload) return undefined
+
+  let files: unknown
+  try {
+    files = JSON.parse(attachments)
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(files) || !files.some(file =>
+    isRecord(file) && file.type === contentType && parseString(file.local_path).split('/')[2] === 'personal-zalo',
+  )) {
+    return undefined
+  }
+
+  if (contentType === 'file') return ''
+  const caption = parseString(payload.description) || parseString(payload.title)
+  return parseHttpUrl(caption) ? '' : caption
+}
+
 export function parseImageMessagePayload(content: string): ImageMessageView | null {
   const root = parseJsonObject(content)
   if (!root) return null

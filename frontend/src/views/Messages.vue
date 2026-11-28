@@ -265,7 +265,7 @@
                 class="d-flex mb-2"
                 :class="msg.sender_type === 'agent' ? 'justify-end' : 'justify-start'"
               >
-                <div v-if="reminderMessageMap[msg.id]" class="pa-3 rounded-lg reminder-message-card message-bubble-box">
+                <div v-if="archivedMediaCaptions[msg.id] === undefined && reminderMessageMap[msg.id]" class="pa-3 rounded-lg reminder-message-card message-bubble-box">
                   <div class="reminder-message-chip">
                     <v-icon size="13" color="deep-orange-darken-2">mdi-calendar-clock</v-icon>
                     <span>Nhắc hẹn</span>
@@ -286,7 +286,7 @@
                     {{ formatMessageTime(msg.sent_at) }}
                   </div>
                 </div>
-                <div v-else-if="thirdPartyLinkMessageMap[msg.id]" class="pa-3 rounded-lg third-party-link-message-card message-bubble-box">
+                <div v-else-if="archivedMediaCaptions[msg.id] === undefined && thirdPartyLinkMessageMap[msg.id]" class="pa-3 rounded-lg third-party-link-message-card message-bubble-box">
                   <div class="third-party-link-chip">
                     <v-icon size="13" color="indigo-darken-2">mdi-link-variant</v-icon>
                     <span>Link ngoài</span>
@@ -318,7 +318,7 @@
                     {{ formatMessageTime(msg.sent_at) }}
                   </div>
                 </div>
-                <div v-else-if="imageMessageMap[msg.id]" class="pa-3 rounded-lg image-json-message-card message-bubble-box">
+                <div v-else-if="archivedMediaCaptions[msg.id] === undefined && imageMessageMap[msg.id]" class="pa-3 rounded-lg image-json-message-card message-bubble-box">
                   <div v-if="imageMessageMap[msg.id].title" class="image-json-message-title">
                     {{ imageMessageMap[msg.id].title }}
                   </div>
@@ -367,10 +367,12 @@
                           {{ att.name || '[Ảnh]' }}
                         </v-chip>
                       </div>
-                      <v-chip v-else size="x-small" variant="tonal" class="mr-1" :href="getAttachmentUrl(att)" target="_blank">
-                        <v-icon start size="12">mdi-paperclip</v-icon>
-                        {{ att.name || att.type || 'File' }}
-                      </v-chip>
+                      <ChatAttachmentLink
+                        v-else
+                        :file-name="att.name || att.type || 'File'"
+                        :local-path="att.local_path"
+                        :external-url="att.url"
+                      />
                     </template>
                   </div>
                   <div v-if="!msg.content && msg.content_type === 'attachment' && !hasAttachments(msg)" class="text-caption font-italic">[File đính kèm]</div>
@@ -540,6 +542,7 @@ import { useConversationStore, type Message } from '../stores/conversations'
 import { useChannelStore, type Channel } from '../stores/channels'
 import { useAuthStore } from '../stores/auth'
 import {
+  archivedMediaCaption,
   parseImageMessagePayload,
   parseReminderPayload,
   parseStructuredMessageText,
@@ -549,6 +552,7 @@ import {
   type ThirdPartyLinkMessageView,
 } from '../utils/message-render'
 import api from '../api'
+import ChatAttachmentLink from '../components/ChatAttachmentLink.vue'
 import { channelTypeColor, channelTypeLabel } from '../utils/channel'
 import { buildQcTimeline, type QcSnapshot } from '../utils/qc-evaluation'
 import MessengerJourneyPanel from '../components/MessengerJourneyPanel.vue'
@@ -636,11 +640,15 @@ const imageMessageMap = computed<Record<string, ImageMessageView>>(() => {
   return map
 })
 
+const archivedMediaCaptions = computed(() => Object.fromEntries(
+  conversationStore.messages.map(msg => [msg.id, archivedMediaCaption(msg.content, msg.content_type, msg.attachments)]),
+))
+
 const displayMessageContentMap = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
   for (const msg of conversationStore.messages) {
     const content = msg.content || ''
-    map[msg.id] = parseStructuredMessageText(content) || content
+    map[msg.id] = archivedMediaCaptions.value[msg.id] ?? (parseStructuredMessageText(content) || content)
   }
   return map
 })
