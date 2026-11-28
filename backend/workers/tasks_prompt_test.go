@@ -3,6 +3,8 @@ package workers
 import (
 	"strings"
 	"testing"
+
+	"github.com/vietbui/chat-quality-agent/engine"
 )
 
 func TestSelectSystemPrompt(t *testing.T) {
@@ -93,8 +95,8 @@ func TestPublicLineStockReply(t *testing.T) {
 
 func TestPublicStockStatusInstructionRequiresStatusOnly(t *testing.T) {
 	for _, want := range []string{"còn hàng", "hết hàng", "TUYỆT ĐỐI KHÔNG nêu số lượng tồn kho cụ thể"} {
-		if !strings.Contains(publicStockStatusInstruction, want) {
-			t.Errorf("publicStockStatusInstruction missing %q", want)
+		if !strings.Contains(engine.TaskPromptText("", engine.PromptPublicStockRules), want) {
+			t.Errorf("public stock rules missing %q", want)
 		}
 	}
 }

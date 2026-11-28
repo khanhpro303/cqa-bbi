@@ -23,11 +23,6 @@ func isCurrentOrderDeliveryTurn(message string, history func() []chatmemory.Rece
 	return isCurrentOrderPreference(text) && isCurrentOrderFollowup(text, history())
 }
 
-const publicOrderLookupInstruction = `QUY TẮC ƯU TIÊN TRA ĐƠN HÀNG CỦA KHÁCH
-- Với "đơn hàng nào sắp giao", "đơn nào đang giao" hoặc yêu cầu xem tình trạng đơn hiện tại, trước khi trả lời phải gọi lookup_order. Khi khách chưa nêu mã đơn hay khoảng ngày, dùng search="đơn hàng" để ERP tra các đơn phát sinh hôm nay theo giờ Việt Nam. Không hỏi số ngày trước lần tra đầu.
-- Nếu đang nói về đơn và khách muốn mặc định xem kết quả hiện tại, tra lại hôm nay bằng search="đơn hàng"; đừng lặp lại khoảng 3/5/7 ngày cũ. Dùng khoảng ngày khách vừa chủ động yêu cầu nếu có.
-- Sau khi có kết quả, ưu tiên trạng thái ERP khi nói đơn đang giao hoặc chờ giao. Chỉ nêu ngày hẹn của đơn khi có scheduled_delivery_date. Nếu hôm nay không có kết quả phù hợp, nêu phạm vi đã tra rồi mới gợi ý mở rộng.`
-
 // A request to default to today's results has no business keywords of its
 // own. Require an exact short preference and the sender's own order context.
 func isCurrentOrderFollowup(message string, recent []chatmemory.RecentTurn) bool {

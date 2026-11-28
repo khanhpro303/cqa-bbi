@@ -139,13 +139,13 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 	}
 	input, prompt := req.Text, g.prompt
 	if prompt != "" {
-		prompt += "\n\nKhi người dùng chỉ chào hỏi, chào ngắn gọn và hỏi họ cần hỗ trợ gì. Chỉ xác nhận kết quả tra cứu do công cụ trả về."
+		prompt += "\n\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZDirectTurn)
 		if g.turnID == "" {
-			prompt += " Phiên này chưa có quyền ERP. Chỉ tư vấn dựa trên tài liệu được phép dùng."
+			prompt += " " + engine.TaskPromptText(req.TenantID, engine.PromptPZNoERP)
 		}
 		if handover := personalZaloHandoverPrompt(channel); handover != "" {
 			if g.complaintGuide != "" {
-				handover = "Với các tình huống ngoài hướng dẫn ghi nhận khiếu nại: " + handover
+				handover = engine.TaskPromptText(req.TenantID, engine.PromptPZHandoverComplaintLead) + " " + handover
 			}
 			prompt += "\n\n" + handover
 		}
@@ -161,7 +161,7 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 		}
 	}
 	if g.agentToken != "" {
-		input, prompt = engine.AddProductAdviceInstruction(input, prompt)
+		input, prompt = engine.AddProductAdviceInstruction(req.TenantID, input, prompt)
 	}
 	var productCandidates []models.ProductAdvisoryImage
 	if g.advicePermissions != nil {
@@ -177,7 +177,7 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 		}
 	}
 	if g.showImages {
-		input, prompt = engine.AddPersonalZaloKnowledgeImageInstruction(input, prompt)
+		input, prompt = engine.AddPersonalZaloKnowledgeImageInstruction(req.TenantID, input, prompt)
 	}
 	result, err := langflow.RunFlowWithCustomerUsage(ctx, g.flowScope, g.flowScope, input, g.flow.APIURL, g.flow.APIKey, g.flowID,
 		g.customer, g.permission, g.agentToken, prompt)

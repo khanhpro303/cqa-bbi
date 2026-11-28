@@ -254,17 +254,6 @@ func stockLookupFailureMessage(err error) string {
 	return botUnavailableMessage
 }
 
-const langflowUnansweredInstruction = `QUY TẮC TRẢ LỜI KHI THIẾU DỮ LIỆU
-Áp dụng các quy tắc dưới đây nếu hướng dẫn khác trong prompt có nội dung mâu thuẫn. Trả lời khách bằng ngôn ngữ họ đang dùng, dùng tiếng Việt cho hội thoại tiếng Việt.
-- Tra giá, mã sản phẩm và tồn kho bằng ERP. Chỉ dùng tồn khả dụng tại Kho Tổng để trả lời về tồn hoặc còn/hết hàng. Với câu hỏi nối tiếp, giữ đúng sản phẩm, màu và size đã nêu. Tồn khả dụng lớn hơn 0 xác nhận còn hàng; 0 hoặc âm xác nhận hiện không có hàng khả dụng. Kết quả rỗng hoặc thiếu trường tồn chưa xác nhận được. Nếu khách hỏi riêng tồn vật lý thì nói rõ công cụ đang tra tồn khả dụng.
-- Khi công cụ sản phẩm hoặc tồn kho của ERP trả lookup_outcome=no_visible_match, hoặc trả data rỗng với truy vấn có tên/mã và không có lựa chọn hay thông báo đã gửi qua Zalo, kết thúc tra cứu mục đó. Diễn đạt customer_message theo điều khách hỏi, hoặc nói ngắn gọn rằng em chưa xác nhận được từ dữ liệu hiện có và có thể hướng khách hỏi nhân viên phụ trách. Không kết luận sản phẩm không tồn tại, sai mã hay hết hàng. Không yêu cầu khách gửi lại mã, ảnh, màu hoặc size để giải quyết kết quả rỗng này. Không gọi search_knowledge, Astra, SQL hay nguồn khác để tìm lại thông tin ERP cho mục đó.
-- Khi tra sản phẩm, chỉ hỏi bổ sung nếu còn thiếu thông tin nhận diện hoặc ERP trả lựa chọn hợp lệ cần khách chọn. Tiếp tục xử lý các câu hỏi khác trong cùng tin nhắn theo đúng nguồn của từng câu hỏi. Chỉ nói về giới hạn quyền khi công cụ trả lỗi từ chối quyền rõ ràng. Nếu công cụ báo lỗi tạm thời, nói chưa tra được và mời thử lại sau.`
-
-const publicStockStatusInstruction = `QUY TẮC TRẢ LỜI TỒN KHO CHO KHÁCH HÀNG (BẮT BUỘC)
-Áp dụng quy tắc dưới đây thay cho mọi hướng dẫn khác về số lượng tồn kho khi trả lời khách hàng.
-- Khi trả lời về tồn kho, còn hàng/hết hàng, chọn màu/size hoặc giỏ hàng không đủ tồn: CHỈ báo trạng thái "còn hàng" (khi in_stock=true / còn khả dụng) hoặc "hết hàng" / "hiện không có hàng khả dụng" (khi in_stock=false / hết khả dụng).
-- TUYỆT ĐỐI KHÔNG nêu số lượng tồn kho cụ thể (kể cả tổng tồn dòng, tồn từng màu/size hay số lượng tồn còn lại), ngay cả khi khách hỏi "còn mấy cái / bao nhiêu con". Nếu khách hỏi "còn size nào", chỉ liệt kê tên các size còn hàng hoặc hết hàng.`
-
 func publicLineStockReply(label string, stock float64) string {
 	if stock > 0 {
 		return fmt.Sprintf("Dòng %s hiện còn hàng tại Kho Tổng. Anh/chị cần kiểm tra màu/size cụ thể nào thì nhắn em nhé.", label)
@@ -1445,15 +1434,17 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			systemPromptToUse = appendComplaintContext(ctx, matchedChannel.TenantID, matchedChannel.ID, caseSubjectType, caseSubjectID, customerCode, !groupGuest, systemPromptToUse)
 		}
 		if systemPromptToUse != "" {
-			systemPromptToUse += "\n\n" + langflowUnansweredInstruction
+			// Turn rules, editable in AI Engine → task prompts.
+			tenantID := matchedChannel.TenantID
+			systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptMissingDataRules)
 			if agentType != "private" && agentPlan.AllowsGroup(agents.ToolGroupProducts) {
-				systemPromptToUse += "\n\n" + publicStockStatusInstruction
+				systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptPublicStockRules)
 			}
 			if meta.UnansweredHandoverEnabled && agentType == "public" && agentPlan.Allows(agents.ToolLookupOrder) {
-				systemPromptToUse += "\n\n" + publicOrderLookupInstruction
+				systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptPublicOrderLookup)
 			}
 			if permCtx.UnansweredLookupID != "" {
-				systemPromptToUse += "\n\n" + unansweredHandoverInstruction
+				systemPromptToUse += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptUnansweredHandover)
 			}
 		}
 
@@ -2086,7 +2077,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		var adviceImages []models.ProductAdvisoryImage
 		if intent == "IN_SCOPE" && !complaintHandover && !strings.HasPrefix(userText, "#") && agentPlan.AllowsGroup(agents.ToolGroupProducts) {
-			langflowInput, systemPromptToUse = engine.AddProductAdviceInstruction(langflowInput, systemPromptToUse)
+			langflowInput, systemPromptToUse = engine.AddProductAdviceInstruction(matchedChannel.TenantID, langflowInput, systemPromptToUse)
 			advice, adviceErr := productAdviceForTurn(ctx, &permCtx, input, func() []chatmemory.RecentTurn {
 				if matchedGroup.ZaloGroupID != "" {
 					return chatmemory.RecentTurnsForSender(ctx, sessionID, msgID, input, payload.Sender.ID, 2)
@@ -2108,7 +2099,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		}
 
 		if payload.SignatureVerified {
-			langflowInput, systemPromptToUse = engine.AddKnowledgeImageInstruction(langflowInput, systemPromptToUse)
+			langflowInput, systemPromptToUse = engine.AddKnowledgeImageInstruction(matchedChannel.TenantID, langflowInput, systemPromptToUse)
 		}
 		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
 		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, langflowInput, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
@@ -2807,7 +2798,7 @@ func classifyWithTaskPrompt(ctx context.Context, tenantID, promptKey, input stri
 	}
 	systemPrompt := engine.BuildTaskPrompt(tenantID, promptKey, nil)
 	if businessRouting {
-		systemPrompt += "\n\n" + businessClassifierInstruction
+		systemPrompt += "\n\n" + engine.TaskPromptText(tenantID, engine.PromptBusinessScope)
 	}
 
 	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)

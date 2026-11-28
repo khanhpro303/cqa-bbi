@@ -71,8 +71,6 @@ type personalZaloAIResult struct {
 	caseText      string
 }
 
-const personalZaloInternbotDraftGuide = "Đây là bản nháp cho nhân viên. Chỉ dùng công cụ tra cứu được phép. Không tiết lộ mã xác thực, mật khẩu, token hoặc thông tin không cần thiết. Không tuyên bố đã xác thực, chuyển tiếp, tạo phiếu hay thực hiện thao tác thay đổi dữ liệu. Nếu cần nhân viên xử lý, chỉ trả " + personalZaloAIHandoverMarker + "."
-
 func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.Channel, req personalZaloChatbotRequest,
 	settings map[string]models.AppSetting, options personalZaloAIOptions) (personalZaloAIResult, error) {
 	result := personalZaloAIResult{complaint: options.complaint}
@@ -91,7 +89,8 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 		var response engine.LangflowResult
 		var err error
 		if options.draft {
-			prompt := strings.TrimSpace(plan.BasePrompt(settings["ai_engine_system_prompt"].ValuePlain) + "\n\n" + personalZaloInternbotDraftGuide)
+			prompt := strings.TrimSpace(plan.BasePrompt(settings["ai_engine_system_prompt"].ValuePlain) + "\n\n" +
+				engine.TaskPromptText(req.TenantID, engine.PromptPZInternbotDraft))
 			response, err = engine.RunPersonalZaloGuestDraft(flowCtx, ai.scoped, flow, ai.cfg.EncryptionKey,
 				req.TenantID, options.scope, req.Text, prompt)
 		} else {
@@ -134,12 +133,12 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 			return result, err
 		}
 		if options.draft {
-			grant.draftGuide = personalZaloInternbotDraftGuide
+			grant.draftGuide = engine.TaskPromptText(req.TenantID, engine.PromptPZInternbotDraft)
 		}
 		if target.raw != "" {
 			result.caseTurnID = target.pending.TurnID
 			result.caseText = target.pending.Text
-			grant.complaintGuide += "\nNhân viên đã trả lời xác nhận mã cho nội dung khiếu nại sau. Hãy ghi nhận ngay bằng complaint_record."
+			grant.complaintGuide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZStaffConfirmed)
 			req.Text = target.pending.Text + "\n\nMã khách đã xác nhận: " + target.code
 		}
 		result.grant = grant
@@ -194,7 +193,7 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 				prompt += "\n\n" + instruction
 			}
 		}
-		input, prompt := engine.AddProductAdviceInstruction(req.Text, prompt)
+		input, prompt := engine.AddProductAdviceInstruction(req.TenantID, req.Text, prompt)
 		reply, err := ai.langflow.RunFlowWithOverrides(flowCtx, options.scope, options.scope,
 			input, flow.APIURL, flow.APIKey, flowID, prompt)
 		result.reply, _ = engine.ParseKnowledgeImageReply(reply, 0)

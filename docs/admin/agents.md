@@ -22,6 +22,9 @@ Trước đây mỗi tầng có một bot làm tất cả: một prompt cho khá
 - **Công cụ**: token ký mang `agent_key` và danh sách công cụ của agent. Máy chủ MCP `/mcp/erp/:tenantId` chỉ liệt kê và chỉ chạy các công cụ đó; gọi công cụ khác nhận lỗi `tool_not_allowed`. Agent không có công cụ nào thì không gọi được công cụ nào.
 - **Việc backend làm thay bot** cũng theo công cụ của agent: ghi khiếu nại thành case chỉ khi agent có `complaint_record`; giỏ hàng chỉ khi agent có công cụ `order_cart_*`; tra đơn đang giao trả lời thẳng chỉ khi agent có `lookup_order`; ghi chú tư vấn sản phẩm và hướng dẫn tồn kho chỉ khi agent có công cụ nhóm sản phẩm.
 
+- **Tài liệu**: token mang `knowledge_tags` của agent. Agent có nhãn thì `search_knowledge` chỉ tra tài liệu mang ít nhất một nhãn đó (gắn nhãn ở trang Tài liệu chatbot, `GET /knowledge/tags` liệt kê nhãn đang dùng); agent không có nhãn tra mọi tài liệu tầng đó được đọc.
+- **Quy tắc hệ thống nối thêm** (thiếu dữ liệu ERP, tồn kho với khách, tra đơn, chuyển người, ảnh tài liệu, khách chưa xác thực, các phần của Zalo cá nhân) là prompt tác vụ trong AI Engine → Prompt cho các tác vụ AI, dùng chung cho mọi agent. Prompt nào có mã hệ thống đọc (ví dụ `[CQA_REQUEST_HUMAN_REVIEW]`) thì không lưu được nếu xoá mã đó.
+
 ## Bật agent và chuyển prompt cũ
 
 - **Công tắc** `ai_agents_enabled` (Cài đặt → Agent). Tắt (mặc định): mọi thứ chạy như trước bằng prompt AI Engine.

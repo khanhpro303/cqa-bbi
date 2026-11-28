@@ -174,7 +174,7 @@ func ERPMCP(c *gin.Context) {
 			return
 		}
 		if params.Name == knowledgeMCPToolName {
-			result := handleKnowledgeTool(c.Request.Context(), tenantID, agentType, params.Arguments)
+			result := handleKnowledgeTool(c.Request.Context(), tenantID, agentType, turn.knowledgeTags(), params.Arguments)
 			if !preview && result["isError"] == false {
 				recordUnansweredLookup(c.Request.Context(), tenantID, agentType, c.GetHeader("X-Permission-Token"))
 			}
@@ -367,6 +367,16 @@ func (t mcpTurn) filter(tools []erpMCPTool) []erpMCPTool {
 		}
 	}
 	return out
+}
+
+// knowledgeTags are the answering agent's knowledge tags: search_knowledge
+// reads only documents carrying one of them. None (no agent, or an agent
+// without tags) searches every document the tier may read.
+func (t mcpTurn) knowledgeTags() []string {
+	if t.permissions == nil || t.permissions.AgentKey == "" {
+		return nil
+	}
+	return t.permissions.KnowledgeTags
 }
 
 // refuse returns the tool result for a call the turn may not make, or "".

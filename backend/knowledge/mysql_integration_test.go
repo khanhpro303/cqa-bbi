@@ -249,3 +249,68 @@ func TestCreateFromFileReadsInBackgroundMySQL(t *testing.T) {
 		t.Fatalf("interrupted read status %s", after.Status)
 	}
 }
+
+// A specialist agent with knowledge tags searches only documents carrying
+// one of them, in vector, keyword and image caption search alike.
+func TestTaggedSearchMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	idx := &memIndex{docs: map[string]chatmemory.VectorDoc{}}
+	svc := NewService(idx, bowEmbed)
+	tenant := pkg.NewUUID()
+
+	debt, err := svc.CreateDocument(NewDocumentInput{TenantID: tenant, Title: "Quy định công nợ", Tags: []string{"Công nợ"},
+		Text: "Hạn thanh toán công nợ là 30 ngày kể từ ngày giao hàng."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shipping, err := svc.CreateDocument(NewDocumentInput{TenantID: tenant, Title: "Giao hàng", Tags: []string{"giao hàng"},
+		Text: "Giao hàng trong 30 ngày với đơn ở tỉnh xa, thanh toán khi nhận."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	untagged, err := svc.CreateDocument(NewDocumentInput{TenantID: tenant, Title: "Thanh toán chung",
+		Text: "Thanh toán bằng chuyển khoản trong 30 ngày."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{debt.ID, shipping.ID, untagged.ID} {
+		waitStatus(t, d, StatusReady)
+	}
+	var stored models.KnowledgeDocument
+	db.DB.First(&stored, "id = ?", debt.ID)
+	if len(stored.Tags) != 1 || stored.Tags[0] != "công nợ" {
+		t.Fatalf("stored tags = %q", stored.Tags)
+	}
+
+	docs := func(hits []Hit) map[string]bool {
+		out := map[string]bool{}
+		for _, h := range hits {
+			out[h.DocumentID] = true
+		}
+		return out
+	}
+	for name, s := range map[string]*Service{"vector": svc, "keyword": NewService(nil, nil)} {
+		all, err := s.SearchTagged(ctx, tenant, "public", "thanh toán 30 ngày", 5, nil)
+		if err != nil || len(docs(all)) != 3 {
+			t.Fatalf("%s: untagged search should see all 3 docs: %+v %v", name, all, err)
+		}
+		tagged, err := s.SearchTagged(ctx, tenant, "public", "thanh toán 30 ngày", 5, []string{"CÔNG NỢ"})
+		if err != nil || len(tagged) == 0 {
+			t.Fatalf("%s: tagged search: %+v %v", name, tagged, err)
+		}
+		if got := docs(tagged); !got[debt.ID] || got[shipping.ID] || got[untagged.ID] {
+			t.Fatalf("%s: tagged search leaked other topics: %+v", name, tagged)
+		}
+		if none, _ := s.SearchTagged(ctx, tenant, "public", "thanh toán 30 ngày", 5, []string{"#bad"}); len(none) != 0 {
+			t.Fatalf("%s: invalid filter widened the search: %+v", name, none)
+		}
+	}
+
+	// Retagging takes effect at once: tags are read from MySQL, not vectors.
+	db.DB.Model(&models.KnowledgeDocument{}).Where("id = ?", shipping.ID).Update("tags", models.KnowledgeTagList{"công nợ", "giao hàng"})
+	hits, err := svc.SearchTagged(ctx, tenant, "public", "giao hàng tỉnh xa", 5, []string{"công nợ"})
+	if got := docs(hits); err != nil || !got[shipping.ID] {
+		t.Fatalf("retagged doc not found: %v %v", got, err)
+	}
+}

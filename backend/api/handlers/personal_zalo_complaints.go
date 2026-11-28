@@ -41,9 +41,9 @@ func personalZaloComplaintGuide(ctx context.Context, req personalZaloChatbotRequ
 	guide := customercases.BotContext(ctx, req.TenantID, req.ChannelID, "user", subjectID, customerCode, func(cases string) string {
 		return engine.BuildTaskPrompt(req.TenantID, engine.PromptComplaintBot, map[string]string{"cases": cases})
 	})
-	guide += "\nKhiếu nại phải gọi complaint_record trước khi xác nhận đã ghi nhận. Nếu công cụ không chạy được, chỉ trả " + personalZaloAIHandoverMarker + "."
+	guide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZComplaintRules)
 	if req.ThreadType == personalZaloThreadGroup {
-		guide += "\nCả nhóm thấy phản hồi. Không nhắc lại thông tin riêng tư hay nội dung khiếu nại cũ của người gửi."
+		guide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZComplaintGroup)
 	}
 	return guide
 }
@@ -83,9 +83,10 @@ func (g *personalZaloDirectGrant) allowComplaints(ctx context.Context, key strin
 		guideReq.SenderID = ""
 		g.complaintGuide = personalZaloComplaintGuide(ctx, guideReq, "")
 		if target.code == "" {
-			g.complaintGuide += "\nNếu tin nhắn là yêu cầu ghi nhận khiếu nại, chưa có mã khách xác thực. Không gọi complaint_record. Chỉ trả " + personalZaloComplaintCodeMarker + "."
+			g.complaintGuide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZStaffNoCode)
 		} else {
-			g.complaintGuide += "\nNhân viên đang báo thay khách. Nếu tin nhắn yêu cầu ghi nhận khiếu nại, hệ thống đã xác thực mã khách " + target.code + ". Gọi complaint_record với mã này."
+			// target.code passed complaintCodeFormat, so it is a plain code.
+			g.complaintGuide += "\n" + engine.BuildTaskPrompt(req.TenantID, engine.PromptPZStaffCode, map[string]string{"customer_code": target.code})
 		}
 	} else {
 		g.complaintGuide = personalZaloComplaintGuide(ctx, req, p.CustomerCode)
@@ -104,7 +105,7 @@ func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cf
 	guide := personalZaloComplaintGuide(ctx, req, "")
 	if staffGroup && req.ThreadType == personalZaloThreadGroup {
 		p.GroupGuest = false
-		guide += "\nNhân viên đang gọi bot trong nhóm khách. Chỉ gọi complaint_record khi tin mới yêu cầu ghi nhận một vấn đề cụ thể cho khách của nhóm. Hệ thống đọc mã khách từ nhóm CRM. Nếu công cụ báo từ chối, nói chưa ghi nhận và nhắc đúng lý do công cụ trả về. Khi ghi nhận thành công, chỉ xác nhận đã ghi nhận."
+		guide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZStaffGroup)
 	}
 	permission, err := engine.SignPermissionToken(p, cfg.EncryptionKey)
 	if err != nil {

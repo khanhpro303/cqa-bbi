@@ -70,6 +70,7 @@ describe('Knowledge page', () => {
     expect(wrapper.getComponent(KnowledgePlayground).props()).toEqual({
       base: '/tenants/tenant-1/knowledge',
       isAdmin: true,
+      knownTags: [],
     })
     wrapper.unmount()
   })
@@ -151,6 +152,40 @@ describe('Knowledge page', () => {
       expect(wrapper.getComponent(KnowledgeDocumentImages).props('drafts')).toEqual([draft])
       expect(wrapper.text()).toContain('kb_images_partial_upload')
       expect(mocks.post).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('sends topic tags with uploads, filters the list by tag and saves edited tags', async () => {
+    const tagged = { ...doc, tags: ['công nợ'] }
+    const plain = { ...doc, id: 'd2', title: 'Giao hàng', tags: [] }
+    mocks.get.mockResolvedValue({ data: { documents: [tagged, plain], tags: [{ tag: 'công nợ', documents: 1 }] } })
+    mocks.patch.mockResolvedValue({ data: { ...tagged, tags: ['bảo hành', 'công nợ'] } })
+    const wrapper = shallowMount(Knowledge, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    try {
+      await flushPromises()
+      const vm = wrapper.vm as any
+      expect(vm.knownTags).toEqual(['công nợ'])
+      expect(wrapper.findAll('[data-testid="kb-doc-tag"]').map((c) => c.text())).toEqual(['công nợ'])
+
+      vm.tagFilter = 'công nợ'
+      await flushPromises()
+      expect(vm.visibleDocuments.map((d: any) => d.id)).toEqual(['d1'])
+
+      vm.uploadFiles = [new File(['a'], 'a.txt')]
+      vm.uploadTags = ['công nợ', 'bảo hành']
+      await vm.upload()
+      const upload = mocks.post.mock.calls.find((c: any[]) => c[0] === `${base}/upload`)!
+      expect((upload[1] as FormData).getAll('tags')).toEqual(['công nợ', 'bảo hành'])
+      expect(vm.uploadTags).toEqual([])
+
+      vm.selected = tagged
+      vm.docDialog = true
+      vm.toggleDocSettings()
+      vm.editTags = ['công nợ', 'bảo hành']
+      await vm.saveDoc()
+      expect(mocks.patch).toHaveBeenCalledWith(`${base}/d1`, { tags: ['công nợ', 'bảo hành'] })
     } finally {
       wrapper.unmount()
     }
@@ -387,5 +422,13 @@ describe('Knowledge playground images', () => {
     } finally {
       wrapper.unmount()
     }
+  })
+})
+
+describe('Knowledge tags input', () => {
+  it('normalizes tags like the server', async () => {
+    const { normalizeTag } = await import('../components/KnowledgeTagsInput.vue')
+    expect(normalizeTag('  Công   Nợ ')).toBe('công nợ')
+    expect(normalizeTag('công nợ')).toBe('công nợ')
   })
 })

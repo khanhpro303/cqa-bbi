@@ -2,12 +2,14 @@ package agents
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/knowledge"
 )
 
 // Security tiers of a chat turn, as signed in the permission token.
@@ -165,10 +167,9 @@ func mustJSON(v any) string {
 }
 
 var (
-	agentKeyPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	flowIDPattern    = regexp.MustCompile(`^[A-Za-z0-9-]{0,64}$`)
-	modelIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_./:@-]{0,127}$`)
-	knowledgeTagExpr = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} _.-]{0,47}$`)
+	agentKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	flowIDPattern   = regexp.MustCompile(`^[A-Za-z0-9-]{0,64}$`)
+	modelIDPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_./:@-]{0,127}$`)
 )
 
 // ValidationError is a field-level problem the UI shows next to the field.
@@ -243,20 +244,13 @@ func Normalize(a Agent) (Agent, error) {
 	}
 	a.Tools = tools
 
-	tags := make([]string, 0, len(a.KnowledgeTags))
-	seen := map[string]bool{}
-	for _, tag := range a.KnowledgeTags {
-		tag = strings.TrimSpace(tag)
-		if tag == "" || seen[strings.ToLower(tag)] {
-			continue
-		}
-		if !knowledgeTagExpr.MatchString(tag) {
-			return a, invalid("knowledge_tags", "nhãn %q không hợp lệ", tag)
-		}
-		seen[strings.ToLower(tag)] = true
-		tags = append(tags, tag)
+	// Same normal form as document tags, so they match exactly.
+	tags, err := knowledge.NormalizeTags(a.KnowledgeTags)
+	if err != nil {
+		var bad knowledge.ErrInvalidTag
+		errors.As(err, &bad)
+		return a, invalid("knowledge_tags", "nhãn %q không hợp lệ", bad.Tag)
 	}
-	sort.Strings(tags)
 	a.KnowledgeTags = tags
 
 	if a.Options.MaxToolCalls < 0 || a.Options.MaxToolCalls > 20 {
