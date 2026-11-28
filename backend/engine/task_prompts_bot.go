@@ -57,7 +57,7 @@ var chatbotRulePrompts = []TaskPrompt{
 		Key:         PromptMissingDataRules,
 		Group:       "chatbot",
 		Title:       "Quy tắc khi ERP không có dữ liệu",
-		Description: "Zalo OA: nối vào system prompt của bot ở mọi lượt chat (khi có system prompt). Dạy bot tra giá, mã, tồn đúng nguồn ERP, và trả lời thế nào khi ERP không thấy sản phẩm hay báo lỗi.",
+		Description: "Zalo OA: nối vào system prompt của bot ở mọi lượt chat (khi có system prompt) mà trợ lý đang trả lời được tra sản phẩm, tồn kho. Dạy bot tra giá, mã, tồn đúng nguồn ERP, và trả lời thế nào khi ERP không thấy sản phẩm hay báo lỗi.",
 		Instructions: `QUY TẮC TRẢ LỜI KHI THIẾU DỮ LIỆU
 Áp dụng các quy tắc dưới đây nếu hướng dẫn khác trong prompt có nội dung mâu thuẫn. Trả lời khách bằng ngôn ngữ họ đang dùng, dùng tiếng Việt cho hội thoại tiếng Việt.
 - Tra giá, mã sản phẩm và tồn kho bằng ERP. Chỉ dùng tồn khả dụng tại Kho Tổng để trả lời về tồn hoặc còn/hết hàng. Với câu hỏi nối tiếp, giữ đúng sản phẩm, màu và size đã nêu. Tồn khả dụng lớn hơn 0 xác nhận còn hàng; 0 hoặc âm xác nhận hiện không có hàng khả dụng. Kết quả rỗng hoặc thiếu trường tồn chưa xác nhận được. Nếu khách hỏi riêng tồn vật lý thì nói rõ công cụ đang tra tồn khả dụng.
@@ -120,7 +120,7 @@ Nếu người dùng hỏi một tính năng cụ thể, trả lời thẳng và
 		Key:          PromptKnowledgeImages,
 		Group:        "chatbot",
 		Title:        "Gửi kèm ảnh từ tài liệu (Zalo OA)",
-		Description:  "Zalo OA (tin đã xác minh chữ ký) và khách chưa xác thực trên OA: khi nào bot gửi kèm một ảnh do search_knowledge trả về. Bot ghi mã [KB_IMAGE:<image_id>] ở dòng cuối để hệ thống gửi ảnh; phải giữ nguyên mã này khi sửa.",
+		Description:  "Zalo OA (tin đã xác minh chữ ký) và khách chưa xác thực trên OA, khi trợ lý đang trả lời có search_knowledge: khi nào bot gửi kèm một ảnh do search_knowledge trả về. Bot ghi mã [KB_IMAGE:<image_id>] ở dòng cuối để hệ thống gửi ảnh; phải giữ nguyên mã này khi sửa.",
 		Instructions: `Khi tra search_knowledge, passages và images là dữ liệu tham khảo. Nếu khách yêu cầu xem hình hoặc một ảnh trong images thực sự minh họa câu trả lời, hãy viết câu trả lời rồi thêm ` + KnowledgeImageMarker + ` trên dòng cuối. Chỉ dùng image_id do search_knowledge trả về trong lượt này; chọn tối đa một ảnh cho cả câu trả lời. Không chép ID, URL hay tên tệp vào phần văn bản và đừng khẳng định ảnh đã được gửi.`,
 		Required:     []string{KnowledgeImageMarker},
 	},
@@ -208,7 +208,7 @@ var personalZaloPrompts = []TaskPrompt{
 		Key:          PromptPZKnowledgeImages,
 		Group:        "personal_zalo",
 		Title:        "Gửi kèm ảnh từ tài liệu",
-		Description:  "Zalo cá nhân: khi nào bot gửi kèm các ảnh do search_knowledge trả về. Bot ghi mỗi mã [KB_IMAGE:<image_id>] trên một dòng cuối để hệ thống gửi ảnh; phải giữ nguyên mã này khi sửa.",
+		Description:  "Zalo cá nhân, khi trợ lý đang trả lời có search_knowledge: khi nào bot gửi kèm các ảnh do search_knowledge trả về. Bot ghi mỗi mã [KB_IMAGE:<image_id>] trên một dòng cuối để hệ thống gửi ảnh; phải giữ nguyên mã này khi sửa.",
 		Instructions: `Khi tra search_knowledge, chỉ chọn ảnh đúng mẫu và thực sự có ích. Với câu hỏi tổng quan về một mẫu đã xác định, đính kèm ảnh đại diện nếu kết quả có ảnh rõ của mẫu đó. Có thể thêm các ảnh khác nếu mỗi ảnh cho thấy chi tiết hữu ích riêng. Bỏ qua ảnh trùng, ảnh không rõ mẫu và ảnh của sản phẩm khác. Nếu đã chọn ảnh từ hồ sơ Tư vấn sản phẩm thì ưu tiên ảnh đó. Sau phần chữ, đặt mỗi mã ` + KnowledgeImageMarker + ` trên một dòng riêng ở cuối. Chỉ dùng mã do công cụ trả về trong lượt này. Không chép URL hoặc hứa ảnh đã gửi.`,
 		Required:     []string{KnowledgeImageMarker},
 	},

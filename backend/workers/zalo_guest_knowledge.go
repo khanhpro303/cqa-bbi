@@ -34,6 +34,11 @@ func handleZaloOAGuestKnowledge(
 	if plan.Mode == agents.ModeSilent {
 		return nil
 	}
+	// A guest is answered from documents only: an agent without
+	// search_knowledge could not answer them at all.
+	if !plan.KeepCandidates(agents.AnswersFromDocuments) {
+		log.Printf("[agents] OA guest channel %s: no agent of team %s can search documents", channel.ID, plan.Selection.Team.ID)
+	}
 	if plan.NeedsRouting() {
 		// Same coordinator as the main turn: the guest's question goes to
 		// the customer agent whose knowledge it is.

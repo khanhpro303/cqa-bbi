@@ -27,18 +27,21 @@ func personalZaloDirectGreeting(agentType string) string {
 }
 
 type personalZaloDirectGrant struct {
-	flow              engine.LangflowConfig
-	flowID            string
-	flowScope         string
-	permission        string
-	customer          string
-	agentToken        string
-	grantHash         string
-	turnID            string
-	prompt            string
-	complaintGuide    string
-	draftGuide        string
-	showImages        bool
+	flow           engine.LangflowConfig
+	flowID         string
+	flowScope      string
+	permission     string
+	customer       string
+	agentToken     string
+	grantHash      string
+	turnID         string
+	prompt         string
+	complaintGuide string
+	draftGuide     string
+	showImages     bool
+	// productAdvice adds the product advice rule (the agent has product
+	// tools, or the AI Engine bot answers).
+	productAdvice     bool
 	skipStockPick     bool
 	advicePermissions *engine.GroupPermissionContext
 }
@@ -46,7 +49,8 @@ type personalZaloDirectGrant struct {
 // preparePersonalZaloDirectGrant builds a verified 1:1 turn. plan says who
 // answers it: an agent's prompt, flow and tools, or the AI Engine prompt.
 func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req personalZaloChatbotRequest, identity personalZaloERPIdentity, flow engine.LangflowConfig, sessionScope string, settings map[string]models.AppSetting, plan agents.Plan) (personalZaloDirectGrant, error) {
-	grant := personalZaloDirectGrant{flow: flow, skipStockPick: !plan.Allows("inventory_by_line")}
+	grant := personalZaloDirectGrant{flow: flow, skipStockPick: !plan.Allows("inventory_by_line"),
+		productAdvice: plan.UsesRule(engine.PromptProductAdvice)}
 	if identity.AgentType != "private" && flow.PublicFlowID == "" {
 		return grant, nil
 	}
@@ -116,7 +120,7 @@ func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req
 			}
 			grant.agentToken = token
 		}
-		grant.showImages = true
+		grant.showImages = plan.UsesRule(engine.PromptPZKnowledgeImages)
 	}
 	if plan.Mode == agents.ModeAgent && grant.agentToken == "" {
 		return grant, errors.New("specialist scoped agent token is unavailable")
@@ -180,7 +184,7 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 			prompt += "\n\n" + g.draftGuide
 		}
 	}
-	if g.agentToken != "" {
+	if g.agentToken != "" && g.productAdvice {
 		input, prompt = engine.AddProductAdviceInstruction(req.TenantID, input, prompt)
 	}
 	var productCandidates []models.ProductAdvisoryImage

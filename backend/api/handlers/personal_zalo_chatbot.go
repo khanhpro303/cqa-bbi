@@ -186,6 +186,10 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		addressed := req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req, sessionConfig)
+		if guest && !agentPlan.KeepCandidates(agents.AnswersFromDocuments) {
+			// An unverified guest is answered from documents only.
+			log.Printf("[agents] personal Zalo channel %s: no agent of team %s can search documents for a guest", req.ChannelID, agentPlan.Selection.Team.ID)
+		}
 		var inferredComplaint bool
 		groupTurn := preparePersonalZaloGroupTurn(ctx, channel, sessionConfig, req, addressed, func(ctx context.Context, tenantID, input string) bool {
 			reply, handover := workers.PersonalZaloGroupNeedsReply(ctx, tenantID, input)

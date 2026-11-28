@@ -58,6 +58,23 @@ func TestPersonalZaloDirectGrantUsesAgent(t *testing.T) {
 		len(permission.Groups) != 0 || permission.CustomerCode != "" {
 		t.Fatalf("specialist-only permission = %+v %v", permission, err)
 	}
+	// Rules follow the agent's tools: documents yes, products no.
+	if !grant.showImages || grant.productAdvice {
+		t.Errorf("debt agent rules: images %t, product advice %t", grant.showImages, grant.productAdvice)
+	}
+	noDocs := plan("debt-flow")
+	noDocs.Selection.Agent.Tools = []string{"lookup_debt"}
+	if g, err := preparePersonalZaloDirectGrant(ctx, cfg, req, customer, flow, "s", settings, noDocs); err != nil || g.showImages || g.productAdvice {
+		t.Errorf("agent without documents: images %t, product advice %t, %v", g.showImages, g.productAdvice, err)
+	}
+	stock := plan("debt-flow")
+	stock.Selection.Agent.Tools = []string{"search_products"}
+	if g, err := preparePersonalZaloDirectGrant(ctx, cfg, req, customer, flow, "s", settings, stock); err != nil || !g.productAdvice {
+		t.Errorf("product agent: product advice %t, %v", g.productAdvice, err)
+	}
+	if g, _ := preparePersonalZaloDirectGrant(ctx, cfg, req, customer, flow, "s", settings, agents.Plan{Mode: agents.ModeLegacy}); !g.showImages || !g.productAdvice {
+		t.Errorf("AI Engine bot lost rules: images %t, product advice %t", g.showImages, g.productAdvice)
+	}
 	grant, err = preparePersonalZaloDirectGrant(ctx, cfg, req, customer, flow, "s", settings, plan(""))
 	if err != nil || grant.flowID != "public" {
 		t.Fatalf("agent without its own flow must use the tier flow: %+v %v", grant, err)

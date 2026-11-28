@@ -252,7 +252,10 @@ func (ai personalZaloAI) generate(ctx, flowCtx context.Context, channel models.C
 				prompt += "\n\n" + instruction
 			}
 		}
-		input, prompt := engine.AddProductAdviceInstruction(req.TenantID, req.Text, prompt)
+		input := req.Text
+		if plan.UsesRule(engine.PromptProductAdvice) {
+			input, prompt = engine.AddProductAdviceInstruction(req.TenantID, input, prompt)
+		}
 		var reply string
 		var err error
 		if plan.Mode == agents.ModeAgent {

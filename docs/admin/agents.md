@@ -44,7 +44,18 @@ Mỗi lượt chatbot Zalo OA ghi mã agent đã trả lời vào nhật ký chi
 - **Công cụ**: token ký mang `agent_key` và danh sách công cụ của agent. Máy chủ MCP `/mcp/erp/:tenantId` chỉ liệt kê và chỉ chạy các công cụ đó; gọi công cụ khác nhận lỗi `tool_not_allowed`. Agent không có công cụ nào thì không gọi được công cụ nào.
 - **Việc backend làm thay bot** cũng theo công cụ của agent: ghi khiếu nại thành case chỉ khi agent có `complaint_record`; giỏ hàng chỉ khi agent có công cụ `order_cart_*`; tra đơn đang giao trả lời thẳng chỉ khi agent có `lookup_order`; ghi chú tư vấn sản phẩm và hướng dẫn tồn kho chỉ khi agent có công cụ nhóm sản phẩm.
 - **Tài liệu**: token mang `knowledge_tags` của agent. Agent có nhãn thì `search_knowledge` chỉ tra tài liệu mang ít nhất một nhãn đó (gắn nhãn ở trang Tài liệu chatbot, `GET /knowledge/tags` liệt kê nhãn đang dùng). Agent không có nhãn tra tài liệu mà tầng bảo mật của lượt chat được đọc.
-- **Quy tắc hệ thống nối thêm** (thiếu dữ liệu ERP, tồn kho với khách, tra đơn, chuyển người, ảnh tài liệu, khách chưa xác thực, các phần của Zalo cá nhân) là prompt tác vụ trong AI Engine → Prompt cho các tác vụ AI, dùng chung cho mọi agent. Prompt nào có mã hệ thống đọc (ví dụ `[CQA_REQUEST_HUMAN_REVIEW]`) thì không lưu được nếu xoá mã đó.
+- **Quy tắc hệ thống nối thêm** là prompt tác vụ trong AI Engine → Prompt cho các tác vụ AI, sửa một chỗ cho mọi agent. Quy tắc về một công cụ chỉ được nối khi agent đang trả lời có công cụ đó (bảng dưới, `agents/rules.go`); bot AI Engine (agent tắt) có mọi công cụ nên nhận mọi quy tắc như trước. Prompt nào có mã hệ thống đọc (ví dụ `[CQA_REQUEST_HUMAN_REVIEW]`) thì không lưu được nếu xoá mã đó.
+
+| Quy tắc | Nối khi agent có |
+|---|---|
+| Thiếu dữ liệu ERP, tồn kho với khách, tư vấn tính năng sản phẩm | một công cụ nhóm sản phẩm (`search_products`, `search_product_variants`, `inventory_by_sku`, `inventory_by_line`) |
+| Tra đơn của khách | `lookup_order` |
+| Lên đơn qua chatbot (giỏ hàng) | một công cụ `order_cart_*` |
+| Gửi kèm ảnh từ tài liệu (Zalo OA, Zalo cá nhân), khách chưa xác thực | `search_knowledge` |
+| Hướng dẫn khiếu nại và mọi prompt khiếu nại của Zalo cá nhân | `complaint_record` |
+| Chuyển người khi bot không có căn cứ, trợ lý nhóm, lời dặn hồ sơ khách, lời dặn chat riêng / phiên chưa có quyền ERP / chuyển nhân viên / Internbot của Zalo cá nhân | mọi agent (không gắn công cụ) |
+
+  Các prompt còn lại (phân loại tin, Bộ điều phối, xã giao, đọc ảnh, tóm tắt, khớp mã ERP, quyết định khiếu nại cũ hay mới...) chạy bằng lượt gọi AI riêng, không nối vào prompt của agent. Test `TestEveryTaskPromptIsClassified` bắt mọi prompt tác vụ mới phải được xếp vào một trong ba loại này. Khách chưa xác thực chỉ được trả lời từ tài liệu, nên Bộ điều phối chỉ chọn cho họ trong các agent có `search_knowledge`.
 
 ## Runtime native (không qua Langflow)
 

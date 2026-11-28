@@ -218,6 +218,10 @@ func TestZaloWebhookAnswersWithAgent(t *testing.T) {
 		!strings.HasPrefix(in.SystemPrompt, "Xưng em, gọi anh/chị.\n\nBạn là bot kho.") {
 		t.Errorf("native run input = %+v", in)
 	}
+	// The stock agent gets the stock rules; see the debt agent below.
+	if !strings.Contains(in.SystemPrompt, "QUY TẮC TRẢ LỜI KHI THIẾU DỮ LIỆU") || !strings.Contains(in.SystemPrompt, "QUY TẮC TRẢ LỜI TỒN KHO CHO KHÁCH HÀNG") {
+		t.Errorf("stock agent prompt lacks the stock rules: %q", in.SystemPrompt)
+	}
 	permissions, err := engine.VerifyPermissionToken(in.PermissionToken, key)
 	if err != nil || permissions.AgentKey != "kho" || !permissions.ToolAllowed("inventory_by_sku") || permissions.ToolAllowed("lookup_debt") {
 		t.Errorf("native turn permissions = %+v, %v", permissions, err)
@@ -257,6 +261,10 @@ func TestZaloWebhookAnswersWithAgent(t *testing.T) {
 	}
 	if in := runtime.inputs[1]; in.Agent.Key != "cong-no" || !strings.HasPrefix(in.SystemPrompt, "Xưng em, gọi anh/chị.\n\nBạn là bot công nợ.") {
 		t.Errorf("routed run input = %+v", in)
+	} else if strings.Contains(in.SystemPrompt, "QUY TẮC TRẢ LỜI KHI THIẾU DỮ LIỆU") || strings.Contains(in.SystemPrompt, "TỒN KHO CHO KHÁCH HÀNG") ||
+		strings.Contains(in.SystemPrompt, "[KB_IMAGE:") || strings.Contains(in.SystemPrompt, "TƯ VẤN TÍNH NĂNG SẢN PHẨM") {
+		// The debt agent has no product or document tools: no rules about them.
+		t.Errorf("debt agent prompt carries rules for tools it lacks: %q", in.SystemPrompt)
 	} else if permissions, err := engine.VerifyPermissionToken(in.PermissionToken, key); err != nil || permissions.AgentKey != "cong-no" ||
 		!permissions.ToolAllowed("lookup_debt") || permissions.ToolAllowed("inventory_by_sku") {
 		t.Errorf("routed turn permissions = %+v, %v", permissions, err)
