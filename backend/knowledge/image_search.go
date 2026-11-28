@@ -22,7 +22,7 @@ func captionSearchWords(query string) []string {
 
 // Search captions in MySQL so an edit, deletion, or visibility change takes
 // effect immediately. Never embed captions into the document's stored chunks.
-func searchImageCaptions(ctx context.Context, tenantID string, publicOnly bool, words []string, limit int) ([]Hit, error) {
+func searchImageCaptions(ctx context.Context, tenantID string, scope documentScope, words []string, limit int) ([]Hit, error) {
 	if len(words) == 0 || tenantID == "" || db.DB == nil {
 		return nil, nil
 	}
@@ -39,9 +39,7 @@ func searchImageCaptions(ctx context.Context, tenantID string, publicOnly bool, 
 		Where("i.tenant_id = ? AND d.tenant_id = ? AND i.enabled = ? AND d.enabled = ? AND d.status = ?",
 			tenantID, tenantID, true, true, StatusReady).
 		Where("("+strings.Join(matches, " OR ")+")", args...)
-	if publicOnly {
-		q = q.Where("d.audience = ?", AudiencePublic)
-	}
+	q = scope.where(q)
 	var rows []struct {
 		Hit
 		MatchCount int

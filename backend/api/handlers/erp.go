@@ -168,6 +168,13 @@ func ERPQuery(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden_token"})
 		return
 	}
+	if permCtx.AgentKey != "" {
+		toolName := c.GetString(erpMCPToolContextKey)
+		if toolName == "" || !permCtx.ToolAllowed(toolName) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "tool_not_allowed"})
+			return
+		}
+	}
 
 	// Enforce permitted resources & scope. product_variants inherits the
 	// products grant via permissionResource (same cache, finer read).

@@ -47,8 +47,10 @@ type knowledgeMCPImage struct {
 }
 
 // handleKnowledgeTool runs search_knowledge. The customer bot (public agent
-// token) only sees documents marked public; the staff bot sees all.
-func handleKnowledgeTool(ctx context.Context, tenantID, agentType string, args map[string]json.RawMessage) gin.H {
+// token) only sees documents marked public; the staff bot sees all. tags,
+// from the verified permission token of a specialist agent's turn, further
+// limit the search to documents carrying one of them.
+func handleKnowledgeTool(ctx context.Context, tenantID, agentType string, tags []string, args map[string]json.RawMessage) gin.H {
 	var query string
 	if raw, ok := args["query"]; !ok || json.Unmarshal(raw, &query) != nil || strings.TrimSpace(query) == "" {
 		return erpMCPResult([]byte(`{"error":"invalid_argument","field":"query"}`), true)
@@ -67,7 +69,7 @@ func handleKnowledgeTool(ctx context.Context, tenantID, agentType string, args m
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	hits, err := knowledge.Default().Search(ctx, tenantID, agentType, query, limit)
+	hits, err := knowledge.Default().SearchTagged(ctx, tenantID, agentType, query, limit, tags)
 	if err != nil {
 		return erpMCPResult([]byte(`{"error":"knowledge_unavailable","message":"Chưa tra được tài liệu. Vui lòng thử lại sau."}`), true)
 	}

@@ -174,7 +174,7 @@ func ERPMCP(c *gin.Context) {
 			return
 		}
 		if params.Name == knowledgeMCPToolName {
-			result := handleKnowledgeTool(c.Request.Context(), tenantID, agentType, params.Arguments)
+			result := handleKnowledgeTool(c.Request.Context(), tenantID, agentType, turn.knowledgeTags(), params.Arguments)
 			if !preview && result["isError"] == false {
 				recordUnansweredLookup(c.Request.Context(), tenantID, agentType, c.GetHeader("X-Permission-Token"))
 			}
@@ -333,11 +333,11 @@ type erpMCPArgumentError struct{ field string }
 
 func (e *erpMCPArgumentError) Error() string { return "Invalid or missing argument: " + e.field }
 
-// mcpTurn is what a verified permission token says about the tools of the
-// current chat turn. The zero value (no or invalid token) restricts nothing:
-// every tool still checks the token itself for data access.
+// mcpTurn is the tool scope of the current chat turn. The zero value
+// preserves legacy and preview callers that omit the permission token.
 type mcpTurn struct {
 	permissions *engine.GroupPermissionContext
+	invalid     bool
 }
 
 func verifiedMCPTurn(tenantID, agentType, permissionToken string) mcpTurn {
@@ -346,17 +346,20 @@ func verifiedMCPTurn(tenantID, agentType, permissionToken string) mcpTurn {
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		return mcpTurn{}
+		return mcpTurn{invalid: true}
 	}
 	p, err := engine.VerifyPermissionToken(permissionToken, cfg.EncryptionKey)
 	if err != nil || p.TenantID != tenantID || p.AgentType != agentType {
-		return mcpTurn{}
+		return mcpTurn{invalid: true}
 	}
 	return mcpTurn{permissions: p}
 }
 
 // filter keeps the tools the turn's agent may call.
 func (t mcpTurn) filter(tools []erpMCPTool) []erpMCPTool {
+	if t.invalid {
+		return []erpMCPTool{}
+	}
 	if t.permissions == nil {
 		return tools
 	}
@@ -369,8 +372,21 @@ func (t mcpTurn) filter(tools []erpMCPTool) []erpMCPTool {
 	return out
 }
 
+// knowledgeTags are the answering agent's knowledge tags: search_knowledge
+// reads only documents carrying one of them. None (no agent, or an agent
+// without tags) searches every document the tier may read.
+func (t mcpTurn) knowledgeTags() []string {
+	if t.permissions == nil || t.permissions.AgentKey == "" {
+		return nil
+	}
+	return t.permissions.KnowledgeTags
+}
+
 // refuse returns the tool result for a call the turn may not make, or "".
 func (t mcpTurn) refuse(name string) string {
+	if t.invalid {
+		return `{"error":"forbidden_token"}`
+	}
 	if t.permissions == nil {
 		return ""
 	}

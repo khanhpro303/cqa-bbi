@@ -8,28 +8,51 @@
 
     <v-alert v-if="loadError" type="error" variant="tonal" density="compact" class="mb-3">{{ loadError }}</v-alert>
 
-    <div v-for="group in groups" :key="group.key" class="mb-4">
-      <div class="text-body-2 font-weight-medium mb-2">{{ $t(group.label) }}</div>
-      <v-list density="compact" class="py-0 task-prompt-list" border rounded>
-        <v-list-item
-          v-for="p in group.items"
-          :key="p.key"
-          :data-testid="`task-prompt-${p.key}`"
-          @click="openEditor(p)"
-        >
-          <v-list-item-title class="d-flex align-center ga-2">
-            {{ p.title }}
-            <v-chip size="x-small" :color="p.customized ? 'primary' : 'grey'" variant="tonal">
-              {{ p.customized ? $t('task_prompt_customized') : $t('task_prompt_default') }}
-            </v-chip>
-          </v-list-item-title>
-          <v-list-item-subtitle class="task-prompt-desc">{{ p.description }}</v-list-item-subtitle>
-          <template #append>
-            <v-icon size="small">mdi-pencil-outline</v-icon>
-          </template>
-        </v-list-item>
-      </v-list>
-    </div>
+    <v-text-field
+      v-model="search"
+      :label="$t('task_prompt_search')"
+      prepend-inner-icon="mdi-magnify"
+      density="compact"
+      variant="outlined"
+      hide-details
+      clearable
+      class="mb-3"
+      data-testid="task-prompt-search"
+    />
+
+    <v-expansion-panels v-model="openGroups" multiple variant="accordion">
+      <v-expansion-panel v-for="group in groups" :key="group.key" :value="group.key" :data-testid="`task-prompt-group-${group.key}`">
+        <v-expansion-panel-title>
+          <span class="text-body-2 font-weight-medium">{{ $t(group.label) }}</span>
+          <v-chip size="x-small" variant="tonal" class="ml-2">{{ group.items.length }}</v-chip>
+          <v-chip v-if="group.customized" size="x-small" color="primary" variant="tonal" class="ml-1">
+            {{ group.customized }} {{ $t('task_prompt_customized') }}
+          </v-chip>
+        </v-expansion-panel-title>
+        <v-expansion-panel-text>
+          <v-list density="compact" class="py-0 task-prompt-list">
+            <v-list-item
+              v-for="p in group.items"
+              :key="p.key"
+              :data-testid="`task-prompt-${p.key}`"
+              @click="openEditor(p)"
+            >
+              <v-list-item-title class="d-flex align-center ga-2">
+                {{ p.title }}
+                <v-chip size="x-small" :color="p.customized ? 'primary' : 'grey'" variant="tonal">
+                  {{ p.customized ? $t('task_prompt_customized') : $t('task_prompt_default') }}
+                </v-chip>
+              </v-list-item-title>
+              <v-list-item-subtitle class="task-prompt-desc">{{ p.description }}</v-list-item-subtitle>
+              <template #append>
+                <v-icon size="small">mdi-pencil-outline</v-icon>
+              </template>
+            </v-list-item>
+          </v-list>
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+    </v-expansion-panels>
+    <div v-if="search && !groups.length" class="text-body-2 text-medium-emphasis mt-2">{{ $t('task_prompt_search_empty') }}</div>
 
     <v-dialog v-model="editorOpen" max-width="900px" persistent>
       <v-card v-if="editing">
@@ -41,6 +64,20 @@
         </v-card-title>
         <v-card-text>
           <div class="text-body-2 text-medium-emphasis mb-3">{{ editing.description }}</div>
+          <div v-if="editing.required?.length" class="mb-3" data-testid="task-prompt-required">
+            <span class="text-caption font-weight-medium mr-1">{{ $t('task_prompt_required') }}</span>
+            <v-chip
+              v-for="r in editing.required"
+              :key="r"
+              size="small"
+              :color="draft.includes(r) ? 'success' : 'error'"
+              variant="tonal"
+              class="mr-1 required-marker"
+            >
+              <code>{{ r }}</code>
+            </v-chip>
+            <div class="text-caption text-medium-emphasis mt-1">{{ $t('task_prompt_required_hint') }}</div>
+          </div>
           <v-textarea
             v-model="draft"
             :label="$t('task_prompt_instructions')"
@@ -62,7 +99,7 @@
           </v-btn>
           <v-spacer />
           <v-btn variant="outlined" @click="editorOpen = false">{{ $t('cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" :loading="saving" :disabled="!draft.trim()" @click="saveDraft">
+          <v-btn color="primary" variant="flat" :loading="saving" :disabled="!draft.trim() || missingRequired.length > 0" @click="saveDraft">
             {{ $t('save') }}
           </v-btn>
         </v-card-actions>
@@ -85,6 +122,8 @@ export interface TaskPrompt {
   description: string
   default: string
   format: string
+  // Markers the code reads in the bot's answer; an edit must keep them.
+  required?: string[]
   value: string
   customized: boolean
 }
@@ -107,20 +146,40 @@ const groupLabels: Record<string, string> = {
   chatbot: 'task_prompt_group_chatbot',
   erp: 'task_prompt_group_erp',
   complaints: 'task_prompt_group_complaints',
+  personal_zalo: 'task_prompt_group_personal_zalo',
+}
+
+const search = ref<string | null>('')
+const openGroups = ref<string[]>([])
+
+function matches(p: TaskPrompt, q: string) {
+  return [p.title, p.description, p.key, p.value].some(text => text?.toLowerCase().includes(q))
 }
 
 const groups = computed(() => {
+  const q = (search.value || '').trim().toLowerCase()
   const order: string[] = []
   const byGroup: Record<string, TaskPrompt[]> = {}
   for (const p of prompts.value) {
+    if (q && !matches(p, q)) continue
     if (!byGroup[p.group]) {
       byGroup[p.group] = []
       order.push(p.group)
     }
     byGroup[p.group].push(p)
   }
-  return order.map(key => ({ key, label: groupLabels[key] || key, items: byGroup[key] }))
+  return order.map(key => ({
+    key, label: groupLabels[key] || key, items: byGroup[key],
+    customized: byGroup[key].filter(p => p.customized).length,
+  }))
 })
+
+// Searching opens every group that has a match.
+watch(search, (q) => {
+  if ((q || '').trim()) openGroups.value = groups.value.map(g => g.key)
+})
+
+const missingRequired = computed(() => (editing.value?.required || []).filter(r => !draft.value.includes(r)))
 
 async function load() {
   if (!props.tenantId) return
@@ -149,8 +208,10 @@ async function saveDraft() {
     editorOpen.value = false
     snackText.value = t('task_prompt_saved')
     snackColor.value = 'success'
-  } catch {
-    snackText.value = t('task_prompt_save_failed')
+  } catch (e: any) {
+    snackText.value = e?.response?.data?.error === 'prompt_missing_required'
+      ? t('task_prompt_missing_required', { markers: (e.response.data.missing || []).join(', ') })
+      : t('task_prompt_save_failed')
     snackColor.value = 'error'
   } finally {
     saving.value = false
@@ -161,13 +222,16 @@ async function saveDraft() {
 onMounted(load)
 watch(() => props.tenantId, load)
 
-defineExpose({ prompts, openEditor, saveDraft, draft, editing, editorOpen })
+defineExpose({ prompts, openEditor, saveDraft, draft, editing, editorOpen, search, groups, missingRequired, openGroups })
 </script>
 
 <style scoped>
 .task-prompt-desc {
   white-space: normal;
   -webkit-line-clamp: unset;
+}
+.required-marker code {
+  font-size: 12px;
 }
 .fixed-format {
   white-space: pre-wrap;

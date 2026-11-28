@@ -22,6 +22,16 @@ trong Langflow tự quyết định khi nào gọi.
   **"Tra tài liệu nghiệp vụ (search_knowledge)"** trong AI Engine → Prompt cho
   các tác vụ AI, sửa được, không hard-code.
 
+- **Nhãn chủ đề** (ví dụ `công nợ`, `bảo hành`): mỗi tài liệu có thể gắn tối đa
+  20 nhãn khi thêm hoặc trong "Cài đặt tài liệu". Nhãn được chuẩn hoá (chữ
+  thường, Unicode NFC, một khoảng trắng) nên gõ "Công Nợ" hay "công nợ" là một.
+  Khi lượt chat do một agent chuyên môn có nhãn trả lời (token quyền ký có
+  `agent_key` và `knowledge_tags`), `search_knowledge` chỉ tra tài liệu mang ít
+  nhất một nhãn đó. Agent không có nhãn, hoặc bot chưa bật agent, tra mọi tài
+  liệu tầng đó được đọc như trước. Nhãn đọc từ MySQL lúc tra, đổi nhãn có hiệu
+  lực ngay, không cần nhúng lại. Ô "Chỉ tài liệu có nhãn" trong "Thử tra" cho
+  xem trước kết quả của một agent có các nhãn đó.
+
 Sau khi deploy, mở node **MCP Tools** trong cả hai flow v2 trên Langflow và làm
 mới danh sách tool để agent thấy `search_knowledge`. Mỗi lần sửa mô tả công cụ
 trong AI Engine cũng cần làm mới như vậy.

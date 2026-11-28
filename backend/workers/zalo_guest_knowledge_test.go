@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -65,6 +66,8 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 		{TenantID: tenantID, SettingKey: "ai_engine_langflow_flow_id", ValuePlain: "private"},
 		{TenantID: tenantID, SettingKey: "ai_engine_langflow_public_flow_id", ValuePlain: "public"},
 	}
+	agentsOn := false
+	audience := agents.AudienceCustomer
 	err = database.Callback().Query().After("gorm:query").Register("test:oa-guest-knowledge", func(tx *gorm.DB) {
 		switch row := tx.Statement.Dest.(type) {
 		case *[]models.Channel:
@@ -73,6 +76,22 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 			_ = tx.AddError(gorm.ErrRecordNotFound)
 		case *[]models.AppSetting:
 			*row = settings
+		case *models.AppSetting:
+			for _, value := range tx.Statement.Vars {
+				if value == agents.EnabledSettingKey && agentsOn {
+					row.ValuePlain = "true"
+				}
+			}
+		case *models.AITeam:
+			*row = models.AITeam{ID: "team", IsActive: true, IsDefault: true}
+		case *[]models.AITeamMember:
+			*row = []models.AITeamMember{{TeamID: "team", AgentID: "agent", Enabled: true}}
+		case *[]models.AIAgent:
+			var agent models.AIAgent
+			agents.Agent{Key: "bao-hanh", Audience: audience, IsActive: true,
+				SystemPrompt: "Tư vấn bảo hành.", Tools: []string{"search_knowledge"}, KnowledgeTags: []string{"bảo hành"}}.ApplyTo(&agent)
+			agent.ID, agent.TenantID = "agent", tenantID
+			*row = []models.AIAgent{agent}
 		}
 	})
 	if err != nil {
@@ -88,8 +107,16 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 			body = `{"data":{"nodes":[{"id":"Agent-fixture","data":{"node":{"template":{"system_prompt":{}}}}}]}}`
 		case "langflow.test/api/v1/run/public":
 			flowCalls++
-			if got := req.Header.Get("X-Langflow-Global-Var-ERP_PERMISSION_TOKEN"); got != "" {
-				t.Errorf("guest request carried ERP permission token %q", got)
+			permission := req.Header.Get("X-Langflow-Global-Var-ERP_PERMISSION_TOKEN")
+			if agentsOn {
+				scope, err := engine.VerifyPermissionToken(permission, key)
+				if err != nil || scope.TenantID != tenantID || scope.AgentType != agents.TierPublic || scope.AgentKey != "bao-hanh" ||
+					!scope.DryRun || len(scope.Groups) != 0 || strings.Join(scope.KnowledgeTags, ",") != "bảo hành" ||
+					!scope.ToolAllowed("search_knowledge") || scope.ToolAllowed("inventory_by_sku") {
+					t.Errorf("guest specialist permission scope = %+v, err = %v", scope, err)
+				}
+			} else if permission != "" {
+				t.Error("legacy guest carried a permission token")
 			}
 			if got := req.Header.Get("X-Langflow-Global-Var-CQA_ERP_AGENT_TOKEN"); !strings.HasPrefix(got, "kb-preview:") {
 				t.Errorf("guest agent token = %q, want public knowledge preview token", got)
@@ -102,7 +129,7 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 			if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 				return nil, err
 			}
-			if input.Text != question || input.Tweaks["customer_code"] != nil || input.Tweaks["permission_token"] != nil ||
+			if input.Text != question || input.Tweaks["customer_code"] != nil ||
 				input.Tweaks["zalo_user_id"] != input.SessionID || !strings.HasPrefix(input.SessionID, "zalo-guest-") ||
 				strings.Contains(input.SessionID, senderID) {
 				t.Errorf("guest Langflow payload = %+v", input)
@@ -111,6 +138,9 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 			prompt, _ := agent["system_prompt"].(string)
 			if !strings.Contains(prompt, "3–4 gạch đầu dòng thật ngắn") || !strings.Contains(prompt, "Giữ nguyên mã tiêu chuẩn") {
 				t.Error("Goby question did not receive the concise, source-grounded product instruction")
+			}
+			if agentsOn && !strings.Contains(prompt, "Tư vấn bảo hành.") {
+				t.Error("guest specialist prompt missing")
 			}
 			body = fmt.Sprintf(`{"provider":"OpenAI","outputs":[{"outputs":[{"results":{"message":{"text":%q,"properties":{"usage":{"input_tokens":9,"output_tokens":7,"model_name":"gpt-5.4"}}}}}]}]}`, answer)
 		case "openapi.zalo.me/v3.0/oa/message/cs":
@@ -137,13 +167,18 @@ func TestZaloOAGuestDirectMessageUsesPublicKnowledgeOnly(t *testing.T) {
 		signed    bool
 		wantReply string
 		wantCalls int
+		agentsOn  bool
+		audience  string
 	}{
-		{question, "user_send_text", true, answer, 1},
-		{"FF901 còn size L không?", "user_send_text", true, engine.GuestKnowledgeVerificationReply, 0},
-		{"Công nợ của tôi bao nhiêu?", "user_send_text", true, engine.GuestKnowledgeVerificationReply, 0},
-		{question, "user_send_text", false, "", 0},
-		{question, "user_send_group_text", true, "", 0},
+		{question, "user_send_text", true, answer, 1, false, ""},
+		{"FF901 còn size L không?", "user_send_text", true, engine.GuestKnowledgeVerificationReply, 0, false, ""},
+		{"Công nợ của tôi bao nhiêu?", "user_send_text", true, engine.GuestKnowledgeVerificationReply, 0, false, ""},
+		{question, "user_send_text", false, "", 0, false, ""},
+		{question, "user_send_group_text", true, "", 0, false, ""},
+		{question, "user_send_text", true, answer, 1, true, agents.AudienceCustomer},
+		{question, "user_send_text", true, "", 0, true, agents.AudienceStaff},
 	} {
+		agentsOn, audience = tc.agentsOn, tc.audience
 		payload := ZaloWebhookPayload{EventName: tc.event, SignatureVerified: tc.signed}
 		payload.Sender.ID, payload.Recipient.ID, payload.Message.Text = senderID, oaID, tc.text
 		task, err := NewZaloWebhookTask(payload)

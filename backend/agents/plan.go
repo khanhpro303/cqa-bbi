@@ -9,8 +9,7 @@ import (
 
 // How a turn is answered.
 const (
-	// ModeLegacy answers with the AI Engine prompts: agents are off, or on
-	// without any team (a setup error, logged by the caller).
+	// ModeLegacy answers with the AI Engine prompts when agents are off.
 	ModeLegacy = "legacy"
 	// ModeAgent answers with Plan.Selection.
 	ModeAgent = "agent"
@@ -29,19 +28,22 @@ type Plan struct {
 	Reason string
 }
 
-// PlanTurn decides who answers a turn on channelID for tier. On a database
-// error it returns ModeLegacy with the error, so a failed lookup degrades to
-// the pre-agent bot (same tier, same data scope) instead of no reply.
+// PlanTurn decides who answers a turn on channelID for tier. When the agent
+// configuration cannot be resolved, the turn stays silent.
 func PlanTurn(ctx context.Context, tenantID, channelID, tier string) (Plan, error) {
-	if !Enabled(ctx, tenantID) {
+	enabled, err := Enabled(ctx, tenantID)
+	if err != nil {
+		return Plan{Mode: ModeSilent, Reason: "enabled_lookup_failed"}, err
+	}
+	if !enabled {
 		return Plan{Mode: ModeLegacy, Reason: "agents_off"}, nil
 	}
 	team, ok, err := TeamForChannel(ctx, tenantID, channelID)
 	if err != nil {
-		return Plan{Mode: ModeLegacy, Reason: "team_lookup_failed"}, err
+		return Plan{Mode: ModeSilent, Reason: "team_lookup_failed"}, err
 	}
 	if !ok {
-		return Plan{Mode: ModeLegacy, Reason: "no_team"}, nil
+		return Plan{Mode: ModeSilent, Reason: "no_team"}, nil
 	}
 	sel, ok := team.Pick(AudienceForTier(tier))
 	if !ok {

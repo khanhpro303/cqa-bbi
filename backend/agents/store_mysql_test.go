@@ -206,6 +206,17 @@ func TestAgentsLifecycleMySQL(t *testing.T) {
 	if revs, _ := ListRevisions(ctx, tenantID, debt.ID); len(revs) != 0 {
 		t.Errorf("revisions left after delete: %d", len(revs))
 	}
+	must(t, db.DB.Model(&models.AITeam{}).Where("tenant_id = ?", tenantID).Update("is_active", false).Error)
+	if plan, err := PlanTurn(ctx, tenantID, personal, TierPublic); err != nil || plan.Mode != ModeSilent || plan.Reason != "no_team" {
+		t.Errorf("plan without an active team = %+v, err = %v", plan, err)
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if plan, err := PlanTurn(canceled, tenantID, personal, TierPublic); err == nil || plan.Mode != ModeSilent || plan.Reason != "enabled_lookup_failed" {
+		t.Errorf("plan with a failed settings lookup = %+v, err = %v", plan, err)
+	}
+
 	must(t, SetEnabled(ctx, tenantID, "admin", false))
 	if plan, _ := PlanTurn(ctx, tenantID, personal, TierPublic); plan.Mode != ModeLegacy {
 		t.Errorf("plan after turning off = %+v", plan)

@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"log"
+	"slices"
 	"strings"
 
 	"github.com/vietbui/chat-quality-agent/db"
@@ -13,13 +15,20 @@ import (
 // on to read the answer or to pass the inputs; it is appended after the
 // instructions and shown read-only in the UI, so an edit cannot break the
 // task.
+//
+// Required lists markers the instructions must keep even when edited: text
+// the code reads in the bot's answer (for example [CQA_REQUEST_HUMAN_REVIEW])
+// where the marker sits inside a sentence of the instructions. Saving an edit
+// without one is refused, and a stored override without one is ignored, so an
+// edit cannot switch off the behaviour the marker drives.
 type TaskPrompt struct {
-	Key          string `json:"key"`
-	Group        string `json:"group"`
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	Instructions string `json:"default"`
-	Format       string `json:"format"`
+	Key          string   `json:"key"`
+	Group        string   `json:"group"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description"`
+	Instructions string   `json:"default"`
+	Format       string   `json:"format"`
+	Required     []string `json:"required,omitempty"`
 }
 
 // SettingKey is the app_settings key holding the tenant's override.
@@ -59,7 +68,11 @@ const CasualReplyHandoff = "[CAN_BOT_CHINH]"
 // sends the turn to the main bot.
 const CasualReplyQuiet = "[IM_LANG]"
 
-var taskPrompts = []TaskPrompt{
+// taskPrompts is every prompt in display order. The chatbot turn rules and
+// the personal Zalo prompts live in task_prompts_bot.go.
+var taskPrompts = slices.Concat(coreTaskPrompts, chatbotRulePrompts, personalZaloPrompts)
+
+var coreTaskPrompts = []TaskPrompt{
 	{
 		Key:         PromptChatMemorySummary,
 		Group:       "chat_memory",
@@ -403,11 +416,28 @@ func TaskPromptInstructions(tenantID, key string) string {
 		var s models.AppSetting
 		if err := db.DB.Select("value_plain").Where("tenant_id = ? AND setting_key = ?", tenantID, p.SettingKey()).First(&s).Error; err == nil {
 			if v := strings.TrimSpace(s.ValuePlain); v != "" {
+				if missing := p.MissingRequired(v); len(missing) > 0 {
+					// Saved before the marker was required, or written
+					// around the API: the default keeps the feature working.
+					log.Printf("[task-prompts] tenant %s prompt %s lacks %v; using the default", tenantID, key, missing)
+					return p.Instructions
+				}
 				return v
 			}
 		}
 	}
 	return p.Instructions
+}
+
+// MissingRequired returns the Required entries that instructions lack.
+func (p TaskPrompt) MissingRequired(instructions string) []string {
+	var missing []string
+	for _, r := range p.Required {
+		if !strings.Contains(instructions, r) {
+			missing = append(missing, r)
+		}
+	}
+	return missing
 }
 
 // BuildTaskPrompt returns the full system prompt for key: the tenant's

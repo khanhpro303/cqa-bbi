@@ -265,4 +265,15 @@ func TestAgentTurnFlow(t *testing.T) {
 			t.Errorf("%s %+v: flow %s, want %s", tc.tier, tc.plan.Selection.Agent, got, tc.want)
 		}
 	}
+	lf.PublicFlowID = ""
+	if got, _ := agentTurnFlow(agentPlan(""), lf, agents.TierPublic); got != "" {
+		t.Errorf("public specialist used the missing public flow's staff fallback %q", got)
+	}
+	if got, _ := agentTurnFlow(agents.Plan{Mode: agents.ModeLegacy}, lf, agents.TierPublic); got != lf.FlowID {
+		t.Errorf("legacy staff fallback = %q, want %q", got, lf.FlowID)
+	}
+	lf.FlowID, lf.PublicFlowID = "37593e48-052f-4be3-abcc-94a21465b3aa", "{37593E48-052F-4BE3-ABCC-94A21465B3AA}"
+	if got, _ := agentTurnFlow(agentPlan(lf.PublicFlowID), lf, agents.TierPublic); got != "" {
+		t.Errorf("public specialist used the staff flow by its equivalent UUID %q", got)
+	}
 }

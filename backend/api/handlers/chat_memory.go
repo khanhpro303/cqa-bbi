@@ -237,6 +237,12 @@ func SaveTaskPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "prompt_too_long"})
 		return
 	}
+	// The code reads these markers in the bot's answer: an edit without one
+	// would quietly switch off what the marker drives (handover, images...).
+	if missing := p.MissingRequired(value); value != "" && len(missing) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "prompt_missing_required", "missing": missing})
+		return
+	}
 	old := getPlainSetting(tenantID, p.SettingKey())
 	var err error
 	if value == "" || value == strings.TrimSpace(p.Instructions) {
