@@ -204,7 +204,9 @@ export default {
   ag_team_deleted: 'Team deleted.',
   ag_team_delete_title: 'Delete coordinator team?',
   ag_team_delete_body: 'Team {name} will be deleted. Its agents stay.',
-  ag_team_delete_default: 'The default team cannot be deleted.',
+  ag_team_delete_default: 'The default team cannot be deleted. Make another team the default first.',
+  ag_team_make_default: 'Make default',
+  ag_team_default_set: '{name} is now the default team.',
   ag_team_delete_has_channels: 'Move these channels to another team before deleting it: {channels}.',
   ag_team_delete_in_use: 'The team is used by a channel or is the default team.',
 

@@ -426,6 +426,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			tenant.POST("/ai-teams", middleware.RequirePermission("settings", "w"), handlers.CreateAITeam)
 			tenant.PUT("/ai-teams/:teamId", middleware.RequirePermission("settings", "w"), handlers.UpdateAITeam)
 			tenant.DELETE("/ai-teams/:teamId", middleware.RequirePermission("settings", "w"), handlers.DeleteAITeam)
+			tenant.POST("/ai-teams/:teamId/default", middleware.RequirePermission("settings", "w"), handlers.SetDefaultAITeam)
 			tenant.PUT("/channels/:channelId/ai-team", middleware.RequirePermission("settings", "w"), handlers.SetChannelAITeam)
 			// Chatbot knowledge base (documents the bot answers from via search_knowledge)
 			tenant.GET("/knowledge", middleware.RequirePermission("settings", "r"), handlers.ListKnowledgeDocuments)

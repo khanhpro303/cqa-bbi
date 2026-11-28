@@ -294,6 +294,17 @@ func DeleteAITeam(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
+// SetDefaultAITeam makes a team the default for channels without their own.
+func SetDefaultAITeam(c *gin.Context) {
+	id := c.Param("teamId")
+	if err := agents.SetDefaultTeam(c.Request.Context(), middleware.GetTenantID(c), id); err != nil {
+		agentError(c, "set default team", err)
+		return
+	}
+	logAgentActivity(c, "ai.team_default_set", "ai_team", id, "")
+	c.JSON(http.StatusOK, gin.H{"message": "saved"})
+}
+
 // SetChannelAITeam points a Zalo OA or personal Zalo channel at a team;
 // an empty team_id returns it to the default team.
 func SetChannelAITeam(c *gin.Context) {

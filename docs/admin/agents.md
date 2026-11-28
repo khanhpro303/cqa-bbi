@@ -5,7 +5,7 @@ Trước đây mỗi tầng có một bot làm tất cả: một prompt cho khá
 ## Khái niệm
 
 - **Agent**: mã (`key`, không đổi sau khi tạo), tên, mô tả, **đối tượng** (`customer` khách hàng, `staff` nhân viên nội bộ, `all` cả hai), system prompt, danh sách **công cụ MCP** được gọi, nhãn tài liệu (`knowledge_tags`), runtime và flow Langflow riêng nếu có. Mỗi lần lưu là một phiên bản (giữ 30 phiên bản gần nhất).
-- **Bộ điều phối**: tên, **giọng chung** (`persona_prompt`, đặt trước prompt của agent đang trả lời), danh sách agent theo thứ tự, agent mặc định. Có đúng một Bộ điều phối **mặc định**; kênh chưa gán Bộ điều phối nào thì trả lời qua nó.
+- **Bộ điều phối**: tên, **giọng chung** (`persona_prompt`, đặt trước prompt của agent đang trả lời), danh sách agent theo thứ tự, agent mặc định. Có đúng một Bộ điều phối **mặc định**; kênh chưa gán Bộ điều phối nào thì trả lời qua nó. Nút **Đặt làm mặc định** trên thẻ một Bộ điều phối đang bật chuyển cờ mặc định sang nó; Bộ điều phối mặc định cũ sau đó xoá được nếu không kênh nào trỏ tới.
 - **Gán kênh**: mỗi kênh `zalo_oa` / `personal_zalo_import` trỏ tới một Bộ điều phối, hoặc để trống để dùng Bộ điều phối mặc định. Nhiều kênh có thể dùng chung một Bộ điều phối (một "bộ mặt" cho nhiều agent, hoặc nhiều bộ mặt cho cùng một nhóm agent).
 
 ## Ai trả lời một tin nhắn
@@ -62,7 +62,7 @@ Mỗi agent chọn **runtime**: `langflow` (mặc định, chạy trên flow Lan
 ## Bật agent và chuyển prompt cũ
 
 - **Công tắc** `ai_agents_enabled` (trang **Agents AI**, chỉ chủ sở hữu hoặc quản trị viên đổi được). Tắt (mặc định): mọi thứ chạy như trước bằng prompt AI Engine.
-- **Lần bật đầu tiên** chép hai system prompt của AI Engine thành hai agent: **Trợ lý khách hàng** (`tro-ly-khach-hang`, đối tượng khách) và **Trợ lý nội bộ** (`tro-ly-noi-bo`, đối tượng nhân viên), cả hai có mọi công cụ và đi theo flow của AI Engine, nằm trong Bộ điều phối **Mặc định** không có giọng chung. Nhờ vậy ngay sau khi bật, khách thấy y như cũ: cùng prompt (chép nguyên văn), cùng flow, cùng công cụ.
+- **Lần bật đầu tiên** chép hai system prompt của AI Engine thành hai agent: **Trợ lý khách hàng** (`tro-ly-khach-hang`, đối tượng khách) và **Trợ lý nội bộ** (`tro-ly-noi-bo`, đối tượng nhân viên), cả hai có mọi công cụ và đi theo flow của AI Engine, nằm trong Bộ điều phối **Mặc định** không có giọng chung. Nhờ vậy ngay sau khi bật, khách thấy y như cũ: cùng prompt (chép nguyên văn), cùng flow, cùng công cụ. Nếu đã xoá hết agent rồi chép lại, hai agent mới được thêm vào Bộ điều phối mặc định đang có (giữ giọng chung, tên), không tạo Bộ điều phối thứ hai.
 - Có thể **chép trước mà chưa bật** (`POST /settings/ai-agents/migrate`) để chia prompt thành các agent rồi mới bật.
 - Khi agent đang bật, hai prompt chatbot ở trang AI Engine là **bản gốc để quay lại**: lưu trang AI Engine không đổi và không xoá chúng. Tắt công tắc là quay về bot cũ ngay.
 - Prompt AI Engine đổi sau khi đã chép (ví dụ sửa lúc agent đang tắt): `GET /settings/ai-agents` trả `drift` là các agent lệch với bản gốc; `POST /settings/ai-agents/migrate` với `{"refresh": true}` chép lại vào các agent đó (ghi đè chỉnh sửa trong agent).
@@ -92,6 +92,7 @@ Khi agent đang bật, trang **AI Engines** hiện hai prompt chatbot ở chế 
 | POST | `/ai-agents/test` | settings:w (nhân viên: owner/admin), 12 lần/phút | `{team_id, audience: customer\|staff, message, current_agent?, reply?, session_id?}` → `{agent, reason, router_reason, routed, candidates}`, kèm `{reply, runtime, usage, session_id}` khi `reply`; `{silent: true}` khi không agent nào phục vụ đối tượng |
 | GET/POST | `/ai-teams` | settings:r / w | danh sách kèm thành viên, kênh (`ai_team_id` rỗng là kênh theo mặc định), `silent` / tạo |
 | PUT/DELETE | `/ai-teams/:teamId` | settings:w | lưu (thay toàn bộ thành viên) / xoá (không xoá được Bộ điều phối mặc định hay đang có kênh dùng) |
+| POST | `/ai-teams/:teamId/default` | settings:w | đặt Bộ điều phối (đang bật) làm mặc định, bỏ cờ ở bộ cũ |
 | PUT | `/channels/:channelId/ai-team` | settings:w | `{team_id}`, rỗng là về Bộ điều phối mặc định |
 | GET | `/analytics/ai-cost?group_by=agent` | như trang chủ | chi phí chatbot theo agent |
 

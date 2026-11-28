@@ -237,3 +237,82 @@ func isValidation(err error, field string) bool {
 	var verr *ValidationError
 	return errors.As(err, &verr) && verr.Field == field
 }
+
+// Copying the AI Engine prompts again after the copied agents were removed
+// and deleted refills the existing default team instead of creating a
+// second, undeletable one; another team can take over as default.
+func TestMigrateAgainReusesDefaultTeamMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx := context.Background()
+	tenantID, channels := seedTenant(t, "Prompt khách", "Prompt nội bộ")
+	oa := channels[0]
+
+	if created, err := MigrateLegacy(ctx, tenantID, "admin"); err != nil || !created {
+		t.Fatalf("first migration = %v %v", created, err)
+	}
+	teams, err := ListTeams(ctx, tenantID)
+	must(t, err)
+	if len(teams) != 1 || !teams[0].IsDefault {
+		t.Fatalf("teams after first copy = %+v", teams)
+	}
+	first := teams[0]
+	// The user empties the default team and deletes both agents.
+	_, err = SaveTeam(ctx, tenantID, "admin", TeamInput{ID: first.ID, Name: first.Name, PersonaPrompt: "Xưng em."})
+	must(t, err)
+	for _, m := range first.Members {
+		must(t, DeleteAgent(ctx, tenantID, m.ID))
+	}
+
+	if created, err := MigrateLegacy(ctx, tenantID, "admin"); err != nil || !created {
+		t.Fatalf("second copy = %v %v", created, err)
+	}
+	teams, err = ListTeams(ctx, tenantID)
+	must(t, err)
+	if len(teams) != 1 || teams[0].ID != first.ID || !teams[0].IsDefault {
+		t.Fatalf("second copy must reuse the default team, got %+v", teams)
+	}
+	again := teams[0]
+	if again.PersonaPrompt != "Xưng em." || len(again.Members) != 2 || len(again.Silent) != 0 {
+		t.Fatalf("default team after second copy = %+v", again)
+	}
+	if again.DefaultAgentID == "" || again.Members[0].Key != LegacyCustomerAgentKey {
+		t.Errorf("default agent = %q members = %+v", again.DefaultAgentID, again.Members)
+	}
+	must(t, SetEnabled(ctx, tenantID, "admin", true))
+	plan, err := PlanTurn(ctx, tenantID, oa, TierPublic)
+	if err != nil || plan.Mode != ModeAgent || plan.Selection.Agent.Key != LegacyCustomerAgentKey {
+		t.Fatalf("plan after second copy = %+v %v", plan, err)
+	}
+
+	// Another team can become the default; the old one is then deletable.
+	other, err := SaveTeam(ctx, tenantID, "admin", TeamInput{Name: "Mới", DefaultAgentID: again.DefaultAgentID,
+		Members: []MemberInput{{AgentID: again.DefaultAgentID, Enabled: true}}})
+	must(t, err)
+	if err := DeleteTeam(ctx, tenantID, first.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("delete default = %v", err)
+	}
+	off := false
+	inactive, err := SaveTeam(ctx, tenantID, "admin", TeamInput{Name: "Tắt", IsActive: &off})
+	must(t, err)
+	if inactive.IsActive {
+		t.Fatalf("a team created switched off must stay off: %+v", inactive)
+	}
+	idle, err := SaveAgent(ctx, tenantID, "admin", Agent{Key: "nghi", Name: "Tạm nghỉ", Audience: AudienceCustomer, IsActive: false})
+	must(t, err)
+	if stored, err := GetAgent(ctx, tenantID, idle.ID); err != nil || stored.IsActive {
+		t.Fatalf("an agent created switched off must stay off: %+v %v", stored, err)
+	}
+	if err := SetDefaultTeam(ctx, tenantID, inactive.ID); !isValidation(err, "is_active") {
+		t.Errorf("inactive default = %v", err)
+	}
+	if err := SetDefaultTeam(ctx, tenantID, uuid.NewString()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown default = %v", err)
+	}
+	must(t, SetDefaultTeam(ctx, tenantID, other.ID))
+	var defaults []models.AITeam
+	must(t, db.DB.Where("tenant_id = ? AND is_default = ?", tenantID, true).Find(&defaults).Error)
+	if len(defaults) != 1 || defaults[0].ID != other.ID {
+		t.Fatalf("defaults = %+v", defaults)
+	}
+	must(t, DeleteTeam(ctx, tenantID, first.ID))
+}
