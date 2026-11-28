@@ -225,5 +225,4 @@ export default {
   ag_engine_agents_on: 'Đang trả lời bằng agent. Hai prompt chatbot dưới đây là bản gốc để quay lại khi tắt agent, chỉ xem được. Sửa prompt của bot trong trang Agents AI.',
   ag_engine_open_agents: 'Mở Agents AI',
   ag_engine_prompt_readonly_hint: 'Chỉ xem: agent đang bật. Bản gốc để quay lại khi tắt agent.',
-
 }

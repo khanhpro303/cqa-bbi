@@ -225,5 +225,4 @@ export default {
   ag_engine_agents_on: 'Agents are answering chats. The two chatbot prompts below are the rollback copy for when agents are turned off and are read-only. Edit the bot\'s prompts on the AI Agents page.',
   ag_engine_open_agents: 'Open AI Agents',
   ag_engine_prompt_readonly_hint: 'Read-only: agents are on. Rollback copy for when agents are turned off.',
-
 }
