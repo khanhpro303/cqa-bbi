@@ -89,6 +89,10 @@ func handleComplaintTool(ctx context.Context, tenantID, agentType, permissionTok
 	}
 	report, refusal := complaintReport(ctx, permissions, args)
 	if refusal != "" {
+		if permissions.PersonalZalo && permissions.ZaloGroupID == "" && permissions.AgentType == "private" &&
+			permissions.Complaints && permissions.ComplaintTurnID != "" && db.RedisClient != nil {
+			_ = db.RedisClient.Set(ctx, personalZaloComplaintRefusalKey(permissions.ComplaintTurnID), refusal, time.Minute).Err()
+		}
 		return result(gin.H{"status": "error", "message": refusal}, true)
 	}
 	out, err := recordComplaint(ctx, report)
@@ -138,11 +142,15 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 		Title: args.Title, Detail: args.Detail, Evidence: args.Evidence,
 	}
 	personalGroupStaff := p.PersonalZalo && p.ZaloGroupID != "" && !p.GroupGuest
+	personalDirectStaff := p.PersonalZalo && p.ZaloGroupID == "" && p.AgentType == "private"
 	if p.PersonalZalo {
 		if p.ComplaintTurnID == "" {
 			return customercases.Report{}, "Không xác định được tin nhắn để ghi nhận."
 		}
 		r.TurnID, r.Retry = p.ComplaintTurnID, true
+	}
+	if personalDirectStaff && (p.ComplaintCustomerCode == "" || p.ComplaintStaffID == "" || db.DB == nil) {
+		return customercases.Report{}, personalZaloComplaintNeedCode
 	}
 	// A group's cases belong to the group, except for a sender who is not a
 	// CRM member of it (GroupGuest): theirs stay their own, matched only with
@@ -172,6 +180,10 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 			if refusal := applyPersonalZaloStaffComplaintSource(ctx, ch, &r); refusal != "" {
 				return customercases.Report{}, refusal
 			}
+		} else if personalDirectStaff {
+			if refusal := applyPersonalZaloDirectComplaintSource(ctx, ch, p, &r); refusal != "" {
+				return customercases.Report{}, refusal
+			}
 		} else {
 			r.ReporterName = zaloPersonName(p.TenantID, p.ZaloUserID)
 			r.CustomerName = r.ReporterName
@@ -189,7 +201,7 @@ func complaintReport(ctx context.Context, p *engine.GroupPermissionContext, args
 			}
 		}
 	}
-	if code := strings.TrimSpace(args.CustomerCode); code != "" && p.AgentType == "private" {
+	if code := strings.TrimSpace(args.CustomerCode); code != "" && p.AgentType == "private" && !personalDirectStaff {
 		// Staff reporting for a customer: the case belongs to that customer.
 		name, ok := cachedCustomer(p.TenantID, code)
 		if !ok {
