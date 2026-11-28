@@ -217,7 +217,7 @@ describe('Agents AI page', () => {
     wrapper.unmount()
   })
 
-  it('distinguishes channels pinned to the current default from channels that follow it', async () => {
+  it('shows a legacy assignment to the current default as following the default', async () => {
     const team = { ...defaultTeam, channels: [
       ...defaultTeam.channels,
       { id: 'pinned', name: 'OA ghim bộ', channel_type: 'zalo_oa', ai_team_id: defaultTeam.id },
@@ -227,8 +227,8 @@ describe('Agents AI page', () => {
     await flushPromises()
     const vm = wrapper.vm as any
     expect(vm.channelRows.find((row: any) => row.channel.id === 'oa').selectValue).toBe('')
-    expect(vm.channelRows.find((row: any) => row.channel.id === 'pinned').selectValue).toBe('t1')
-    expect(vm.teamItems.map((item: any) => item.value)).toEqual(['', 't1', 't2'])
+    expect(vm.channelRows.find((row: any) => row.channel.id === 'pinned').selectValue).toBe('')
+    expect(vm.teamItems.map((item: any) => item.value)).toEqual(['', 't2'])
     expect(vm.teamItems[0].title).not.toBe(vm.teamItems[1].title)
     wrapper.unmount()
   })

@@ -386,7 +386,7 @@ const channelRows = computed<ChannelRow[]>(() => {
       const picks = { customer: pickFor(effective, 'customer'), staff: pickFor(effective, 'staff') }
       rows.push({
         channel: ch,
-        selectValue: own?.id || '',
+        selectValue: own && !own.is_default ? own.id : '',
         ownInactive: !!own && !own.is_active,
         silentTeam: effective && !picks.customer && !picks.staff ? effective.name : '',
         picks,
@@ -406,8 +406,7 @@ function teamLabel(team: Team): string {
 }
 
 const teamItems = computed(() => {
-  const pinned = new Set(channelRows.value.map(row => row.selectValue))
-  const explicitTeams = teams.value.filter(team => !team.is_default || pinned.has(team.id))
+  const explicitTeams = teams.value.filter(team => !team.is_default)
     .map(team => ({ title: teamLabel(team), value: team.id }))
   const followDefault = { title: t('ag_channel_follow_default', { name: defaultTeam.value ? teamLabel(defaultTeam.value) : '—' }), value: '' }
   const items = [followDefault, ...explicitTeams]
