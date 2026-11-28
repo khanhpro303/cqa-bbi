@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	adviceParentExpr = "COALESCE(NULLIF(TRIM(ma_cha), ''), TRIM(ma))"
 	adviceLimit      = 3
 	adviceImageLimit = 12
 )
@@ -112,6 +111,23 @@ func findProductAdvice(ctx context.Context, perm *engine.GroupPermissionContext,
 	defer cancel()
 	query := db.DB.WithContext(ctx)
 	brands, allBrands := perm.ResolveBrandFilter("products")
+	var exactGroupKeys, exactParents []string
+	if len(codes) != 0 {
+		var exactGroups []struct {
+			GroupKey   string `gorm:"column:group_key"`
+			ParentCode string `gorm:"column:parent_code"`
+		}
+		if err := query.Model(&models.CachedProduct{}).
+			Select(models.ProductAdvisoryGroupKeySQL+" AS group_key, LOWER("+models.ProductAdvisoryParentSQL+") AS parent_code").Distinct().
+			Where("tenant_id = ? AND TRIM(ma) <> '' AND (LOWER(TRIM(ma)) IN ? OR LOWER("+models.ProductAdvisoryParentSQL+") IN ?)", perm.TenantID, codes, codes).
+			Scopes(engine.ExcludeDKCopies).Scan(&exactGroups).Error; err != nil {
+			return nil, err
+		}
+		for _, group := range exactGroups {
+			exactGroupKeys = append(exactGroupKeys, group.GroupKey)
+			exactParents = append(exactParents, group.ParentCode)
+		}
+	}
 	var matches, ranks []string
 	var matchArgs, rankArgs []any
 	addMatch := func(condition string, score int, args ...any) {
@@ -121,9 +137,7 @@ func findProductAdvice(ctx context.Context, perm *engine.GroupPermissionContext,
 		rankArgs = append(rankArgs, args...)
 	}
 	if len(codes) != 0 {
-		variantParents := query.Model(&models.CachedProduct{}).Select(adviceParentExpr).
-			Where("tenant_id = ? AND ma IN ?", perm.TenantID, codes).Scopes(engine.ExcludeDKCopies)
-		addMatch("p.parent_code IN ? OR p.parent_code IN (?)", 100, codes, variantParents)
+		addMatch("LOWER(p.parent_code) IN ? OR p.group_key IN ?", 100, codes, exactGroupKeys)
 	}
 	for _, token := range append(slices.Clone(codes), words...) {
 		pattern := "%" + token + "%"
@@ -133,35 +147,42 @@ func findProductAdvice(ctx context.Context, perm *engine.GroupPermissionContext,
 
 	var profiles []models.ProductAdvisory
 	if err := query.Table("product_advisories AS p").Select("p.*").
-		Where("p.tenant_id = ?", perm.TenantID).
+		Where("p.tenant_id = ? AND p.group_key <> ''", perm.TenantID).
 		Where("("+strings.Join(matches, ") OR (")+")", matchArgs...).
-		Clauses(clause.OrderBy{Expression: clause.Expr{SQL: strings.Join(ranks, " + ") + " DESC, p.parent_code ASC", Vars: rankArgs}}).
+		Scopes(func(tx *gorm.DB) *gorm.DB {
+			if len(exactGroupKeys) == 0 {
+				return tx
+			}
+			// Text in a sibling profile can mention the same model or SKU.
+			return tx.Where("(LOWER(TRIM(p.parent_code)) NOT IN ? OR p.group_key IN ?)", exactParents, exactGroupKeys)
+		}).
+		Clauses(clause.OrderBy{Expression: clause.Expr{SQL: strings.Join(ranks, " + ") + " DESC, p.parent_code ASC, p.group_key ASC", Vars: rankArgs}}).
 		Limit(30).Find(&profiles).Error; err != nil || len(profiles) == 0 {
 		return nil, err
 	}
-	parents := make([]string, 0, len(profiles))
+	groupKeys := make([]string, 0, len(profiles))
 	for _, profile := range profiles {
-		parents = append(parents, profile.ParentCode)
+		groupKeys = append(groupKeys, profile.GroupKey)
 	}
 	var rows []struct {
-		ParentCode string
+		GroupKey   string
 		Code       string
 		WebName    string
 		Brand      string
 		GroupNames string
 	}
-	// A whole parent profile may describe any of its surviving variants. If
-	// the parent spans an excluded brand/group, don't share the combined profile.
+	// A profile describes one catalog group. If one of that group's variants is
+	// outside the allowed brand/group scope, don't share its combined profile.
 	if err := query.Model(&models.CachedProduct{}).
-		Select(adviceParentExpr+" AS parent_code, ma AS code, ten_dong_bo_web AS web_name, nhan_hieu_name AS brand, list_ten_nhom_vthh AS group_names").
-		Where("tenant_id = ? AND "+adviceParentExpr+" IN ?", perm.TenantID, parents).
+		Select(models.ProductAdvisoryGroupKeySQL+" AS group_key, ma AS code, ten_dong_bo_web AS web_name, nhan_hieu_name AS brand, list_ten_nhom_vthh AS group_names").
+		Where("tenant_id = ? AND TRIM(ma) <> '' AND "+models.ProductAdvisoryGroupKeySQL+" IN ?", perm.TenantID, groupKeys).
 		Scopes(engine.ExcludeDKCopies).Order("ma ASC").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	visible, names := make(map[string]bool), make(map[string]string)
 	profileBrands, variantCodes := make(map[string]string), make(map[string][]string)
 	for _, row := range rows {
-		key := strings.ToLower(row.ParentCode)
+		key := row.GroupKey
 		if previous, seen := visible[key]; !seen || previous {
 			visible[key] = engine.WarehouseProductAllowed(row.GroupNames, row.Brand, groups, brands, allBrands)
 		}
@@ -178,7 +199,7 @@ func findProductAdvice(ctx context.Context, perm *engine.GroupPermissionContext,
 	result := make([]productAdvice, 0, adviceLimit)
 	ids := make([]string, 0, adviceLimit)
 	for _, profile := range profiles {
-		key := strings.ToLower(profile.ParentCode)
+		key := profile.GroupKey
 		if !visible[key] {
 			continue
 		}
@@ -383,7 +404,7 @@ func LoadPersonalZaloProductAdviceImage(ctx context.Context, perm *engine.GroupP
 		return models.ProductAdvisoryImage{}, err
 	}
 	var profile models.ProductAdvisory
-	if err := query.Select("id", "parent_code").Where("tenant_id = ? AND id = ?", perm.TenantID, image.ProductAdvisoryID).Take(&profile).Error; err != nil {
+	if err := query.Select("group_key").Where("tenant_id = ? AND id = ? AND group_key <> ''", perm.TenantID, image.ProductAdvisoryID).Take(&profile).Error; err != nil {
 		return models.ProductAdvisoryImage{}, err
 	}
 
@@ -394,7 +415,7 @@ func LoadPersonalZaloProductAdviceImage(ctx context.Context, perm *engine.GroupP
 	}
 	if err := query.Model(&models.CachedProduct{}).
 		Select("nhan_hieu_name AS brand, list_ten_nhom_vthh AS group_names").
-		Where("tenant_id = ? AND "+adviceParentExpr+" = ?", perm.TenantID, profile.ParentCode).
+		Where("tenant_id = ? AND TRIM(ma) <> '' AND "+models.ProductAdvisoryGroupKeySQL+" = ?", perm.TenantID, profile.GroupKey).
 		Scopes(engine.ExcludeDKCopies).Order("ma ASC").Scan(&variants).Error; err != nil {
 		return models.ProductAdvisoryImage{}, err
 	}

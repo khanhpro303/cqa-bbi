@@ -185,6 +185,9 @@ func TestFindProductAdviceMySQL(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := db.MigrateProductAdvisoryGroups(testDB); err != nil {
+		t.Fatal(err)
+	}
 	if err := testDB.Model(&photos[1]).Update("enabled", false).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -231,5 +234,30 @@ func TestFindProductAdviceMySQL(t *testing.T) {
 	}
 	if _, err := LoadPersonalZaloProductAdviceImage(context.Background(), &perm, photos[2].ID); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("image escaped product scope: %v", err)
+	}
+
+	accessory := models.CachedProduct{ID: pkg.NewUUID(), TenantID: tenant, MA: "SKU903", MA_CHA: "PARENT901", TEN_DONG_BO_WEB: "Phụ kiện LS2", NHAN_HIEU_NAME: "LS2", LIST_TEN_NHOM_VTHH: "Phụ kiện"}
+	accessoryProfile := models.ProductAdvisory{ID: pkg.NewUUID(), TenantID: tenant, ParentCode: "PARENT901", WebName: accessory.TEN_DONG_BO_WEB, Notes: "Phụ tùng thay thế cho SKU901"}
+	accessoryImage := models.ProductAdvisoryImage{ID: pkg.NewUUID(), TenantID: tenant, ProductAdvisoryID: accessoryProfile.ID, Enabled: true}
+	for _, seed := range []any{&accessory, &accessoryProfile, &accessoryImage} {
+		if err := testDB.Create(seed).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.MigrateProductAdvisoryGroups(testDB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPersonalZaloProductAdviceImage(context.Background(), &perm, photos[0].ID); err != nil {
+		t.Fatalf("helmet photo was blocked by the accessory: %v", err)
+	}
+	if _, err := LoadPersonalZaloProductAdviceImage(context.Background(), &perm, accessoryImage.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("accessory photo escaped the helmet-only scope: %v", err)
+	}
+	perm.Groups[0].Resources[0].ProductGroups = []string{"mũ", "phụ kiện"}
+	for sku, wanted := range map[string]string{"SKU901": good, "SKU903": accessoryProfile.ID} {
+		profiles, err := findProductAdvice(context.Background(), &perm, sku, adviceImageLimit)
+		if err != nil || len(profiles) != 1 || profiles[0].ID != wanted || len(profiles[0].VariantCodes) != 1 || profiles[0].VariantCodes[0] != sku {
+			t.Fatalf("SKU %s matched the wrong product line: %+v (%v)", sku, profiles, err)
+		}
 	}
 }

@@ -31,6 +31,7 @@ export interface ProductAdvisoryImportItem {
   source_url: string
   parent_code: string
   web_name: string
+  product_category?: string
   matched_by: string
   overwrite: boolean
   status: ProductAdvisoryImportItemStatus
@@ -50,6 +51,7 @@ export interface ProductAdvisoryImportReviewGroup {
   id: string
   parent_code: string
   web_name: string
+  product_category?: string
   image_count: number
   pending_image_count: number
 }
@@ -61,6 +63,7 @@ export function importReviewGroups(items: ProductAdvisoryImportItem[]): ProductA
       id: item.id,
       parent_code: item.parent_code,
       web_name: item.web_name,
+      product_category: item.product_category,
       image_count: item.image_count,
       pending_image_count: item.pending_image_count,
     }))

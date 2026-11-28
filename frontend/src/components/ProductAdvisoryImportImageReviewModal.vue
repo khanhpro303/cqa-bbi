@@ -61,7 +61,7 @@
                       @click="selectGroup(index)"
                     >
                       <v-list-item-title>{{ group.web_name || group.parent_code }}</v-list-item-title>
-                      <v-list-item-subtitle>{{ group.parent_code }}</v-list-item-subtitle>
+                      <v-list-item-subtitle>{{ [group.parent_code, group.product_category].filter(Boolean).join(' · ') }}</v-list-item-subtitle>
                       <template #append>
                         <v-chip size="x-small" class="review-indicator" :color="group.pending_image_count > 0 ? 'warning' : 'success'" variant="tonal">
                           {{ group.pending_image_count }}/{{ group.image_count }}
@@ -80,7 +80,7 @@
                     {{ t('product_advisory_import_review_position', { current: currentIndex + 1, total: groupsWithImages.length }) }}
                   </div>
                   <h3 class="text-h6">{{ currentGroup.web_name || currentGroup.parent_code }}</h3>
-                  <p class="text-body-2 text-medium-emphasis mb-0">{{ currentGroup.parent_code }}</p>
+                  <p class="text-body-2 text-medium-emphasis mb-0">{{ [currentGroup.parent_code, currentGroup.product_category].filter(Boolean).join(' · ') }}</p>
                 </div>
                 <v-chip v-if="!loading && !loadError && images.length" class="review-indicator" :color="currentPending > 0 ? 'warning' : 'success'" variant="tonal">
                   {{ currentPending > 0

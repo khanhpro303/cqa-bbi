@@ -46,30 +46,29 @@ type productAdvisoryImportRow struct {
 	RowNumber       int
 	InputWebName    string
 	InputParentCode string
+	InputCategory   string
 	SourceURL       string
 }
 
 type productAdvisoryTemplateRow struct {
-	ParentCode string `gorm:"column:parent_code"`
-	WebName    string `gorm:"column:web_name"`
-	SourceURL  string `gorm:"column:source_url"`
+	ParentCode      string `gorm:"column:parent_code"`
+	WebName         string `gorm:"column:web_name"`
+	ProductCategory string `gorm:"column:product_category"`
+	SourceURL       string `gorm:"column:source_url"`
 }
 
 // DownloadProductAdvisoryLinkTemplate returns the tenant catalog as an XLSX
 // whose existing links can be retained to deliberately re-read those pages.
 func DownloadProductAdvisoryLinkTemplate(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
-	catalog := db.DB.WithContext(c.Request.Context()).Model(&models.CachedProduct{}).
-		Select(productCatalogGroupSelect).
-		Where("tenant_id = ? AND TRIM(ma) <> ''", tenantID).
-		Scopes(engine.ExcludeDKCopies).
-		Group(productParentCodeExpr)
+	tx := db.DB.WithContext(c.Request.Context())
+	catalog := productAdvisoryCatalog(tx, tenantID)
 
 	var rows []productAdvisoryTemplateRow
-	if err := db.DB.WithContext(c.Request.Context()).Table("(?) AS catalog", catalog).
-		Select("catalog.parent_code, catalog.web_name, COALESCE(pa.source_url, '') AS source_url").
-		Joins("LEFT JOIN product_advisories pa ON pa.tenant_id = ? AND pa.parent_code = catalog.parent_code", tenantID).
-		Order("catalog.web_name, catalog.parent_code").Scan(&rows).Error; err != nil {
+	if err := tx.Table("(?) AS catalog", catalog).
+		Select("catalog.parent_code, catalog.web_name, catalog.product_category, COALESCE(pa.source_url, '') AS source_url").
+		Joins("LEFT JOIN product_advisories pa ON pa.tenant_id = ? AND pa.group_key = catalog.group_key", tenantID).
+		Order("catalog.web_name, catalog.parent_code, catalog.group_key").Scan(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query_failed"})
 		return
 	}
@@ -80,7 +79,7 @@ func DownloadProductAdvisoryLinkTemplate(c *gin.Context) {
 	_ = f.SetSheetName("Sheet1", productSheet)
 	_, _ = f.NewSheet("Huong dan")
 	for column, value := range map[string]string{
-		"A1": "ten_dong_bo_web", "B1": "ma_cha", "C1": "link",
+		"A1": "ten_dong_bo_web", "B1": "ma_cha", "C1": "link", "D1": "nhom_vthh",
 	} {
 		_ = f.SetCellValue(productSheet, column, value)
 	}
@@ -89,19 +88,21 @@ func DownloadProductAdvisoryLinkTemplate(c *gin.Context) {
 		_ = f.SetCellValue(productSheet, fmt.Sprintf("A%d", excelRow), row.WebName)
 		_ = f.SetCellValue(productSheet, fmt.Sprintf("B%d", excelRow), row.ParentCode)
 		_ = f.SetCellValue(productSheet, fmt.Sprintf("C%d", excelRow), row.SourceURL)
+		_ = f.SetCellValue(productSheet, fmt.Sprintf("D%d", excelRow), row.ProductCategory)
 	}
 	_ = f.SetColWidth(productSheet, "A", "A", 36)
 	_ = f.SetColWidth(productSheet, "B", "B", 20)
 	_ = f.SetColWidth(productSheet, "C", "C", 72)
+	_ = f.SetColWidth(productSheet, "D", "D", 32)
 	_ = f.SetPanes(productSheet, &excelize.Panes{Freeze: true, Split: false, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
 	textStyle, _ := f.NewStyle(&excelize.Style{NumFmt: 49})
-	_ = f.SetColStyle(productSheet, "A:C", textStyle)
+	_ = f.SetColStyle(productSheet, "A:D", textStyle)
 	headerStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true, Color: "FFFFFF"}, Fill: excelize.Fill{Type: "pattern", Color: []string{"2563EB"}, Pattern: 1}})
-	_ = f.SetCellStyle(productSheet, "A1", "C1", headerStyle)
+	_ = f.SetCellStyle(productSheet, "A1", "D1", headerStyle)
 
 	instructions := []string{
-		"Điền link sản phẩm vào cột link. Có thể dùng mã cha hoặc tên đồng bộ web để ánh xạ sản phẩm.",
-		"Mã cha được ưu tiên. Khi mã cha có giá trị nhưng không khớp, dòng sẽ báo lỗi để tránh cập nhật nhầm sản phẩm.",
+		"Điền link sản phẩm vào cột link. Hệ thống chấp nhận mã cha, SKU riêng biệt hoặc tên đồng bộ web.",
+		"Nếu nhiều dòng dùng chung mã cha, hãy giữ tên đồng bộ web và nhóm VTHH trong file mẫu hoặc dùng SKU riêng biệt trong cột ma_cha.",
 		"Dòng không có link sẽ được bỏ qua. Link phải dùng http hoặc https.",
 		"Các link đã có sẵn trong file mẫu sẽ được đọc lại và ghi đè dữ liệu scrape cũ nếu bạn giữ nguyên chúng khi import.",
 		"Ảnh scrape mới sẽ chờ duyệt trước khi chatbot sử dụng.",
@@ -245,7 +246,7 @@ func parseProductAdvisoryImportRows(rawRows [][]string) ([]productAdvisoryImport
 	if len(rawRows) == 0 {
 		return nil, errProductImportEmpty
 	}
-	columns := map[string]int{"web_name": -1, "parent_code": -1, "link": -1}
+	columns := map[string]int{"web_name": -1, "parent_code": -1, "category": -1, "link": -1}
 	for index, value := range rawRows[0] {
 		kind := productImportHeaderKind(value)
 		if kind == "" {
@@ -268,6 +269,7 @@ func parseProductAdvisoryImportRows(rawRows [][]string) ([]productAdvisoryImport
 			RowNumber:       rowIndex + 2,
 			InputWebName:    productImportCell(values, columns["web_name"]),
 			InputParentCode: productImportCell(values, columns["parent_code"]),
+			InputCategory:   productImportCell(values, columns["category"]),
 			SourceURL:       productImportCell(values, columns["link"]),
 		}
 		if row.InputWebName == "" && row.InputParentCode == "" && row.SourceURL == "" {
@@ -303,6 +305,8 @@ func productImportHeaderKind(header string) string {
 		return "web_name"
 	case "macha", "maskumacha", "sku", "parentsku", "parentcode":
 		return "parent_code"
+	case "nhomvthh", "listtennhomvthh", "listvthh", "productcategory":
+		return "category"
 	case "link", "linksanpham", "url", "producturl", "sourceurl":
 		return "link"
 	default:
@@ -336,48 +340,48 @@ func normalizeProductImportName(value string) string {
 }
 
 func mapProductAdvisoryImportRows(ctx context.Context, tenantID string, rows []productAdvisoryImportRow) ([]models.ProductAdvisoryImportItem, error) {
+	tx := db.DB.WithContext(ctx)
 	var groups []productCatalogGroup
-	if err := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).
-		Select(productCatalogGroupSelect).
-		Where("tenant_id = ? AND TRIM(ma) <> ''", tenantID).
-		Scopes(engine.ExcludeDKCopies).Group(productParentCodeExpr).Scan(&groups).Error; err != nil {
+	if err := productAdvisoryCatalog(tx, tenantID).Scan(&groups).Error; err != nil {
 		return nil, err
 	}
 	type childProduct struct {
-		SKU        string `gorm:"column:sku"`
-		ParentCode string `gorm:"column:parent_code"`
+		SKU      string `gorm:"column:sku"`
+		GroupKey string `gorm:"column:group_key"`
 	}
 	var children []childProduct
-	if err := db.DB.WithContext(ctx).Model(&models.CachedProduct{}).
-		Select("TRIM(ma) AS sku, "+productParentCodeExpr+" AS parent_code").
+	if err := tx.Model(&models.CachedProduct{}).
+		Select("TRIM(ma) AS sku, "+models.ProductAdvisoryGroupKeySQL+" AS group_key").Distinct().
 		Where("tenant_id = ? AND TRIM(ma) <> ''", tenantID).
 		Scopes(engine.ExcludeDKCopies).Scan(&children).Error; err != nil {
 		return nil, err
 	}
 	var profiles []models.ProductAdvisory
-	if err := db.DB.WithContext(ctx).Select("parent_code").Where("tenant_id = ?", tenantID).Find(&profiles).Error; err != nil {
+	if err := tx.Select("group_key").Where("tenant_id = ? AND group_key IS NOT NULL", tenantID).Find(&profiles).Error; err != nil {
 		return nil, err
 	}
 	overwrite := make(map[string]bool, len(profiles))
 	for _, profile := range profiles {
-		overwrite[strings.ToLower(strings.TrimSpace(profile.ParentCode))] = true
+		overwrite[profile.GroupKey] = true
 	}
-	byParent := make(map[string]productCatalogGroup, len(groups))
+	byKey := make(map[string]productCatalogGroup, len(groups))
+	byParent := make(map[string][]productCatalogGroup, len(groups))
 	byName := make(map[string][]productCatalogGroup)
 	for _, group := range groups {
-		byParent[strings.ToLower(strings.TrimSpace(group.ParentCode))] = group
+		byKey[group.GroupKey] = group
+		parent := strings.ToLower(group.ParentCode)
+		byParent[parent] = append(byParent[parent], group)
 		name := normalizeProductImportName(group.WebName)
 		if name != "" {
 			byName[name] = append(byName[name], group)
 		}
 	}
-	byChild := make(map[string]map[string]struct{})
+	byChild := make(map[string][]productCatalogGroup)
 	for _, child := range children {
-		key := strings.ToLower(strings.TrimSpace(child.SKU))
-		if byChild[key] == nil {
-			byChild[key] = make(map[string]struct{})
+		if group, ok := byKey[child.GroupKey]; ok {
+			code := strings.ToLower(child.SKU)
+			byChild[code] = append(byChild[code], group)
 		}
-		byChild[key][strings.TrimSpace(child.ParentCode)] = struct{}{}
 	}
 
 	items := make([]models.ProductAdvisoryImportItem, 0, len(rows))
@@ -398,7 +402,7 @@ func mapProductAdvisoryImportRows(ctx context.Context, tenantID string, rows []p
 			items = append(items, item)
 			continue
 		}
-		if utf8.RuneCountInString(row.InputParentCode) > 100 || (row.InputParentCode == "" && utf8.RuneCountInString(row.InputWebName) > 255) {
+		if utf8.RuneCountInString(row.InputParentCode) > 100 || utf8.RuneCountInString(row.InputCategory) > 500 || utf8.RuneCountInString(row.InputWebName) > 255 {
 			item.Status, item.ErrorCode = "unmatched", "identifier_too_long"
 			items = append(items, item)
 			continue
@@ -411,6 +415,9 @@ func mapProductAdvisoryImportRows(ctx context.Context, tenantID string, rows []p
 				item.ErrorCode = "missing_product_identifier"
 			} else if len(candidates) > 1 {
 				item.ErrorCode = "ambiguous_web_name"
+				if row.InputParentCode != "" {
+					item.ErrorCode = "ambiguous_parent_code"
+				}
 				sort.Strings(candidates)
 				item.ErrorMessage = clipProductImportText(strings.Join(candidates, ", "), 500)
 			} else {
@@ -419,10 +426,11 @@ func mapProductAdvisoryImportRows(ctx context.Context, tenantID string, rows []p
 			items = append(items, item)
 			continue
 		}
-		item.ParentCode, item.WebName, item.MatchedBy = group.ParentCode, group.WebName, matchedBy
-		item.Overwrite = overwrite[strings.ToLower(strings.TrimSpace(group.ParentCode))]
+		item.ParentCode, item.GroupKey, item.WebName, item.MatchedBy = group.ParentCode, group.GroupKey, group.WebName, matchedBy
+		item.ProductCategory = group.ProductCategory
+		item.Overwrite = overwrite[group.GroupKey]
 		item.Status = "pending"
-		key := strings.ToLower(strings.TrimSpace(group.ParentCode))
+		key := group.GroupKey
 		if previous, exists := latestPending[key]; exists {
 			items[previous].Status = "skipped"
 			items[previous].ErrorCode = "duplicate_in_file"
@@ -433,28 +441,54 @@ func mapProductAdvisoryImportRows(ctx context.Context, tenantID string, rows []p
 	return items, nil
 }
 
-func matchProductImportGroup(row productAdvisoryImportRow, byParent map[string]productCatalogGroup, byChild map[string]map[string]struct{}, byName map[string][]productCatalogGroup) (productCatalogGroup, string, []string) {
+func matchProductImportGroup(row productAdvisoryImportRow, byParent, byChild, byName map[string][]productCatalogGroup) (productCatalogGroup, string, []string) {
+	matchedBy := "web_name"
+	matches := byName[normalizeProductImportName(row.InputWebName)]
 	if code := strings.ToLower(strings.TrimSpace(row.InputParentCode)); code != "" {
-		if group, ok := byParent[code]; ok {
-			return group, "parent_code", nil
+		matchedBy, matches = "parent_code", byParent[code]
+		if len(matches) == 0 {
+			matchedBy, matches = "child_sku", byChild[code]
 		}
-		parents := byChild[code]
-		if len(parents) == 1 {
-			for parent := range parents {
-				if group, ok := byParent[strings.ToLower(parent)]; ok {
-					return group, "child_sku", nil
-				}
+	}
+	if row.InputCategory != "" {
+		var categoryMatches []productCatalogGroup
+		for _, match := range matches {
+			if strings.EqualFold(match.ProductCategory, row.InputCategory) {
+				categoryMatches = append(categoryMatches, match)
 			}
 		}
-		return productCatalogGroup{}, "", nil
+		matches = categoryMatches
+		if row.InputWebName != "" && matchedBy == "parent_code" {
+			var nameMatches []productCatalogGroup
+			for _, match := range matches {
+				if normalizeProductImportName(match.WebName) == normalizeProductImportName(row.InputWebName) {
+					nameMatches = append(nameMatches, match)
+				}
+			}
+			matches = nameMatches
+		}
 	}
-	matches := byName[normalizeProductImportName(row.InputWebName)]
 	if len(matches) == 1 {
-		return matches[0], "web_name", nil
+		return matches[0], matchedBy, nil
+	}
+	// Prefer the literal web name to the accent-insensitive lookup when
+	// several catalog groups have similar names.
+	var exact []productCatalogGroup
+	for _, match := range matches {
+		if strings.EqualFold(match.WebName, strings.TrimSpace(row.InputWebName)) {
+			exact = append(exact, match)
+		}
+	}
+	if len(exact) == 1 {
+		return exact[0], matchedBy, nil
 	}
 	candidates := make([]string, 0, len(matches))
 	for _, match := range matches {
-		candidates = append(candidates, match.ParentCode)
+		candidate := match.ParentCode + " / " + match.WebName
+		if match.ProductCategory != "" {
+			candidate += " / " + match.ProductCategory
+		}
+		candidates = append(candidates, candidate)
 	}
 	return productCatalogGroup{}, "", candidates
 }
