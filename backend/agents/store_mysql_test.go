@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"gorm.io/gorm"
 )
 
 // Needs MySQL 8, e.g.
@@ -315,4 +316,64 @@ func TestMigrateAgainReusesDefaultTeamMySQL(t *testing.T) {
 		t.Fatalf("defaults = %+v", defaults)
 	}
 	must(t, DeleteTeam(ctx, tenantID, first.ID))
+}
+
+func TestAgentDefaultTeamSurvivesConcurrentDeleteMySQL(t *testing.T) {
+	connectTestMySQL(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	tenantID, _ := seedTenant(t, "Prompt khách", "Prompt nội bộ")
+	_, err := MigrateLegacy(ctx, tenantID, "admin")
+	must(t, err)
+	target, err := SaveTeam(ctx, tenantID, "admin", TeamInput{Name: "Khác"})
+	must(t, err)
+
+	// Hold the deletion after reading the current default flag. Promotion
+	// must wait on the same row before it can change that flag.
+	type deleteQueryKey struct{}
+	read := make(chan struct{})
+	resume := make(chan struct{})
+	const callback = "test:pause_delete_team_after_select"
+	must(t, db.DB.Callback().Query().After("gorm:query").Register(callback, func(query *gorm.DB) {
+		if query.Statement.Table == "ai_teams" && query.Statement.Context.Value(deleteQueryKey{}) == target.ID {
+			close(read)
+			<-resume
+		}
+	}))
+	t.Cleanup(func() { _ = db.DB.Callback().Query().Remove(callback) })
+
+	deleted := make(chan error, 1)
+	go func() {
+		deleted <- DeleteTeam(context.WithValue(ctx, deleteQueryKey{}, target.ID), tenantID, target.ID)
+	}()
+	select {
+	case <-read:
+	case err := <-deleted:
+		close(resume)
+		t.Fatalf("deletion finished before its first read: %v", err)
+	case <-ctx.Done():
+		close(resume)
+		<-deleted
+		t.Fatal(ctx.Err())
+	}
+
+	promoted := make(chan error, 1)
+	go func() { promoted <- SetDefaultTeam(ctx, tenantID, target.ID) }()
+	select {
+	case err := <-promoted:
+		close(resume)
+		<-deleted
+		t.Fatalf("promotion finished while deletion held the row: %v", err)
+	case <-time.After(time.Second):
+		close(resume)
+	}
+	must(t, <-deleted)
+	if err := <-promoted; !errors.Is(err, ErrNotFound) {
+		t.Fatalf("promoting deleted team = %v, want ErrNotFound", err)
+	}
+	teams, err := ListTeams(ctx, tenantID)
+	must(t, err)
+	if len(teams) != 1 || !teams[0].IsDefault {
+		t.Fatalf("original default team did not survive: %+v", teams)
+	}
 }

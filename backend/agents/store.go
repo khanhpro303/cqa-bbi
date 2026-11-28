@@ -553,6 +553,20 @@ func ListTeams(ctx context.Context, tenantID string) ([]TeamDetail, error) {
 	return out, nil
 }
 
+// lockTenantForTeamChange gives default-team changes and migration the same
+// lock order before any of them read or update a team.
+func lockTenantForTeamChange(tx *gorm.DB, tenantID string) error {
+	var tenant models.Tenant
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", tenantID).First(&tenant).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock tenant: %w", err)
+	}
+	return nil
+}
+
 // DeleteTeam removes a team no channel points at. The default team stays.
 func DeleteTeam(ctx context.Context, tenantID, id string) error {
 	d, err := database(ctx)
@@ -560,8 +574,11 @@ func DeleteTeam(ctx context.Context, tenantID, id string) error {
 		return err
 	}
 	return d.Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantForTeamChange(tx, tenantID); err != nil {
+			return err
+		}
 		var row models.AITeam
-		if err := tx.Where("tenant_id = ? AND id = ?", tenantID, id).First(&row).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND id = ?", tenantID, id).First(&row).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
@@ -593,18 +610,16 @@ func SetDefaultTeam(ctx context.Context, tenantID, id string) error {
 		return err
 	}
 	return d.Transaction(func(tx *gorm.DB) error {
-		var rows []models.AITeam
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ?", tenantID).Find(&rows).Error; err != nil {
+		if err := lockTenantForTeamChange(tx, tenantID); err != nil {
 			return err
 		}
-		var target *models.AITeam
-		for i := range rows {
-			if rows[i].ID == id {
-				target = &rows[i]
-			}
-		}
-		if target == nil {
+		var target models.AITeam
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND id = ?", tenantID, id).First(&target).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrNotFound
+		}
+		if err != nil {
+			return err
 		}
 		if !target.IsActive {
 			return invalid("is_active", "bật Bộ điều phối trước khi đặt làm mặc định")
@@ -659,10 +674,8 @@ func MigrateLegacy(ctx context.Context, tenantID, actorID string) (created bool,
 		return false, err
 	}
 	err = d.Transaction(func(tx *gorm.DB) error {
-		// Serialize concurrent migrations of one tenant on its tenant row.
-		var tenant models.Tenant
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", tenantID).First(&tenant).Error; err != nil {
-			return fmt.Errorf("lock tenant: %w", err)
+		if err := lockTenantForTeamChange(tx, tenantID); err != nil {
+			return err
 		}
 		var count int64
 		if err := tx.Model(&models.AIAgent{}).Where("tenant_id = ?", tenantID).Count(&count).Error; err != nil {

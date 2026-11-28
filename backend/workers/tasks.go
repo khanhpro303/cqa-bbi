@@ -361,10 +361,10 @@ func erpAgentTokenFor(tenantID, agentType string) string {
 	return ""
 }
 
-// HandleZaloWebhookTask processes the webhook task
 // agentRouterAsk is the model the coordinator asks (a seam for tests).
 var agentRouterAsk = agents.TenantAsk
 
+// HandleZaloWebhookTask processes the webhook task.
 func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowClient, lookupOrderDelivery CurrentOrderDeliveryLookup) asynq.HandlerFunc {
 	guestLangflow := engine.NewLangflowPreviewClient(cfg)
 	var asynqClient *asynq.Client
@@ -1352,7 +1352,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					if isWhitelisted {
 						casualAgentType = "private"
 					}
-					go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, casualAgentType, "", agentPlan.AgentKey(), reply.Result, reply.Prompt, reply.Text)
+					go logChatbotAIUsage(matchedChannel.TenantID, matchedChannel.ID, payload.Sender.ID, whitelistRec.Name, casualAgentType, "", "", reply.Result, reply.Prompt, reply.Text)
 				}
 				switch {
 				case err != nil:
