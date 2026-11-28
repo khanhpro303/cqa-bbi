@@ -61,6 +61,7 @@ export interface TeamChannel {
   id: string
   name: string
   channel_type: string
+  avatar_url?: string
   // The team the channel itself points at; empty when it follows the default.
   ai_team_id: string
 }

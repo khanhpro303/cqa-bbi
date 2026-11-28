@@ -245,12 +245,35 @@ func ListAIAgentRevisions(c *gin.Context) {
 
 // ListAITeams returns the coordinator teams with members and channels.
 func ListAITeams(c *gin.Context) {
-	teams, err := agents.ListTeams(c.Request.Context(), middleware.GetTenantID(c))
+	ctx, tenantID := c.Request.Context(), middleware.GetTenantID(c)
+	teams, err := agents.ListTeams(ctx, tenantID)
 	if err != nil {
 		agentServerError(c, "list teams", err)
 		return
 	}
+	if cfg, err := config.Load(); err == nil {
+		enrichAITeamAvatars(ctx, tenantID, teams, cfg.PersonalZaloGatewayBaseURL)
+	}
 	c.JSON(http.StatusOK, gin.H{"teams": teams})
+}
+
+func enrichAITeamAvatars(ctx context.Context, tenantID string, teams []agents.TeamDetail, gatewayBaseURL string) {
+	var channelIDs []string
+	for _, team := range teams {
+		for _, ch := range team.Channels {
+			if ch.ChannelType == "personal_zalo_import" {
+				channelIDs = append(channelIDs, ch.ID)
+			}
+		}
+	}
+	avatars := personalZaloChannelAvatars(ctx, tenantID, channelIDs, gatewayBaseURL)
+	for _, team := range teams {
+		for i := range team.Channels {
+			if avatar := avatars[team.Channels[i].ID]; avatar != "" {
+				team.Channels[i].AvatarURL = avatar
+			}
+		}
+	}
 }
 
 // CreateAITeam adds a coordinator team.

@@ -7,6 +7,7 @@ import AgentEditorDialog from '../components/ai-agents/AgentEditorDialog.vue'
 import TeamEditorDialog from '../components/ai-agents/TeamEditorDialog.vue'
 import AgentSwitchCard from '../components/ai-agents/AgentSwitchCard.vue'
 import TaskModelsPanel from '../components/ai-agents/TaskModelsPanel.vue'
+import ChannelAvatar from '../components/channels/ChannelAvatar.vue'
 import AIEngines from '../views/AIEngines.vue'
 import { useAuthStore } from '../stores/auth'
 import type { ToolInfo } from '../components/ai-agents/types'
@@ -48,7 +49,7 @@ const debtTeam = {
   id: 't2', name: 'Công nợ', persona_prompt: 'Xưng em.', router_prompt: '', default_agent_id: 'a3', is_default: false, is_active: true, options: { sticky_minutes: 30 },
   members: [debtAgent],
   memberships: [{ team_id: 't2', agent_id: 'a3', position: 0, enabled: true }],
-  channels: [{ id: 'pz', name: 'Zalo Lan', channel_type: 'personal_zalo_import', ai_team_id: 't2' }],
+  channels: [{ id: 'pz', name: 'Zalo Lan', channel_type: 'personal_zalo_import', ai_team_id: 't2', avatar_url: 'https://cdn.example.com/lan.jpg' }],
   silent: ['staff'],
 }
 
@@ -142,12 +143,46 @@ describe('Agents AI page', () => {
     await flushPromises()
     const vm = wrapper.vm as any
     vm.tab = 'teams'
+    vm.openTeam(vm.teams[0])
     await flushPromises()
     expect(wrapper.find('[data-testid="team-make-default-t1"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="team-make-default-t2"]').exists()).toBe(true)
-    await vm.makeDefaultTeam(debtTeam)
+
+    const teamURL = '/tenants/tenant-1/ai-teams'
+    const promotedTeams = [
+      { ...defaultTeam, is_default: false, channels: [] },
+      { ...debtTeam, is_default: true, channels: [...defaultTeam.channels, { ...debtTeam.channels[0]!, ai_team_id: '' }] },
+    ]
+    let finishOldLoad!: (response: { data: { teams: unknown[] } }) => void
+    mocks.get.mockImplementationOnce(() => new Promise(resolve => { finishOldLoad = resolve }))
+    const oldReload = vm.$.setupState.loadTeams()
+    mocks.get.mockImplementation(routeGet({ [teamURL]: { teams: promotedTeams } }))
+    await wrapper.get('[data-testid="team-make-default-t2"]').trigger('click')
+    await flushPromises()
+    finishOldLoad({ data: { teams: [defaultTeam, debtTeam] } })
+    await oldReload
+    await flushPromises()
+
     expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/ai-teams/t2/default')
-    expect(mocks.get.mock.calls.filter(c => c[0] === '/tenants/tenant-1/ai-teams')).toHaveLength(2)
+    expect(wrapper.find('[data-testid="team-make-default-t2"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="team-make-default-t1"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid^="team-card-"]').map(card => card.attributes('data-testid'))).toEqual(['team-card-t1', 'team-card-t2'])
+    expect(wrapper.findComponent(TeamEditorDialog).props('team')).toMatchObject({ id: 't1', is_default: false, channels: [] })
+    expect(vm.channelRows.map((row: { selectValue: string }) => row.selectValue)).toEqual(['', ''])
+  })
+
+  it('uses channel avatars on coordinator cards and in the channel list', async () => {
+    const wrapper = shallowMount(AIAgents, stubs)
+    await flushPromises()
+    for (const tab of ['teams', 'channels']) {
+      ;(wrapper.vm as any).tab = tab
+      await flushPromises()
+      const avatars = wrapper.findAllComponents(ChannelAvatar).map(avatar => avatar.props())
+      expect(avatars).toEqual([
+        expect.objectContaining({ channelType: 'zalo_oa', channelId: 'oa' }),
+        expect.objectContaining({ channelType: 'personal_zalo_import', channelId: 'pz', avatarUrl: 'https://cdn.example.com/lan.jpg' }),
+      ])
+    }
   })
 
   it('tells same-named teams apart and warns when a channel points at an empty one', async () => {
@@ -371,6 +406,7 @@ describe('Team editor', () => {
     await flushPromises()
     const vm = wrapper.vm as any
     expect(vm.deleteBlockedReason).toContain('Zalo Lan')
+    expect(wrapper.getComponent(ChannelAvatar).props()).toMatchObject({ channelType: 'personal_zalo_import', avatarUrl: 'https://cdn.example.com/lan.jpg' })
     vm.removeMember(0)
     expect(vm.draft.default_agent_id).toBe('')
     expect(vm.silent).toEqual(['customer', 'staff'])
