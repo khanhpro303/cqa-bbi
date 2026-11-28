@@ -132,6 +132,12 @@ const router = createRouter({
           meta: { perm: 'settings' },
         },
         {
+          path: 'ai-agents',
+          name: 'ai-agents',
+          component: () => import('../views/AIAgents.vue'),
+          meta: { perm: 'settings' },
+        },
+        {
           path: 'crm',
           name: 'crm',
           component: () => import('../views/CRM.vue'),

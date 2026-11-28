@@ -619,6 +619,7 @@ const navItems = computed(() => {
     { icon: 'mdi-bell-ring', label: 'nav_notification_logs', route: `${base}/notifications`, exact: false, perm: 'jobs' },
     { icon: 'mdi-api', label: 'nav_mcp', route: `${base}/mcp`, exact: false, perm: 'settings' },
     { icon: 'mdi-brain', label: 'nav_ai_engines', route: `${base}/ai-engines`, exact: false, perm: 'settings' },
+    { icon: 'mdi-account-network-outline', label: 'nav_ai_agents', route: `${base}/ai-agents`, exact: false, perm: 'settings' },
     { icon: 'mdi-book-open-variant', label: 'nav_knowledge', route: `${base}/knowledge`, exact: false, perm: 'settings' },
     { icon: 'mdi-account-box-multiple', label: 'nav_crm', route: `${base}/crm`, exact: false, perm: 'settings' },
     { icon: 'mdi-account-group', label: 'nav_users', route: `${base}/users`, exact: false, perm: 'settings' },

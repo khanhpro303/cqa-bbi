@@ -24,11 +24,22 @@ Trước đây mỗi tầng có một bot làm tất cả: một prompt cho khá
 
 ## Bật agent và chuyển prompt cũ
 
-- **Công tắc** `ai_agents_enabled` (Cài đặt → Agent). Tắt (mặc định): mọi thứ chạy như trước bằng prompt AI Engine.
+- **Công tắc** `ai_agents_enabled` (trang **Agents AI**, chỉ chủ sở hữu hoặc quản trị viên đổi được). Tắt (mặc định): mọi thứ chạy như trước bằng prompt AI Engine.
 - **Lần bật đầu tiên** chép hai system prompt của AI Engine thành hai agent: **Trợ lý khách hàng** (`tro-ly-khach-hang`, đối tượng khách) và **Trợ lý nội bộ** (`tro-ly-noi-bo`, đối tượng nhân viên), cả hai có mọi công cụ và đi theo flow của AI Engine, nằm trong Bộ điều phối **Mặc định** không có giọng chung. Nhờ vậy ngay sau khi bật, khách thấy y như cũ: cùng prompt (chép nguyên văn), cùng flow, cùng công cụ.
 - Có thể **chép trước mà chưa bật** (`POST /settings/ai-agents/migrate`) để chia prompt thành các agent rồi mới bật.
 - Khi agent đang bật, hai prompt chatbot ở trang AI Engine là **bản gốc để quay lại**: lưu trang AI Engine không đổi và không xoá chúng. Tắt công tắc là quay về bot cũ ngay.
 - Prompt AI Engine đổi sau khi đã chép (ví dụ sửa lúc agent đang tắt): `GET /settings/ai-agents` trả `drift` là các agent lệch với bản gốc; `POST /settings/ai-agents/migrate` với `{"refresh": true}` chép lại vào các agent đó (ghi đè chỉnh sửa trong agent).
+
+## Trang Agents AI
+
+Menu **Agents AI** (quyền settings) có công tắc ở đầu trang và ba tab:
+
+- **Công tắc**: bật, tắt agent (hỏi lại trước khi đổi, cảnh báo Bộ điều phối nào sẽ im lặng với ai). Chưa có agent thì có nút chép prompt AI Engine thành agent mà chưa bật. Agent lệch với prompt gốc (`drift`) hiện thành thông báo kèm nút **Chép lại từ AI Engine** (hỏi lại vì ghi đè prompt agent; bản cũ vẫn còn trong lịch sử).
+- **Agent chuyên môn**: danh sách agent (đối tượng, số công cụ, flow riêng hay flow AI Engine, nằm trong Bộ điều phối nào). Cửa sổ sửa agent có tên, mã (chỉ đặt lúc tạo, tự sinh từ tên), mô tả, đối tượng, bật/tắt, system prompt, danh sách công cụ MCP theo nhóm (đánh dấu công cụ ghi dữ liệu), runtime, flow Langflow riêng, nhãn tài liệu. Tab **Lịch sử phiên bản** so prompt của từng bản với bản đang soạn và đưa một bản cũ vào bản soạn (bấm Lưu mới áp dụng). Agent đang nằm trong Bộ điều phối thì không xoá được.
+- **Bộ điều phối**: mỗi thẻ có giọng chung, agent theo thứ tự (ngôi sao là agent mặc định), ai trả lời khách và nhân viên, cảnh báo im lặng, các kênh đang dùng. Cửa sổ sửa cho đổi thứ tự, bật/tắt từng agent trong bộ, thêm/gỡ agent và xem ngay ai sẽ trả lời. Phần "Tự chọn agent theo nội dung" (prompt điều phối, giữ agent, chuyển lượt) lưu sẵn nhưng chưa có hiệu lực ở bản này.
+- **Kênh**: chọn Bộ điều phối cho từng kênh Zalo OA và Zalo cá nhân (hoặc theo mặc định), kèm agent sẽ trả lời khách và nhân viên trên kênh đó.
+
+Khi agent đang bật, trang **AI Engines** hiện hai prompt chatbot ở chế độ chỉ xem kèm đường dẫn sang Agents AI.
 
 ## API (theo tenant, `/api/v1/tenants/:tenantId`)
 
@@ -41,7 +52,7 @@ Trước đây mỗi tầng có một bot làm tất cả: một prompt cho khá
 | GET/POST | `/ai-agents` | settings:r / settings:w | danh sách (không kèm prompt) / tạo |
 | GET/PUT/DELETE | `/ai-agents/:agentId` | settings:r / w / w | xem (kèm prompt), lưu (gửi đủ mọi trường), xoá (chỉ khi không nằm trong Bộ điều phối nào) |
 | GET | `/ai-agents/:agentId/revisions` | settings:r | các phiên bản đã lưu |
-| GET/POST | `/ai-teams` | settings:r / w | danh sách kèm thành viên, kênh, `silent` / tạo |
+| GET/POST | `/ai-teams` | settings:r / w | danh sách kèm thành viên, kênh (`ai_team_id` rỗng là kênh theo mặc định), `silent` / tạo |
 | PUT/DELETE | `/ai-teams/:teamId` | settings:w | lưu (thay toàn bộ thành viên) / xoá (không xoá được Bộ điều phối mặc định hay đang có kênh dùng) |
 | PUT | `/channels/:channelId/ai-team` | settings:w | `{team_id}`, rỗng là về Bộ điều phối mặc định |
 

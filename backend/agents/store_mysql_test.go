@@ -132,6 +132,10 @@ func TestAgentsLifecycleMySQL(t *testing.T) {
 		len(teams[1].Channels) != 1 || teams[1].Channels[0].ID != personal || len(teams[1].Silent) != 1 || teams[1].Silent[0] != AudienceStaff {
 		t.Errorf("teams = %+v", teams)
 	}
+	// The UI tells a channel's own team from the default it falls back to.
+	if teams[0].Channels[0].AITeamID != "" || teams[1].Channels[0].AITeamID != team.ID {
+		t.Errorf("channel team ids = %q %q", teams[0].Channels[0].AITeamID, teams[1].Channels[0].AITeamID)
+	}
 	for _, m := range teams[0].Members {
 		if m.SystemPrompt != "" {
 			t.Error("team list must not carry prompts")

@@ -53,14 +53,28 @@
         class="mb-3"
       />
 
+      <v-alert
+        v-if="agentsOn"
+        type="info"
+        variant="tonal"
+        density="compact"
+        class="mb-4"
+        data-testid="agents-on-notice"
+      >
+        {{ $t('ag_engine_agents_on') }}
+        <template #append>
+          <v-btn size="small" variant="text" color="primary" :to="`/${tenantId}/ai-agents`">{{ $t('ag_engine_open_agents') }}</v-btn>
+        </template>
+      </v-alert>
+
       <v-text-field
         :model-value="langflow.systemPrompt"
         :label="$t('langflow_system_prompt')"
         :placeholder="$t('langflow_system_prompt_placeholder')"
-        :hint="$t('langflow_system_prompt_hint')"
+        :hint="agentsOn ? $t('ag_engine_prompt_readonly_hint') : $t('langflow_system_prompt_hint')"
         persistent-hint
         density="comfortable"
-        prepend-inner-icon="mdi-message-text-outline"
+        :prepend-inner-icon="agentsOn ? 'mdi-lock-outline' : 'mdi-message-text-outline'"
         append-inner-icon="mdi-arrow-expand-all"
         @click="openPromptModal('public')"
         @click:append-inner.stop="openPromptModal('public')"
@@ -72,10 +86,10 @@
         :model-value="langflow.systemPromptInternal"
         :label="$t('langflow_system_prompt_internal')"
         :placeholder="$t('langflow_system_prompt_internal_placeholder')"
-        :hint="$t('langflow_system_prompt_internal_hint')"
+        :hint="agentsOn ? $t('ag_engine_prompt_readonly_hint') : $t('langflow_system_prompt_internal_hint')"
         persistent-hint
         density="comfortable"
-        prepend-inner-icon="mdi-account-tie-outline"
+        :prepend-inner-icon="agentsOn ? 'mdi-lock-outline' : 'mdi-account-tie-outline'"
         append-inner-icon="mdi-arrow-expand-all"
         @click="openPromptModal('internal')"
         @click:append-inner.stop="openPromptModal('internal')"
@@ -469,8 +483,19 @@
           >
             {{ $t('messenger_insights_system_prompt_note') }}
           </v-alert>
+          <v-alert
+            v-if="promptModalReadonly"
+            type="info"
+            variant="tonal"
+            density="compact"
+            class="mb-4"
+          >
+            {{ $t('ag_engine_agents_on') }}
+          </v-alert>
           <v-textarea
             v-model="promptModalText"
+            :readonly="promptModalReadonly"
+            data-testid="prompt-modal-text"
             rows="18"
             variant="outlined"
             density="comfortable"
@@ -492,9 +517,9 @@
             {{ $t('messenger_insights_restore_default') }}
           </v-btn>
           <v-btn variant="outlined" @click="promptModalOpen = false">
-            {{ $t('cancel') }}
+            {{ promptModalReadonly ? $t('ag_close') : $t('cancel') }}
           </v-btn>
-          <v-btn variant="flat" color="primary" @click="savePromptModal">
+          <v-btn v-if="!promptModalReadonly" variant="flat" color="primary" @click="savePromptModal">
             {{ $t('confirm') }}
           </v-btn>
         </v-card-actions>
@@ -546,6 +571,13 @@ const promptModalType = ref<'public' | 'internal' | 'crm_analysis' | 'messenger_
 const promptModalText = ref('')
 const messengerInsightsDefaultPrompt = ref('')
 
+// While specialist agents answer chats, the two chatbot prompts here are the
+// copy the agents were made from and the rollback for turning agents off:
+// they are shown read-only (the backend also keeps them on save).
+const agentsOn = ref(false)
+const promptModalReadonly = computed(() =>
+  agentsOn.value && (promptModalType.value === 'public' || promptModalType.value === 'internal'))
+
 function openPromptModal(type: 'public' | 'internal' | 'crm_analysis' | 'messenger_insights') {
   promptModalType.value = type
   if (type === 'public') {
@@ -561,6 +593,10 @@ function openPromptModal(type: 'public' | 'internal' | 'crm_analysis' | 'messeng
 }
 
 function savePromptModal() {
+  if (promptModalReadonly.value) {
+    promptModalOpen.value = false
+    return
+  }
   if (promptModalType.value === 'public') {
     langflow.systemPrompt = promptModalText.value
   } else if (promptModalType.value === 'internal') {
@@ -758,6 +794,15 @@ async function testConnection() {
   }
 }
 
+async function loadAgentsState() {
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/settings/ai-agents`)
+    agentsOn.value = !!data?.enabled
+  } catch {
+    agentsOn.value = false
+  }
+}
+
 async function fetchListTenNhomVthh() {
   try {
     const { data } = await api.get(`/tenants/${tenantId.value}/crm/list-ten-nhom-vthh`)
@@ -868,7 +913,7 @@ function showSnack(text: string, color: string) {
 }
 
 onMounted(async () => {
-  await loadSettings()
+  await Promise.all([loadSettings(), loadAgentsState()])
   await fetchListTenNhomVthh()
   await fetchListNhanHieu()
 })
