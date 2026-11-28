@@ -63,6 +63,11 @@ const stubs = {
     emits: ['update:modelValue'],
     template: '<select :aria-label="label" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option></select>',
   },
+  VAutocomplete: {
+    props: ['modelValue', 'label', 'items'],
+    emits: ['update:modelValue', 'update:search'],
+    template: '<select :aria-label="label" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value || null)"><option value=""></option><option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option></select>',
+  },
   VSwitch: {
     props: ['modelValue', 'label', 'disabled'],
     emits: ['update:modelValue'],
@@ -93,6 +98,7 @@ beforeEach(() => {
     if (url.endsWith('/personal-zalo-gateway')) return { data: { gateway_configured: true, gateway_reachable: true, account_exists: false } }
     if (url.endsWith('/zalo-whitelist')) return { data: [{ id: 'staff', name: 'An', zalo_user_id: '123', status: 'active' }] }
     if (url.endsWith('/sync-history')) return { data: { data: [], total: 0 } }
+    if (url === tenant + '/conversations') return { data: { data: [{ id: 'group-conversation', customer_name: 'Khách A' }], total: 1 } }
     return { data: [] }
   })
   api.put.mockReset().mockImplementation(async (_url: string, { metadata, ...fields }: Partial<Channel>) => {
@@ -162,6 +168,9 @@ describe.each([false, true])('channel editor on detail page = %s', (detail) => {
     await tabs[3]!.trigger('click')
     await flushPromises()
     await dialog.get('[data-testid="personal-zalo-complaint-cases"]').setValue(true)
+    await dialog.get('[data-testid="personal-zalo-complaint-add-mapping"]').trigger('click')
+    await dialog.get('[data-testid="personal-zalo-complaint-group-0"]').setValue('group-conversation')
+    await dialog.get('[data-testid="personal-zalo-complaint-customer-code-0"]').setValue(' KH001 ')
 
     await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
     await flushPromises()
@@ -170,7 +179,7 @@ describe.each([false, true])('channel editor on detail page = %s', (detail) => {
     expect(JSON.parse(api.put.mock.calls[0]![1].metadata)).toEqual({
       sync_scope: 'all', session_keyword: 'Call Bull', session_timeout_minutes: 60,
       personal_zalo_group_reply_enabled: true, personal_zalo_handover_staff_id: 'staff', handover_alert_group_id: '',
-      complaint_cases: true,
+      complaint_cases: true, complaint_group_customers: { 'group-conversation': 'KH001' },
     })
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     const refreshed = detail ? channelStore.currentChannel : channelStore.channels[0]
@@ -202,6 +211,23 @@ it('shows the dedicated complaint settings tab for a Zalo OA channel', async () 
   await tabs.find(tab => tab.text() === en.complaint_settings_tab)!.trigger('click')
   await flushPromises()
   expect(dialog.get('[data-testid="complaint-cases"]').attributes('aria-label')).toBe(en.complaint_cases_switch)
+})
+
+it('blocks saving an incomplete personal Zalo complaint customer mapping', async () => {
+  const { wrapper } = await mountPage(true)
+  await wrapper.get(editButton).trigger('click')
+  const dialog = wrapper.get('[role="dialog"]')
+  await dialog.findAll('button[role="tab"]').find(tab => tab.text() === en.complaint_settings_tab)!.trigger('click')
+  await flushPromises()
+  await dialog.get('[data-testid="personal-zalo-complaint-cases"]').setValue(true)
+  await dialog.get('[data-testid="personal-zalo-complaint-add-mapping"]').trigger('click')
+  await dialog.get('[data-testid="personal-zalo-complaint-group-0"]').setValue('group-conversation')
+  await dialog.get('[data-testid="personal-zalo-complaint-customer-code-0"]').setValue('KH001')
+  await dialog.get('[data-testid="personal-zalo-complaint-group-0"]').setValue('')
+  await dialog.findAll('button').find(button => button.text() === en.save_settings)!.trigger('click')
+
+  expect(api.put).not.toHaveBeenCalled()
+  expect(dialog.get('[role="alert"]').text()).toBe(en.personal_zalo_complaint_mapping_incomplete)
 })
 
 it('keeps the edit dialog open with the original draft after a validation error', async () => {

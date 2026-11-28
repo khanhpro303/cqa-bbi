@@ -86,6 +86,9 @@ type Report struct {
 	// SubjectOnly: match only the chat's own cases, not others with the same
 	// customer code (a sender in a group they are not a member of).
 	SubjectOnly bool
+	// MatchCustomerOnly keeps a staff report on the configured customer even
+	// if the group has tickets from before its customer mapping changed.
+	MatchCustomerOnly bool
 	// Retry: the turn is a retried message. If it already recorded a
 	// report, that report stands and nothing new is written.
 	Retry    bool
@@ -213,7 +216,7 @@ func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 		matchCode = ""
 	}
 	r.settings = channelSettings(ctx, r.TenantID, r.ChannelID)
-	candidates, err := Candidates(ctx, r.TenantID, r.SubjectType, r.SubjectID, matchCode, r.settings.ResolvedWindow())
+	candidates, err := candidateCases(ctx, r.TenantID, r.SubjectType, r.SubjectID, matchCode, r.settings.ResolvedWindow(), r.MatchCustomerOnly)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -251,8 +254,14 @@ func decideAndWrite(ctx context.Context, r Report) (Outcome, error) {
 // the customer code's) open cases and the ones resolved within window,
 // newest first.
 func Candidates(ctx context.Context, tenantID, subjectType, subjectID, customerCode string, window time.Duration) ([]models.CustomerCase, error) {
+	return candidateCases(ctx, tenantID, subjectType, subjectID, customerCode, window, false)
+}
+
+func candidateCases(ctx context.Context, tenantID, subjectType, subjectID, customerCode string, window time.Duration, matchCustomerOnly bool) ([]models.CustomerCase, error) {
 	q := db.DB.WithContext(ctx).Where("tenant_id = ?", tenantID)
-	if customerCode != "" {
+	if matchCustomerOnly {
+		q = q.Where("customer_code <> '' AND customer_code = ? AND private = ?", customerCode, false)
+	} else if customerCode != "" {
 		q = q.Where("((subject_type = ? AND subject_id = ?) OR (customer_code = ? AND private = ?))", subjectType, subjectID, customerCode, false)
 	} else {
 		q = q.Where("subject_type = ? AND subject_id = ?", subjectType, subjectID)

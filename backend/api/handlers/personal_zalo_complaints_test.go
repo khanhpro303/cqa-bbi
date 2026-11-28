@@ -35,7 +35,7 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	if err := database.AutoMigrate(&models.AppSetting{}, &models.CRMGroup{}, &models.ZaloCustomer{},
 		&models.ZaloWhitelist{}, &models.PersonalZaloIdentityLink{}, &models.Conversation{}, &models.CustomerCase{},
 		&models.CustomerCaseEvent{}, &models.CustomerCaseAlert{}, &models.ERPAuditLog{}, &models.NotificationLog{}, &models.CRMGroupCustomerCode{},
-		&models.CRMGroupCustomer{}); err != nil {
+		&models.CRMGroupCustomer{}, &models.CachedCustomer{}); err != nil {
 		t.Fatal(err)
 	}
 	previousRedis := db.RedisClient
@@ -76,6 +76,54 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	if err := database.Create(&ch).Error; err != nil {
 		t.Fatal(err)
 	}
+	const staffSender, customerGroup, missingMappingGroup = "791", "988", "989"
+	const staffName, groupCustomerCode, groupCustomerName = "Nhân viên Ánh", "S042", "Khách của nhóm"
+	staffUser := models.User{ID: uuid.NewString(), Email: "staff-complaints@example.test", Name: staffName, PasswordHash: "fixture"}
+	groupConversation := models.Conversation{ID: uuid.NewString(), TenantID: tenant, ChannelID: ch.ID,
+		ExternalConversationID: "group:" + customerGroup, CustomerName: "Nhóm khách kiểm thử", Metadata: "{}"}
+	for _, row := range []any{
+		&staffUser, &groupConversation,
+		&models.CachedCustomer{ID: uuid.NewString(), TenantID: tenant, MA: groupCustomerCode, HO_VA_TEN: groupCustomerName},
+		&models.CustomerCase{ID: uuid.NewString(), TenantID: tenant, ChannelID: ch.ID, SubjectType: "group",
+			SubjectID: customerGroup, ZaloGroupID: customerGroup, ZaloUserID: "old-reporter", CustomerCode: "OLD",
+			Status: "open", Title: "Vấn đề của khách trước đây", Images: "[]"},
+	} {
+		if err := database.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.Exec("INSERT INTO user_tenants (tenant_id, user_id) VALUES (?, ?)", tenant, staffUser.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := decodeMetadataObject(ch.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata[personalZaloAccountOwnersKey] = []map[string]string{{"account_external_id": staffSender, "user_id": staffUser.ID}}
+	mappingPatch := fmt.Sprintf(`{"complaint_group_customers":{%q:%q}}`, groupConversation.ID, groupCustomerCode)
+	if err := validatePersonalZaloComplaintCustomers(t.Context(), ch, mappingPatch, metadata); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{
+		`{"complaint_group_customers":{"unrelated-conversation":"S042"}}`,
+		fmt.Sprintf(`{"complaint_group_customers":{%q:"UNKNOWN"}}`, groupConversation.ID),
+	} {
+		if err := validatePersonalZaloComplaintCustomers(t.Context(), ch, invalid, map[string]interface{}{}); err == nil {
+			t.Fatalf("accepted invalid mapping: %s", invalid)
+		}
+	}
+	saveMetadata := func() {
+		t.Helper()
+		raw, err := json.Marshal(metadata)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ch.Metadata = string(raw)
+		if err := database.Model(&ch).Update("metadata", ch.Metadata).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	saveMetadata()
 	verifiedID, verifiedAt := "457", time.Now()
 	customer := models.ZaloCustomer{ID: uuid.NewString(), TenantID: tenant, Name: "Verified customer", Status: "approved", CustomerCode: "S041"}
 	if err := database.Create(&customer).Error; err != nil {
@@ -117,6 +165,10 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	mcp.POST("/mcp/:tenantId", ERPMCP)
 	flow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/responses" {
+			input, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(input), "Vấn đề của khách trước đây") {
+				t.Error("complaint model received a case for the previous customer of this group")
+			}
 			_, _ = io.WriteString(w, `{"output_text":"{\"label\":\"HANDOVER\"}"}`)
 			return
 		}
@@ -144,8 +196,15 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 		if err != nil || !p.PersonalZalo || !p.Complaints || p.ChannelID != ch.ID || p.ComplaintTurnID == "" || len(p.Groups) != 0 {
 			t.Error("Langflow did not get a scoped complaint grant")
 		}
+		if p == nil {
+			return
+		}
+		isStaff := p.ZaloUserID == staffSender
+		if p.ZaloGroupID != "" && p.GroupGuest == isStaff {
+			t.Errorf("wrong group complaint grant for staff=%t", isStaff)
+		}
 		callTool := func(name string) string {
-			body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + name + `","arguments":{"title":"Kính giao bị nứt","detail":"Kiểm tra đơn giao kính nứt","type":"product_defect"}}}`
+			body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + name + `","arguments":{"title":"Kính giao bị nứt","detail":"Kiểm tra đơn giao kính nứt","type":"product_defect","customer_code":"UNTRUSTED"}}}`
 			req := httptest.NewRequest(http.MethodPost, "/mcp/"+tenant, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-Agent-Token", r.Header.Get("X-Langflow-Global-Var-CQA_ERP_AGENT_TOKEN"))
@@ -157,7 +216,15 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 		if out := callTool("lookup_order"); !strings.Contains(out, "Tool unavailable in knowledge preview") {
 			t.Errorf("complaint grant allowed an ERP lookup: %s", out)
 		}
-		if out := callTool(complaintMCPToolName); !strings.Contains(out, `"isError":false`) {
+		out := callTool(complaintMCPToolName)
+		if p.ZaloGroupID == missingMappingGroup {
+			if !strings.Contains(out, "chưa được gắn mã khách hàng") || !strings.Contains(out, `"isError":true`) {
+				t.Errorf("missing mapping was not refused: %s", out)
+			}
+			_, _ = fmt.Fprint(w, `{"outputs":[{"outputs":[{"results":{"message":{"text":"[CQA_REQUEST_HUMAN_REVIEW]"}}}]}]}`)
+			return
+		}
+		if !strings.Contains(out, `"isError":false`) {
 			t.Errorf("complaint tool rejected the signed turn: %s", out)
 		} else if p != nil && p.ZaloGroupID != "" && (!strings.Contains(out, `\"action\":\"recorded\"`) || strings.Contains(out, `\"case\"`)) {
 			t.Errorf("group tool result exposed case details: %s", out)
@@ -181,14 +248,24 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		customerCode string
+		staffGroup   bool
+		unmapped     bool
+		silent       bool
 		turn         personalZaloChatbotRequest
 	}{
 		{name: "direct guest", turn: personalZaloChatbotRequest{SchemaVersion: personalZaloDirectProtocol, ThreadType: personalZaloThreadUser, SenderID: "456", ThreadID: "456"}},
 		{name: "direct verified", customerCode: customer.CustomerCode, turn: personalZaloChatbotRequest{SchemaVersion: personalZaloDirectProtocol, ThreadType: personalZaloThreadUser, SenderID: verifiedID, ThreadID: verifiedID}},
 		{name: "group mention", turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: "789", ThreadID: "987", BotMentioned: true}},
 		{name: "group assistant without mention", turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: "790", ThreadID: "987"}},
+		{name: "ordinary staff message without calling bot", staffGroup: true, silent: true, turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: staffSender, ThreadID: customerGroup}},
+		{name: "staff calls bot with group assistant off", customerCode: groupCustomerCode, staffGroup: true, turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: staffSender, ThreadID: customerGroup, BotMentioned: true}},
+		{name: "staff calls bot without a group mapping", staffGroup: true, unmapped: true, turn: personalZaloChatbotRequest{SchemaVersion: "personal-zalo-chatbot-v2", ThreadType: personalZaloThreadGroup, SenderID: staffSender, ThreadID: missingMappingGroup, BotMentioned: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.staffGroup {
+				metadata["group_assistant_mode"] = false
+				saveMetadata()
+			}
 			turn := tc.turn
 			turn.TenantID, turn.ChannelID, turn.AccountExternalID = tenant, ch.ID, ch.ExternalID
 			turn.SentAt, turn.MessageID, turn.Text = time.Now(), "same-message-id", "Kính vừa giao bị nứt rồi em"
@@ -213,22 +290,53 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 				req.Header.Set("X-CQA-Chatbot-Signature", sign(gatewaySecret))
 				res := httptest.NewRecorder()
 				router.ServeHTTP(res, req)
+				if tc.silent {
+					if res.Code != http.StatusNoContent {
+						t.Fatalf("unaddressed staff message returned status %d", res.Code)
+					}
+					continue
+				}
+				if tc.unmapped {
+					if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "chưa ghi nhận được khiếu nại thay khách") {
+						t.Fatalf("unmapped group reply status=%d body=%s", res.Code, res.Body.String())
+					}
+					continue
+				}
 				if res.Code != http.StatusOK || strings.Contains(res.Body.String(), "66656") || !strings.Contains(res.Body.String(), "Dạ đã ghi nhận.") {
 					t.Fatalf("reply status=%d body=%s", res.Code, res.Body.String())
 				}
 			}
 			var cases []models.CustomerCase
-			if err := database.Where("tenant_id = ? AND zalo_user_id = ?", tenant, turn.SenderID).Find(&cases).Error; err != nil {
-				t.Fatal(err)
-			}
 			groupID := ""
 			if turn.ThreadType == personalZaloThreadGroup {
 				groupID = turn.ThreadID
 			}
-			if len(cases) != 1 || cases[0].ChannelID != ch.ID || cases[0].SubjectType != "user" ||
-				cases[0].SubjectID != turn.SenderID || cases[0].ZaloGroupID != groupID || cases[0].FollowupCount != 0 ||
+			if err := database.Where("tenant_id = ? AND zalo_user_id = ? AND zalo_group_id = ?", tenant, turn.SenderID, groupID).Find(&cases).Error; err != nil {
+				t.Fatal(err)
+			}
+			if tc.unmapped || tc.silent {
+				if len(cases) != 0 {
+					t.Fatalf("ineligible staff message produced cases: %+v", cases)
+				}
+				return
+			}
+			subjectType, subjectID := personalZaloThreadUser, turn.SenderID
+			if tc.staffGroup {
+				subjectType, subjectID = personalZaloThreadGroup, groupID
+			}
+			if len(cases) != 1 || cases[0].ChannelID != ch.ID || cases[0].SubjectType != subjectType ||
+				cases[0].SubjectID != subjectID || cases[0].ZaloGroupID != groupID || cases[0].FollowupCount != 0 ||
 				cases[0].CustomerCode != tc.customerCode {
 				t.Fatalf("wrong or duplicate cases: %+v", cases)
+			}
+			if tc.staffGroup && (cases[0].ReporterName != staffName || cases[0].CustomerName != groupCustomerName || cases[0].Private) {
+				t.Fatalf("staff complaint has wrong reporter or customer: %+v", cases[0])
+			}
+			if tc.staffGroup {
+				var event models.CustomerCaseEvent
+				if err := database.Where("tenant_id = ? AND case_id = ? AND kind = ?", tenant, cases[0].ID, "opened").Take(&event).Error; err != nil || event.ActorName != staffName {
+					t.Fatalf("complaint history has wrong reporter: %+v (%v)", event, err)
+				}
 			}
 		})
 	}
@@ -236,11 +344,11 @@ func TestPersonalZaloComplaintsMySQL(t *testing.T) {
 	if err := database.Model(&models.NotificationLog{}).Where("tenant_id = ? AND recipient = ? AND status = ?", tenant, staff.ID, "sent").Count(&alerts).Error; err != nil {
 		t.Fatal(err)
 	}
-	if alerts != 4 {
+	if alerts != 5 {
 		t.Fatalf("expected one staff alert per complaint despite retries, got %d", alerts)
 	}
 	var history int64
-	if err := database.Model(&models.CustomerCaseAlert{}).Where("tenant_id = ? AND group_id = ? AND group_name = ? AND status = ?", tenant, staff.ID, staff.Name, "sent").Count(&history).Error; err != nil || history != 4 {
-		t.Fatalf("expected four linked alert outcomes, got %d (%v)", history, err)
+	if err := database.Model(&models.CustomerCaseAlert{}).Where("tenant_id = ? AND group_id = ? AND group_name = ? AND status = ?", tenant, staff.ID, staff.Name, "sent").Count(&history).Error; err != nil || history != 5 {
+		t.Fatalf("expected five linked alert outcomes, got %d (%v)", history, err)
 	}
 }

@@ -323,6 +323,10 @@ func UpdateChannel(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_personal_zalo_chatbot_settings", "details": err.Error()})
 				return
 			}
+			if err := validatePersonalZaloComplaintCustomers(c.Request.Context(), channel, req.Metadata, merged); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_personal_zalo_chatbot_settings", "details": err.Error()})
+				return
+			}
 			out, _ := json.Marshal(merged)
 			metadata = string(out)
 		case "zalo_oa":

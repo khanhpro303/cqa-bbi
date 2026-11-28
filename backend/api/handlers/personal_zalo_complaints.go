@@ -74,7 +74,7 @@ func (g *personalZaloDirectGrant) allowComplaints(ctx context.Context, key strin
 	return nil
 }
 
-func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cfg *config.Config, flow engine.LangflowConfig, req personalZaloChatbotRequest, scope string, complaints bool) (engine.LangflowResult, error) {
+func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cfg *config.Config, flow engine.LangflowConfig, req personalZaloChatbotRequest, scope string, complaints, staffGroup bool) (engine.LangflowResult, error) {
 	if !complaints {
 		return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope, req.Text, "", "")
 	}
@@ -82,15 +82,20 @@ func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cf
 		TenantID: req.TenantID, ChannelID: req.ChannelID, ZaloUserID: req.SenderID, AgentType: "public", PersonalZalo: true,
 	}
 	attachPersonalZaloComplaintGrant(&p, req)
+	guide := personalZaloComplaintGuide(ctx, req, "")
+	if staffGroup && req.ThreadType == personalZaloThreadGroup {
+		p.GroupGuest = false
+		guide += "\nNhân viên đang gọi bot trong nhóm khách. Chỉ gọi complaint_record khi tin mới yêu cầu ghi nhận một vấn đề cụ thể cho khách của nhóm. Hệ thống tự tìm khách được gắn với nhóm. Nếu công cụ báo từ chối, nói chưa ghi nhận và nhắc đúng lý do công cụ trả về. Khi ghi nhận thành công, chỉ xác nhận đã ghi nhận."
+	}
 	permission, err := engine.SignPermissionToken(p, cfg.EncryptionKey)
 	if err != nil {
 		return engine.LangflowResult{}, err
 	}
 	return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope,
-		req.Text, permission, personalZaloComplaintGuide(ctx, req, ""))
+		req.Text, permission, guide)
 }
 
-func finishPersonalZaloComplaint(ctx context.Context, cfg *config.Config, channel models.Channel, req personalZaloChatbotRequest, reply string, forceHandover bool) (string, bool) {
+func finishPersonalZaloComplaint(ctx context.Context, cfg *config.Config, channel models.Channel, req personalZaloChatbotRequest, reply string, forceHandover, staffGroup bool) (string, bool) {
 	turnID := personalZaloComplaintTurnID(req)
 	recorded, notified := customercases.TurnCaseState(ctx, req.TenantID, turnID)
 	cleaned := customercases.StripRefs(personalZaloStripHandoverMarker(reply))
@@ -102,6 +107,9 @@ func finishPersonalZaloComplaint(ctx context.Context, cfg *config.Config, channe
 	}
 	if !recorded && !forceHandover && !workers.PersonalZaloComplaintNeedsHandover(ctx, req.TenantID, req.Text) {
 		return cleaned, false
+	}
+	if staffGroup && !recorded {
+		return "Dạ, em chưa ghi nhận được khiếu nại thay khách. Anh/chị kiểm tra giúp mã khách đã gắn với nhóm trong phần Khiếu nại của kênh.", true
 	}
 	log.Printf("[cases] personal Zalo turn channel=%s recorded=%t; sending fallback handover", channel.ID, recorded)
 	alertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

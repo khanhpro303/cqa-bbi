@@ -19,6 +19,7 @@ import (
 type conversationListFilters struct {
 	ChannelID   string
 	ChannelType string
+	ThreadType  string
 	Search      string
 	Evaluation  string
 }
@@ -27,6 +28,7 @@ func conversationListFiltersFromRequest(c *gin.Context) conversationListFilters 
 	return conversationListFilters{
 		ChannelID:   c.Query("channel_id"),
 		ChannelType: c.Query("channel_type"),
+		ThreadType:  c.Query("thread_type"),
 		Search:      c.Query("search"),
 		Evaluation:  c.Query("evaluation"),
 	}
@@ -48,6 +50,9 @@ func conversationListQuery(database *gorm.DB, tenantID string, filters conversat
 	}
 	if filters.Search != "" {
 		query = query.Where("conversations.customer_name LIKE ?", "%"+filters.Search+"%")
+	}
+	if filters.ThreadType == "group" {
+		query = query.Where("conversations.external_conversation_id LIKE ?", "group:%")
 	}
 
 	if filters.Evaluation != "" {

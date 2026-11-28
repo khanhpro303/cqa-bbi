@@ -15,6 +15,7 @@ export interface PersonalZaloGroupSettings {
   complaint_cases: boolean
   complaint_resolved_days: number
   complaint_streams: ComplaintStream[]
+  complaint_group_customers: Record<string, string>
 }
 
 export interface PersonalZaloHandoverStaff {
@@ -43,6 +44,22 @@ export interface PersonalZaloHandoverGroup {
   } | null
 }
 
+export function readComplaintGroupCustomers(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).flatMap(([conversationID, customerCode]) => {
+    const normalizedID = conversationID.trim()
+    const normalizedCode = typeof customerCode === 'string' ? customerCode.trim() : ''
+    return normalizedID && normalizedCode ? [[normalizedID, normalizedCode]] : []
+  }))
+}
+
+function complaintGroupCustomersPatch(value: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(value).flatMap(([conversationID, customerCode]) => {
+    const normalizedID = conversationID.trim()
+    return normalizedID && typeof customerCode === 'string' ? [[normalizedID, customerCode.trim()]] : []
+  }))
+}
+
 export function readPersonalZaloGroupSettings(metadata: Record<string, unknown> = {}): PersonalZaloGroupSettings {
   return {
     personal_zalo_group_reply_enabled: metadata.personal_zalo_group_reply_enabled === true,
@@ -56,6 +73,7 @@ export function readPersonalZaloGroupSettings(metadata: Record<string, unknown> 
     complaint_cases: metadata.complaint_cases === true,
     complaint_resolved_days: readComplaintResolvedDays(metadata.complaint_resolved_days),
     complaint_streams: readComplaintStreams(metadata.complaint_streams),
+    complaint_group_customers: readComplaintGroupCustomers(metadata.complaint_group_customers),
   }
 }
 
@@ -72,6 +90,7 @@ export function personalZaloGroupSettingsPatch(settings: PersonalZaloGroupSettin
     complaint_cases: settings.complaint_cases,
     complaint_resolved_days: readComplaintResolvedDays(Number(settings.complaint_resolved_days)),
     complaint_streams: normalizeStreams(settings.complaint_streams),
+    complaint_group_customers: complaintGroupCustomersPatch(settings.complaint_group_customers),
   }
 }
 

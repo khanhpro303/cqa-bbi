@@ -38,7 +38,7 @@ type personalZaloPendingReply struct {
 }
 
 func preparePersonalZaloGroupTurn(ctx context.Context, channel models.Channel, session personalZaloSessionConfig, req personalZaloChatbotRequest, addressed bool, needsReply func(context.Context, string, string) bool) personalZaloGroupTurn {
-	if req.ThreadType != personalZaloThreadGroup || !session.GroupAssistantMode || db.RedisClient == nil {
+	if req.ThreadType != personalZaloThreadGroup || (!session.GroupAssistantMode && !addressed) {
 		return personalZaloGroupTurn{}
 	}
 	welcome := personalZaloMatchesKeyword(req.Text, session.SessionKeyword)
@@ -56,6 +56,9 @@ func preparePersonalZaloGroupTurn(ctx context.Context, channel models.Channel, s
 		return personalZaloGroupTurn{}
 	}
 	speaker := personalZaloGroupSpeaker(req, staff)
+	if !session.GroupAssistantMode || db.RedisClient == nil {
+		return personalZaloGroupTurn{Staff: staff, Speaker: speaker}
+	}
 	recent, err := rememberPersonalZaloGroupLine(ctx, req, session, speaker+": "+personalZaloGroupText(req.Text))
 	if err != nil {
 		log.Printf("[personal-zalo] could not read group context for channel %s: %v", channel.ID, err)
