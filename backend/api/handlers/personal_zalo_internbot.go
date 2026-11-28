@@ -3,24 +3,23 @@ package handlers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"github.com/vietbui/chat-quality-agent/customercases"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
+	"github.com/vietbui/chat-quality-agent/engine"
 	"github.com/vietbui/chat-quality-agent/workers"
 	"gorm.io/gorm"
 )
 
 const personalZaloInternbotProtocol = "personal-zalo-internbot-v1"
-
-const personalZaloInternbotHandover = "Dạ, em xin phép nhờ nhân viên phụ trách tiếp tục hỗ trợ anh/chị ạ."
 
 var personalZaloInternbotSecret = regexp.MustCompile(`(?i)(?:\b(?:otp|mã xác thực|mã đăng nhập)\s*[:=]?\s*[0-9]{4,10}\b|\b(?:password|mật khẩu|token|api[_ -]?key)\s*[:=]\s*[^\s,;]+|\bbearer\s+[A-Za-z0-9._~+/=-]{12,})`)
 
@@ -113,7 +112,7 @@ func (ai personalZaloAI) generateInternbotDelivery(c *gin.Context, ctx context.C
 		handover = result.handover || strings.TrimSpace(result.reply) == personalZaloAIHandoverMarker
 	}
 	if handover {
-		result.reply = personalZaloInternbotHandover
+		result.reply = engine.TaskPromptText(req.TenantID, engine.PromptPZInternbotHandover)
 		result.images = personalZaloImageSelection{}
 	}
 	result.reply = strings.TrimSpace(redactPersonalZaloInternbotSecrets(
@@ -206,7 +205,13 @@ func (ai personalZaloAI) internbotScope(ctx context.Context, channel models.Chan
 	return personalZaloSessionFlowScope(req, base+":"+id), nil
 }
 
+// formatPersonalZaloInternbotDraft fills the tenant's frame (edited in AI
+// Engine) for the supervisor group.
 func formatPersonalZaloInternbotDraft(req personalZaloChatbotRequest, reply string, handover bool) string {
+	return fillPersonalZaloInternbotDraft(engine.TaskPromptText(req.TenantID, engine.PromptPZInternbotFrame), req, reply, handover)
+}
+
+func fillPersonalZaloInternbotDraft(frame string, req personalZaloChatbotRequest, reply string, handover bool) string {
 	source := strings.Join(strings.Fields(redactPersonalZaloInternbotSecrets(req.SourceName)), " ")
 	if source == "" {
 		source = "Chat 1:1"
@@ -219,20 +224,31 @@ func formatPersonalZaloInternbotDraft(req personalZaloChatbotRequest, reply stri
 		sender = req.SenderID
 	}
 	location := time.FixedZone("ICT", 7*60*60)
-	status := ""
-	if handover {
-		status = "\nCần nhân viên xử lý"
+	// The reply gets the room the rest of the frame leaves under the Zalo
+	// limit, shared when the frame repeats it.
+	vars := map[string]string{
+		"nhom": source, "khach": sender, "gio": req.SentAt.In(location).Format("15:04"),
+		"tin_nhan": clipPersonalZaloInternbotText(req.Text, 400),
 	}
-	header := fmt.Sprintf("Internbot · %s\nKhách: %s · %s\nTin nhắn: %s%s\n\nPhản hồi đề xuất:\n",
-		source, sender, req.SentAt.In(location).Format("15:04"), clipPersonalZaloInternbotText(req.Text, 400), status)
-	room := personalZaloTextLimit
-	for _, r := range header {
-		room--
-		if r > 0xffff {
-			room--
-		}
+	show := map[string]bool{"neu_can_nhan_vien": handover}
+	vars["phan_hoi"] = ""
+	empty := engine.FillMessageTemplate(frame, vars, show)
+	vars["phan_hoi"] = "x"
+	slots := len(engine.FillMessageTemplate(frame, vars, show)) - len(empty)
+	room := personalZaloTextLimit - personalZaloUTF16Len(empty)
+	if slots > 1 {
+		room /= slots
 	}
-	return header + clipPersonalZaloInternbotText(reply, room)
+	vars["phan_hoi"] = clipPersonalZaloInternbotText(reply, room)
+	return clipPersonalZaloInternbotText(engine.FillMessageTemplate(frame, vars, show), personalZaloTextLimit)
+}
+
+func personalZaloUTF16Len(value string) int {
+	n := 0
+	for _, r := range value {
+		n += utf16.RuneLen(r)
+	}
+	return n
 }
 
 func clipPersonalZaloInternbotText(value string, limit int) string {

@@ -282,6 +282,56 @@ func TestPersonalZaloInternbotDraftFitsZaloTextLimit(t *testing.T) {
 	}
 }
 
+// The default frame in AI Engine reproduces the draft the code built before
+// the frame became editable.
+func TestPersonalZaloInternbotDefaultFrameMatchesTheOldDraft(t *testing.T) {
+	sent := time.Date(2026, 11, 28, 2, 5, 0, 0, time.UTC)
+	for _, handover := range []bool{false, true} {
+		for _, req := range []personalZaloChatbotRequest{
+			{ThreadType: "user", ThreadID: "456", SenderID: "456", SenderName: "Khách  A", Text: "còn {phan_hoi} FF399?\nsize L", SentAt: sent},
+			{ThreadType: "group", ThreadID: "789", SenderID: "111", SourceName: "Đại lý B", Text: "hello", SentAt: sent},
+			{ThreadType: "group", ThreadID: "789", SenderID: "111", Text: strings.Repeat("a", 500), SentAt: sent},
+		} {
+			reply := "Dạ còn ạ."
+			status := ""
+			if handover {
+				status = "\nCần nhân viên xử lý"
+			}
+			source := map[string]string{"user": "Chat 1:1", "group": "Nhóm 789"}[req.ThreadType]
+			if req.SourceName != "" {
+				source = req.SourceName
+			}
+			sender := strings.Join(strings.Fields(req.SenderName), " ")
+			if sender == "" {
+				sender = req.SenderID
+			}
+			want := "Internbot · " + source + "\nKhách: " + sender + " · 09:05\nTin nhắn: " +
+				clipPersonalZaloInternbotText(req.Text, 400) + status + "\n\nPhản hồi đề xuất:\n" + reply
+			if got := formatPersonalZaloInternbotDraft(req, reply, handover); got != want {
+				t.Fatalf("handover=%v draft:\n%q\nwant\n%q", handover, got, want)
+			}
+		}
+	}
+}
+
+func TestPersonalZaloInternbotCustomFrame(t *testing.T) {
+	req := personalZaloChatbotRequest{ThreadType: "user", ThreadID: "456", SenderID: "456", SenderName: "An", Text: "giá?",
+		SentAt: time.Date(2026, 11, 28, 2, 5, 0, 0, time.UTC)}
+	frame := "[{gio}] {khach}: {tin_nhan}\n⚠️ {neu_can_nhan_vien}Gọi khách ngay\n> {phan_hoi}\n({nhom})"
+	if got := fillPersonalZaloInternbotDraft(frame, req, "Dạ 100k ạ.", false); got != "[09:05] An: giá?\n> Dạ 100k ạ.\n(Chat 1:1)" {
+		t.Fatalf("draft = %q", got)
+	}
+	if got := fillPersonalZaloInternbotDraft(frame, req, "Nhờ nhân viên.", true); got != "[09:05] An: giá?\n⚠️ Gọi khách ngay\n> Nhờ nhân viên.\n(Chat 1:1)" {
+		t.Fatalf("handover draft = %q", got)
+	}
+	// A reply placed mid-frame, or twice, still fits the Zalo limit and the
+	// text after it survives.
+	got := fillPersonalZaloInternbotDraft("{phan_hoi}\n---\n{phan_hoi}\nHết", req, strings.Repeat("🛡", 2000), false)
+	if personalZaloTextBoundary(got, personalZaloTextLimit) != len(got) || !strings.HasSuffix(got, "…\nHết") {
+		t.Fatalf("long draft does not fit or lost its ending: %d bytes, ends %q", len(got), got[len(got)-12:])
+	}
+}
+
 func TestPersonalZaloInternbotSignsOnlyAnEffectiveERPGrant(t *testing.T) {
 	const key = "fixture-internbot-signing-key"
 	req := personalZaloChatbotRequest{ThreadType: "user", ThreadID: "456"}
