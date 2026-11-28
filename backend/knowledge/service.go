@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -154,6 +155,9 @@ type NewDocumentInput struct {
 	Source    string
 	SizeBytes int64
 	Audience  string
+	// Tags are normalized here; invalid ones are dropped (handlers validate
+	// user input first with NormalizeTags).
+	Tags      []string
 	CreatedBy string
 	// Text is chunked with SplitChunks. Chunks, when set, are used as they
 	// are instead (Astra import keeps the original passages).
@@ -258,9 +262,14 @@ func newDocument(in NewDocumentInput) *models.KnowledgeDocument {
 	if source == "" {
 		source = "upload"
 	}
+	tags, _ := filterTags(in.Tags)
+	tags = slices.Compact(tags)
+	if len(tags) > MaxDocumentTags {
+		tags = tags[:MaxDocumentTags]
+	}
 	now := time.Now()
 	return &models.KnowledgeDocument{
-		ID: pkg.NewUUID(), TenantID: in.TenantID, Title: truncateRunes(title, 250),
+		ID: pkg.NewUUID(), TenantID: in.TenantID, Title: truncateRunes(title, 250), Tags: models.KnowledgeTagList(tags),
 		FileName: truncateRunes(in.FileName, 250), MimeType: truncateRunes(in.MimeType, 100),
 		Source: source, SizeBytes: in.SizeBytes, Audience: NormalizeAudience(in.Audience),
 		Enabled: true, Status: StatusProcessing, CreatedBy: truncateRunes(in.CreatedBy, 250),
@@ -484,6 +493,13 @@ func (s *Service) ResumePending() {
 // Search returns up to topK passages for the query. agentType "public" (the
 // customer bot) sees only public documents; the staff bot sees all.
 func (s *Service) Search(ctx context.Context, tenantID, agentType, query string, topK int) ([]Hit, error) {
+	return s.SearchTagged(ctx, tenantID, agentType, query, topK, nil)
+}
+
+// SearchTagged is Search limited to documents carrying at least one of tags
+// (the answering specialist agent's knowledge tags). No tags searches every
+// document the tier may read.
+func (s *Service) SearchTagged(ctx context.Context, tenantID, agentType, query string, topK int, tags []string) ([]Hit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, errors.New("empty query")
@@ -491,22 +507,28 @@ func (s *Service) Search(ctx context.Context, tenantID, agentType, query string,
 	if topK <= 0 || topK > 10 {
 		topK = 5
 	}
-	publicOnly := agentType != "private"
+	tags, matchNothing := filterTags(tags)
+	if matchNothing {
+		return nil, nil
+	}
+	scope := documentScope{publicOnly: agentType != "private", tags: tags}
 	var hits []Hit
 	var err error
 	if s.index != nil && s.embed != nil {
-		hits, err = s.vectorSearch(ctx, tenantID, publicOnly, query, topK)
+		hits, err = s.vectorSearch(ctx, tenantID, scope, query, topK)
 		if err != nil {
 			log.Printf("[knowledge] vector search failed, using keyword search: %v", err)
 		}
 	}
-	if s.index == nil || s.embed == nil || err != nil {
-		hits, err = keywordSearch(tenantID, publicOnly, query, topK)
+	// The vector index does not know tags: when none of its nearest passages
+	// is tagged for this agent, look through the tagged documents by keyword.
+	if s.index == nil || s.embed == nil || err != nil || (len(hits) == 0 && len(tags) > 0) {
+		hits, err = keywordSearch(tenantID, scope, query, topK)
 		if err != nil {
 			return nil, err
 		}
 	}
-	captions, err := searchImageCaptions(ctx, tenantID, publicOnly, captionSearchWords(query), topK)
+	captions, err := searchImageCaptions(ctx, tenantID, scope, captionSearchWords(query), topK)
 	if err != nil {
 		log.Printf("[knowledge] image caption search failed: %v", err)
 		return hits, nil
@@ -514,16 +536,37 @@ func (s *Service) Search(ctx context.Context, tenantID, agentType, query string,
 	return mergeCaptionHits(hits, captions, topK), nil
 }
 
-func (s *Service) vectorSearch(ctx context.Context, tenantID string, publicOnly bool, query string, topK int) ([]Hit, error) {
+// documentScope is which documents a search may read: the tier's audience
+// and, for a specialist agent, its knowledge tags.
+type documentScope struct {
+	publicOnly bool
+	tags       []string
+}
+
+// where adds the scope to a query that joins knowledge_documents as d.
+func (sc documentScope) where(q *gorm.DB) *gorm.DB {
+	if sc.publicOnly {
+		q = q.Where("d.audience = ?", AudiencePublic)
+	}
+	return whereDocumentTagged(q, sc.tags)
+}
+
+func (s *Service) vectorSearch(ctx context.Context, tenantID string, scope documentScope, query string, topK int) ([]Hit, error) {
 	vec, err := s.embed(ctx, tenantID, query)
 	if err != nil {
 		return nil, err
 	}
 	filter := map[string]string{"tenant_id": tenantID}
-	if publicOnly {
+	if scope.publicOnly {
 		filter["audience"] = AudiencePublic
 	}
-	raw, err := s.index.Query(ctx, vec, filter, topK*2)
+	// Tags are filtered in MySQL below: ask for more neighbours so passages
+	// of other topics do not crowd out the agent's documents.
+	candidates := topK * 2
+	if len(scope.tags) > 0 {
+		candidates = topK * 8
+	}
+	raw, err := s.index.Query(ctx, vec, filter, candidates)
 	if err != nil {
 		return nil, err
 	}
@@ -535,7 +578,7 @@ func (s *Service) vectorSearch(ctx context.Context, tenantID string, publicOnly 
 	}
 	// MySQL decides what is live: a stale vector of an archived, disabled or
 	// re-scoped document is dropped here.
-	chunks, err := liveChunks(tenantID, publicOnly, ids)
+	chunks, err := liveChunks(tenantID, scope, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -557,7 +600,7 @@ type liveChunk struct {
 	Content    string
 }
 
-func liveChunks(tenantID string, publicOnly bool, ids []string) ([]liveChunk, error) {
+func liveChunks(tenantID string, scope documentScope, ids []string) ([]liveChunk, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -565,9 +608,7 @@ func liveChunks(tenantID string, publicOnly bool, ids []string) ([]liveChunk, er
 		Select("c.id, c.document_id, d.title, c.content").
 		Joins("JOIN knowledge_documents d ON d.id = c.document_id").
 		Where("c.id IN ? AND c.tenant_id = ? AND d.tenant_id = ? AND d.enabled = ? AND d.status = ?", ids, tenantID, tenantID, true, StatusReady)
-	if publicOnly {
-		q = q.Where("d.audience = ?", AudiencePublic)
-	}
+	q = scope.where(q)
 	var out []liveChunk
 	err := q.Scan(&out).Error
 	return out, err
@@ -575,7 +616,7 @@ func liveChunks(tenantID string, publicOnly bool, ids []string) ([]liveChunk, er
 
 // keywordSearch is the fallback without a vector index: it ranks chunks by
 // how many distinct query words they contain.
-func keywordSearch(tenantID string, publicOnly bool, query string, topK int) ([]Hit, error) {
+func keywordSearch(tenantID string, scope documentScope, query string, topK int) ([]Hit, error) {
 	words := queryWords(query)
 	if len(words) == 0 {
 		return nil, nil
@@ -584,9 +625,7 @@ func keywordSearch(tenantID string, publicOnly bool, query string, topK int) ([]
 		Select("c.id, c.document_id, d.title, c.content").
 		Joins("JOIN knowledge_documents d ON d.id = c.document_id").
 		Where("c.tenant_id = ? AND d.tenant_id = ? AND d.enabled = ? AND d.status = ?", tenantID, tenantID, true, StatusReady)
-	if publicOnly {
-		q = q.Where("d.audience = ?", AudiencePublic)
-	}
+	q = scope.where(q)
 	conds := make([]string, 0, len(words))
 	args := make([]interface{}, 0, len(words))
 	for _, w := range words {

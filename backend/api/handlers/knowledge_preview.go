@@ -90,7 +90,7 @@ func NewKnowledgeChatPreview(cfg *config.Config) gin.HandlerFunc {
 		}
 		// The preview identity also scopes the flow's vector history to this
 		// conversation. The MCP credential grants only search_knowledge.
-		input, prompt := engine.AddKnowledgeImageInstruction(question, settings[promptKey].ValuePlain)
+		input, prompt := engine.AddKnowledgeImageInstruction(tenantID, question, settings[promptKey].ValuePlain)
 		reply, err := client.RunFlowWithCustomerUsage(ctx, session.flowSessionID, session.flowSessionID, input,
 			lf.APIURL, lf.APIKey, flowID, "", "", token, prompt)
 		if err != nil {

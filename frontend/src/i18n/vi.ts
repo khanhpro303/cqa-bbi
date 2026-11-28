@@ -1,10 +1,12 @@
 import serviceQuality from './service-quality-vi'
 import qualityMeta from './quality-meta-vi'
 import qualityInsight from './quality-insight-vi'
+import aiAgents from './ai-agents-vi'
 
 export default {
   ...serviceQuality,
   ...qualityMeta,
+  ...aiAgents,
   qualityInsight,
   // Common
   app_name: 'BBI CRM Agent',
@@ -1173,6 +1175,12 @@ export default {
   nine_router_models_failed: 'Không tải được model. Kiểm tra kết nối 9router đã lưu rồi thử lại.',
   nine_router_other_models: 'Model và combo khác',
   task_prompt_group_complaints: "Khiếu nại (ghi case, vấn đề cũ hay mới)",
+  task_prompt_group_personal_zalo: "Zalo cá nhân (chat riêng, nhóm, Internbot)",
+  task_prompt_search: "Tìm prompt theo tên hoặc nội dung",
+  task_prompt_search_empty: "Không có prompt nào khớp.",
+  task_prompt_required: "Phải giữ nguyên:",
+  task_prompt_required_hint: "Hệ thống đọc mã này trong câu trả lời của bot để chuyển nhân viên, gửi ảnh hay hỏi xác thực. Xoá mã thì tính năng đó ngừng chạy, nên không lưu được.",
+  task_prompt_missing_required: "Chưa lưu: prompt phải giữ nguyên {markers}",
   cc_status_active: "Đang mở",
   cc_status_open: "Mới",
   cc_status_in_progress: "Đang xử lý",
@@ -1400,6 +1408,12 @@ export default {
   kb_search_description: "Xem các đoạn liên quan và độ khớp. Chọn một kết quả để đọc toàn bộ đoạn.",
   kb_search_input: "Nhập câu hỏi hoặc từ khóa",
   kb_search_button: "Tìm",
+  kb_tags_label: "Nhãn chủ đề",
+  kb_tags_hint: "Ví dụ: công nợ, bảo hành. Trợ lý chuyên môn có nhãn chỉ tra tài liệu mang nhãn đó; trợ lý không có nhãn tra mọi tài liệu.",
+  kb_tags_filter: "Lọc theo nhãn",
+  kb_tags_filter_empty: "Không có tài liệu nào mang nhãn này.",
+  kb_search_tags: "Chỉ tài liệu có nhãn",
+  kb_search_tags_hint: "Xem trước kết quả của một trợ lý chuyên môn có các nhãn này.",
   kb_search_waiting: "Đang tìm tài liệu…",
   kb_search_error: "Chưa tìm được tài liệu. Vui lòng thử lại.",
   kb_search_count: "{count} đoạn liên quan",

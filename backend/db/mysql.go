@@ -129,6 +129,10 @@ func AutoMigrate() error {
 		&models.CustomerCaseAlert{},
 		&models.CustomerImageFile{},
 		&models.CustomerCaseImageLink{},
+		&models.AIAgent{},
+		&models.AIAgentRevision{},
+		&models.AITeam{},
+		&models.AITeamMember{},
 	)
 	if err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)

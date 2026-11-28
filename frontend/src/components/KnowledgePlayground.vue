@@ -77,6 +77,22 @@
         </div>
         <v-select v-model="searchAgent" :items="agents" :label="t('kb_as_label')" density="compact" hide-details class="agent-select" />
       </div>
+      <div v-if="knownTags.length" class="playground-form pb-0">
+        <v-select
+          v-model="searchTags"
+          :items="knownTags"
+          :label="t('kb_search_tags')"
+          :hint="t('kb_search_tags_hint')"
+          persistent-hint
+          multiple
+          chips
+          closable-chips
+          clearable
+          density="compact"
+          prepend-inner-icon="mdi-tag-outline"
+          data-testid="kb-search-tags"
+        />
+      </div>
       <form class="playground-form search-form" @submit.prevent="runSearch">
         <v-text-field v-model="searchQuery" :label="t('kb_search_input')" density="compact" hide-details maxlength="2000" />
         <v-btn type="submit" color="primary" variant="flat" prepend-icon="mdi-magnify" :disabled="!searchQuery.trim() || !!searchRequest">
@@ -123,7 +139,7 @@ type Agent = 'public' | 'private'
 type Hit = { document_id: string; title: string; content: string; score: number }
 type Message = { role: 'user' | 'bot'; text: string; images?: KnowledgeImage[] }
 
-const props = defineProps<{ base: string; isAdmin: boolean }>()
+const props = withDefaults(defineProps<{ base: string; isAdmin: boolean; knownTags?: string[] }>(), { knownTags: () => [] })
 const { t } = useI18n()
 const mode = ref<'chat' | 'search'>('chat')
 const agents = computed(() => [
@@ -208,6 +224,8 @@ async function sendQuestion() {
 }
 
 const searchAgent = ref<Agent>('public')
+// Preview what a specialist agent with these knowledge tags finds.
+const searchTags = ref<string[]>([])
 const searchQuery = ref('')
 const hits = ref<Hit[] | null>(null)
 const imageCounts = ref<Record<string, number>>({})
@@ -223,11 +241,13 @@ function clearSearch() {
 }
 
 watch(searchAgent, clearSearch, { flush: 'sync' })
+watch(searchTags, clearSearch, { flush: 'sync' })
 watch(() => props.base, () => {
   resetChat()
   clearSearch()
   chatAgent.value = 'public'
   searchAgent.value = 'public'
+  searchTags.value = []
   searchQuery.value = ''
   mode.value = 'chat'
 }, { flush: 'sync' })
@@ -250,6 +270,7 @@ async function runSearch() {
     const { data } = await api.post<{ hits: Hit[]; images?: KnowledgeImage[] }>(`${props.base}/search`, {
       query,
       agent_type: searchAgent.value,
+      ...(searchTags.value.length ? { tags: searchTags.value } : {}),
     }, { signal: request.signal })
     if (searchRequest.value !== request) return
     hits.value = data.hits || []

@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -125,7 +126,7 @@ func TestPersonalZaloGobyAdvisoryMySQL(t *testing.T) {
 		"ai_engine_system_prompt_internal": {ValuePlain: "Hỗ trợ nhân viên."},
 	}
 	flow := engine.LangflowConfig{APIURL: server.URL, APIKey: "fixture-key", FlowID: "private", PublicFlowID: "public"}
-	grant, err := preparePersonalZaloDirectGrant(ctx, cfg, req, identity, flow, "fixture-session", settings)
+	grant, err := preparePersonalZaloDirectGrant(ctx, cfg, req, identity, flow, "fixture-session", settings, agents.Plan{})
 	if err != nil {
 		t.Fatal(err)
 	}

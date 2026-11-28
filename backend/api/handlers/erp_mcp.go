@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/engine"
 )
@@ -129,6 +130,9 @@ func ERPMCP(c *gin.Context) {
 	reply := func(result any) {
 		c.JSON(http.StatusOK, gin.H{"jsonrpc": "2.0", "id": req.ID, "result": result})
 	}
+	// A turn that runs as a specialist agent carries the agent's tool list
+	// in its signed permission token: list and serve only those tools.
+	turn := verifiedMCPTurn(tenantID, agentType, permissionToken)
 	switch req.Method {
 	case "initialize":
 		var params struct {
@@ -150,12 +154,12 @@ func ERPMCP(c *gin.Context) {
 			if personalComplaint {
 				tools = append(tools, complaintMCPTool())
 			}
-			reply(gin.H{"tools": tools})
+			reply(gin.H{"tools": turn.filter(tools)})
 			return
 		}
 		tools := append(erpMCPToolsForAgent(agentType), listedOrderTools()...)
 		tools = append(tools, knowledgeMCPTool(tenantID), complaintMCPTool())
-		reply(gin.H{"tools": tools})
+		reply(gin.H{"tools": turn.filter(tools)})
 	case "tools/call":
 		var params struct {
 			Name      string                     `json:"name"`
@@ -165,8 +169,12 @@ func ERPMCP(c *gin.Context) {
 			fail(-32602, "Invalid tool parameters")
 			return
 		}
+		if refusal := turn.refuse(params.Name); refusal != "" {
+			reply(erpMCPResult([]byte(refusal), true))
+			return
+		}
 		if params.Name == knowledgeMCPToolName {
-			result := handleKnowledgeTool(c.Request.Context(), tenantID, agentType, params.Arguments)
+			result := handleKnowledgeTool(c.Request.Context(), tenantID, agentType, turn.knowledgeTags(), params.Arguments)
 			if !preview && result["isError"] == false {
 				recordUnansweredLookup(c.Request.Context(), tenantID, agentType, c.GetHeader("X-Permission-Token"))
 			}
@@ -324,3 +332,79 @@ func erpMCPQuery(tool erpMCPTool, args map[string]json.RawMessage) ([]byte, erro
 type erpMCPArgumentError struct{ field string }
 
 func (e *erpMCPArgumentError) Error() string { return "Invalid or missing argument: " + e.field }
+
+// mcpTurn is the tool scope of the current chat turn. The zero value
+// preserves legacy and preview callers that omit the permission token.
+type mcpTurn struct {
+	permissions *engine.GroupPermissionContext
+	invalid     bool
+}
+
+func verifiedMCPTurn(tenantID, agentType, permissionToken string) mcpTurn {
+	if permissionToken == "" {
+		return mcpTurn{}
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return mcpTurn{invalid: true}
+	}
+	p, err := engine.VerifyPermissionToken(permissionToken, cfg.EncryptionKey)
+	if err != nil || p.TenantID != tenantID || p.AgentType != agentType {
+		return mcpTurn{invalid: true}
+	}
+	return mcpTurn{permissions: p}
+}
+
+// filter keeps the tools the turn's agent may call.
+func (t mcpTurn) filter(tools []erpMCPTool) []erpMCPTool {
+	if t.invalid {
+		return []erpMCPTool{}
+	}
+	if t.permissions == nil {
+		return tools
+	}
+	out := make([]erpMCPTool, 0, len(tools))
+	for _, tool := range tools {
+		if t.permissions.ToolAllowed(tool.Name) && !(t.permissions.DryRun && agents.ToolWrites(tool.Name)) {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
+
+// knowledgeTags are the answering agent's knowledge tags: search_knowledge
+// reads only documents carrying one of them. None (no agent, or an agent
+// without tags) searches every document the tier may read.
+func (t mcpTurn) knowledgeTags() []string {
+	if t.permissions == nil || t.permissions.AgentKey == "" {
+		return nil
+	}
+	return t.permissions.KnowledgeTags
+}
+
+// refuse returns the tool result for a call the turn may not make, or "".
+func (t mcpTurn) refuse(name string) string {
+	if t.invalid {
+		return `{"error":"forbidden_token"}`
+	}
+	if t.permissions == nil {
+		return ""
+	}
+	if !t.permissions.ToolAllowed(name) {
+		return `{"error":"tool_not_allowed","message":"Công cụ này không thuộc phạm vi của trợ lý đang trả lời."}`
+	}
+	if t.permissions.DryRun && agents.ToolWrites(name) {
+		return `{"error":"dry_run","message":"Đang chạy thử: công cụ ghi dữ liệu không được gọi."}`
+	}
+	return ""
+}
+
+// ERPMCPHandler serves the ERP MCP route in this process for the native
+// agent runtime (agents/native.MCPClient): its tool calls take the same
+// handler, tokens and checks as Langflow's calls over HTTP.
+func ERPMCPHandler() http.Handler {
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.POST("/mcp/erp/:tenantId", ERPMCP)
+	return router
+}

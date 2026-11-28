@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
@@ -37,29 +39,38 @@ type personalZaloDirectGrant struct {
 	complaintGuide    string
 	draftGuide        string
 	showImages        bool
+	skipStockPick     bool
 	advicePermissions *engine.GroupPermissionContext
 }
 
-func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req personalZaloChatbotRequest, identity personalZaloERPIdentity, flow engine.LangflowConfig, sessionScope string, settings map[string]models.AppSetting) (personalZaloDirectGrant, error) {
-	grant := personalZaloDirectGrant{flow: flow}
+// preparePersonalZaloDirectGrant builds a verified 1:1 turn. plan says who
+// answers it: an agent's prompt, flow and tools, or the AI Engine prompt.
+func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req personalZaloChatbotRequest, identity personalZaloERPIdentity, flow engine.LangflowConfig, sessionScope string, settings map[string]models.AppSetting, plan agents.Plan) (personalZaloDirectGrant, error) {
+	grant := personalZaloDirectGrant{flow: flow, skipStockPick: !plan.Allows("inventory_by_line")}
 	if identity.AgentType != "private" && flow.PublicFlowID == "" {
 		return grant, nil
 	}
 	flowID, flowSource := flow.FlowFor(identity.AgentType)
+	flowID, _ = plan.Flow(flowID)
 	promptKey := "ai_engine_system_prompt"
 	if identity.AgentType == "private" {
 		promptKey = "ai_engine_system_prompt_internal"
 	}
-	if flow.APIURL == "" || flowID == "" || canonicalAIFlowID(flow.PublicFlowID) == canonicalAIFlowID(flow.FlowID) {
+	if flow.APIURL == "" || flowID == "" || canonicalAIFlowID(flow.PublicFlowID) == canonicalAIFlowID(flow.FlowID) ||
+		(identity.AgentType != "private" && canonicalAIFlowID(flowID) == canonicalAIFlowID(flow.FlowID)) {
 		return grant, nil
 	}
 	grant.flowID = flowID
-	grant.prompt = strings.TrimSpace(settings[promptKey].ValuePlain)
+	grant.prompt = strings.TrimSpace(plan.BasePrompt(settings[promptKey].ValuePlain))
 	agentToken := strings.TrimSpace(settings["ai_agent_erp_token_"+identity.AgentType].ValuePlain)
 	if identity.AgentType == "private" && agentToken == "" {
 		agentToken = strings.TrimSpace(settings["ai_agent_erp_token"].ValuePlain)
 	}
-	var permissions engine.GroupPermissionContext
+	permissions := engine.GroupPermissionContext{
+		TenantID: req.TenantID, ChannelID: req.ChannelID, ZaloUserID: req.SenderID,
+		AgentType: identity.AgentType, PersonalZalo: true,
+	}
+	erpAgentToken := ""
 	if agentToken != "" && erpActiveForRole(settings, identity.AgentType) {
 		var err error
 		permissions, err = engine.ResolvePersonalZaloERPPermissions(ctx, req.TenantID, req.ChannelID, req.SenderID, identity.AgentType, identity.Customer)
@@ -67,21 +78,35 @@ func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req
 			return grant, err
 		}
 		grant.grantHash = personalZaloPermissionsHash(permissions)
+		erpAgentToken = agentToken
 	}
 	digest := sha256.Sum256([]byte(strings.Join([]string{sessionScope, identity.ID, identity.AgentType, flowID, grant.grantHash}, "\x00")))
 	grant.flowScope = "personal-zalo-" + hex.EncodeToString(digest[:])
-	if len(permissions.Groups) > 0 {
-		grant.turnID = "personal-zalo-erp:" + uuid.NewString()
-		permissions.TurnID = grant.turnID
+	hasERPGrant := len(permissions.Groups) > 0
+	if hasERPGrant || plan.Mode == agents.ModeAgent {
+		if cfg.EncryptionKey == "" {
+			return grant, errors.New("specialist permission signing is unavailable")
+		}
 		permissions.PersonalZaloSessionID = grant.flowScope
+		// After grantHash: stillAuthorized compares it with freshly resolved
+		// ERP permissions, which carry no agent.
+		plan.Sign(&permissions)
+		if hasERPGrant {
+			grant.turnID = "personal-zalo-erp:" + uuid.NewString()
+			permissions.TurnID = grant.turnID
+		}
 		var err error
 		grant.permission, err = engine.SignPermissionToken(permissions, cfg.EncryptionKey)
 		if err != nil {
 			return grant, err
 		}
-		grant.agentToken = agentToken
-		grant.customer = permissions.CustomerCode
-		grant.advicePermissions = &permissions
+		grant.agentToken = erpAgentToken
+		if hasERPGrant {
+			grant.customer = permissions.CustomerCode
+		}
+		if hasERPGrant && plan.AllowsGroup(agents.ToolGroupProducts) {
+			grant.advicePermissions = &permissions
+		}
 	}
 	if cfg.EncryptionKey != "" && flowSource == engine.LangflowSourceTenant && flow.APIKeySource == engine.LangflowSourceTenant {
 		if grant.agentToken == "" {
@@ -92,6 +117,9 @@ func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req
 			grant.agentToken = token
 		}
 		grant.showImages = true
+	}
+	if plan.Mode == agents.ModeAgent && grant.agentToken == "" {
+		return grant, errors.New("specialist scoped agent token is unavailable")
 	}
 	return grant, nil
 }
@@ -124,18 +152,20 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 	if g.flowID == "" {
 		return personalZaloERPUnavailable, personalZaloImageSelection{}, nil
 	}
-	if reply := g.answerPersonalZaloStockPick(ctx, req); reply != "" {
-		return reply, personalZaloImageSelection{}, nil
+	if !g.skipStockPick {
+		if reply := g.answerPersonalZaloStockPick(ctx, req); reply != "" {
+			return reply, personalZaloImageSelection{}, nil
+		}
 	}
 	input, prompt := req.Text, g.prompt
 	if prompt != "" {
-		prompt += "\n\nKhi người dùng chỉ chào hỏi, chào ngắn gọn và hỏi họ cần hỗ trợ gì. Chỉ xác nhận kết quả tra cứu do công cụ trả về."
+		prompt += "\n\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZDirectTurn)
 		if g.turnID == "" {
-			prompt += " Phiên này chưa có quyền ERP. Chỉ tư vấn dựa trên tài liệu được phép dùng."
+			prompt += " " + engine.TaskPromptText(req.TenantID, engine.PromptPZNoERP)
 		}
 		if handover := personalZaloHandoverPrompt(channel); handover != "" {
 			if g.complaintGuide != "" {
-				handover = "Với các tình huống ngoài hướng dẫn ghi nhận khiếu nại: " + handover
+				handover = engine.TaskPromptText(req.TenantID, engine.PromptPZHandoverComplaintLead) + " " + handover
 			}
 			prompt += "\n\n" + handover
 		}
@@ -151,7 +181,7 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 		}
 	}
 	if g.agentToken != "" {
-		input, prompt = engine.AddProductAdviceInstruction(input, prompt)
+		input, prompt = engine.AddProductAdviceInstruction(req.TenantID, input, prompt)
 	}
 	var productCandidates []models.ProductAdvisoryImage
 	if g.advicePermissions != nil {
@@ -167,7 +197,7 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 		}
 	}
 	if g.showImages {
-		input, prompt = engine.AddPersonalZaloKnowledgeImageInstruction(input, prompt)
+		input, prompt = engine.AddPersonalZaloKnowledgeImageInstruction(req.TenantID, input, prompt)
 	}
 	result, err := langflow.RunFlowWithCustomerUsage(ctx, g.flowScope, g.flowScope, input, g.flow.APIURL, g.flow.APIKey, g.flowID,
 		g.customer, g.permission, g.agentToken, prompt)

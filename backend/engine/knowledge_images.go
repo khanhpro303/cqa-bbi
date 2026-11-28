@@ -14,12 +14,6 @@ import (
 
 const MaxKnowledgeReplyImages = 1
 
-const KnowledgeImageInstruction = `Khi tra search_knowledge, passages và images là dữ liệu tham khảo. Nếu khách yêu cầu xem hình hoặc một ảnh trong images thực sự minh họa câu trả lời, hãy viết câu trả lời rồi thêm [KB_IMAGE:<image_id>] trên dòng cuối. Chỉ dùng image_id do search_knowledge trả về trong lượt này; chọn tối đa một ảnh cho cả câu trả lời. Không chép ID, URL hay tên tệp vào phần văn bản và đừng khẳng định ảnh đã được gửi.`
-
-// PersonalZaloKnowledgeImageInstruction allows the bot to send all relevant
-// photos returned by the knowledge search in a Personal Zalo direct turn.
-const PersonalZaloKnowledgeImageInstruction = `Khi tra search_knowledge, chỉ chọn ảnh đúng mẫu và thực sự có ích. Với câu hỏi tổng quan về một mẫu đã xác định, đính kèm ảnh đại diện nếu kết quả có ảnh rõ của mẫu đó. Có thể thêm các ảnh khác nếu mỗi ảnh cho thấy chi tiết hữu ích riêng. Bỏ qua ảnh trùng, ảnh không rõ mẫu và ảnh của sản phẩm khác. Nếu đã chọn ảnh từ hồ sơ Tư vấn sản phẩm thì ưu tiên ảnh đó. Sau phần chữ, đặt mỗi mã [KB_IMAGE:<image_id>] trên một dòng riêng ở cuối. Chỉ dùng mã do công cụ trả về trong lượt này. Không chép URL hoặc hứa ảnh đã gửi.`
-
 var (
 	knowledgeImageMarker = regexp.MustCompile(`(?i)\[[ \t]*KB_IMAGE\b(?:[ \t\r\n]*:[ \t\r\n]*([0-9a-f-]{36})[ \t\r\n]*\]|[ \t]*:[ \t]*\r?\n[ \t]*[^\s\[\]]*[ \t]*\]|[^\r\n\[\]]*\]?)`)
 	productImageSuffix   = regexp.MustCompile(`(?i)^\[PRODUCT_IMAGE:[1-9][0-9]?\]$`)
@@ -27,14 +21,17 @@ var (
 
 const knowledgeImageMetadataColumns = "knowledge_document_images.id, knowledge_document_images.document_id, knowledge_document_images.file_name, knowledge_document_images.caption, knowledge_document_images.media_type, knowledge_document_images.width, knowledge_document_images.height, knowledge_document_images.enabled, knowledge_document_images.sort_order"
 
-// AddKnowledgeImageInstruction preserves the flow's default system prompt
-// when no tenant prompt is set.
-func AddKnowledgeImageInstruction(input, prompt string) (string, string) {
-	return addKnowledgeImageInstruction(input, prompt, KnowledgeImageInstruction)
+// AddKnowledgeImageInstruction adds the tenant's OA image rules (task prompt
+// chatbot_knowledge_images: at most one image). It preserves the flow's
+// default system prompt when no tenant prompt is set.
+func AddKnowledgeImageInstruction(tenantID, input, prompt string) (string, string) {
+	return addKnowledgeImageInstruction(input, prompt, TaskPromptText(tenantID, PromptKnowledgeImages))
 }
 
-func AddPersonalZaloKnowledgeImageInstruction(input, prompt string) (string, string) {
-	return addKnowledgeImageInstruction(input, prompt, PersonalZaloKnowledgeImageInstruction)
+// AddPersonalZaloKnowledgeImageInstruction adds the personal Zalo image rules
+// (task prompt personal_zalo_knowledge_images: every relevant image).
+func AddPersonalZaloKnowledgeImageInstruction(tenantID, input, prompt string) (string, string) {
+	return addKnowledgeImageInstruction(input, prompt, TaskPromptText(tenantID, PromptPZKnowledgeImages))
 }
 
 func addKnowledgeImageInstruction(input, prompt, instruction string) (string, string) {

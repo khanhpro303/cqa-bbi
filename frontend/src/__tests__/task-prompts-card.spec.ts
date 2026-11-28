@@ -48,4 +48,31 @@ describe('TaskPromptsCard', () => {
     expect(vm.prompts[1].customized).toBe(true)
     expect(vm.editorOpen).toBe(false)
   })
+
+  it('keeps the save button off while a required marker is missing and explains a refused save', async () => {
+    mocks.get.mockResolvedValueOnce({ data: { data: [
+      { ...prompt('personal_zalo_handover', 'personal_zalo'), required: ['[CQA_REQUEST_HUMAN_REVIEW]'], default: 'trả [CQA_REQUEST_HUMAN_REVIEW]', value: 'trả [CQA_REQUEST_HUMAN_REVIEW]' },
+    ] } })
+    const wrapper = await mountCard()
+    const vm = wrapper.vm as any
+    vm.openEditor(vm.prompts[0])
+    expect(vm.missingRequired).toEqual([])
+    vm.draft = 'Báo nhân viên khi cần.'
+    expect(vm.missingRequired).toEqual(['[CQA_REQUEST_HUMAN_REVIEW]'])
+
+    mocks.put.mockRejectedValueOnce({ response: { data: { error: 'prompt_missing_required', missing: ['[CQA_REQUEST_HUMAN_REVIEW]'] } } })
+    await vm.saveDraft()
+    expect(vm.editorOpen).toBe(true)
+  })
+
+  it('filters prompts by search text and opens the matching groups', async () => {
+    const wrapper = await mountCard()
+    const vm = wrapper.vm as any
+    expect(vm.groups.map((g: any) => g.key)).toEqual(['chat_memory', 'erp'])
+    expect(vm.groups[0].customized).toBe(1)
+    vm.search = 'product_code'
+    await flushPromises()
+    expect(vm.groups.map((g: any) => g.key)).toEqual(['erp'])
+    expect(vm.openGroups).toEqual(['erp'])
+  })
 })

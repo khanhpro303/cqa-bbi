@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/customercases"
 	"github.com/vietbui/chat-quality-agent/db/models"
@@ -41,9 +42,9 @@ func personalZaloComplaintGuide(ctx context.Context, req personalZaloChatbotRequ
 	guide := customercases.BotContext(ctx, req.TenantID, req.ChannelID, "user", subjectID, customerCode, func(cases string) string {
 		return engine.BuildTaskPrompt(req.TenantID, engine.PromptComplaintBot, map[string]string{"cases": cases})
 	})
-	guide += "\nKhiếu nại phải gọi complaint_record trước khi xác nhận đã ghi nhận. Nếu công cụ không chạy được, chỉ trả " + personalZaloAIHandoverMarker + "."
+	guide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZComplaintRules)
 	if req.ThreadType == personalZaloThreadGroup {
-		guide += "\nCả nhóm thấy phản hồi. Không nhắc lại thông tin riêng tư hay nội dung khiếu nại cũ của người gửi."
+		guide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZComplaintGroup)
 	}
 	return guide
 }
@@ -83,9 +84,10 @@ func (g *personalZaloDirectGrant) allowComplaints(ctx context.Context, key strin
 		guideReq.SenderID = ""
 		g.complaintGuide = personalZaloComplaintGuide(ctx, guideReq, "")
 		if target.code == "" {
-			g.complaintGuide += "\nNếu tin nhắn là yêu cầu ghi nhận khiếu nại, chưa có mã khách xác thực. Không gọi complaint_record. Chỉ trả " + personalZaloComplaintCodeMarker + "."
+			g.complaintGuide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZStaffNoCode)
 		} else {
-			g.complaintGuide += "\nNhân viên đang báo thay khách. Nếu tin nhắn yêu cầu ghi nhận khiếu nại, hệ thống đã xác thực mã khách " + target.code + ". Gọi complaint_record với mã này."
+			// target.code passed complaintCodeFormat, so it is a plain code.
+			g.complaintGuide += "\n" + engine.BuildTaskPrompt(req.TenantID, engine.PromptPZStaffCode, map[string]string{"customer_code": target.code})
 		}
 	} else {
 		g.complaintGuide = personalZaloComplaintGuide(ctx, req, p.CustomerCode)
@@ -93,25 +95,34 @@ func (g *personalZaloDirectGrant) allowComplaints(ctx context.Context, key strin
 	return nil
 }
 
-func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cfg *config.Config, flow engine.LangflowConfig, req personalZaloChatbotRequest, scope string, complaints, staffGroup bool) (engine.LangflowResult, error) {
-	if !complaints {
-		return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope, req.Text, "", "")
-	}
+func runPersonalZaloGuest(ctx context.Context, client *engine.LangflowClient, cfg *config.Config, flow engine.LangflowConfig, req personalZaloChatbotRequest, scope string, complaints, staffGroup bool, plan agents.Plan) (engine.LangflowResult, error) {
 	p := engine.GroupPermissionContext{
 		TenantID: req.TenantID, ChannelID: req.ChannelID, ZaloUserID: req.SenderID, AgentType: "public", PersonalZalo: true,
 	}
-	attachPersonalZaloComplaintGrant(&p, req)
-	guide := personalZaloComplaintGuide(ctx, req, "")
-	if staffGroup && req.ThreadType == personalZaloThreadGroup {
-		p.GroupGuest = false
-		guide += "\nNhân viên đang gọi bot trong nhóm khách. Chỉ gọi complaint_record khi tin mới yêu cầu ghi nhận một vấn đề cụ thể cho khách của nhóm. Hệ thống đọc mã khách từ nhóm CRM. Nếu công cụ báo từ chối, nói chưa ghi nhận và nhắc đúng lý do công cụ trả về. Khi ghi nhận thành công, chỉ xác nhận đã ghi nhận."
+	guide := ""
+	if complaints {
+		attachPersonalZaloComplaintGrant(&p, req)
+		guide = personalZaloComplaintGuide(ctx, req, "")
+		if staffGroup && req.ThreadType == personalZaloThreadGroup {
+			p.GroupGuest = false
+			guide += "\n" + engine.TaskPromptText(req.TenantID, engine.PromptPZStaffGroup)
+		}
+	} else {
+		// A knowledge-only guest turn may carry a specialist scope, but it
+		// must never gain a write tool from that agent.
+		p.DryRun = true
+	}
+	if plan.Mode == agents.ModeAgent {
+		plan.Sign(&p)
+	} else if !complaints {
+		return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope, req.Text, "", "", false)
 	}
 	permission, err := engine.SignPermissionToken(p, cfg.EncryptionKey)
 	if err != nil {
 		return engine.LangflowResult{}, err
 	}
 	return engine.RunPersonalZaloGuestKnowledge(ctx, client, flow, cfg.EncryptionKey, req.TenantID, scope,
-		req.Text, permission, guide)
+		req.Text, permission, guide, complaints)
 }
 
 func finishPersonalZaloComplaint(ctx context.Context, cfg *config.Config, channel models.Channel, req personalZaloChatbotRequest, turnID, reply string, forceHandover, staffGroup bool) (string, bool) {

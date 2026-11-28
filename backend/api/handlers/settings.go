@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/ai"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/config"
@@ -318,6 +319,11 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		return
 	}
 
+	specialistAgentsEnabled, err := agents.Enabled(c.Request.Context(), tenantID)
+	if err != nil {
+		agentServerError(c, "get enabled setting", err)
+		return
+	}
 	cfg, _ := config.Load()
 
 	// Audit: hash prompt cũ để ghi cũ→mới (không bao giờ log nội dung prompt).
@@ -344,6 +350,14 @@ func SaveAIEnginesSettings(c *gin.Context) {
 		upsertSetting(tenantID, "ai_engine_langflow_public_flow_id", req.LangflowPublicFlowID, nil)
 	} else {
 		db.DB.Where("tenant_id = ? AND setting_key = ?", tenantID, "ai_engine_langflow_public_flow_id").Delete(&models.AppSetting{})
+	}
+
+	// Once chats are answered by specialist agents, the two chatbot prompts
+	// here are the copy agents were made from and the rollback if agents are
+	// turned off: the AI Engine page shows them read-only and saving it must
+	// not change or clear them.
+	if specialistAgentsEnabled {
+		req.SystemPrompt, req.SystemPromptInternal = oldPrompt, oldPromptInternal
 	}
 
 	// System prompt (plain text, optional). Empty clears the override so the

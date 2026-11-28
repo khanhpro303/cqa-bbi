@@ -120,13 +120,18 @@ func TestKnowledgeFirecrawl(c *gin.Context) {
 
 func CreateKnowledgeURL(c *gin.Context) {
 	var req struct {
-		URL      string `json:"url"`
-		Title    string `json:"title"`
-		Audience string `json:"audience"`
+		URL      string   `json:"url"`
+		Title    string   `json:"title"`
+		Audience string   `json:"audience"`
+		Tags     []string `json:"tags"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_body"})
+		return
+	}
+	tags, ok := knowledgeTagsFromRequest(c, req.Tags)
+	if !ok {
 		return
 	}
 	source, err := knowledge.ParseSourceURL(req.URL)
@@ -140,7 +145,7 @@ func CreateKnowledgeURL(c *gin.Context) {
 	}
 	tenantID := middleware.GetTenantID(c)
 	doc, err := knowledge.Default().CreateFromURL(knowledge.NewDocumentInput{
-		TenantID: tenantID, Title: req.Title, Audience: req.Audience, CreatedBy: middleware.GetUserEmail(c),
+		TenantID: tenantID, Title: req.Title, Audience: req.Audience, Tags: tags, CreatedBy: middleware.GetUserEmail(c),
 	}, source, client)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "save_failed"})

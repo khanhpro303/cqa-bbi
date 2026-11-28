@@ -11,6 +11,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/channels"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/customercases"
@@ -176,6 +177,14 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			}
 		}
 		guest := req.ThreadType == personalZaloThreadUser && identity.AgentType == ""
+		// Specialist agents: the channel's team picks who answers. A team
+		// with no agent for this sender leaves the chat to people.
+		agentPlan := personalZaloAgentPlan(ctx, req, identity)
+		if agentPlan.Mode == agents.ModeSilent {
+			log.Printf("[agents] personal Zalo channel %s: no agent serves this sender here; staying silent (%s)", req.ChannelID, agentPlan.LogFields())
+			c.Status(http.StatusNoContent)
+			return
+		}
 		addressed := req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req, sessionConfig)
 		var inferredComplaint bool
 		groupTurn := preparePersonalZaloGroupTurn(ctx, channel, sessionConfig, req, addressed, func(ctx context.Context, tenantID, input string) bool {
@@ -184,7 +193,8 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			return reply
 		})
 		staffGroupComplaint := groupTurn.Staff && addressed
-		complaints := customercases.EnabledFor(channel.Metadata) && (!groupTurn.Staff || staffGroupComplaint) && req.Text != ""
+		complaints := customercases.EnabledFor(channel.Metadata) && (!groupTurn.Staff || staffGroupComplaint) && req.Text != "" &&
+			agentPlan.Allows(agents.ToolComplaintRecord)
 		requestedHandover := personalZaloHandoverRequested(req.Text) && (addressed || (groupTurn.Inferred && !groupTurn.Staff))
 		handover := !complaints && !guest && requestedHandover
 		directSessionRequired := req.ThreadType == personalZaloThreadUser &&
@@ -225,7 +235,7 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			}
 			generation, err = ai.generate(ctx, flowCtx, channel, req, settings, personalZaloAIOptions{
 				scope: turn.FlowScope, identity: identity, guest: guest, complaint: generation.complaint,
-				canHandover: addressed || !groupTurn.Staff, staffGroupComplaint: staffGroupComplaint,
+				canHandover: addressed || !groupTurn.Staff, staffGroupComplaint: staffGroupComplaint, plan: agentPlan,
 			})
 			if generation.settingsError {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chatbot_settings_unavailable"})
