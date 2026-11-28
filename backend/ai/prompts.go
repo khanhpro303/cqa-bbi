@@ -101,6 +101,7 @@ const mandatoryProductNormalizationHeading = "## Quy tắc chuẩn hóa sản ph
 const messengerOrderOutcomePromptHeading = "## Quy tắc nhận diện đơn hàng"
 
 const mandatoryNeedHeading = "## Quy tắc nhóm nhu cầu bắt buộc"
+const mandatoryMessengerIntentLabelsHeading = "## Quy tắc nhãn nhu cầu hiển thị"
 
 const mandatorySenderRoleInstructions = `
 
@@ -131,7 +132,13 @@ const mandatoryNeedInstructions = `
 - Mã hợp lệ: "price" (hỏi giá, khuyến mãi), "advice" (tư vấn mẫu, size, thông số), "stock" (hỏi còn hàng, còn màu, còn size), "order" (đặt hàng, thanh toán, giao hàng, theo dõi đơn), "warranty" (bảo hành, đổi trả, hàng lỗi), "complaint" (khiếu nại, phàn nàn về sản phẩm hoặc dịch vụ), "other" (nhu cầu khác), "unknown" (không có tin nhắn customer).
 - Chỉ dựa vào lời khách hàng (customer). Không dùng lời agent.
 - Khi khách có nhiều nhu cầu, chọn mã đứng trước theo thứ tự: complaint, warranty, order, price, stock, advice, other.
-- Chỉ trả mã, không trả câu mô tả.`
+- Trong insights.need, chỉ trả mã, không trả câu mô tả.`
+
+const mandatoryMessengerIntentLabelsInstructions = `
+
+## Quy tắc nhãn nhu cầu hiển thị
+- Mỗi phần tử trong insights.intents là một nhãn tiếng Việt tự nhiên, ngắn gọn về nhu cầu cụ thể của khách, ví dụ "Hỏi giá", "Hỏi tồn kho" hoặc "Tư vấn kích cỡ".
+- Chỉ dùng mã nhóm nhu cầu cho insights.need. Trong insights.intents, viết nhãn cho người đọc và tránh các mã như ask_price, check_stock, order hoặc advice.`
 
 func appendMandatorySenderRoleInstructions(prompt string) string {
 	if strings.Contains(prompt, mandatorySenderRoleHeading) {
@@ -147,6 +154,9 @@ func appendMandatoryMessengerInsightsInstructions(prompt string) string {
 	}
 	if !strings.Contains(prompt, mandatoryNeedHeading) {
 		prompt += mandatoryNeedInstructions
+	}
+	if !strings.Contains(prompt, mandatoryMessengerIntentLabelsHeading) {
+		prompt += mandatoryMessengerIntentLabelsInstructions
 	}
 	return prompt
 }

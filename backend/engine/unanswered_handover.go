@@ -100,7 +100,7 @@ func NotifyUnansweredHandover(ctx context.Context, sender unansweredHandoverSend
 	return notifyUnansweredHandoverRecipients(ctx, db.RedisClient, sender, channel, turnID, body, destinations), true
 }
 
-func notifyUnansweredHandoverRecipients(ctx context.Context, client *redis.Client, sender unansweredHandoverSender, channel models.Channel, turnID, body string, destinations []unansweredHandoverDestination) bool {
+func notifyUnansweredHandoverRecipients(ctx context.Context, client *redis.Client, sender unansweredHandoverSender, channel models.Channel, turnID, body string, destinations []unansweredHandoverDestination, onAttempt ...func(error)) bool {
 	confirmed := false
 	for _, destination := range destinations {
 		kind := "dm"
@@ -111,6 +111,9 @@ func notifyUnansweredHandoverRecipients(ctx context.Context, client *redis.Clien
 		if deliverUnansweredHandover(ctx, client, key, func() error {
 			err := sendUnansweredHandover(ctx, sender, destination, body)
 			recordUnansweredHandoverLog(ctx, channel.TenantID, destination.id, body, err)
+			for _, observe := range onAttempt {
+				observe(err)
+			}
 			return err
 		}) {
 			confirmed = true

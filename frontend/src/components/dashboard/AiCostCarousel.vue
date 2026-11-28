@@ -8,7 +8,7 @@
   >
     <div class="dashboard-chart__heading">
       <span class="dashboard-chart__icon" aria-hidden="true">
-        <v-icon size="20">mdi-chart-line</v-icon>
+        <v-icon size="20">{{ view === 'day' ? 'mdi-chart-line' : 'mdi-chart-bar' }}</v-icon>
       </span>
       <h2>{{ title }}</h2>
       <span class="cost-currency">{{ locale === 'vi' ? 'VNĐ' : 'VND' }}</span>
@@ -67,7 +67,7 @@
     </div>
 
     <div v-if="loading" class="cost-slide">
-      <DashboardChartSkeleton :variant="view === 'day' ? 'line' : 'ranking'" :label="$t('loading')" />
+      <DashboardChartSkeleton :label="$t('loading')" />
     </div>
     <div v-else class="cost-slide" @touchstart.passive="playing = false">
       <Transition name="cost-slide" mode="out-in">
@@ -81,17 +81,28 @@
             <span>{{ $t(view === 'employee' && source === 'job' ? 'cost_employee_chatbot_only' : 'no_data') }}</span>
           </div>
           <DailyTrendChart v-else-if="view === 'day'" :label="title" :dates="dates" :series="series" currency />
-          <ol v-else class="cost-ranking" role="list" :aria-label="title" tabindex="0">
-            <li v-for="(row, index) in rankedRows" :key="index" class="cost-ranking__row">
-              <div class="cost-ranking__caption">
-                <span class="cost-ranking__name">{{ row.label }}</span>
-                <strong>{{ currency.format(row.cost) }}</strong>
+          <div v-else class="cost-bars">
+            <div class="cost-bars__axis" aria-hidden="true">
+              <span v-for="tick in costTicks" :key="tick">{{ compactNumber.format(tick) }}</span>
+            </div>
+            <div class="cost-bars__scroll" role="region" :aria-label="title" tabindex="0">
+              <div class="cost-bars__plot" :style="{ '--cost-bar-count': barRows.length }">
+                <div class="cost-bars__grid" aria-hidden="true">
+                  <span v-for="tick in costTicks" :key="tick" />
+                </div>
+                <ol class="cost-bars__columns" role="list">
+                  <li v-for="(row, index) in barRows" :key="index">
+                    <div class="cost-bars__column">
+                      <div class="cost-bars__bar" :style="{ height: `${Math.max(0, row.cost) / costTicks[0] * 100}%` }">
+                        <strong class="cost-bars__value">{{ currency.format(row.cost) }}</strong>
+                      </div>
+                    </div>
+                    <span class="cost-bars__name" :title="row.label">{{ row.label }}</span>
+                  </li>
+                </ol>
               </div>
-              <div class="cost-ranking__track" aria-hidden="true">
-                <span :style="{ width: row.share + '%' }" />
-              </div>
-            </li>
-          </ol>
+            </div>
+          </div>
         </div>
       </Transition>
     </div>
@@ -142,14 +153,25 @@ const rows = reactive<Record<GroupBy, CostRow[] | null>>({ day: [], channel: [],
 const title = computed(() => t(views[view.value].title))
 const playbackLabel = computed(() => t(playing.value ? 'cost_slideshow_pause' : 'cost_slideshow_play'))
 const currency = computed(() => new Intl.NumberFormat(locale.value, { style: 'currency', currency: 'VND' }))
+const compactNumber = computed(() => new Intl.NumberFormat(locale.value, {
+  notation: 'compact', compactDisplay: 'long', maximumFractionDigits: 1,
+}))
 const activeRows = computed(() => rows[view.value])
 const dates = computed(() => rows.day?.map(row => row.label) ?? [])
 const series = computed(() => [{ label: t('cost'), values: rows.day?.map(row => toVnd(row.total_cost)) ?? [] }])
-const rankedRows = computed(() => {
-  const entries = (activeRows.value ?? []).map(row => ({ label: row.label, cost: toVnd(row.total_cost) }))
-  const max = entries.reduce((highest, row) => Math.max(highest, row.cost), 0)
+const barRows = computed(() => (activeRows.value ?? []).map(row => ({
+  label: row.label,
+  cost: toVnd(row.total_cost),
+})))
+const costTicks = computed(() => {
+  const max = barRows.value.reduce((highest, row) => Math.max(highest, row.cost), 0)
+  const intervals = 4
+  const targetStep = Math.max(1, max / intervals)
+  const magnitude = 10 ** Math.floor(Math.log10(targetStep))
+  const multiplier = [1, 2, 5, 10].find(value => value * magnitude >= targetStep) ?? 10
+  const step = multiplier * magnitude
 
-  return entries.map(row => ({ ...row, share: max > 0 ? Math.max(0, row.cost) / max * 100 : 0 }))
+  return Array.from({ length: intervals + 1 }, (_, index) => (intervals - index) * step)
 })
 
 function toVnd(usd: number): number {
@@ -196,13 +218,15 @@ watch(
 .dashboard-chart--cost.v-card {
   --chart-accent: #91420b;
   --chart-tint: rgba(191, 91, 20, 0.10);
-  --ranking-bar: #c46c31;
+  --cost-bar-fill: #c46c31;
+  --cost-bar-edge: #df955a;
 }
 
 :global(.v-theme--dark) .dashboard-chart--cost.v-card {
   --chart-accent: #ffc38c;
   --chart-tint: rgba(255, 180, 99, 0.14);
-  --ranking-bar: #e0a46e;
+  --cost-bar-fill: #be7845;
+  --cost-bar-edge: #ffc38c;
 }
 
 .cost-currency {
@@ -339,54 +363,114 @@ watch(
 
 .cost-views button:focus-visible,
 .cost-filter__options button:focus-visible,
-.cost-ranking:focus-visible {
+.cost-bars__scroll:focus-visible {
   outline: 2px solid var(--chart-accent);
   outline-offset: 2px;
 }
 
-.cost-ranking {
-  flex: 1;
-  min-height: 240px;
-  max-height: 286px;
-  overflow-y: auto;
-  margin: 0;
-  padding: 3px 6px 3px 0;
-  list-style: none;
+.cost-bars {
+  --cost-plot-height: 174px;
+  --cost-plot-top: 26px;
+  --cost-column-width: 112px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
 }
 
-.cost-ranking__row + .cost-ranking__row {
-  margin-top: 14px;
-}
-
-.cost-ranking__caption {
+.cost-bars__axis,
+.cost-bars__grid {
   display: flex;
+  flex-direction: column;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
-  font-size: 0.8125rem;
-  line-height: 1.35;
+  height: var(--cost-plot-height);
+  margin-top: var(--cost-plot-top);
 }
 
-.cost-ranking__name {
-  overflow-wrap: anywhere;
-}
-
-.cost-ranking__caption strong {
-  flex-shrink: 0;
+.cost-bars__axis {
+  text-align: end;
+  white-space: nowrap;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
 }
 
-.cost-ranking__track {
-  height: 7px;
-  border-radius: 6px;
-  overflow: hidden;
-  background: rgba(var(--v-theme-on-surface), 0.07);
+.cost-bars__axis span {
+  line-height: 0;
 }
 
-.cost-ranking__track span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--ranking-bar);
+.cost-bars__scroll {
+  min-width: 0;
+  overflow-x: auto;
+  border-radius: 4px;
+}
+
+.cost-bars__plot {
+  position: relative;
+  min-width: calc(var(--cost-bar-count) * var(--cost-column-width));
+}
+
+.cost-bars__grid {
+  position: absolute;
+  inset: 0 0 auto;
+  pointer-events: none;
+}
+
+.cost-bars__grid span {
+  width: 100%;
+  height: 0;
+  box-shadow: 0 1px 0 0.5px rgba(var(--v-theme-on-surface), 0.10);
+}
+
+.cost-bars__grid span:last-child {
+  box-shadow: 0 1px 0 0.5px rgba(var(--v-theme-on-surface), 0.24);
+}
+
+.cost-bars__columns {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--cost-bar-count), minmax(0, 1fr));
+  margin: 0;
+  padding: var(--cost-plot-top) 0 8px;
+  list-style: none;
+  text-align: center;
+}
+
+.cost-bars__column {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  height: var(--cost-plot-height);
+}
+
+.cost-bars__bar {
+  position: relative;
+  width: min(56%, 72px);
+  border-radius: 7px 7px 0 0;
+  background: linear-gradient(to bottom, var(--cost-bar-edge), var(--cost-bar-fill));
+}
+
+.cost-bars__value {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 1px 4px;
+  background: rgb(var(--v-theme-surface));
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-bars__name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  margin: 8px 5px 0;
+  color: rgba(var(--v-theme-on-surface), 0.82);
+  font-size: 0.75rem;
+  line-height: 1.25;
 }
 </style>

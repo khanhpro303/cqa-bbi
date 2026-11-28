@@ -1182,7 +1182,10 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 					return
 				}
 				log.Printf("[cases] complaint turn from %s reached no staff (recorded=%t); sending the handover alert", payload.Sender.ID, recorded)
-				engine.NotifyHandover(bg, adapter, alert)
+				engine.NotifyHandover(bg, adapter, alert, engine.HandoverTracking{
+					SourceGroupID: matchedGroup.ZaloGroupID,
+					Observe:       customercases.CaseFallbackObserver(bg, matchedChannel.TenantID, turnID),
+				})
 			}()
 		}
 
@@ -2038,6 +2041,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 
 		var adviceImages []models.ProductAdvisoryImage
 		if intent == "IN_SCOPE" && !complaintHandover && !strings.HasPrefix(userText, "#") {
+			langflowInput, systemPromptToUse = engine.AddProductAdviceInstruction(langflowInput, systemPromptToUse)
 			advice, adviceErr := productAdviceForTurn(ctx, &permCtx, input, func() []chatmemory.RecentTurn {
 				if matchedGroup.ZaloGroupID != "" {
 					return chatmemory.RecentTurnsForSender(ctx, sessionID, msgID, input, payload.Sender.ID, 2)

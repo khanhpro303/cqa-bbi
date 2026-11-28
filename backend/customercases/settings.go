@@ -158,7 +158,9 @@ func TenantStreams(ctx context.Context, tenantID string) []Stream {
 		return nil
 	}
 	var chans []models.Channel
-	db.DB.WithContext(ctx).Select("id, metadata").Where("tenant_id = ? AND channel_type = ?", tenantID, "zalo_oa").Order("created_at").Find(&chans)
+	db.DB.WithContext(ctx).Select("id, metadata").
+		Where("tenant_id = ? AND channel_type IN ?", tenantID, []string{"zalo_oa", "personal_zalo_import"}).
+		Order("created_at").Find(&chans)
 	seen := map[string]bool{}
 	var out []Stream
 	for _, ch := range chans {

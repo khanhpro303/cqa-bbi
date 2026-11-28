@@ -1,3 +1,10 @@
+import {
+  readComplaintResolvedDays,
+  readComplaintStreams,
+  normalizeStreams,
+  type ComplaintStream,
+} from './zaloGroupSettings'
+
 export interface PersonalZaloGroupSettings {
   personal_zalo_group_reply_enabled: boolean
   group_assistant_mode: boolean
@@ -5,6 +12,9 @@ export interface PersonalZaloGroupSettings {
   group_bot_names: string
   handover_alert_group_id: string
   personal_zalo_handover_staff_id: string
+  complaint_cases: boolean
+  complaint_resolved_days: number
+  complaint_streams: ComplaintStream[]
 }
 
 export interface PersonalZaloHandoverStaff {
@@ -43,6 +53,9 @@ export function readPersonalZaloGroupSettings(metadata: Record<string, unknown> 
     personal_zalo_handover_staff_id: typeof metadata.personal_zalo_handover_staff_id === 'string'
       ? metadata.personal_zalo_handover_staff_id
       : '',
+    complaint_cases: metadata.complaint_cases === true,
+    complaint_resolved_days: readComplaintResolvedDays(metadata.complaint_resolved_days),
+    complaint_streams: readComplaintStreams(metadata.complaint_streams),
   }
 }
 
@@ -56,6 +69,9 @@ export function personalZaloGroupSettingsPatch(settings: PersonalZaloGroupSettin
     personal_zalo_handover_staff_id: settings.handover_alert_group_id
       ? ''
       : settings.personal_zalo_handover_staff_id || '',
+    complaint_cases: settings.complaint_cases,
+    complaint_resolved_days: readComplaintResolvedDays(Number(settings.complaint_resolved_days)),
+    complaint_streams: normalizeStreams(settings.complaint_streams),
   }
 }
 

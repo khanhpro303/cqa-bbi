@@ -29,6 +29,9 @@ const Table = defineComponent({
     h('div', { class: 'queue-headers' }, (props.headers as { title: string }[]).map(header => header.title).join(' | ')),
     ...(props.items as { conversation_id: string; customer_name: string }[]).map(row => h('div', { class: 'queue-row', 'data-id': row.conversation_id }, [
       row.customer_name,
+      slots['item.waiting']?.({ item: row }),
+      slots['item.last_message_at']?.({ item: row }),
+      slots['item.insight']?.({ item: row }),
       slots['item.quality_analysis']?.({ item: row }),
       slots['item.actions']?.({ item: row }),
     ])),
@@ -54,7 +57,7 @@ function report(statuses: string[], staleIndexes: number[] = [], qualityIndexes:
     rows: statuses.map((status, index) => ({
       conversation_id: `c${index}`, customer_name: `Khách ${index}`, channel_id: 'page-one', channel_name: 'Fanpage A', last_message_at: null, status, turns: [],
       insight_stale: staleIndexes.includes(index), insight_job_id: staleIndexes.includes(index) ? `job-${index % 2}` : undefined,
-      insight: index === 0 ? { lead_quality: { level: 'high', reason: 'Khách có nhu cầu rõ ràng' }, order_outcomes: [{ status: 'confirmed', order_ref: 'DH-01', value_vnd: 450000, confirmation_message_id: 'msg-1', confirmation_evidence: 'Đã tạo đơn', amount_message_id: 'msg-2', amount_evidence: 'Tổng 450.000đ', confidence: 0.95 }, { status: 'review', value_vnd: null, evidence_message_ids: ['old-id'] }] } : undefined,
+      insight: index === 0 ? { intents: ['ask_price', 'Hỏi giá', 'check_stock'], lead_quality: { level: 'high', reason: 'Khách có nhu cầu rõ ràng' }, order_outcomes: [{ status: 'confirmed', order_ref: 'DH-01', value_vnd: 450000, confirmation_message_id: 'msg-1', confirmation_evidence: 'Đã tạo đơn', amount_message_id: 'msg-2', amount_evidence: 'Tổng 450.000đ', confidence: 0.95 }, { status: 'review', value_vnd: null, evidence_message_ids: ['old-id'] }] } : undefined,
       quality_analysis_stale: qualityStaleIndexes.includes(index),
       quality_analysis: qualityIndexes.includes(index) ? {
         job_run_id: 'qc-run', job_name: 'Chất lượng CSKH', evaluated_at: '2026-09-15T02:00:00Z', verdict: 'FAIL', score: 20,
@@ -111,6 +114,9 @@ describe('ServiceQuality queue banner navigation', () => {
     await wrapper.get('[data-id="c0"] button[title="Xem chi tiết"]').trigger('click')
     await nextTick()
 
+    expect(wrapper.text().match(/Hỏi giá/g)).toHaveLength(1)
+    expect(wrapper.text()).toContain('Hỏi tồn kho')
+    expect(wrapper.text()).not.toMatch(/ask_price|check_stock/)
     expect(wrapper.text()).toContain('Đơn hàng được AI nhận diện')
     expect(wrapper.text()).toContain('Đã xác nhận')
     expect(wrapper.text()).toContain('450.000 ₫')
@@ -279,5 +285,41 @@ describe('ServiceQuality queue banner navigation', () => {
     }
     expect(scrollIntoView).toHaveBeenCalledTimes(2)
     expect(mocks.get).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps insight badges, timestamps, durations, and action buttons on a single line', async () => {
+    mocks.canEditJobs = true
+    const data = report(['overdue', 'answered'], [], [0]) as any
+    data.rows[0].insight = {
+      lead_quality: { level: 'converted', reason: 'Đã chốt đơn' },
+    }
+    data.rows[0].waiting = { seconds: 3498 }
+    data.rows[0].last_message_at = '2026-11-28T06:40:00Z'
+    i18n = createI18n({ legacy: false, locale: 'vi', messages: { vi: qualityVi, en: qualityEn } })
+    mocks.get.mockResolvedValue({ data })
+    const wrapper = mount(ServiceQuality, {
+      attachTo: document.body,
+      global: { plugins: [i18n], stubs: {
+        ...stubs, VBtn: Button, VSelect: Field, VTextField: Field, VTextarea: Field, VSwitch: Field, VDataTable: Table,
+        VDialog: Hidden,
+        VExpansionPanels: ExpansionPanels, VExpansionPanel: Container, VExpansionPanelTitle: Container, VExpansionPanelText: Container,
+        MetaLabelsPanel: Hidden, InsightWordcloudPanel: Hidden,
+      } },
+    })
+    wrappers.push(wrapper)
+    await flushPromises()
+
+    const row = wrapper.get('[data-id="c0"]')
+    const insightCell = row.get('.conversation-insight-cell')
+    expect(insightCell.classes()).not.toContain('flex-wrap')
+    expect(insightCell.text()).toContain('Đã phân tích')
+    expect(insightCell.text()).toContain('Đã chuyển đổi')
+
+    const actionsCell = row.get('.conversation-actions-cell')
+    expect(actionsCell.classes()).toContain('flex-nowrap')
+    expect(actionsCell.classes()).not.toContain('flex-wrap')
+
+    const noWrapSpans = row.findAll('.text-no-wrap').map(el => el.text())
+    expect(noWrapSpans.some(text => text.includes('58 phút 18 giây'))).toBe(true)
   })
 })

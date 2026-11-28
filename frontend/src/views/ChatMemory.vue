@@ -11,7 +11,7 @@
 
     <!-- Complaint cases -->
     <v-card v-if="tab === 'cases'" class="pa-4">
-      <CasesPanel :tenant-id="tenantId" @open-session="openSessionById" />
+      <CasesPanel :tenant-id="tenantId" @open-session="openSessionById" @open-conversation="openConversation" />
     </v-card>
 
     <!-- Profiles -->
@@ -119,6 +119,7 @@
             :customer-code="selectedProfile.customer_code"
             class="mb-4"
             @open-session="openSessionById"
+            @open-conversation="openConversation"
           />
           <div class="text-subtitle-2 mb-1">{{ $t('cm_recent_sessions') }}</div>
           <SessionTable :sessions="profileSessions" :loading="loadingProfileSessions" compact @open="openSession" />
@@ -211,17 +212,18 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import SessionTable from '../components/chat-memory/SessionTable.vue'
 import CasesPanel from '../components/chat-memory/CasesPanel.vue'
 import {
-  type ChatProfile, type ChatSession, type TranscriptLine,
+  type ChatProfile, type ChatSession, type CustomerCase, type TranscriptLine,
   parseIssues, parseList, issueTypeLabelKey, severityColor, sentimentColor, profileFieldKeys,
 } from '../components/chat-memory/labels'
 
 const route = useRoute()
+const router = useRouter()
 const { t } = useI18n()
 const tenantId = computed(() => route.params.tenantId as string)
 const perPage = 20
@@ -381,6 +383,15 @@ async function openSessionById(id: string) {
   }
 }
 
+function openConversation(c: CustomerCase) {
+  if (!c.conversation_id) return
+  router.push({
+    name: 'messages',
+    params: { tenantId: tenantId.value },
+    query: { conv: c.conversation_id, channel_id: c.channel_id, tab: 'messages' },
+  })
+}
+
 async function resummarize() {
   if (!selectedSession.value) return
   resummarizing.value = true
@@ -438,7 +449,7 @@ onMounted(() => {
   else if (tab.value === 'profiles') loadProfiles(1)
 })
 
-defineExpose({ loadProfiles, loadSessions, profileRows, openSession, openSessionById, sessions, profiles, issueFilter, tab })
+defineExpose({ loadProfiles, loadSessions, profileRows, openSession, openSessionById, openConversation, sessions, profiles, issueFilter, tab })
 </script>
 
 <style scoped>

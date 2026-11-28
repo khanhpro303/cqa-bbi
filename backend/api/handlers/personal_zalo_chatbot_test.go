@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"github.com/vietbui/chat-quality-agent/api/middleware"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db"
@@ -34,6 +37,8 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	const secret = "test-personal-zalo-channel-secret"
 	const gatewaySecret = "test-deployment-gateway-signing-secret"
 	const imageID = "cea6c2f1-40bc-4c42-a256-e2f676d24e9d"
+	const gobyQuestion = "Bull ơi, cho tôi thông tin giày goby với"
+	const gobyAnswer = "Dạ, LS2 Goby Man có 3 điểm nổi bật ạ.\n• CE EN 13634:2017, mức 2|2|2|2 WR.\n• Cổ cao bảo vệ mắt cá, gót và ngón chân.\n• Da bò và chi tiết phản quang."
 	var pngData bytes.Buffer
 	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 3, 4))); err != nil {
 		t.Fatal(err)
@@ -212,10 +217,11 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			if resolveKnowledgePreviewAgent(key, channel.TenantID, token) != "public" ||
 				r.Header.Get("X-LANGFLOW-GLOBAL-VAR-ERP_PERMISSION_TOKEN") != "" ||
 				input.Tweaks["permission_token"] != nil || input.Tweaks["customer_code"] != nil ||
-				!strings.Contains(prompt, "Khách trong phiên này chưa xác thực") {
+				input.Text != gobyQuestion || !strings.Contains(prompt, "Khách trong phiên này chưa xác thực") ||
+				!strings.Contains(prompt, "3–4 gạch đầu dòng thật ngắn") {
 				t.Error("guest flow did not receive only the public knowledge credential and guest prompt")
 			}
-			reply = "Dạ, em có thể tư vấn chính sách đổi size."
+			reply = gobyAnswer
 		} else if (staff || customerERP.Load()) && !erpPaused.Load() {
 			sessionDuringERP.Store(input.SessionID)
 			if disableERPDuringNextTurn.Swap(false) {
@@ -233,7 +239,8 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			if staff {
 				wantPrompt = "Hỗ trợ nhân viên."
 			}
-			if !strings.HasPrefix(prompt, wantPrompt) || !strings.Contains(prompt, "chào ngắn gọn") {
+			if !strings.HasPrefix(prompt, wantPrompt) || !strings.Contains(prompt, "chào ngắn gọn") ||
+				!strings.Contains(prompt, "3–4 gạch đầu dòng thật ngắn") {
 				t.Errorf("%s flow received the wrong prompt", wantAgent)
 			}
 			if err != nil || permissions == nil || !permissions.PersonalZalo || permissions.AgentType != wantAgent ||
@@ -386,12 +393,16 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 			t.Fatalf("guest ERP request %q: status=%d calls=%d body=%s", question, response.Code, flowCalls.Load(), response.Body)
 		}
 	}
-	fresh.RequestID, fresh.Text = "guest-knowledge", "Chính sách đổi size thế nào?"
+	channel.Metadata = `{"session_keyword":" ; \u00a0 ","session_timeout_minutes":7}`
+	fresh.RequestID, fresh.Text = "guest-goby-knowledge", gobyQuestion
 	guestResponse := submit(fresh, secret, gatewaySecret)
-	if guestResponse.Code != http.StatusOK || !strings.Contains(guestResponse.Body.String(), "tư vấn chính sách đổi size") ||
+	var guestReply struct{ Reply string }
+	if err := json.Unmarshal(guestResponse.Body.Bytes(), &guestReply); err != nil ||
+		guestResponse.Code != http.StatusOK || guestReply.Reply != gobyAnswer ||
 		!strings.Contains(guestResponse.Body.String(), "delivery_token") || flowCalls.Load() != 1 {
 		t.Fatalf("guest knowledge: status=%d calls=%d body=%s", guestResponse.Code, flowCalls.Load(), guestResponse.Body)
 	}
+	channel.Metadata = ""
 	tenantCredentials.Store(false)
 	customerVerified.Store(true)
 	fresh.RequestID, fresh.Text = "public-greeting", "Hello"
@@ -528,6 +539,82 @@ func TestPersonalZaloChatbotSignedTurn(t *testing.T) {
 	if response := submit(fresh, secret, gatewaySecret); response.Code != http.StatusNoContent {
 		t.Fatalf("an in-flight turn may not deliver after the sender loses access: %s", response.Body.String())
 	}
+
+	t.Run("configured session gates direct replies", func(t *testing.T) {
+		addr := os.Getenv("TEST_REDIS_ADDR")
+		if addr == "" {
+			t.Skip("TEST_REDIS_ADDR not set")
+		}
+		client := redis.NewClient(&redis.Options{Addr: addr})
+		if err := client.Ping(t.Context()).Err(); err != nil {
+			t.Fatal(err)
+		}
+		originalRedis := db.RedisClient
+		db.RedisClient = client
+		t.Cleanup(func() { db.RedisClient = originalRedis; _ = client.Close() })
+		customerVerified.Store(false)
+		staffVerified.Store(false)
+		req := fresh
+		req.ThreadType, req.SenderID = personalZaloThreadUser, req.ThreadID
+		sessionKey := personalZaloSessionKey(req)
+		t.Cleanup(func() { _ = client.Del(context.WithoutCancel(t.Context()), sessionKey).Err() })
+
+		send := func(id, message string, status int, reply string, flowCallsAdded int32) {
+			t.Helper()
+			req.RequestID, req.MessageID, req.Text = "direct-session-"+id, id, message
+			calls := flowCalls.Load()
+			response := submit(req, secret, gatewaySecret)
+			if response.Code != status || flowCalls.Load()-calls != flowCallsAdded {
+				t.Fatalf("%s: status=%d body=%s, flow calls=%d", id, response.Code, response.Body, flowCalls.Load()-calls)
+			}
+			if status == http.StatusOK {
+				var output struct {
+					Reply string `json:"reply"`
+					Token string `json:"delivery_token"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &output); err != nil || output.Reply != reply || output.Token == "" {
+					t.Fatalf("%s: unexpected reply or delivery token: %s", id, response.Body)
+				}
+			}
+		}
+
+		const handoverRequest = "Cho tôi gặp nhân viên"
+		for _, sender := range []struct {
+			name            string
+			customer, staff bool
+		}{
+			{name: "guest"},
+			{name: "customer", customer: true},
+			{name: "staff", staff: true},
+		} {
+			customerVerified.Store(sender.customer)
+			staffVerified.Store(sender.staff)
+			channel.Metadata = `{"session_keyword":"chào bull","handover_alert_group_id":"unavailable-group"}`
+			send(sender.name+"-handover-before-opening", handoverRequest, http.StatusNoContent, "", 0)
+			channel.Metadata = `{"session_keyword":"chào bull","complaint_cases":true}`
+			send(sender.name+"-complaint-before-opening", handoverRequest, http.StatusNoContent, "", 0)
+		}
+		customerVerified.Store(false)
+		staffVerified.Store(false)
+		channel.Metadata = `{"session_keyword":"chào bull; bắt đầu","session_end_keyword":"kết thúc","session_welcome_message":"Mời anh/chị đặt câu hỏi","session_goodbye_message":"Hẹn gặp lại"}`
+		send("partial-keyword", "chào bull, tư vấn giúp em", http.StatusNoContent, "", 0)
+		send("verify-before-opening", "verify", http.StatusOK, personalZaloInvalidPairingReply, 0)
+		send("open", " CHÀO BULL ", http.StatusOK, "Mời anh/chị đặt câu hỏi", 0)
+		send("follow-up", gobyQuestion, http.StatusOK, gobyAnswer, 1)
+		send("close", "kết thúc", http.StatusOK, "Hẹn gặp lại", 0)
+		send("closed-follow-up", gobyQuestion, http.StatusNoContent, "", 0)
+		send("reopen", "bắt đầu", http.StatusOK, "Mời anh/chị đặt câu hỏi", 0)
+		if err := client.Expire(t.Context(), sessionKey, -time.Second).Err(); err != nil {
+			t.Fatal(err)
+		}
+		send("expired-follow-up", gobyQuestion, http.StatusNoContent, "", 0)
+
+		customerVerified.Store(true)
+		channel.Metadata = `{"session_keyword":"chào bull; nói chuyện với nhân viên","session_welcome_message":"Mời anh/chị đặt câu hỏi","handover_alert_group_id":"unavailable-group"}`
+		send("open-with-handover-phrase", "nói chuyện với nhân viên", http.StatusOK, "Mời anh/chị đặt câu hỏi", 0)
+		send("handover-in-open-session", handoverRequest, http.StatusOK, personalZaloHandoverUnavailable, 0)
+		send("handover-after-session-closed", handoverRequest, http.StatusNoContent, "", 0)
+	})
 }
 
 func TestPersonalZaloTextBoundaryCountsUTF16(t *testing.T) {

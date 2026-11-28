@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/vietbui/chat-quality-agent/config"
+	"github.com/vietbui/chat-quality-agent/engine"
 )
 
 type erpMCPTool struct {
@@ -82,9 +83,16 @@ func ERPMCP(c *gin.Context) {
 	token := c.GetHeader("X-Agent-Token")
 	preview := strings.HasPrefix(token, knowledgePreviewTokenPrefix)
 	var agentType string
+	var personalComplaint bool
+	permissionToken := c.GetHeader("X-Permission-Token")
 	if preview {
 		if cfg, err := config.Load(); err == nil {
 			agentType = resolveKnowledgePreviewAgent(cfg.EncryptionKey, tenantID, token)
+			if agentType != "" && permissionToken != "" {
+				p, err := engine.VerifyPermissionToken(permissionToken, cfg.EncryptionKey)
+				personalComplaint = err == nil && p.TenantID == tenantID && p.AgentType == agentType &&
+					p.PersonalZalo && p.Complaints && p.ComplaintTurnID != ""
+			}
 		}
 	} else if token != "" {
 		agentType = resolveAgentType(tenantID, token)
@@ -138,7 +146,11 @@ func ERPMCP(c *gin.Context) {
 		reply(gin.H{})
 	case "tools/list":
 		if preview {
-			reply(gin.H{"tools": []erpMCPTool{knowledgeMCPTool(tenantID)}})
+			tools := []erpMCPTool{knowledgeMCPTool(tenantID)}
+			if personalComplaint {
+				tools = append(tools, complaintMCPTool())
+			}
+			reply(gin.H{"tools": tools})
 			return
 		}
 		tools := append(erpMCPToolsForAgent(agentType), listedOrderTools()...)
@@ -161,12 +173,12 @@ func ERPMCP(c *gin.Context) {
 			reply(result)
 			return
 		}
-		if preview {
-			fail(-32602, "Tool unavailable in knowledge preview")
+		if params.Name == complaintMCPToolName && (!preview || personalComplaint) {
+			reply(handleComplaintTool(c.Request.Context(), tenantID, agentType, permissionToken, params.Arguments))
 			return
 		}
-		if params.Name == complaintMCPToolName {
-			reply(handleComplaintTool(c.Request.Context(), tenantID, agentType, c.GetHeader("X-Permission-Token"), params.Arguments))
+		if preview {
+			fail(-32602, "Tool unavailable in knowledge preview")
 			return
 		}
 		if tool, ok := findCartTool(params.Name); ok {

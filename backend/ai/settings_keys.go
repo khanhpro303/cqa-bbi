@@ -15,6 +15,8 @@ func ProviderAPIKeySettingKey(provider string) string {
 		return "ai_api_key_openai"
 	case "openrouter":
 		return "ai_api_key_openrouter"
+	case "9router":
+		return "ai_api_key_9router"
 	default:
 		return "ai_api_key"
 	}
@@ -27,9 +29,8 @@ func ProviderAPIKeySettingKeys(provider string) []string {
 	if primary == "ai_api_key" {
 		return []string{"ai_api_key"}
 	}
-	if provider == "openrouter" {
-		// New provider: never fall back to the legacy key, which belongs to
-		// another vendor.
+	if provider == "openrouter" || provider == "9router" {
+		// Routers need their own key. The legacy key may belong to another provider.
 		return []string{primary}
 	}
 	return []string{primary, "ai_api_key"}

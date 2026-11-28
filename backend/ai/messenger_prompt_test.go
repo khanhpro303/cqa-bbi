@@ -64,6 +64,22 @@ func TestMessengerPromptAlwaysIncludesMandatoryProductNormalizationRules(t *test
 	}
 }
 
+func TestMessengerPromptRequiresVietnameseIntentLabels(t *testing.T) {
+	config := `{"profile":"messenger_insights","rules":[]}`
+	legacyOverride := "Prompt tùy chỉnh {{rules}}\n\n" + mandatoryNeedHeading + "\n- Chỉ trả mã, không trả câu mô tả."
+	for _, override := range []string{"", legacyOverride, DefaultMessengerInsightsPrompt()} {
+		prompt := BuildClassificationPrompt(config, override)
+		for _, expected := range []string{
+			"Mỗi phần tử trong insights.intents là một nhãn tiếng Việt",
+			"Chỉ dùng mã nhóm nhu cầu cho insights.need",
+		} {
+			if count := strings.Count(prompt, expected); count != 1 {
+				t.Errorf("expected %q exactly once, found %d", expected, count)
+			}
+		}
+	}
+}
+
 func TestMessengerPromptDefaultExposesEditableOrderOutcomeRules(t *testing.T) {
 	prompt := DefaultMessengerInsightsPrompt()
 	for _, expected := range []string{

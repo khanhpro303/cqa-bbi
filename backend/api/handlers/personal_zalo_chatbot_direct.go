@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/vietbui/chat-quality-agent/config"
 	"github.com/vietbui/chat-quality-agent/db/models"
 	"github.com/vietbui/chat-quality-agent/engine"
+	"github.com/vietbui/chat-quality-agent/workers"
 )
 
 const personalZaloERPUnavailable = "Dạ em chưa thể thực hiện tra cứu này trên kênh Zalo này. Anh/chị vui lòng thử lại hoặc liên hệ nhân viên phụ trách ạ."
@@ -23,16 +25,18 @@ func personalZaloDirectGreeting(agentType string) string {
 }
 
 type personalZaloDirectGrant struct {
-	flow       engine.LangflowConfig
-	flowID     string
-	flowScope  string
-	permission string
-	customer   string
-	agentToken string
-	grantHash  string
-	turnID     string
-	prompt     string
-	showImages bool
+	flow              engine.LangflowConfig
+	flowID            string
+	flowScope         string
+	permission        string
+	customer          string
+	agentToken        string
+	grantHash         string
+	turnID            string
+	prompt            string
+	complaintGuide    string
+	showImages        bool
+	advicePermissions *engine.GroupPermissionContext
 }
 
 func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req personalZaloChatbotRequest, identity personalZaloERPIdentity, flow engine.LangflowConfig, sessionScope string, settings map[string]models.AppSetting) (personalZaloDirectGrant, error) {
@@ -76,6 +80,7 @@ func preparePersonalZaloDirectGrant(ctx context.Context, cfg *config.Config, req
 		}
 		grant.agentToken = agentToken
 		grant.customer = permissions.CustomerCode
+		grant.advicePermissions = &permissions
 	}
 	if cfg.EncryptionKey != "" && flowSource == engine.LangflowSourceTenant && flow.APIKeySource == engine.LangflowSourceTenant {
 		if grant.agentToken == "" {
@@ -119,11 +124,31 @@ func (g personalZaloDirectGrant) run(ctx context.Context, langflow *engine.Langf
 	input, prompt := req.Text, g.prompt
 	if prompt != "" {
 		prompt += "\n\nKhi người dùng chỉ chào hỏi, chào ngắn gọn và hỏi họ cần hỗ trợ gì. Chỉ xác nhận kết quả tra cứu do công cụ trả về."
-		if g.permission == "" {
+		if g.turnID == "" {
 			prompt += " Phiên này chưa có quyền ERP. Chỉ tư vấn dựa trên tài liệu được phép dùng."
 		}
 		if handover := personalZaloHandoverPrompt(channel); handover != "" {
+			if g.complaintGuide != "" {
+				handover = "Với các tình huống ngoài hướng dẫn ghi nhận khiếu nại: " + handover
+			}
 			prompt += "\n\n" + handover
+		}
+	}
+	if g.complaintGuide != "" {
+		prompt = strings.TrimSpace(prompt + "\n\n" + g.complaintGuide)
+	}
+	if g.agentToken != "" {
+		input, prompt = engine.AddProductAdviceInstruction(input, prompt)
+	}
+	if g.advicePermissions != nil {
+		adviceContext, err := workers.PersonalZaloProductAdvice(ctx, g.advicePermissions, req.Text)
+		switch {
+		case err != nil:
+			log.Printf("[product-advisory] catalog lookup for personal Zalo channel %s failed: %v", channel.ID, err)
+		case adviceContext != "" && prompt != "":
+			prompt += "\n\n" + adviceContext
+		case adviceContext != "":
+			input += "\n\n" + adviceContext
 		}
 	}
 	imageLimit := 0

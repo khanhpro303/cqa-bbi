@@ -36,8 +36,17 @@
             @update:model-value="onProviderChange"
           />
 
+          <v-text-field
+            v-if="isNineRouter"
+            v-model="aiSettings.model"
+            :label="$t('ai_model')"
+            placeholder="cx/gpt-5.6-luna"
+            hint="Nhập model ID từ 9router, gồm cả tiền tố nhà cung cấp."
+            persistent-hint
+            class="mb-3"
+          />
           <v-select
-            v-if="aiSettings.provider !== 'openai' && aiSettings.provider !== 'openrouter'"
+            v-else-if="aiSettings.provider !== 'openai' && aiSettings.provider !== 'openrouter'"
             v-model="aiSettings.model"
             :label="$t('ai_model')"
             :items="modelOptions"
@@ -81,6 +90,7 @@
           />
 
           <v-switch
+            v-if="!isNineRouter"
             v-model="useCustomBaseUrl"
             :label="$t('custom_api_url')"
             color="primary"
@@ -88,19 +98,20 @@
             hide-details
             class="mt-1 mb-2"
           />
-          <div v-if="!useCustomBaseUrl" class="text-caption text-grey mb-2">{{ $t('custom_api_url_hint') }}</div>
+          <div v-if="!hasCustomBaseUrl" class="text-caption text-grey mb-2">{{ $t('custom_api_url_hint') }}</div>
 
           <v-text-field
-            v-if="useCustomBaseUrl"
+            v-if="hasCustomBaseUrl"
             v-model="aiSettings.baseUrl"
             label="Base URL"
             :placeholder="baseURLPlaceholder"
-            hint="Để trống để dùng mặc định"
+            :hint="isNineRouter ? 'Nhập endpoint 9router mà máy chủ CQA truy cập được. URL kết thúc bằng /v1.' : 'Để trống để dùng mặc định'"
             persistent-hint
             clearable
             :rules="[
-              v => !!v || 'Vui lòng nhập URL hoặc tắt tùy chỉnh',
+              v => !!v || (isNineRouter ? 'Vui lòng nhập URL 9router' : 'Vui lòng nhập URL hoặc tắt tùy chỉnh'),
               v => !v || v.startsWith('http://') || v.startsWith('https://') || 'URL phải bắt đầu bằng http:// hoặc https://',
+              v => !isNineRouter || !v || /\/v1\/*$/.test(v.trim()) || 'URL 9router phải kết thúc bằng /v1',
             ]"
             class="mb-3"
           />
@@ -415,7 +426,7 @@ const tabs = [
   { label: 'facebook_account', value: 'facebook', icon: 'mdi-facebook' },
 ]
 
-type AIProvider = 'claude' | 'gemini' | 'openai' | 'openrouter'
+type AIProvider = 'claude' | 'gemini' | 'openai' | 'openrouter' | '9router'
 
 type TaskAISetting = {
   key: string
@@ -452,6 +463,7 @@ const providerOptions = [
   { title: 'Gemini (Google)', value: 'gemini' },
   { title: 'OpenAI (Codex)', value: 'openai' },
   { title: 'OpenRouter (nhiều hãng, có model free)', value: 'openrouter' },
+  { title: '9router', value: '9router' },
 ]
 
 const claudeModels = [
@@ -479,6 +491,7 @@ const defaultModelByProvider: Record<AIProvider, string> = {
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-5.4-mini',
   openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
+  '9router': '',
 }
 
 const providerApiKeys = reactive<Record<AIProvider, string>>({
@@ -486,6 +499,7 @@ const providerApiKeys = reactive<Record<AIProvider, string>>({
   gemini: '',
   openai: '',
   openrouter: '',
+  '9router': '',
 })
 const providerBaseURLs = reactive<Partial<Record<AIProvider, string>>>({})
 
@@ -746,6 +760,9 @@ const appUrlRules = [
   (v: string) => !v || !v.endsWith('/') || 'URL không nên có dấu / ở cuối',
 ]
 
+const isNineRouter = computed(() => aiSettings.provider === '9router')
+const hasCustomBaseUrl = computed(() => isNineRouter.value || useCustomBaseUrl.value)
+
 const modelOptions = computed(() => {
   switch (aiSettings.provider) {
     case 'claude':
@@ -762,7 +779,9 @@ const modelOptions = computed(() => {
 })
 
 function onProviderChange() {
-  aiSettings.model = defaultModelByProvider[aiSettings.provider]
+  aiSettings.model = isNineRouter.value && taskDefaults.provider === '9router'
+    ? taskDefaults.model
+    : defaultModelByProvider[aiSettings.provider]
   aiSettings.apiKey = providerApiKeys[aiSettings.provider] || ''
   aiSettings.baseUrl = providerBaseURLs[aiSettings.provider] || ''
   useCustomBaseUrl.value = !!aiSettings.baseUrl
@@ -779,6 +798,8 @@ const baseURLPlaceholder = computed(() => {
       return 'https://api.openai.com/v1'
     case 'openrouter':
       return 'https://openrouter.ai/api/v1'
+    case '9router':
+      return 'https://router.example.com/v1'
     default:
       return ''
   }
@@ -793,6 +814,7 @@ async function loadSettings() {
     providerApiKeys.gemini = settings.ai_api_key_gemini || ''
     providerApiKeys.openai = settings.ai_api_key_openai || ''
     providerApiKeys.openrouter = settings.ai_api_key_openrouter || ''
+    providerApiKeys['9router'] = settings.ai_api_key_9router || ''
 
     const provider = (settings.ai_provider as AIProvider) || 'claude'
     aiSettings.provider = provider
@@ -802,7 +824,7 @@ async function loadSettings() {
     }
 
     if (provider === 'openrouter') loadOpenRouterModels()
-    if (!providerApiKeys[provider] && settings.ai_api_key && provider !== 'openrouter') {
+    if (!providerApiKeys[provider] && settings.ai_api_key && provider !== 'openrouter' && provider !== '9router') {
       providerApiKeys[provider] = settings.ai_api_key
     }
     aiSettings.apiKey = providerApiKeys[provider] || ''
@@ -857,15 +879,15 @@ async function saveAI(credentialsOnly: boolean) {
     showSnack('Vui lòng chọn hoặc nhập model', 'error')
     return
   }
-  if (useCustomBaseUrl.value && !aiSettings.baseUrl) {
-    showSnack('Vui lòng nhập Base URL hoặc tắt tùy chỉnh', 'error')
+  const baseURL = hasCustomBaseUrl.value ? (aiSettings.baseUrl || '').trim() : ''
+  if (hasCustomBaseUrl.value && !baseURL) {
+    showSnack('Vui lòng nhập Base URL', 'error')
     return
   }
   const loading = credentialsOnly ? savingAICredentials : savingAI
   loading.value = true
   try {
     const { provider, apiKey } = aiSettings
-    const baseURL = useCustomBaseUrl.value ? (aiSettings.baseUrl || '').trim() : ''
     const modelStr = typeof aiSettings.model === 'object' && aiSettings.model ? (aiSettings.model as any).value : aiSettings.model
     await api.put(`/tenants/${tenantId.value}/settings/ai`, {
       provider,
@@ -885,7 +907,9 @@ async function saveAI(credentialsOnly: boolean) {
     }
     showSnack(t('success'), 'success')
   } catch (err: any) {
-    showSnack(err.response?.data?.error || t('error'), 'error')
+    const failure = err.response?.data
+    showSnack(failure?.error === 'invalid_base_url' || failure?.error === '9router_endpoint_changed'
+      ? failure.details : failure?.error || t('error'), 'error')
   } finally {
     loading.value = false
   }
@@ -896,6 +920,15 @@ async function testKey() {
     showSnack('Vui lòng nhập API Key', 'error')
     return
   }
+  const baseURL = hasCustomBaseUrl.value ? (aiSettings.baseUrl || '').trim() : ''
+  if (isNineRouter.value && !baseURL) {
+    showSnack('Vui lòng nhập Base URL', 'error')
+    return
+  }
+  if (isNineRouter.value && !aiSettings.model?.trim()) {
+    showSnack('Vui lòng nhập model ID 9router', 'error')
+    return
+  }
   testingKey.value = true
   try {
     const modelStr = typeof aiSettings.model === 'object' && aiSettings.model ? (aiSettings.model as any).value : aiSettings.model
@@ -903,11 +936,13 @@ async function testKey() {
       provider: aiSettings.provider,
       api_key: aiSettings.apiKey,
       model: modelStr,
-      base_url: useCustomBaseUrl.value ? (aiSettings.baseUrl || '') : '',
+      base_url: baseURL,
     })
     showSnack(`${data.provider}: ${data.message}`, 'success')
   } catch (err: any) {
-    showSnack(err.response?.data?.error || t('error'), 'error')
+    const failure = err.response?.data
+    showSnack(failure?.error === 'invalid_ai_configuration' || failure?.error === '9router_endpoint_changed'
+      ? failure.details : failure?.error || t('error'), 'error')
   } finally {
     testingKey.value = false
   }

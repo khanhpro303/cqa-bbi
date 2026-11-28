@@ -92,6 +92,9 @@ func AutoMigrate() error {
 		&models.CachedProduct{},
 		&models.ProductAdvisory{},
 		&models.ProductAdvisoryImage{},
+		&models.ProductAdvisoryImportJob{},
+		&models.ProductAdvisoryImportItem{},
+		&models.ProductAdvisoryImportImage{},
 		&models.ERPRawProduct{},
 		&models.CachedCustomer{},
 		&models.ERPParentSKUExclusion{},
@@ -120,6 +123,7 @@ func AutoMigrate() error {
 		&models.OrderCart{},
 		&models.CustomerCase{},
 		&models.CustomerCaseEvent{},
+		&models.CustomerCaseAlert{},
 		&models.CustomerImageFile{},
 		&models.CustomerCaseImageLink{},
 	)

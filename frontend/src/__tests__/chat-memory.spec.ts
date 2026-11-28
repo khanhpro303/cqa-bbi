@@ -4,13 +4,17 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import ChatMemory from '../views/ChatMemory.vue'
 import { highestSeverity, issueTypeLabelKey, parseIssues } from '../components/chat-memory/labels'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn() }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn(), push: vi.fn() }))
 vi.mock('../api', () => ({ default: mocks }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ params: { tenantId: 'tenant-1' }, query: {} }) }))
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ params: { tenantId: 'tenant-1' }, query: {} }),
+  useRouter: () => ({ push: mocks.push }),
+}))
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 describe('ChatMemory page', () => {
   beforeEach(() => {
+    mocks.push.mockReset()
     mocks.get.mockReset().mockImplementation(async (url: string) => {
       if (url.endsWith('/profiles')) {
         return { data: { data: [{ id: 'p1', subject_type: 'user', subject_id: 'u1', customer_name: 'Anh Bình', profile: '{"address_form":"anh","interests":["E-24","FF818"],"custom":"x"}', card: 'Xưng anh', sessions_count: 2 }], total: 1 } }
@@ -46,6 +50,15 @@ describe('ChatMemory page', () => {
     vm.issueFilter = 'high'
     await vm.loadSessions(1)
     expect(mocks.get).toHaveBeenLastCalledWith('/tenants/tenant-1/chat-memory/sessions', { params: expect.objectContaining({ issues: 'high', page: 1 }) })
+  })
+
+  it('opens the source conversation in Messages', async () => {
+    const wrapper = shallowMount(ChatMemory, { global: { mocks: { $t: (k: string) => k }, renderStubDefaultSlot: true } })
+    ;(wrapper.vm as any).openConversation({ conversation_id: 'conv-1', channel_id: 'personal-1' })
+    expect(mocks.push).toHaveBeenCalledWith({
+      name: 'messages', params: { tenantId: 'tenant-1' },
+      query: { conv: 'conv-1', channel_id: 'personal-1', tab: 'messages' },
+    })
   })
 })
 

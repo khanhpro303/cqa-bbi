@@ -12,7 +12,7 @@
           <v-chip size="small" variant="tonal" :color="caseStatusColor(item.status)">{{ $t(`cc_status_${item.status}`) }}</v-chip>
           <v-chip size="small" :color="severityColor(item.severity)">{{ $t(`cm_severity_${item.severity}`) }}</v-chip>
           <v-chip size="small" variant="outlined">{{ $t(issueTypeLabelKey(item.type)) }}</v-chip>
-          <v-chip v-if="item.stream" size="small" variant="outlined" prepend-icon="mdi-source-fork">{{ streamName(streams || [], item.stream) }}</v-chip>
+          <v-chip v-if="item.stream" size="small" variant="outlined" prepend-icon="mdi-source-fork">{{ item.stream_name || streamName(streams, item.stream) }}</v-chip>
           <v-chip size="small" variant="outlined" prepend-icon="mdi-source-branch">{{ $t(`cc_source_${item.source}`) }}</v-chip>
           <v-chip v-if="item.followup_count" size="small" color="warning" variant="tonal">{{ $t('cc_followups') }}: {{ item.followup_count }}</v-chip>
         </div>
@@ -22,10 +22,16 @@
             <div class="text-caption text-medium-emphasis mb-2">
               {{ item.customer_name || item.reporter_name || item.subject_id }}
               <span v-if="item.customer_code"> · {{ item.customer_code }}</span>
-              · {{ item.subject_type === 'group' ? $t('cm_group_chat') : $t('cm_direct_chat') }}
+              · {{ item.zalo_group_id || item.subject_type === 'group' ? $t('cm_group_chat') : $t('cm_direct_chat') }}
               <span v-if="item.reporter_name && item.reporter_name !== item.customer_name"> · {{ $t('cc_reporter') }}: {{ item.reporter_name }}</span>
               · {{ $t('cc_opened') }} {{ formatDateTime(item.created_at) }}
             </div>
+            <v-sheet class="pa-3 mb-3 rounded" color="surface-variant" data-testid="case-source">
+              <div v-if="item.channel_name"><span class="text-medium-emphasis">{{ $t('cc_channel') }}:</span> {{ item.channel_name }}</div>
+              <div v-if="item.source_group_name || item.zalo_group_id">
+                <span class="text-medium-emphasis">{{ $t('cc_source_group') }}:</span> {{ item.source_group_name || item.zalo_group_id }}
+              </div>
+            </v-sheet>
             <div class="text-subtitle-2 mb-1">{{ $t('cc_detail') }}</div>
             <p class="mb-3 pre-wrap">{{ item.detail || '—' }}</p>
             <template v-if="item.evidence">
@@ -69,7 +75,16 @@
               </div>
             </template>
             <v-btn
-              v-if="item.opened_session_id"
+              v-if="item.conversation_id"
+              variant="text"
+              size="small"
+              prepend-icon="mdi-message-text-outline"
+              class="mb-3 px-0"
+              data-testid="case-open-conversation"
+              @click="$emit('open-conversation', item)"
+            >{{ $t('cc_view_conversation') }}</v-btn>
+            <v-btn
+              v-else-if="item.opened_session_id"
               variant="text"
               size="small"
               prepend-icon="mdi-forum-outline"
@@ -77,6 +92,33 @@
               data-testid="case-open-session"
               @click="$emit('open-session', item.opened_session_id)"
             >{{ $t('cc_view_session') }}</v-btn>
+
+            <div class="text-subtitle-2 mb-1">{{ $t('cc_alert_history') }}</div>
+            <div v-if="alertsUnavailable" class="text-body-2 text-error mb-3" role="alert">
+              {{ $t('cc_alert_unavailable') }}
+            </div>
+            <div v-else-if="alerts.length === 0" class="text-body-2 text-medium-emphasis mb-3" data-testid="case-alert-none">
+              {{ $t('cc_alert_none') }}
+            </div>
+            <template v-else>
+              <v-sheet
+                v-for="(alert, index) in alerts"
+                :key="`${alert.created_at}-${index}`"
+                class="pa-2 mb-2 rounded border"
+                :data-testid="`case-alert-${alert.status}`"
+              >
+                <div class="d-flex align-center ga-2">
+                  <v-chip size="x-small" variant="tonal" :color="alert.status === 'sent' ? 'success' : 'error'">
+                    {{ $t(alert.status === 'sent' ? 'cc_alert_sent' : 'cc_alert_failed') }}
+                  </v-chip>
+                  <span class="text-body-2">{{ alert.group_name || alert.zalo_group_id || alert.group_id || $t(alert.kind === 'fallback_staff' ? 'cc_alert_staff' : 'cc_alert_group_unknown') }}</span>
+                  <v-spacer />
+                  <span class="text-caption text-medium-emphasis">{{ formatDateTime(alert.created_at) }}</span>
+                </div>
+                <div v-if="alert.kind === 'fallback' || alert.kind === 'fallback_staff'" class="text-caption text-medium-emphasis">{{ $t('cc_alert_fallback') }}</div>
+                <div v-if="alert.error" class="text-caption text-error mt-1">{{ $t(`cc_alert_error_${alert.error}`, $t('cc_alert_error_delivery_failed')) }}</div>
+              </v-sheet>
+            </template>
 
             <div class="text-subtitle-2 mb-1">{{ $t('cc_history') }}</div>
             <div class="mb-2">
@@ -152,20 +194,24 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../../api'
 import {
-  type CaseEvent, type CaseStream, type CustomerCase, caseEventIcon, caseStatusColor, caseStatuses, caseTypes,
+  type CaseAlert, type CaseEvent, type CaseStream, type CustomerCase, caseEventIcon, caseStatusColor, caseStatuses, caseTypes,
   issueTypeLabelKey, mergeCaseImages, parseCaseImages, severityColor, streamName,
 } from './labels'
 
-const props = defineProps<{ modelValue: boolean; tenantId: string; caseId: string; streams?: CaseStream[] }>()
+const props = defineProps<{ modelValue: boolean; tenantId: string; caseId: string }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'saved', c: CustomerCase): void
   (e: 'open-session', id: string): void
+  (e: 'open-conversation', c: CustomerCase): void
 }>()
 
 const { t } = useI18n()
 const item = ref<CustomerCase | null>(null)
 const events = ref<CaseEvent[]>([])
+const streams = ref<CaseStream[]>([])
+const alerts = ref<CaseAlert[]>([])
+const alertsUnavailable = ref(false)
 const users = ref<{ user_id: string; name: string; email: string }[]>([])
 const saving = ref(false)
 const snack = ref(false)
@@ -194,7 +240,7 @@ const typeOptions = computed(() => caseTypes.map(v => ({ title: t(issueTypeLabel
 // The case's current stream stays pickable even if it was removed from the
 // channel settings.
 const streamOptions = computed(() => {
-  const list = (props.streams || []).map(s => ({ title: s.name, value: s.key }))
+  const list = streams.value.map(s => ({ title: s.name, value: s.key }))
   const cur = item.value?.stream
   if (cur && !list.some(o => o.value === cur)) list.push({ title: cur, value: cur })
   return [{ title: t('cc_stream_none'), value: '' }, ...list]
@@ -266,11 +312,17 @@ async function load() {
   const seq = ++loadSeq
   item.value = null
   events.value = []
+  streams.value = []
+  alerts.value = []
+  alertsUnavailable.value = false
   try {
     const { data } = await api.get(`/tenants/${props.tenantId}/customer-cases/${props.caseId}`)
     if (seq !== loadSeq) return
     fill(data.case)
     events.value = data.events || []
+    streams.value = Array.isArray(data.streams) ? data.streams : []
+    alerts.value = Array.isArray(data.alerts) ? data.alerts : []
+    alertsUnavailable.value = data.alerts_unavailable === true
   } catch {
     notify(t('cm_load_failed'), 'error')
   }
@@ -354,7 +406,7 @@ watch(() => [props.modelValue, props.caseId], ([open]) => {
 
 onBeforeUnmount(clearCaseImage)
 
-defineExpose({ form, save, item, images, loadCaseImage, activeImageUrl, imageErrorId })
+defineExpose({ form, save, item, images, streams, alerts, loadCaseImage, activeImageUrl, imageErrorId })
 </script>
 
 <style scoped>
