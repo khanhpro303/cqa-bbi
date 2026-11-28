@@ -204,7 +204,9 @@ export default {
   ag_team_deleted: 'Đã xoá Bộ điều phối.',
   ag_team_delete_title: 'Xoá Bộ điều phối?',
   ag_team_delete_body: 'Bộ điều phối {name} sẽ bị xoá. Agent trong đó vẫn còn.',
-  ag_team_delete_default: 'Không xoá được Bộ điều phối mặc định.',
+  ag_team_delete_default: 'Không xoá được Bộ điều phối mặc định. Đặt Bộ điều phối khác làm mặc định trước.',
+  ag_team_make_default: 'Đặt làm mặc định',
+  ag_team_default_set: 'Đã đặt {name} làm Bộ điều phối mặc định.',
   ag_team_delete_has_channels: 'Chuyển các kênh sang Bộ điều phối khác trước khi xoá: {channels}.',
   ag_team_delete_in_use: 'Bộ điều phối đang có kênh dùng hoặc là Bộ điều phối mặc định.',
 

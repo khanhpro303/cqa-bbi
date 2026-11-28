@@ -122,6 +122,19 @@ describe('Agents AI page', () => {
     expect(mocks.get.mock.calls.filter(c => c[0] === '/tenants/tenant-1/ai-teams')).toHaveLength(2)
   })
 
+  it('makes another team the default so the old one can be deleted', async () => {
+    const wrapper = shallowMount(AIAgents, stubs)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.tab = 'teams'
+    await flushPromises()
+    expect(wrapper.find('[data-testid="team-make-default-t1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="team-make-default-t2"]').exists()).toBe(true)
+    await vm.makeDefaultTeam(debtTeam)
+    expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/ai-teams/t2/default')
+    expect(mocks.get.mock.calls.filter(c => c[0] === '/tenants/tenant-1/ai-teams')).toHaveLength(2)
+  })
+
   it('falls back to the default team when a channel points at a team that is off', async () => {
     mocks.get.mockImplementation(routeGet({ '/tenants/tenant-1/ai-teams': { teams: [defaultTeam, { ...debtTeam, is_active: false }] } }))
     const wrapper = shallowMount(AIAgents, stubs)

@@ -155,6 +155,17 @@
               <template v-if="team.channels.length">{{ team.channels.map(c => c.name).join(', ') }}</template>
               <template v-else>{{ $t('ag_team_no_channels') }}</template>
             </div>
+            <div v-if="canEdit && !team.is_default && team.is_active" class="mt-2">
+              <v-btn
+                size="small"
+                variant="text"
+                color="primary"
+                prepend-icon="mdi-star-outline"
+                :loading="settingDefault === team.id"
+                :data-testid="`team-make-default-${team.id}`"
+                @click="makeDefaultTeam(team)"
+              >{{ $t('ag_team_make_default') }}</v-btn>
+            </div>
           </v-card>
         </v-col>
       </v-row>
@@ -360,6 +371,20 @@ function openAgent(id: string) {
 function openTeam(team: Team | null) {
   editingTeam.value = team
   teamDialog.value = true
+}
+
+const settingDefault = ref('')
+async function makeDefaultTeam(team: Team) {
+  settingDefault.value = team.id
+  try {
+    await api.post(`/tenants/${tenantId.value}/ai-teams/${team.id}/default`)
+    await loadTeams()
+    showSnack(t('ag_team_default_set', { name: team.name }), 'success')
+  } catch {
+    showSnack(t('ag_save_failed'), 'error')
+  } finally {
+    settingDefault.value = ''
+  }
 }
 
 async function setChannelTeam(channelId: string, teamId: string) {
