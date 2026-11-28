@@ -125,6 +125,8 @@ export default {
   ag_field_prompt_native_required: 'The native runtime needs a system prompt.',
   ag_field_tags: 'Document tags',
   ag_field_tags_hint: 'Limits document search to these tags; empty reads every document of the tier. Not in effect yet: chatbot documents cannot be tagged.',
+  ag_field_tags_hint_live: 'The agent only searches documents with one of these tags. Empty reads every document of the tier. Tag documents on the Chatbot documents page.',
+  ag_tag_item: '{tag} ({n} documents)',
   ag_field_tags_placeholder: 'Type a tag and press Enter',
   ag_err_name: 'Enter a name.',
   ag_err_key: 'Use lower-case letters without accents, digits and dashes (up to 63 characters).',

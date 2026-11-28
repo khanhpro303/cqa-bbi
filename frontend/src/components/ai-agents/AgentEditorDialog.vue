@@ -240,10 +240,14 @@
           </div>
           <v-combobox
             v-model="draft.knowledge_tags"
+            :items="tagItems"
+            item-title="title"
+            item-value="value"
+            :return-object="false"
             multiple
             chips
             closable-chips
-            :hint="$t('ag_field_tags_hint')"
+            :hint="knowledgeTags ? $t('ag_field_tags_hint_live') : $t('ag_field_tags_hint')"
             persistent-hint
             :error-messages="errors.knowledge_tags"
             :readonly="readonly"
@@ -368,11 +372,11 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../../api'
-import type { Agent, AgentRevision, ToolInfo } from './types'
+import type { Agent, AgentRevision, KnowledgeTag, ToolInfo } from './types'
 import { emptyAgent, errorCodeOf, fieldErrorOf } from './types'
 import {
   AGENT_KEY_PATTERN, AUDIENCES, FLOW_ID_PATTERN, MAX_PROMPT_CHARS,
-  diffLines, diffStats, groupTools, slugify, unusableTools,
+  diffLines, diffStats, groupTools, normalizeTags, slugify, unusableTools,
 } from './agentRules'
 
 const props = defineProps<{
@@ -386,6 +390,8 @@ const props = defineProps<{
   // Names of the teams the agent is in (it cannot be deleted while > 0).
   teamNames: string[]
   userNames?: Record<string, string>
+  // Document tags in use; null when the server has no tag list yet.
+  knowledgeTags?: KnowledgeTag[] | null
 }>()
 
 const emit = defineEmits<{
@@ -425,6 +431,10 @@ const runtimeItems = computed(() => {
 })
 // Same vendors as the AI task model picker in Settings; the backend
 // validates the pair, so a vendor it does not know is refused there.
+const tagItems = computed(() => (props.knowledgeTags || []).map(x => ({
+  title: t('ag_tag_item', { tag: x.tag, n: x.documents }),
+  value: x.tag,
+})))
 const providerItems = [
   { title: 'OpenAI', value: 'openai' },
   { title: 'Claude', value: 'claude' },
@@ -567,7 +577,7 @@ function payload(): Agent {
     langflow_flow_id: (a.langflow_flow_id || '').trim(),
     provider: a.runtime === 'native' ? a.provider : '',
     model: a.runtime === 'native' ? (a.model || '').trim() : '',
-    knowledge_tags: a.knowledge_tags.map(x => String(x).trim()).filter(Boolean),
+    knowledge_tags: normalizeTags(a.knowledge_tags),
     options,
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  diffLines, diffStats, groupTools, moveItem, pickAgent, silentAudiences, slugify, unusableTools,
+  diffLines, diffStats, groupTools, moveItem, normalizeTags, pickAgent, silentAudiences, slugify, unusableTools,
 } from '../components/ai-agents/agentRules'
 import type { ToolInfo } from '../components/ai-agents/types'
 
@@ -53,6 +53,11 @@ describe('agent rules', () => {
     expect(pickAgent(members, 's', 'customer')?.id).toBe('a')
     expect(pickAgent(members, 'a', 'staff')?.id).toBe('b')
     expect(pickAgent([{ agent: a, enabled: true }], '', 'staff')).toBeNull()
+  })
+
+  it('normalizes document tags like the knowledge package', () => {
+    // 'Bảo hành' typed in decomposed form (NFD) still matches the stored tag.
+    expect(normalizeTags(['  Bảo   Hành '.normalize('NFD'), 'bảo hành', 'Giao hàng', '', null])).toEqual(['bảo hành', 'giao hàng'])
   })
 
   it('moves members without mutating the list', () => {

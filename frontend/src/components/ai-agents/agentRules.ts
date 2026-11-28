@@ -88,6 +88,16 @@ export function slugify(name: string): string {
     .replace(/-+$/g, '')
 }
 
+// normalizeTag mirrors knowledge.NormalizeTag: NFC, lower case, single
+// spaces, so a typed tag matches the stored document tags.
+export function normalizeTag(tag: string): string {
+  return tag.normalize('NFC').split(/\s+/).filter(Boolean).join(' ').toLowerCase()
+}
+
+export function normalizeTags(tags: unknown[]): string[] {
+  return [...new Set(tags.map(t => normalizeTag(String(t ?? ''))).filter(Boolean))].sort()
+}
+
 export const AGENT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
 export const FLOW_ID_PATTERN = /^[A-Za-z0-9-]{0,64}$/
 export const MAX_PROMPT_CHARS = 120_000

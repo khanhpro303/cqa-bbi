@@ -220,6 +220,7 @@
       :readonly="!canEdit"
       :team-names="editingAgentId ? teamsOfAgent(editingAgentId) : []"
       :user-names="userNames"
+      :knowledge-tags="knowledgeTags"
       @saved="reloadData"
       @deleted="reloadData"
       @notify="showSnack"
@@ -249,7 +250,7 @@ import { useAuthStore } from '../stores/auth'
 import AgentSwitchCard from '../components/ai-agents/AgentSwitchCard.vue'
 import AgentEditorDialog from '../components/ai-agents/AgentEditorDialog.vue'
 import TeamEditorDialog from '../components/ai-agents/TeamEditorDialog.vue'
-import type { Agent, AgentSettings, Team, TeamChannel, ToolInfo } from '../components/ai-agents/types'
+import type { Agent, AgentSettings, KnowledgeTag, Team, TeamChannel, ToolInfo } from '../components/ai-agents/types'
 import { pickAgent } from '../components/ai-agents/agentRules'
 
 const route = useRoute()
@@ -272,6 +273,8 @@ const runtimes = ref<string[]>(['langflow'])
 const agents = ref<Agent[]>([])
 const teams = ref<Team[]>([])
 const userNames = ref<Record<string, string>>({})
+// null until the server lists document tags (older servers have no list).
+const knowledgeTags = ref<KnowledgeTag[] | null>(null)
 
 const agentDialog = ref(false)
 const editingAgentId = ref('')
@@ -400,6 +403,15 @@ async function loadUsers() {
   }
 }
 
+async function loadKnowledgeTags() {
+  try {
+    const { data } = await api.get(`/tenants/${tenantId.value}/knowledge/tags`)
+    knowledgeTags.value = Array.isArray(data?.tags) ? data.tags : null
+  } catch {
+    knowledgeTags.value = null
+  }
+}
+
 async function reloadData() {
   try {
     await Promise.all([loadSettings(), loadAgents(), loadTeams()])
@@ -420,6 +432,7 @@ async function loadAll() {
     loading.value = false
   }
   loadUsers()
+  loadKnowledgeTags()
 }
 
 // Keep the selected tab in the URL so a link opens the same tab.

@@ -96,6 +96,12 @@ export interface TeamInput {
   members: MemberInput[]
 }
 
+// A document tag and how many chatbot documents carry it.
+export interface KnowledgeTag {
+  tag: string
+  documents: number
+}
+
 export interface AgentSettings {
   enabled: boolean
   has_agents: boolean

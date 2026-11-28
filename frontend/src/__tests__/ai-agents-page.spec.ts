@@ -185,6 +185,20 @@ describe('Agent editor', () => {
     expect(mocks.post).toHaveBeenCalledWith('/tenants/tenant-1/ai-agents', expect.objectContaining({ runtime: 'native', provider: '9router', model: 'cx/gpt-5' }))
   })
 
+  it('offers the document tags and saves them in their stored form', async () => {
+    const wrapper = shallowMount(AgentEditorDialog, {
+      props: { ...base, modelValue: true, agentId: 'a3', knowledgeTags: [{ tag: 'công nợ', documents: 3 }] },
+      ...stubs,
+    })
+    await flushPromises()
+    const vm = wrapper.vm as any
+    expect(wrapper.get('[data-testid="agent-tags"]').attributes('hint')).toBe('ag_field_tags_hint_live')
+    vm.draft.knowledge_tags = ['Công Nợ', 'công nợ', ' Bảo hành ']
+    mocks.put.mockResolvedValue({ data: { ...debtAgent } })
+    await vm.save()
+    expect(mocks.put.mock.calls[0][1].knowledge_tags).toEqual(['bảo hành', 'công nợ'])
+  })
+
   it('refuses bad keys and flow ids before calling the API', async () => {
     const wrapper = shallowMount(AgentEditorDialog, { props: { ...base, modelValue: true, agentId: '' }, ...stubs })
     await flushPromises()

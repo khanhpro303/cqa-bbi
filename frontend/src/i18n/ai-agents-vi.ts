@@ -125,6 +125,8 @@ export default {
   ag_field_prompt_native_required: 'Runtime native cần có system prompt.',
   ag_field_tags: 'Nhãn tài liệu',
   ag_field_tags_hint: 'Giới hạn tìm tài liệu theo nhãn, để trống là mọi tài liệu tầng đó được đọc. Chưa có hiệu lực: tài liệu chatbot chưa gắn nhãn được.',
+  ag_field_tags_hint_live: 'Agent chỉ tìm tài liệu có một trong các nhãn này. Để trống: mọi tài liệu tầng đó được đọc. Gắn nhãn cho tài liệu ở trang Tài liệu chatbot.',
+  ag_tag_item: '{tag} ({n} tài liệu)',
   ag_field_tags_placeholder: 'Gõ nhãn rồi Enter',
   ag_err_name: 'Nhập tên.',
   ag_err_key: 'Chỉ dùng chữ thường không dấu, số và dấu gạch ngang (tối đa 63 ký tự).',
