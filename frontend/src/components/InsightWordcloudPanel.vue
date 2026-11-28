@@ -163,7 +163,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import ShapeWordcloud from './ShapeWordcloud.vue'
-import { normalizeInsightLabel, type AggregateItem, type InsightRow } from '../utils/service-quality'
+import { messengerIntentEntry, normalizeInsightLabel, type AggregateItem, type InsightRow } from '../utils/service-quality'
 
 interface InsightGroup {
   kind: string
@@ -332,17 +332,16 @@ function keywordCitations(row: SourceConversation): KeywordCitation[] {
       explanation: lead.reason,
     }]
   } else if (selectedKind.value === 'intent') {
-    const normalizedKeyword = normalizeInsightLabel(selectedKeyword.value?.label || key)
-    citations = latestClassificationTags(row).filter(result => {
-      const normalizedRule = normalizeInsightLabel(result.rule_name || '')
-      return Boolean(result.evidence) && (normalizedRule.includes(normalizedKeyword) || normalizedKeyword.includes(normalizedRule))
-    }).map(result => {
+    const normalizedKeyword = messengerIntentEntry(selectedKeyword.value?.label || key).key
+    citations = latestClassificationTags(row).flatMap(result => {
+      const rule = messengerIntentEntry(result.rule_name || '')
+      if (!result.evidence || !rule.key || (!rule.key.includes(normalizedKeyword) && !normalizedKeyword.includes(rule.key))) return []
       const explanation = parseEvaluationDetail(result.detail).explanation
-      return {
-        label: result.rule_name || selectedKeyword.value?.label || '',
-        evidence: result.evidence!,
+      return [{
+        label: rule.label,
+        evidence: result.evidence,
         explanation: typeof explanation === 'string' ? explanation : undefined,
-      }
+      }]
     })
   }
   return citations.filter((citation, index, all) =>

@@ -80,6 +80,34 @@ export function normalizeInsightLabel(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('vi')
 }
 
+const messengerIntentCodeLabels = new Map([
+  ['ask_price', 'Hỏi giá'],
+  ['price', 'Hỏi giá/khuyến mãi'],
+  ['order', 'Đặt hàng/giao hàng'],
+  ['advice', 'Tư vấn sản phẩm'],
+  ['check_stock', 'Hỏi tồn kho'],
+  ['stock', 'Hỏi tồn kho'],
+  ['warranty', 'Bảo hành/đổi trả'],
+  ['complaint', 'Khiếu nại'],
+  ['other', 'Khác'],
+  ['unknown', 'Chưa xác định'],
+])
+
+export function messengerIntentEntry(intent: string) {
+  const label = messengerIntentCodeLabels.get(normalizeInsightLabel(intent)) ?? intent.trim()
+  const key = normalizeInsightLabel(label).replace(/\s*\/\s*/g, '/')
+  return { key, label }
+}
+
+export function messengerIntentEntries(intents?: readonly string[] | null) {
+  const labels = new Map<string, string>()
+  for (const intent of intents ?? []) {
+    const { key, label } = messengerIntentEntry(intent)
+    if (key && !labels.has(key)) labels.set(key, label)
+  }
+  return Array.from(labels, ([key, label]) => ({ key, label }))
+}
+
 function addUnique(target: Map<string, AggregateItem>, values: Array<{ key: string; label: string }>, conversationId: string) {
   const seen = new Set<string>()
   for (const value of values) {
@@ -128,7 +156,7 @@ export function aggregateInsights(rows: InsightRow[], from: string | Date, to: s
     }
 
     eligibleConversations += 1
-    addUnique(intents, (row.insight.intents || []).map(label => ({ key: normalizeInsightLabel(label), label: label.trim() })), row.conversation_id)
+    addUnique(intents, messengerIntentEntries(row.insight.intents), row.conversation_id)
     addUnique(products, (row.insight.products || []).map(product => {
       const sku = product.sku?.trim()
       const name = product.name.trim()

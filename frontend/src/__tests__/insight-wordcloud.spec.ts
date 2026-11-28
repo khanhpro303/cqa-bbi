@@ -174,14 +174,14 @@ describe('InsightWordcloudPanel', () => {
     expect(api.get).toHaveBeenCalledTimes(2)
   })
 
-  it('renders the intent citation, explanation, and orange border on its source message', async () => {
+  it.each(['Nhu cầu - Hỏi giá/khuyến mãi', 'ask_price'])('renders the intent citation and source highlight for rule %s', async (ruleName) => {
     vi.mocked(api.get).mockImplementation(url => Promise.resolve(
       String(url).endsWith('/evaluations')
         ? { data: { groups: [{ job_type: 'classification', results: [
           { result_type: 'conversation_insight', detail: JSON.stringify({ summary: 'Tóm tắt a' }) },
           {
             result_type: 'classification_tag',
-            rule_name: 'Nhu cầu - Hỏi giá/khuyến mãi',
+            rule_name: ruleName,
             evidence: 'giá sao',
             detail: JSON.stringify({ explanation: 'Khách hỏi giá của sản phẩm.' }),
           },
