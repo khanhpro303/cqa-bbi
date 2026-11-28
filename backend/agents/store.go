@@ -133,6 +133,28 @@ func TeamForChannel(ctx context.Context, tenantID, channelID string) (Team, bool
 	return team, true, nil
 }
 
+// TeamByID returns one of the tenant's teams, active or not, with its active
+// members in order (the agents a turn could go to). The test console uses
+// it, so a team can be tried before it is switched on.
+func TeamByID(ctx context.Context, tenantID, teamID string) (Team, error) {
+	d, err := database(ctx)
+	if err != nil {
+		return Team{}, err
+	}
+	var row models.AITeam
+	if err := d.Where("id = ? AND tenant_id = ?", teamID, tenantID).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return Team{}, ErrNotFound
+		}
+		return Team{}, err
+	}
+	team := TeamFromModel(row)
+	if team.Members, err = loadMembers(d, tenantID, team.ID, true); err != nil {
+		return Team{}, err
+	}
+	return team, nil
+}
+
 // loadMembers returns a team's agents in position order. activeOnly drops
 // disabled memberships and inactive agents.
 func loadMembers(d *gorm.DB, tenantID, teamID string, activeOnly bool) ([]Agent, error) {

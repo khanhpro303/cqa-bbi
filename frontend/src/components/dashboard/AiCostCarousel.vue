@@ -78,7 +78,7 @@
           </div>
           <div v-else-if="!activeRows.length" class="dashboard-chart__state" role="status">
             <v-icon size="28" aria-hidden="true">mdi-chart-box-outline</v-icon>
-            <span>{{ $t(view === 'employee' && source === 'job' ? 'cost_employee_chatbot_only' : 'no_data') }}</span>
+            <span>{{ $t(source === 'job' && (view === 'employee' || view === 'agent') ? `cost_${view}_chatbot_only` : 'no_data') }}</span>
           </div>
           <DailyTrendChart v-else-if="view === 'day'" :label="title" :dates="dates" :series="series" currency />
           <div v-else class="cost-bars">
@@ -131,6 +131,7 @@ const views = {
   day: { label: 'cost_view_day', title: 'cost_by_day_chart' },
   channel: { label: 'cost_view_channel', title: 'cost_by_channel_chart' },
   employee: { label: 'cost_view_employee', title: 'cost_by_employee_chart' },
+  agent: { label: 'cost_view_agent', title: 'cost_by_agent_chart' },
 } as const
 
 const sources = { all: 'source_all', job: 'source_job', chatbot: 'source_chatbot' } as const
@@ -148,7 +149,7 @@ const source = ref<keyof typeof sources>('all')
 const segment = ref<keyof typeof segments>('all')
 const loading = ref(true)
 const reload = ref(0)
-const rows = reactive<Record<GroupBy, CostRow[] | null>>({ day: [], channel: [], employee: [] })
+const rows = reactive<Record<GroupBy, CostRow[] | null>>({ day: [], channel: [], employee: [], agent: [] })
 
 const title = computed(() => t(views[view.value].title))
 const playbackLabel = computed(() => t(playing.value ? 'cost_slideshow_pause' : 'cost_slideshow_play'))

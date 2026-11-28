@@ -17,11 +17,11 @@ func (AppSetting) TableName() string {
 }
 
 type NotificationLog struct {
-	ID           string    `gorm:"type:char(36);primaryKey" json:"id"`
-	TenantID     string    `gorm:"type:char(36);not null;index:idx_notiflog_tenant_sent" json:"tenant_id"`
-	JobID        string    `gorm:"type:char(36)" json:"job_id"`
-	JobRunID     string    `gorm:"type:char(36)" json:"job_run_id"`
-	ChannelType  string    `gorm:"type:varchar(20);not null" json:"channel_type"` // telegram | email | zalo | zalo_oa
+	ID          string `gorm:"type:char(36);primaryKey" json:"id"`
+	TenantID    string `gorm:"type:char(36);not null;index:idx_notiflog_tenant_sent" json:"tenant_id"`
+	JobID       string `gorm:"type:char(36)" json:"job_id"`
+	JobRunID    string `gorm:"type:char(36)" json:"job_run_id"`
+	ChannelType string `gorm:"type:varchar(20);not null" json:"channel_type"` // telegram | email | zalo | zalo_oa
 	// Source distinguishes the origin of the notification: "job" (AI task output
 	// dispatched via notifications.Dispatcher) or "campaign" (CRM campaign failure
 	// alert). Defaults to "job" so pre-existing rows keep their original meaning
@@ -37,10 +37,10 @@ type NotificationLog struct {
 }
 
 type AIUsageLog struct {
-	ID           string `gorm:"type:char(36);primaryKey" json:"id"`
-	TenantID     string `gorm:"type:char(36);not null;index:idx_aiusage_tenant_created;index:idx_aiusage_tenant_source_created" json:"tenant_id"`
-	JobID        string `gorm:"type:char(36)" json:"job_id"`
-	JobRunID     string `gorm:"type:char(36)" json:"job_run_id"`
+	ID       string `gorm:"type:char(36);primaryKey" json:"id"`
+	TenantID string `gorm:"type:char(36);not null;index:idx_aiusage_tenant_created;index:idx_aiusage_tenant_source_created" json:"tenant_id"`
+	JobID    string `gorm:"type:char(36)" json:"job_id"`
+	JobRunID string `gorm:"type:char(36)" json:"job_run_id"`
 	// Source distinguishes where the AI spend came from: "job" (QC/classification
 	// analysis) or "chatbot" (Zalo OA live chatbot). Defaults to "job" so existing
 	// rows keep their original meaning after migration.
@@ -55,7 +55,10 @@ type AIUsageLog struct {
 	// AgentType is "public" (group GMF) | "private" (1-1 whitelist) | "" (job).
 	AgentType string `gorm:"type:varchar(20)" json:"agent_type"`
 	// GroupID links to the CRMGroup when the turn happened in a GMF group chat.
-	GroupID      string    `gorm:"type:char(36)" json:"group_id"`
+	GroupID string `gorm:"type:char(36)" json:"group_id"`
+	// AgentKey is the specialist agent (ai_agents.key) that answered a
+	// chatbot turn; empty for jobs and for the AI Engine bot.
+	AgentKey     string    `gorm:"type:varchar(64)" json:"agent_key"`
 	Provider     string    `gorm:"type:varchar(20)" json:"provider"`
 	Model        string    `gorm:"type:varchar(100)" json:"model"`
 	InputTokens  int       `gorm:"default:0" json:"input_tokens"`

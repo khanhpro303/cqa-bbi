@@ -186,6 +186,9 @@ func NewPersonalZaloChatbotHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		addressed := req.ThreadType == personalZaloThreadUser || personalZaloGroupMessageAddressed(req, sessionConfig)
+		if addressed {
+			agentPlan = routePersonalZaloAgent(ctx, cfg, req, agentPlan, sessionConfig.SessionTimeoutMinutes)
+		}
 		var inferredComplaint bool
 		groupTurn := preparePersonalZaloGroupTurn(ctx, channel, sessionConfig, req, addressed, func(ctx context.Context, tenantID, input string) bool {
 			reply, handover := workers.PersonalZaloGroupNeedsReply(ctx, tenantID, input)

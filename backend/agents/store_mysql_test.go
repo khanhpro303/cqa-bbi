@@ -170,8 +170,18 @@ func TestAgentsLifecycleMySQL(t *testing.T) {
 		t.Errorf("revisions = %+v", revs)
 	}
 
+	// The test console loads a team by id with its active members, and
+	// never another tenant's.
+	byID, err := TeamByID(ctx, tenantID, team.ID)
+	if err != nil || byID.Name != "Công nợ" || len(byID.Members) != 1 || byID.Members[0].Key != "cong-no" {
+		t.Errorf("team by id = %+v %v", byID, err)
+	}
+
 	// Tenant isolation.
 	otherTenant, _ := seedTenant(t, "", "")
+	if _, err := TeamByID(ctx, otherTenant, team.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-tenant team by id = %v", err)
+	}
 	if _, err := GetAgent(ctx, otherTenant, debt.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("cross-tenant read = %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/vietbui/chat-quality-agent/agents"
 	"github.com/vietbui/chat-quality-agent/config"
@@ -63,6 +64,27 @@ func personalZaloAgentPlan(ctx context.Context, req personalZaloChatbotRequest, 
 		// tier's Langflow flow with its prompt and tools.
 		log.Printf("[agents] personal Zalo channel %s: native agent %s runs on Langflow here", req.ChannelID, sel.Agent.Key)
 	}
+	return plan
+}
+
+// routePersonalZaloAgent lets the channel's coordinator pick the agent for a
+// personal Zalo message addressed to the bot when the team has more than one
+// for the sender, leaning towards the agent already in the chat. Personal
+// Zalo keeps its chat log in Langflow, so the coordinator reads the message
+// alone; a turn without text (an image) stays with the current agent.
+func routePersonalZaloAgent(ctx context.Context, cfg *config.Config, req personalZaloChatbotRequest, plan agents.Plan, sessionMinutes int) agents.Plan {
+	if !plan.NeedsRouting() {
+		return plan
+	}
+	chatKey := personalZaloSessionKey(req)
+	plan.Stick(ctx, chatKey)
+	if text := strings.TrimSpace(req.Text); text != "" {
+		from := plan.Selection.Agent.Key
+		reason := plan.Route(ctx, req.TenantID, agentRouterAsk(cfg, req.TenantID), agents.RouterInput(text))
+		log.Printf("[agents] personal Zalo channel %s: coordinator %s -> %s (%s) %s",
+			req.ChannelID, from, plan.Selection.Agent.Key, plan.Selection.Reason, reason)
+	}
+	plan.Remember(ctx, chatKey, time.Duration(sessionMinutes)*time.Minute)
 	return plan
 }
 

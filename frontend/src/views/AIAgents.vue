@@ -108,6 +108,7 @@
               <v-chip v-if="team.is_default" size="x-small" color="primary" variant="tonal">{{ $t('ag_team_default_badge') }}</v-chip>
               <v-chip v-if="!team.is_active" size="x-small" color="grey" variant="tonal">{{ $t('ag_inactive') }}</v-chip>
               <v-spacer />
+              <v-btn v-if="canEdit && team.members.length" size="small" variant="text" prepend-icon="mdi-play-circle-outline" :data-testid="`team-test-${team.id}`" @click="openTest(team)">{{ $t('ag_test_open') }}</v-btn>
               <v-btn size="small" variant="text" :prepend-icon="canEdit ? 'mdi-pencil' : 'mdi-eye-outline'" @click="openTeam(team)">{{ canEdit ? $t('edit') : $t('ag_view') }}</v-btn>
             </div>
             <div class="text-caption text-medium-emphasis persona-preview mb-3">
@@ -237,6 +238,8 @@
       @notify="showSnack"
     />
 
+    <TeamTestDialog v-model="testDialog" :tenant-id="tenantId" :team="testingTeam" :can-staff="canSwitch" />
+
     <v-snackbar v-model="snackbar" :color="snackColor" timeout="3500">{{ snackText }}</v-snackbar>
   </div>
 </template>
@@ -250,6 +253,7 @@ import { useAuthStore } from '../stores/auth'
 import AgentSwitchCard from '../components/ai-agents/AgentSwitchCard.vue'
 import AgentEditorDialog from '../components/ai-agents/AgentEditorDialog.vue'
 import TeamEditorDialog from '../components/ai-agents/TeamEditorDialog.vue'
+import TeamTestDialog from '../components/ai-agents/TeamTestDialog.vue'
 import type { Agent, AgentSettings, KnowledgeTag, Team, TeamChannel, ToolInfo } from '../components/ai-agents/types'
 import { pickAgent } from '../components/ai-agents/agentRules'
 
@@ -280,6 +284,8 @@ const agentDialog = ref(false)
 const editingAgentId = ref('')
 const teamDialog = ref(false)
 const editingTeam = ref<Team | null>(null)
+const testDialog = ref(false)
+const testingTeam = ref<Team | null>(null)
 const savingChannel = ref('')
 
 const snackbar = ref(false)
@@ -360,6 +366,10 @@ function openAgent(id: string) {
 function openTeam(team: Team | null) {
   editingTeam.value = team
   teamDialog.value = true
+}
+function openTest(team: Team) {
+  testingTeam.value = team
+  testDialog.value = true
 }
 
 async function setChannelTeam(channelId: string, teamId: string) {

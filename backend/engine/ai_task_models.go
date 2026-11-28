@@ -45,6 +45,7 @@ func AITaskModelOptions() []AITaskModelOption {
 		{AITaskModelSetting{Key: AITaskCRMAnalysis}, "Phân tích lịch sử chat CRM", "Phân tích", "text"},
 		{AITaskModelSetting{Key: PromptIntentClassifier}, "Phân loại tin nhắn 1:1", "Chatbot", "text"},
 		{AITaskModelSetting{Key: PromptGroupClassifier}, "Phân loại tin nhắn nhóm", "Chatbot", "text"},
+		{AITaskModelSetting{Key: PromptAgentRouter}, "Bộ điều phối chọn agent", "Chatbot", "text"},
 		{AITaskModelSetting{Key: PromptCasualReply}, "Trả lời xã giao", "Chatbot", "text"},
 		{AITaskModelSetting{Key: PromptImageReader}, "Đọc ảnh khách gửi", "Chatbot", "vision"},
 		{AITaskModelSetting{Key: PromptComplaintMatch}, "Phân loại và gom khiếu nại", "Chatbot", "text"},

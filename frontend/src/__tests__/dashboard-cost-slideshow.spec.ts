@@ -44,9 +44,9 @@ async function mountSlideshow() {
   return wrapper
 }
 
-it('rotates through the three views every six seconds and wraps to day', async () => {
+it('rotates through the four views every six seconds and wraps to day', async () => {
   const wrapper = await mountSlideshow()
-  for (const title of ['cost_by_day_chart', 'cost_by_channel_chart', 'cost_by_employee_chart', 'cost_by_day_chart']) {
+  for (const title of ['cost_by_day_chart', 'cost_by_channel_chart', 'cost_by_employee_chart', 'cost_by_agent_chart', 'cost_by_day_chart']) {
     expect(wrapper.get('h2').text()).toBe(title)
     await vi.advanceTimersByTimeAsync(6000)
   }
