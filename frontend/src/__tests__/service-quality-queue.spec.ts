@@ -29,6 +29,9 @@ const Table = defineComponent({
     h('div', { class: 'queue-headers' }, (props.headers as { title: string }[]).map(header => header.title).join(' | ')),
     ...(props.items as { conversation_id: string; customer_name: string }[]).map(row => h('div', { class: 'queue-row', 'data-id': row.conversation_id }, [
       row.customer_name,
+      slots['item.waiting']?.({ item: row }),
+      slots['item.last_message_at']?.({ item: row }),
+      slots['item.insight']?.({ item: row }),
       slots['item.quality_analysis']?.({ item: row }),
       slots['item.actions']?.({ item: row }),
     ])),
@@ -282,5 +285,41 @@ describe('ServiceQuality queue banner navigation', () => {
     }
     expect(scrollIntoView).toHaveBeenCalledTimes(2)
     expect(mocks.get).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps insight badges, timestamps, durations, and action buttons on a single line', async () => {
+    mocks.canEditJobs = true
+    const data = report(['overdue', 'answered'], [], [0]) as any
+    data.rows[0].insight = {
+      lead_quality: { level: 'converted', reason: 'Đã chốt đơn' },
+    }
+    data.rows[0].waiting = { seconds: 3498 }
+    data.rows[0].last_message_at = '2026-11-28T06:40:00Z'
+    i18n = createI18n({ legacy: false, locale: 'vi', messages: { vi: qualityVi, en: qualityEn } })
+    mocks.get.mockResolvedValue({ data })
+    const wrapper = mount(ServiceQuality, {
+      attachTo: document.body,
+      global: { plugins: [i18n], stubs: {
+        ...stubs, VBtn: Button, VSelect: Field, VTextField: Field, VTextarea: Field, VSwitch: Field, VDataTable: Table,
+        VDialog: Hidden,
+        VExpansionPanels: ExpansionPanels, VExpansionPanel: Container, VExpansionPanelTitle: Container, VExpansionPanelText: Container,
+        MetaLabelsPanel: Hidden, InsightWordcloudPanel: Hidden,
+      } },
+    })
+    wrappers.push(wrapper)
+    await flushPromises()
+
+    const row = wrapper.get('[data-id="c0"]')
+    const insightCell = row.get('.conversation-insight-cell')
+    expect(insightCell.classes()).not.toContain('flex-wrap')
+    expect(insightCell.text()).toContain('Đã phân tích')
+    expect(insightCell.text()).toContain('Đã chuyển đổi')
+
+    const actionsCell = row.get('.conversation-actions-cell')
+    expect(actionsCell.classes()).toContain('flex-nowrap')
+    expect(actionsCell.classes()).not.toContain('flex-wrap')
+
+    const noWrapSpans = row.findAll('.text-no-wrap').map(el => el.text())
+    expect(noWrapSpans.some(text => text.includes('58 phút 18 giây'))).toBe(true)
   })
 })

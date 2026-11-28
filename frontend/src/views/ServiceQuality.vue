@@ -264,30 +264,33 @@
           hover
         >
           <template #item.customer_name="{ item }">
-            <div class="py-2">
-              <div class="font-weight-medium">{{ item.customer_name || t('sq_customer_fallback') }}</div>
-              <div class="text-caption text-medium-emphasis">{{ item.channel_name }}</div>
+            <div class="py-2 conversation-customer-cell">
+              <div class="font-weight-medium conversation-customer-text">{{ item.customer_name || t('sq_customer_fallback') }}</div>
+              <div class="text-caption text-medium-emphasis conversation-customer-text">{{ item.channel_name }}</div>
             </div>
           </template>
           <template #item.status="{ item }">
-            <v-chip :color="statusColor(item.status)" variant="tonal" size="small">{{ statusLabel(item.status) }}</v-chip>
+            <v-chip :color="statusColor(item.status)" variant="tonal" size="small" class="flex-shrink-0">{{ statusLabel(item.status) }}</v-chip>
           </template>
           <template #item.waiting="{ item }">
-            <span v-if="item.waiting" :class="item.status === 'overdue' ? 'text-error font-weight-bold' : ''">{{ formatDuration(item.waiting.seconds) }}</span>
+            <span v-if="item.waiting" class="text-no-wrap" :class="item.status === 'overdue' ? 'text-error font-weight-bold' : ''">{{ formatDuration(item.waiting.seconds) }}</span>
             <span v-else>—</span>
           </template>
-          <template #item.last_message_at="{ item }">{{ item.last_message_at ? formatDateTime(item.last_message_at) : '—' }}</template>
+          <template #item.last_message_at="{ item }">
+            <span class="text-no-wrap">{{ item.last_message_at ? formatDateTime(item.last_message_at) : '—' }}</span>
+          </template>
           <template #item.insight="{ item }">
-            <div class="d-flex align-center flex-wrap ga-1">
-              <v-chip v-if="item.insight" :color="item.insight_stale ? 'warning' : 'success'" size="x-small" variant="tonal">
+            <div class="d-flex align-center ga-1 conversation-insight-cell">
+              <v-chip v-if="item.insight" :color="item.insight_stale ? 'warning' : 'success'" size="x-small" variant="tonal" class="flex-shrink-0">
                 {{ item.insight_stale ? t('sq_reanalyse') : t('sq_analysed') }}
               </v-chip>
-              <span v-else class="text-medium-emphasis">{{ t('sq_none') }}</span>
+              <span v-else class="text-medium-emphasis text-no-wrap">{{ t('sq_none') }}</span>
               <v-chip
                 v-if="item.insight?.lead_quality?.level === 'converted'"
                 color="primary"
                 size="x-small"
                 variant="flat"
+                class="flex-shrink-0"
               >
                 {{ t('sq_lead_converted') }}
               </v-chip>
@@ -297,6 +300,7 @@
                 size="x-small"
                 variant="tonal"
                 prepend-icon="mdi-cart-check"
+                class="flex-shrink-0"
               >
                 {{ t('sq_order_confirmed') }}
               </v-chip>
@@ -304,7 +308,7 @@
           </template>
           <template #item.quality_analysis="{ item }">
             <div class="quality-analysis-status-cell">
-              <v-chip v-if="item.quality_analysis_stale" color="warning" size="x-small" variant="tonal">
+              <v-chip v-if="item.quality_analysis_stale" color="warning" size="x-small" variant="tonal" class="flex-shrink-0">
                 {{ t('sq_quality_reanalyse') }}
               </v-chip>
               <v-chip
@@ -312,6 +316,7 @@
                 :color="qualityVerdictColor(item.quality_analysis.verdict)"
                 size="x-small"
                 variant="tonal"
+                class="flex-shrink-0"
               >
                 {{ t('sq_quality_analysed') }}<template v-if="item.quality_analysis.score != null"> · {{ item.quality_analysis.score }}/100</template>
               </v-chip>
@@ -319,7 +324,7 @@
             </div>
           </template>
           <template #item.actions="{ item }">
-            <div class="d-flex flex-wrap ga-1 justify-end">
+            <div class="d-flex flex-nowrap ga-1 justify-end conversation-actions-cell">
               <v-btn icon="mdi-eye-outline" variant="text" size="small" :title="t('sq_view_detail')" @click="openDetail(item)" />
               <v-btn
                 icon="mdi-open-in-new"
@@ -1343,6 +1348,44 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.conversation-insight-cell,
+.conversation-actions-cell {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+@media (min-width: 601px) {
+  .conversation-queue :deep(.conversation-table table thead tr > th),
+  .conversation-queue :deep(.conversation-table table tbody tr > td) {
+    white-space: nowrap;
+    padding: 0 12px;
+  }
+
+  .conversation-queue :deep(.conversation-table table thead tr > th:first-child),
+  .conversation-queue :deep(.conversation-table table tbody tr > td:first-child) {
+    padding-left: 16px;
+  }
+
+  .conversation-queue :deep(.conversation-table table thead tr > th:last-child),
+  .conversation-queue :deep(.conversation-table table tbody tr > td:last-child) {
+    padding-right: 16px;
+  }
+
+  .conversation-queue :deep(.conversation-table table tbody tr) {
+    height: 58px;
+  }
+
+  .conversation-customer-cell {
+    max-width: 280px;
+  }
+
+  .conversation-customer-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 .quality-analysis-detail-item + .quality-analysis-detail-item {
   margin-top: 16px;
 }
@@ -1446,6 +1489,18 @@ onBeforeUnmount(() => {
   .conversation-queue :deep(.conversation-table tbody td:nth-child(6)) {
     grid-column: 1 / 3;
     grid-row: 5;
+  }
+
+  .conversation-customer-cell {
+    max-width: none;
+  }
+
+  .conversation-customer-text {
+    white-space: normal;
+  }
+
+  .conversation-insight-cell {
+    flex-wrap: wrap;
   }
 }
 </style>
