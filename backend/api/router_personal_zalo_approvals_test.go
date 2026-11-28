@@ -15,6 +15,7 @@ func TestPersonalZaloApprovalRoutesRequireAuthentication(t *testing.T) {
 	const base = "/api/v1/tenants/tenant/channels/channel/personal-zalo/approvals"
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, base},
+		{http.MethodGet, "/api/v1/tenants/tenant/personal-zalo/approvals/pending"},
 		{http.MethodPut, base + "/group/123"},
 		{http.MethodPost, "/api/internal/imports/personal-zalo/roster"},
 		{http.MethodPost, "/api/internal/chatbot/personal-zalo/thread-access"},

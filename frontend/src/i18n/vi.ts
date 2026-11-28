@@ -604,6 +604,8 @@ export default {
   personal_zalo_group_staff_call_only_hint: 'Áp dụng cho tài khoản Zalo đã gán cho người dùng CQA ở trang chi tiết kênh. Sau khi bot gửi thành công một tin trả lời, nhân viên có tối đa 5 phút để hỏi tiếp mà không cần gọi lại.',
   personal_zalo_group_bot_names_hint: 'Cách nhau bằng dấu ;, ví dụ: Bull;bot. Để trống thì dùng "bot". Khi chế độ trợ lý tắt, mọi người phải gọi một tên đứng riêng thành một từ hoặc dùng từ khóa phiên.',
   personal_zalo_approval_title: 'Duyệt truy cập Zalo cá nhân',
+  personal_zalo_approval_notice: 'Có {count} bạn bè hoặc nhóm Zalo cá nhân đang chờ duyệt',
+  personal_zalo_approval_open_channel: 'Duyệt kênh {name} ({count})',
   personal_zalo_approval_hint: 'Bạn bè và nhóm mới cần được duyệt khi bật tự động trả lời. Nếu từ chối, bot sẽ im lặng trong cuộc chat đó.',
   personal_zalo_approval_pending: 'Chờ duyệt',
   personal_zalo_approval_approved: 'Đã duyệt',

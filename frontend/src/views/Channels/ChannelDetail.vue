@@ -333,6 +333,8 @@
       :key="`${tenantId}:${channelId}`"
       :tenant-id="tenantId"
       :channel-id="channelId"
+      :focus-review="route.hash === '#personal-zalo-approvals'"
+      @review-focused="router.replace({ query: route.query, hash: '' })"
     />
 
     <!-- Sync result alert -->
