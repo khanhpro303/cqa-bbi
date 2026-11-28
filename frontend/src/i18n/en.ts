@@ -1,10 +1,12 @@
 import serviceQuality from './service-quality-en'
 import qualityMeta from './quality-meta-en'
 import qualityInsight from './quality-insight-en'
+import aiAgents from './ai-agents-en'
 
 export default {
   ...serviceQuality,
   ...qualityMeta,
+  ...aiAgents,
   qualityInsight,
   // Common
   app_name: 'BBI CRM Agent',
@@ -1159,6 +1161,19 @@ export default {
   openrouter_free_models_hint: "Pick a free model from the list or type an OpenRouter model id. Free models have a daily request limit.",
   openrouter_load_models: "Load free models",
   openrouter_load_failed: "Could not load the OpenRouter model list",
+  nine_router_api_key: '9router API key',
+  nine_router_url_hint: 'Use a URL that the CQA server can reach and that ends in /v1.',
+  nine_router_model_hint: 'Search or enter the full model ID, such as cx/gpt-5.6-luna.',
+  nine_router_vision_hint: 'Select a model that supports images or enter its full model ID.',
+  nine_router_save_connection_hint: 'Save the 9router connection to load models, or enter a model ID manually.',
+  nine_router_save_connection: 'Save 9router connection',
+  save_ai_provider_credentials: 'Save API key and Base URL',
+  nine_router_test_model: 'Test model',
+  nine_router_refresh_models: 'Refresh 9router models',
+  nine_router_models_count: '{count} models from the saved connection',
+  nine_router_models_empty: '9router returned no models. Check the providers in 9router.',
+  nine_router_models_failed: 'Could not load models. Check the saved 9router connection and try again.',
+  nine_router_other_models: 'Other models and combos',
   task_prompt_group_complaints: "Complaints (cases, same or new problem)",
   cc_status_active: "Open",
   cc_status_open: "New",

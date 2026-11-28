@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/vietbui/chat-quality-agent/ai"
@@ -32,23 +33,63 @@ func ResolveTenantAIProviderWithTenantKey(tenantID string, cfg *config.Config, t
 
 func resolveTenantAIProvider(tenantID string, cfg *config.Config, task string, fallback AITaskModel, useLegacyOpenAIKey bool) (TenantAIProvider, error) {
 	taskKey := AITaskModelSettingPrefix + task
-	var settings []models.AppSetting
-	keys := []string{"ai_provider", "ai_model", "ai_base_url", "ai_api_key", taskKey}
-	for _, provider := range ai.Providers {
-		keys = append(keys, ai.ProviderAPIKeySettingKey(provider), ai.ProviderBaseURLSettingKey(provider))
-	}
-	if err := db.DB.Where("tenant_id = ? AND setting_key IN ?", tenantID, keys).Find(&settings).Error; err != nil {
-		return TenantAIProvider{}, fmt.Errorf("load tenant AI settings: %w", err)
-	}
-	byKey := make(map[string]models.AppSetting, len(settings))
-	for _, setting := range settings {
-		byKey[setting.SettingKey] = setting
+	byKey, err := loadTenantAISettings(tenantID, taskKey)
+	if err != nil {
+		return TenantAIProvider{}, err
 	}
 	override, err := ParseAITaskModel(byKey[taskKey].ValuePlain)
 	if err != nil {
 		return TenantAIProvider{}, fmt.Errorf("AI task %s: %w", task, err)
 	}
+	return buildTenantAIProvider(byKey, cfg, "AI task "+task, override, fallback, useLegacyOpenAIKey)
+}
 
+// ResolveTenantAIModel builds a client for an explicit provider and model
+// with the tenant's key for that provider, exactly as a task override would
+// pick it (the tenant's default gateway URL only for the default provider).
+// The native agent runtime uses it for each agent's own model. A missing key
+// is an error.
+func ResolveTenantAIModel(tenantID string, cfg *config.Config, provider, model string) (TenantAIProvider, error) {
+	override, err := NormalizeAITaskModel(AITaskModel{Provider: provider, Model: model})
+	if err != nil {
+		return TenantAIProvider{}, err
+	}
+	if override.Provider == "" {
+		return TenantAIProvider{}, fmt.Errorf("AI provider not set")
+	}
+	byKey, err := loadTenantAISettings(tenantID)
+	if err != nil {
+		return TenantAIProvider{}, err
+	}
+	return buildTenantAIProvider(byKey, cfg, "agent model", override, AITaskModel{Provider: "claude"}, false)
+}
+
+// ErrLoadTenantAISettings wraps a failed read of the tenant's AI settings:
+// a database problem, unlike a missing key, that may pass.
+var ErrLoadTenantAISettings = errors.New("load tenant AI settings")
+
+// loadTenantAISettings reads the tenant's AI provider settings (and extra
+// keys) by key.
+func loadTenantAISettings(tenantID string, extra ...string) (map[string]models.AppSetting, error) {
+	var settings []models.AppSetting
+	keys := append([]string{"ai_provider", "ai_model", "ai_base_url", "ai_api_key"}, extra...)
+	for _, provider := range ai.Providers {
+		keys = append(keys, ai.ProviderAPIKeySettingKey(provider), ai.ProviderBaseURLSettingKey(provider))
+	}
+	if err := db.DB.Where("tenant_id = ? AND setting_key IN ?", tenantID, keys).Find(&settings).Error; err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrLoadTenantAISettings, err)
+	}
+	byKey := make(map[string]models.AppSetting, len(settings))
+	for _, setting := range settings {
+		byKey[setting.SettingKey] = setting
+	}
+	return byKey, nil
+}
+
+// buildTenantAIProvider picks the model, URL and key from the tenant's
+// settings: override when set, else the tenant default (fallback when that
+// is unset). label names the caller in errors.
+func buildTenantAIProvider(byKey map[string]models.AppSetting, cfg *config.Config, label string, override, fallback AITaskModel, useLegacyOpenAIKey bool) (TenantAIProvider, error) {
 	selection, baseURL, keyNames := selectTaskAIModel(override, fallback,
 		AITaskModel{Provider: byKey["ai_provider"].ValuePlain, Model: byKey["ai_model"].ValuePlain},
 		byKey["ai_base_url"].ValuePlain)
@@ -80,7 +121,7 @@ func resolveTenantAIProvider(tenantID string, cfg *config.Config, task string, f
 	}
 	if apiKey == "" {
 		if override != (AITaskModel{}) {
-			return out, fmt.Errorf("API key not configured for AI task %s (%s)", task, selection.Provider)
+			return out, fmt.Errorf("API key not configured for %s (%s)", label, selection.Provider)
 		}
 		return out, nil
 	}

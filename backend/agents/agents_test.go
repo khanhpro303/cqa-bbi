@@ -44,11 +44,15 @@ func TestNormalizeAgent(t *testing.T) {
 		"unknown tool":      {func(a *Agent) { a.Tools = []string{"drop_tables"} }, "tools"},
 		"native no model":   {func(a *Agent) { a.Runtime, a.Provider = RuntimeNative, "openai" }, "model"},
 		"native bad vendor": {func(a *Agent) { a.Runtime, a.Provider, a.Model = RuntimeNative, "acme", "m1" }, "provider"},
-		"bad flow":          {func(a *Agent) { a.LangflowFlowID = "../../etc" }, "langflow_flow_id"},
-		"bad tag":           {func(a *Agent) { a.KnowledgeTags = []string{"#tag"} }, "knowledge_tags"},
-		"temperature":       {func(a *Agent) { a.Options.Temperature = &temp }, "options.temperature"},
-		"tool calls":        {func(a *Agent) { a.Options.MaxToolCalls = 99 }, "options.max_tool_calls"},
-		"long prompt":       {func(a *Agent) { a.SystemPrompt = strings.Repeat("x", MaxPromptChars+1) }, "system_prompt"},
+		"native bad model":  {func(a *Agent) { a.Runtime, a.Provider, a.Model = RuntimeNative, "openai", "gpt 5" }, "model"},
+		"native no prompt": {func(a *Agent) {
+			a.Runtime, a.Provider, a.Model, a.SystemPrompt = RuntimeNative, "openai", "gpt-5-mini", " "
+		}, "system_prompt"},
+		"bad flow":    {func(a *Agent) { a.LangflowFlowID = "../../etc" }, "langflow_flow_id"},
+		"bad tag":     {func(a *Agent) { a.KnowledgeTags = []string{"#tag"} }, "knowledge_tags"},
+		"temperature": {func(a *Agent) { a.Options.Temperature = &temp }, "options.temperature"},
+		"tool calls":  {func(a *Agent) { a.Options.MaxToolCalls = 99 }, "options.max_tool_calls"},
+		"long prompt": {func(a *Agent) { a.SystemPrompt = strings.Repeat("x", MaxPromptChars+1) }, "system_prompt"},
 	} {
 		a := base
 		tc.mutate(&a)
@@ -61,6 +65,7 @@ func TestNormalizeAgent(t *testing.T) {
 
 	native := base
 	native.Runtime, native.Provider, native.Model = RuntimeNative, "OpenRouter", "vendor/model:free"
+	native.SystemPrompt = "Bạn là bot công nợ."
 	if got, err := Normalize(native); err != nil || got.Provider != "openrouter" {
 		t.Errorf("native agent: %+v %v", got, err)
 	}

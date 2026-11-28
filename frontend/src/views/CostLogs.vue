@@ -6,7 +6,7 @@
       <v-card-text class="d-flex ga-3 pb-0 flex-wrap">
         <v-select
           v-model="filterProvider"
-          :items="['claude', 'gemini', 'openai', 'openrouter']"
+          :items="['claude', 'gemini', 'openai', 'openrouter', '9router']"
           :label="$t('ai_provider')"
           density="compact"
           clearable

@@ -219,6 +219,16 @@ func agentTurnFlow(plan agents.Plan, lf engine.LangflowConfig, tier string) (flo
 	return id, "agent"
 }
 
+// langflowResultFromRun reads an agent runtime's answer as the Langflow
+// result the rest of the turn (reply parsing, cost log) works with.
+func langflowResultFromRun(res agents.RunResult) engine.LangflowResult {
+	return engine.LangflowResult{
+		Text: res.Text, Provider: res.Usage.Provider, Model: res.Usage.Model,
+		InputTokens: res.Usage.InputTokens, OutputTokens: res.Usage.OutputTokens,
+		HasUsage: res.Usage.HasUsage, ReportedCostUSD: res.Usage.ReportedCostUSD,
+	}
+}
+
 // selectSystemPrompt returns the flow-appropriate system prompt. The private
 // staff flow gets the internal (ALL-scope) prompt; everything else gets the
 // public (OWN-scope) prompt. An empty internal prompt intentionally returns ""
@@ -2110,12 +2120,35 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 		if payload.SignatureVerified {
 			langflowInput, systemPromptToUse = engine.AddKnowledgeImageInstruction(langflowInput, systemPromptToUse)
 		}
-		// 2. Call Langflow API (passing Zalo Sender ID as zaloUserID, customerCode, and permissionToken)
-		lfRes, err := langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, langflowInput, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
+		// 2. Answer the turn. An agent on the native runtime calls its own
+		// model and MCP tools directly, with the same prompt, tokens and
+		// conversation; everything else calls Langflow (passing Zalo Sender ID
+		// as zaloUserID, customerCode, and permissionToken).
+		var lfRes engine.LangflowResult
+		nativeRuntime, nativeTurn := agentPlan.NativeRuntime()
+		if nativeTurn {
+			flowIDToUse, flowSource = "", "native:"+agentPlan.Selection.Agent.Key
+			// A group's conversation is this sender's thread in it, as for
+			// the classifier.
+			historySender := ""
+			if matchedGroup.ZaloGroupID != "" {
+				historySender = payload.Sender.ID
+			}
+			var runRes agents.RunResult
+			runRes, err = nativeRuntime.Run(ctx, agents.RunInput{
+				Agent: agentPlan.Selection.Agent, Tier: turnTier, SessionID: langflowSessionID, SenderID: payload.Sender.ID,
+				Input: langflowInput, SystemPrompt: systemPromptToUse,
+				History:         chatmemory.ConversationTurns(ctx, sessionID, msgID, input, historySender),
+				PermissionToken: permissionToken, AgentToken: erpAgentToken, CustomerCode: customerCode,
+			})
+			lfRes = langflowResultFromRun(runRes)
+		} else {
+			lfRes, err = langflowClient.RunFlowWithCustomerUsage(ctx, langflowSessionID, payload.Sender.ID, langflowInput, lfCfg.APIURL, lfCfg.APIKey, flowIDToUse, customerCode, permissionToken, erpAgentToken, systemPromptToUse)
+		}
 		// Self-heal: a per-channel Langflow override that Langflow rejects (bad
 		// key / deleted flow) must not take the whole bot down while the AI
 		// Engine settings are fine. Retry once with the tenant config.
-		if err != nil && engine.IsLangflowConfigError(err) && lfCfg.UsesChannelOverride() && !lfCfg.Equivalent(lfTenantCfg, flowAgentType) {
+		if err != nil && engine.IsLangflowConfigError(err) && lfCfg.UsesChannelOverride() && !lfCfg.Equivalent(lfTenantCfg, flowAgentType) && !nativeTurn {
 			fallbackFlow, fallbackSource := agentTurnFlow(agentPlan, lfTenantCfg, flowAgentType)
 			log.Printf("[worker] WARNING channel %s Langflow override rejected (%v); falling back to AI Engine config flow=%s (source=%s). Clear the Langflow fields on this channel to silence this.",
 				matchedChannel.ID, err, fallbackFlow, fallbackSource)
@@ -2129,7 +2162,7 @@ func HandleZaloWebhookTask(cfg *config.Config, langflowClient *engine.LangflowCl
 			// Retry transient failures, but never leave the customer in silence:
 			// on the last attempt tell them the bot could not answer.
 			// Permanent failures get the fallback immediately.
-			if isLastAttempt(ctx) || engine.IsPermanentLangflowError(err) {
+			if isLastAttempt(ctx) || engine.IsPermanentLangflowError(err) || errors.Is(err, agents.ErrPermanent) {
 				log.Printf("[zalo-drop] reason=langflow_error sender=%s flow=%s flow_source=%s key_source=%s err=%v", payload.Sender.ID, flowIDToUse, flowSource, lfCfg.APIKeySource, err)
 				if sendErr := sendChatReply(ctx, adapter, matchedGroup.ZaloGroupID, payload.Sender.ID, botUnavailableMessage); sendErr != nil {
 					log.Printf("[worker] failed to send langflow-error fallback: %v", sendErr)

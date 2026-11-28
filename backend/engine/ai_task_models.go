@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/vietbui/chat-quality-agent/ai"
 )
 
 const (
@@ -65,12 +67,14 @@ func NormalizeAITaskModel(value AITaskModel) (AITaskModel, error) {
 	if value == (AITaskModel{}) {
 		return value, nil
 	}
-	switch value.Provider {
-	case "openai", "claude", "gemini", "openrouter":
-	default:
+	if !ai.ValidProvider(value.Provider) {
 		return value, fmt.Errorf("nhà cung cấp model không hợp lệ")
 	}
-	if !aiTaskModelID.MatchString(value.Model) {
+	modelID := value.Model
+	if value.Provider == "9router" {
+		modelID = strings.TrimSuffix(modelID, "[1m]")
+	}
+	if !aiTaskModelID.MatchString(modelID) {
 		return value, fmt.Errorf("mã model không hợp lệ")
 	}
 	return value, nil
